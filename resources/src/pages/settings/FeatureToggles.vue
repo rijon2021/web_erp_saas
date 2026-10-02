@@ -59,6 +59,13 @@
     </div>
     <div class="setting-row">
       <div>
+        <div class="setting-label">{{ $t('Enable_Warehouse_Letterhead') }}</div>
+        <div class="setting-help">{{ $t('Enable_Warehouse_Letterhead_Hint') }}</div>
+      </div>
+      <a-switch v-model:checked="features.enable_warehouse_letterhead" @change="dirty = true" />
+    </div>
+    <div class="setting-row">
+      <div>
         <div class="setting-label">{{ $t('Auto_Journal_Entries') }}</div>
         <div class="setting-help">{{ $t('Auto_Journal_Entries_Hint') }}</div>
       </div>
@@ -66,10 +73,46 @@
     </div>
     <div class="setting-row">
       <div>
+        <div class="setting-label">{{ $t('Require_Payment_Account') }}</div>
+        <div class="setting-help">{{ $t('Require_Payment_Account_Hint') }}</div>
+      </div>
+      <a-switch v-model:checked="features.require_payment_account" @change="dirty = true" />
+    </div>
+    <div class="setting-row">
+      <div>
         <div class="setting-label">{{ $t('Allow_Overselling') }}</div>
         <div class="setting-help">{{ $t('Allow_Overselling_Help') }}</div>
       </div>
       <a-switch v-model:checked="features.allow_overselling" @change="dirty = true" />
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">{{ $t('Restrict_Master_Data_By_Warehouse') }}</div>
+        <div class="setting-help">{{ $t('Restrict_Master_Data_By_Warehouse_Help') }}</div>
+      </div>
+      <a-switch v-model:checked="features.restrict_master_data_by_warehouse" @change="dirty = true" />
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">{{ $t('Restrict_Products_By_Warehouse') }}</div>
+        <div class="setting-help">{{ $t('Restrict_Products_By_Warehouse_Help') }}</div>
+      </div>
+      <a-switch v-model:checked="features.restrict_products_by_warehouse" @change="dirty = true" />
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">{{ $t('Customer_Performance') }}</div>
+        <div class="setting-help">{{ $t('Customer_Performance_Help') }}</div>
+      </div>
+      <a-switch v-model:checked="features.customer_performance_enabled" @change="dirty = true" />
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">{{ $t('Product_Supplier') }}</div>
+        <div class="setting-help">{{ $t('Product_Supplier_Help') }}</div>
+      </div>
+      <a-switch v-model:checked="features.product_supplier_enabled" @change="dirty = true" />
     </div>
   </a-card>
 </template>
@@ -104,7 +147,13 @@ const features = reactive({
   enable_multi_pack_selling: false,
   enable_multi_currency: false,
   accounting_auto_generate_journals: false,
+  require_payment_account: false,
   allow_overselling: false,
+  enable_warehouse_letterhead: false,
+  restrict_master_data_by_warehouse: false,
+  restrict_products_by_warehouse: false,
+  customer_performance_enabled: true,
+  product_supplier_enabled: false,
 });
 
 async function save() {

@@ -38,7 +38,7 @@ class SettingSeeder extends Seeder
         // "logo-default.png" filename resolves to the tenant-scoped copy.
         $logo = 'logo-default.png';
 
-        DB::table('settings')->insert(
+        DB::table('settings')->insertOrIgnore(
             [
                 'id' => 1,
                 'email' => $defaults['email'],

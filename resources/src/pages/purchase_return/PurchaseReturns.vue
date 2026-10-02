@@ -17,9 +17,9 @@
 
     <a-card size="small" style="margin-bottom: 16px">
       <a-row :gutter="[16, 8]">
-        <a-col :xs="12" :md="8" :xl="4">
+        <a-col :xs="24" :md="16" :xl="8">
           <div class="filter-label">{{ $t('date') }}</div>
-          <a-date-picker v-model:value="filters.date" value-format="YYYY-MM-DD" style="width: 100%" @change="crud.reload()" />
+          <DateRangePicker v-model:value="range" allow-clear style="width: 100%" @change="crud.reload()" />
         </a-col>
         <a-col :xs="12" :md="8" :xl="5">
           <div class="filter-label">{{ $t('Supplier') }}</div>
@@ -55,6 +55,16 @@
       </a-row>
     </a-card>
 
+    <!-- Totals for the whole filtered set, not just the page on screen. -->
+    <a-card v-if="summary" size="small" style="margin-bottom: 16px">
+      <a-row :gutter="[16, 12]">
+        <a-col v-for="s in summaryTiles" :key="s.label" :xs="12" :md="6">
+          <div class="filter-label">{{ $t(s.label) }}</div>
+          <div class="summary-value" :style="s.style">{{ s.value }}</div>
+        </a-col>
+      </a-row>
+    </a-card>
+
     <DataTable :crud="crud" :columns="columns" :selectable="auth.can('Purchase_Returns_delete')">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'date'">{{ dateTime(record.date) }}</template>
@@ -66,8 +76,10 @@
           <span v-else>—</span>
         </template>
         <template v-else-if="column.key === 'statut'">
-          <a-tag :color="record.statut === 'received' ? 'success' : 'processing'">
-            {{ record.statut === 'received' ? $t('Received') : $t('Pending') }}
+          <!-- Purchase returns are 'completed' | 'pending' (the form's options
+               and PurchasesReturnController), unlike sale returns' 'received'. -->
+          <a-tag :color="record.statut === 'completed' ? 'success' : 'processing'">
+            {{ record.statut === 'completed' ? $t('complete') : $t('Pending') }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'GrandTotal'">{{ money(record.GrandTotal) }}</template>
@@ -162,6 +174,7 @@ import {
 import dayjs from 'dayjs';
 import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
+import DateRangePicker from '../../components/DateRangePicker.vue';
 import ReturnPaymentsModal from '../../components/ReturnPaymentsModal.vue';
 import ReturnPaymentFormModal from '../../components/ReturnPaymentFormModal.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
@@ -178,13 +191,17 @@ const auth = useAuthStore();
 const router = useRouter();
 
 const filters = ref({
-  date: null, provider_id: undefined, purchase_id: undefined,
+  provider_id: undefined, purchase_id: undefined,
   warehouse_id: undefined, payment_statut: undefined,
 });
+// [start, end] dayjs pair; either bound may be empty and the backend then
+// leaves that side open.
+const range = ref(null);
 
 const filterParams = () => ({
   Ref: '',
-  date: filters.value.date || '',
+  ...(range.value?.[0] ? { from: range.value[0].format('YYYY-MM-DD') } : {}),
+  ...(range.value?.[1] ? { to: range.value[1].format('YYYY-MM-DD') } : {}),
   purchase_id: filters.value.purchase_id || '',
   provider_id: filters.value.provider_id || '',
   statut: '',
@@ -197,6 +214,20 @@ const crud = useCrudTable('returns/purchase', {
   params: filterParams,
 });
 crud.fetchRows();
+
+// Backend aggregates over the filtered set. Absent on an older backend, in
+// which case the tile row simply does not render.
+const summary = computed(() => crud.payload.value?.summary || null);
+const summaryTiles = computed(() => {
+  const s = summary.value;
+  if (!s) return [];
+  return [
+    { label: 'Returns', value: s.count },
+    { label: 'Total', value: money(s.total) },
+    { label: 'Paid', value: money(s.paid) },
+    { label: 'Due', value: money(s.due), style: Number(s.due) > 0 ? { color: '#ff4d4f' } : undefined },
+  ];
+});
 
 const supplierOptions = computed(() =>
   (crud.payload.value?.suppliers || []).map(s => ({ value: s.id, label: s.name }))
@@ -391,5 +422,10 @@ async function submitPayment() {
   margin-bottom: 4px;
   color: rgba(var(--ink-rgb), 0.55);
   font-size: 13px;
+}
+.summary-value {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 </style>

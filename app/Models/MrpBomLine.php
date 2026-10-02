@@ -31,6 +31,41 @@ class MrpBomLine extends Model
         return $this->belongsTo(Product::class, 'product_id');
     }
 
+    public function unit()
+    {
+        return $this->belongsTo(Unit::class, 'unit_id');
+    }
+
+    /**
+     * Multiplier from the line's unit to the component's base (stock) unit.
+     *
+     * Same rule purchases use: a sub-unit with operator "*" holds operator_value
+     * base units (a box of 12), one with "/" is a fraction of the base unit. A
+     * line with no unit, or stated in the base unit itself, is already in base.
+     */
+    public function unitFactor(): float
+    {
+        if (! $this->unit_id) {
+            return 1.0;
+        }
+        $unit = $this->unit;
+        if (! $unit || ! $unit->base_unit) {
+            return 1.0;
+        }
+        $value = (float) $unit->operator_value;
+        if ($value <= 0) {
+            return 1.0;
+        }
+
+        return $unit->operator === '/' ? 1 / $value : $value;
+    }
+
+    /** {@see qtyWithScrap()} expressed in the component's base unit. */
+    public function baseQtyWithScrap(): float
+    {
+        return round($this->qtyWithScrap() * $this->unitFactor(), 6);
+    }
+
     /**
      * Quantity to draw for one BOM output, scrap included.
      *

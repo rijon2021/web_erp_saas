@@ -163,6 +163,10 @@ class PaymentSalesController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'create', PaymentSale::class);
 
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $this->paymentAccountRule()]);
+
         \DB::transaction(function () use ($request) {
             $helpers = new helpers;
             $user = Auth::user();
@@ -208,15 +212,7 @@ class PaymentSalesController extends BaseController
                         'user_id' => Auth::user()->id,
                     ]);
 
-                    $account = Account::where('id', $request['account_id'])->exists();
-
-                    if ($account) {
-                        // Account exists, perform the update
-                        $account = Account::find($request['account_id']);
-                        $account->update([
-                            'balance' => $account->balance + $request['montant'],
-                        ]);
-                    }
+                    Account::adjustBalance($request['account_id'], $request['montant']);
 
                     $sale->update([
                         'paid_amount' => $total_paid,
@@ -270,6 +266,10 @@ class PaymentSalesController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'update', PaymentSale::class);
 
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $this->paymentAccountRule()]);
+
         \DB::transaction(function () use ($id, $request) {
             $helpers = new helpers;
             $user = Auth::user();
@@ -301,19 +301,15 @@ class PaymentSalesController extends BaseController
                 $payment_statut = 'unpaid';
             }
 
-            // delete old balance
-            $account = Account::where('id', $payment->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance - $payment->montant,
-                ]);
-            }
-
             try {
                 if ($payment->payment_method_id != 1 && $payment->payment_method_id != '1') {
+
+                    // Reverse the old account and credit the new one only on the
+                    // path that actually rewrites the payment. Card payments fall
+                    // through this branch untouched, so reversing before the check
+                    // would take the money off the account with nothing putting it
+                    // back.
+                    Account::adjustBalance($payment->account_id, -$payment->montant);
 
                     $payment->update([
                         'date' => $request['date'],
@@ -324,16 +320,7 @@ class PaymentSalesController extends BaseController
                         'notes' => $request['notes'],
                     ]);
 
-                    // update new account
-                    $new_account = Account::where('id', $request['account_id'])->exists();
-
-                    if ($new_account) {
-                        // Account exists, perform the update
-                        $new_account = Account::find($request['account_id']);
-                        $new_account->update([
-                            'balance' => $new_account->balance + $request['montant'],
-                        ]);
-                    }
+                    Account::adjustBalance($request['account_id'], $request['montant']);
 
                     $sale->update([
                         'paid_amount' => $new_total_paid,
@@ -390,15 +377,7 @@ class PaymentSalesController extends BaseController
                 'deleted_at' => Carbon::now(),
             ]);
 
-            $account = Account::where('id', $payment->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance - $payment->montant,
-                ]);
-            }
+            Account::adjustBalance($payment->account_id, -$payment->montant);
 
             $sale->update([
                 'paid_amount' => $total_paid,
@@ -452,6 +431,8 @@ class PaymentSalesController extends BaseController
     {
         $payment = PaymentSale::with('sale', 'sale.client')->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($payment);
+
         $payment_data['sale_Ref'] = $payment['sale']->Ref;
         $payment_data['client_name'] = $payment['sale']['client']?->name ?? '---';
         $payment_data['client_phone'] = $payment['sale']['client']->phone;
@@ -469,6 +450,8 @@ class PaymentSalesController extends BaseController
         $Html = view('pdf.payment_sale', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve(optional($payment->sale)->warehouse_id, $settings),
             'payment' => $payment_data,
         ])->render();
 

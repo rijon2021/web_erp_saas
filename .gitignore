@@ -19,3 +19,6 @@ Homestead.yaml
 npm-debug.log
 yarn-error.log
 .claude
+
+# Per-tenant uploads (upload_path()) — runtime data, never committed
+/public/images/tenants/*

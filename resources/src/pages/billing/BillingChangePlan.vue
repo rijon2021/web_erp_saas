@@ -15,10 +15,12 @@
         </template>
       </a-alert>
 
-      <div style="text-align: center; margin-bottom: 20px">
+      <!-- Hidden entirely when the platform sells a single cycle: a one-option
+           toggle is noise, and `cycle` is already pinned to that option. -->
+      <div v-if="cycles.length > 1" style="text-align: center; margin-bottom: 20px">
         <a-radio-group v-model:value="cycle" button-style="solid">
-          <a-radio-button value="monthly">{{ tf('Monthly', 'Monthly') }}</a-radio-button>
-          <a-radio-button value="yearly">{{ tf('Yearly', 'Yearly') }} <a-tag color="success" style="margin-left: 6px">{{ $t('Save') }}</a-tag></a-radio-button>
+          <a-radio-button v-if="cycles.includes('monthly')" value="monthly">{{ tf('Monthly', 'Monthly') }}</a-radio-button>
+          <a-radio-button v-if="cycles.includes('yearly')" value="yearly">{{ tf('Yearly', 'Yearly') }} <a-tag color="success" style="margin-left: 6px">{{ $t('Save') }}</a-tag></a-radio-button>
         </a-radio-group>
       </div>
 
@@ -69,6 +71,9 @@ const { currencySymbol } = useBillingFormat();
 const loading = ref(true);
 const plans = ref([]);
 const cycle = ref('monthly');
+// Cycles the super admin currently sells. Defaults to both so the page still
+// renders if an older backend omits the key.
+const cycles = ref(['monthly', 'yearly']);
 const currentPlanPrice = ref(null);
 const hasActive = ref(false);
 const pendingUpgrade = ref(null);
@@ -89,6 +94,9 @@ onMounted(async () => {
     hasActive.value = !!data.has_active;
     pendingUpgrade.value = data.pending_upgrade || null;
     currencySymbol.value = data.currency_symbol || '$';
+    if (Array.isArray(data.billing_cycles) && data.billing_cycles.length) cycles.value = data.billing_cycles;
+    // Never leave the page on a cycle the backend would reject.
+    if (!cycles.value.includes(cycle.value)) cycle.value = cycles.value[0];
     if (plans.value.length) allFeatures.value = plans.value[0].all_features || {};
   } catch (e) {
     message.error(e?.data?.message || 'Failed to load plans.');

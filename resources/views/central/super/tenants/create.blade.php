@@ -41,7 +41,7 @@
                                     name="company_name"
                                     class="form-control @error('company_name') is-invalid @enderror"
                                     value="{{ old('company_name') }}"
-                                    placeholder="Acme Inc."
+                                    placeholder="{{ __('super.tenants.ph_company') }}"
                                     required
                                 >
                                 @error('company_name')
@@ -86,7 +86,7 @@
                                     name="admin_email"
                                     class="form-control @error('admin_email') is-invalid @enderror"
                                     value="{{ old('admin_email') }}"
-                                    placeholder="admin@company.com"
+                                    placeholder="{{ __('super.tenants.ph_admin_email') }}"
                                     required
                                 >
                                 @error('admin_email')

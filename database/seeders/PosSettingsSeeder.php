@@ -9,7 +9,7 @@ class PosSettingsSeeder extends Seeder
 {
     public function run()
     {
-        DB::table('pos_settings')->insert([
+        DB::table('pos_settings')->insertOrIgnore([
             'id' => 1,
             'note_customer' => 'Thank You For Shopping With Us . Please Come Again',
             'show_note' => 1,

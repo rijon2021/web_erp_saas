@@ -29,7 +29,7 @@
                         <div class="col-md-6">
                             <div class="form-group">
                                 <label class="form-label">{{ __('super.blog.name') }}</label>
-                                <input type="text" name="name" class="form-control @error('name') is-invalid @enderror" value="{{ old('name', $blogCategory->name ?? '') }}" required placeholder="e.g. Product Updates">
+                                <input type="text" name="name" class="form-control @error('name') is-invalid @enderror" value="{{ old('name', $blogCategory->name ?? '') }}" required placeholder="{{ __('super.blog.ph_category_name') }}">
                                 @error('name') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>

@@ -4,8 +4,8 @@
  * are wrapped back into `{ status, data }` (http.raw keeps the HTTP status,
  * which offline-sync callers read as `response.status`). Supports the config
  * subset POS uses:
- * { params }, { responseType: 'blob' }, { timeout } (ignored — fetch has no
- * trivial timeout and the legacy value was advisory).
+ * { params }, { responseType: 'blob' | 'text' }, { timeout } (ignored — fetch
+ * has no trivial timeout and the legacy value was advisory).
  */
 import http from '../lib/http';
 
@@ -14,7 +14,10 @@ function csrfHeaders() {
     return match ? { 'X-XSRF-TOKEN': decodeURIComponent(match[1]) } : {};
 }
 
-async function blobGet(url) {
+// Non-JSON GETs: PDF blobs and the A4 invoice HTML (`sale_print_html/{id}`).
+// http.raw always calls res.json(), which throws on an HTML body, so these
+// bypass it and read the body in the requested shape.
+async function rawGet(url, responseType) {
     const res = await fetch('/api/' + url.replace(/^\//, ''), {
         credentials: 'same-origin',
         headers: { 'X-Requested-With': 'XMLHttpRequest', ...csrfHeaders() },
@@ -24,7 +27,8 @@ async function blobGet(url) {
         err.response = { status: res.status };
         throw err;
     }
-    return { status: res.status, data: await res.blob() };
+    const data = responseType === 'text' ? await res.text() : await res.blob();
+    return { status: res.status, data };
 }
 
 function wrapError(e) {
@@ -35,7 +39,9 @@ function wrapError(e) {
 
 export default {
     async get(url, config = {}) {
-        if (config.responseType === 'blob') return blobGet(url);
+        if (config.responseType === 'blob' || config.responseType === 'text') {
+            return rawGet(url, config.responseType);
+        }
         try {
             return await http.raw('GET', url, { params: config.params });
         } catch (e) { wrapError(e); }

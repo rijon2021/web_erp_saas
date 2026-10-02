@@ -13,7 +13,7 @@
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'image'">
           <a-image
-            :src="uploadUrl('brands', record.image || 'no_image.png')"
+            :src="uploadUrl('brands', record.image || 'no-image.png')"
             :width="44"
             :height="44"
             :preview="!!record.image"

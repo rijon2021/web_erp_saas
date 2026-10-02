@@ -174,13 +174,7 @@ class ExpensesController extends BaseController
                 'amount' => $request['expense']['amount'],
             ]);
 
-            $account = Account::find($request['expense']['account_id']);
-
-            if ($account) {
-                $account->update([
-                    'balance' => $account->balance - $request['expense']['amount'],
-                ]);
-            }
+            Account::adjustBalance($request['expense']['account_id'], -$request['expense']['amount']);
 
         }, 10);
 
@@ -214,7 +208,7 @@ class ExpensesController extends BaseController
         $expense = Expense::findOrFail($expenseId);
 
         $request->validate([
-            'documents.*' => 'required|file|max:10240', // Max 10MB per file
+            'documents.*' => 'required|file|mimes:jpg,jpeg,png,webp,pdf,doc,docx,xls,xlsx,csv,txt|max:10240', // Max 10MB per file
         ]);
 
         $uploadedDocuments = [];
@@ -232,7 +226,9 @@ class ExpensesController extends BaseController
                 $size = $file->getSize();
                 $mimeType = $file->getMimeType();
 
-                $filename = time() . '_' . Str::random(10) . '_' . $originalName;
+                $safeBase = preg_replace('/[^A-Za-z0-9_.-]+/', '_', pathinfo($originalName, PATHINFO_FILENAME)) ?: 'document';
+                $safeExt  = strtolower($file->guessExtension() ?: pathinfo($originalName, PATHINFO_EXTENSION));
+                $filename = time() . '_' . Str::random(10) . '_' . $safeBase . ($safeExt ? '.' . $safeExt : '');
 
                 // Move file to public/images/expense_documents
                 $file->move($uploadPath, $filename);
@@ -313,8 +309,11 @@ class ExpensesController extends BaseController
             ->update(['deleted_at' => Carbon::now()]);
 
         // Optionally delete the physical file
-        $filePath = public_path($document->path);
-        if (file_exists($filePath)) {
+        // Only delete files that really live under public/images — the stored
+        // path is server-written, but keep the unlink() contained regardless.
+        $filePath = realpath(public_path($document->path));
+        $imagesRoot = realpath(public_path('images'));
+        if ($filePath && $imagesRoot && str_starts_with($filePath, $imagesRoot . DIRECTORY_SEPARATOR) && is_file($filePath)) {
             unlink($filePath);
         }
 
@@ -364,13 +363,7 @@ class ExpensesController extends BaseController
                 'expense.payment_method_id' => 'required',
             ]);
 
-            $account = Account::find($expense->account_id);
-
-            if ($account) {
-                $account->update([
-                    'balance' => $account->balance + $expense->amount,
-                ]);
-            }
+            Account::adjustBalance($expense->account_id, $expense->amount);
 
             Expense::whereId($id)->update([
                 'date' => $request['expense']['date'],
@@ -382,12 +375,7 @@ class ExpensesController extends BaseController
                 'amount' => $request['expense']['amount'],
             ]);
 
-            $account = Account::find($request['expense']['account_id']);
-            if ($account) {
-                $account->update([
-                    'balance' => $account->balance - $request['expense']['amount'],
-                ]);
-            }
+            Account::adjustBalance($request['expense']['account_id'], -$request['expense']['amount']);
 
         }, 10);
 
@@ -419,15 +407,7 @@ class ExpensesController extends BaseController
             'deleted_at' => Carbon::now(),
         ]);
 
-        $account = Account::where('id', $expense->account_id)->exists();
-
-        if ($account) {
-            // Account exists, perform the update
-            $account = Account::find($expense->account_id);
-            $account->update([
-                'balance' => $account->balance + $expense->amount,
-            ]);
-        }
+        Account::adjustBalance($expense->account_id, $expense->amount);
 
         return response()->json(['success' => true]);
     }
@@ -459,15 +439,7 @@ class ExpensesController extends BaseController
                 'deleted_at' => Carbon::now(),
             ]);
 
-            $account = Account::where('id', $expense->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($expense->account_id);
-                $account->update([
-                    'balance' => $account->balance + $expense->amount,
-                ]);
-            }
+            Account::adjustBalance($expense->account_id, $expense->amount);
         }
 
         return response()->json(['success' => true]);

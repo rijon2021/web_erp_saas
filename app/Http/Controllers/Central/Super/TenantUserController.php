@@ -65,7 +65,7 @@ class TenantUserController extends Controller
             $userName = trim($user->firstname . ' ' . $user->lastname);
         });
 
-        return back()->with('success', "User \"{$userName}\" has been blocked.");
+        return back()->with('success', __('super.flash.user_blocked', ['name' => $userName]));
     }
 
     /**
@@ -81,7 +81,7 @@ class TenantUserController extends Controller
             $userName = trim($user->firstname . ' ' . $user->lastname);
         });
 
-        return back()->with('success', "User \"{$userName}\" has been unblocked.");
+        return back()->with('success', __('super.flash.user_unblocked', ['name' => $userName]));
     }
 
     /**

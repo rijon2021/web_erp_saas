@@ -9,7 +9,7 @@ class LanguagesSeeder extends Seeder
 {
     public function run()
     {
-        DB::table('languages')->insert([
+        DB::table('languages')->insertOrIgnore([
             ['name' => 'English', 'locale' => 'en', 'flag' => 'gb.svg', 'is_active' => true, 'is_default' => true],
             ['name' => 'Français', 'locale' => 'fr', 'flag' => 'fr.svg', 'is_active' => true, 'is_default' => false],
             ['name' => 'العربية', 'locale' => 'ar', 'flag' => 'sa.svg', 'is_active' => true, 'is_default' => false],

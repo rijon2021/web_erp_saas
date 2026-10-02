@@ -8,6 +8,7 @@ use App\Models\Central\PendingRegistration;
 use App\Models\Central\Plan;
 use App\Services\CurrencyConversionService;
 use App\Services\PaymentGateways\PaymentGatewayFactory;
+use App\Support\IsoCurrencies;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -104,14 +105,40 @@ class CheckoutController extends Controller
 
         // ── Online payment gateways ──
 
+        // A misspelled platform currency (Super Admin > Settings > General,
+        // e.g. "DBT" instead of "BDT") can neither be converted nor charged;
+        // every gateway rejects the session. Say so instead of a generic error.
+        if (! IsoCurrencies::isValid($registration->currency)) {
+            Log::error("Checkout blocked for registration {$registration->id}: platform currency '{$registration->currency}' is not a valid ISO 4217 code. Fix it under Super Admin > Settings > General.", [
+                'gateway'    => $gatewayKey,
+                'suggestion' => IsoCurrencies::suggest($registration->currency),
+            ]);
+
+            return back()->withErrors(['payment' => __('central.CheckoutInvalidPlatformCurrency', ['code' => strtoupper((string) $registration->currency)])]);
+        }
+
         // Resolve currency conversion
         $currencyConfig = PaymentGatewayFactory::getGatewayCurrencyConfig($gatewayKey);
-        $conversion = CurrencyConversionService::resolve(
-            (float) $registration->amount,
-            $registration->currency,
-            $currencyConfig['supported_currencies'],
-            $currencyConfig['default_currency']
-        );
+
+        try {
+            $conversion = CurrencyConversionService::resolve(
+                (float) $registration->amount,
+                $registration->currency,
+                $currencyConfig['supported_currencies'],
+                $currencyConfig['default_currency']
+            );
+        } catch (\Throwable $e) {
+            // Typically an unknown/misspelled platform currency code (e.g. "DBT"
+            // instead of "BDT") that no exchange-rate provider can resolve.
+            // Surface it on the checkout page instead of a bare 500.
+            Log::error("Checkout currency conversion failed for registration {$registration->id}: {$e->getMessage()}", [
+                'system_currency'  => $registration->currency,
+                'gateway'          => $gatewayKey,
+                'gateway_currency' => $currencyConfig['default_currency'],
+            ]);
+
+            return back()->withErrors(['payment' => $e->getMessage()]);
+        }
 
         $successUrl = route('central.registration.preparing', ['token' => $registration->token]);
         $cancelUrl  = route('central.checkout', ['token' => $registration->token]) . '?cancelled=1';

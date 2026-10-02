@@ -15,7 +15,7 @@ class ServerSeeder extends Seeder
     public function run()
     {
         // Insert some stuff
-        DB::table('servers')->insert(
+        DB::table('servers')->insertOrIgnore(
             [
                 'id' => 1,
                 'host' => 'mailtrap.io',

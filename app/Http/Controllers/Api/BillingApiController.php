@@ -194,6 +194,8 @@ class BillingApiController extends Controller
             ] : null,
             'currency_code'       => GeneralSetting::currencyCode(),
             'currency_symbol'     => GeneralSetting::currencySymbol(),
+            // Cycles the UI may offer. One entry = no cycle selector.
+            'billing_cycles'      => GeneralSetting::enabledBillingCycles(),
         ]);
     }
 
@@ -253,6 +255,8 @@ class BillingApiController extends Controller
                 'plan_id'   => $pendingSub->plan_id,
                 'plan_name' => $pendingSub->plan?->name,
             ] : null,
+            // Cycles the UI may offer. One entry = no cycle selector.
+            'billing_cycles'     => GeneralSetting::enabledBillingCycles(),
         ]);
     }
 
@@ -266,7 +270,7 @@ class BillingApiController extends Controller
 
         $request->validate([
             'plan_id'        => 'required|integer',
-            'billing_cycle'  => 'required|in:monthly,yearly',
+            'billing_cycle'  => 'required|' . GeneralSetting::billingCycleRule(),
             'offline_method' => 'required|string|max:50', // e.g. bank_transfer, cash, check
             'payment_proof'  => 'required|file|mimes:jpg,jpeg,png,webp,pdf|max:5120',
         ]);
@@ -374,7 +378,7 @@ class BillingApiController extends Controller
         $request->validate([
             'plan_id'       => 'required|integer',
             'gateway'       => 'required|string',
-            'billing_cycle' => 'required|in:monthly,yearly',
+            'billing_cycle' => 'required|' . GeneralSetting::billingCycleRule(),
         ]);
 
         $plan = Plan::where('is_active', true)->findOrFail($request->plan_id);

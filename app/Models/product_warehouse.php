@@ -30,6 +30,21 @@ class product_warehouse extends Model
         'qte' => 'double',
     ];
 
+    /**
+     * A variant product is stocked per variant. A parent-level row (no
+     * variant) left on one is not a pickable item — there is no variant to
+     * price it from — so product pickers must skip it.
+     */
+    public function scopeWithoutVariantParentRows($query)
+    {
+        return $query->where(function ($q) {
+            $q->whereNotNull('product_warehouse.product_variant_id')
+                ->orWhereHas('product', function ($p) {
+                    $p->where('type', '!=', 'is_variant');
+                });
+        });
+    }
+
     public function warehouse()
     {
         return $this->belongsTo('App\Models\Warehouse');

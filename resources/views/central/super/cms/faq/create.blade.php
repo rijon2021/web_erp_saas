@@ -24,7 +24,7 @@
                     @csrf
                     <div class="form-group mb-4">
                         <label class="form-label">{{ __('super.faq.question') }} <span class="text-danger">*</span></label>
-                        <input type="text" name="question" class="form-control" value="{{ old('question') }}" placeholder="e.g. How do I get started?" required>
+                        <input type="text" name="question" class="form-control" value="{{ old('question') }}" placeholder="{{ __('super.cms.ph_faq_question') }}" required>
                     </div>
                     <div class="form-group mb-4">
                         <label class="form-label">{{ __('super.faq.answer') }} <span class="text-danger">*</span></label>

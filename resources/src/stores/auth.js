@@ -57,6 +57,9 @@ export const useAuthStore = defineStore('auth', {
         // Custom footer line and the "developed by" credit.
         footerText: s => (s.user && s.user.footer) || '',
         developedBy: s => (s.user && s.user.developed_by) || 'Stocky',
+        // Plan feature remove_branding: may the tenant edit the two above?
+        // (Server-enforced too; without it the payload carries the platform's.)
+        canRemoveBranding: s => !!(s.user && s.user.can_remove_branding),
         // Admin module toggles (System Settings → Modules). Null map or a
         // missing key = module enabled, so fresh installs show everything.
         moduleEnabled: s => key => isModuleEnabled(s.user && s.user.module_flags, key),

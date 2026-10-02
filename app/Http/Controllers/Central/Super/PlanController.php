@@ -20,8 +20,8 @@ class PlanController extends Controller
 
     public function create(): View
     {
-        $availableLimits = Plan::AVAILABLE_LIMITS;
-        $availableFeatures = Plan::AVAILABLE_FEATURES;
+        $availableLimits = Plan::availableLimits();
+        $availableFeatures = Plan::availableFeatures();
 
         return view('central.super.plans.create', compact('availableLimits', 'availableFeatures'));
     }
@@ -53,14 +53,14 @@ class PlanController extends Controller
 
         Plan::create($validated);
 
-        return redirect()->route('super.plans.index')->with('success', 'Plan created successfully.');
+        return redirect()->route('super.plans.index')->with('success', __('super.plans.created'));
     }
 
     public function edit(Plan $plan): View
     {
         $plan->loadCount('tenantSubscriptions');
-        $availableLimits = Plan::AVAILABLE_LIMITS;
-        $availableFeatures = Plan::AVAILABLE_FEATURES;
+        $availableLimits = Plan::availableLimits();
+        $availableFeatures = Plan::availableFeatures();
 
         return view('central.super.plans.edit', compact('plan', 'availableLimits', 'availableFeatures'));
     }
@@ -91,18 +91,18 @@ class PlanController extends Controller
 
         $plan->update($validated);
 
-        return redirect()->route('super.plans.index')->with('success', 'Plan updated successfully.');
+        return redirect()->route('super.plans.index')->with('success', __('super.plans.updated'));
     }
 
     public function destroy(Plan $plan): RedirectResponse
     {
         if ($plan->tenantSubscriptions()->exists()) {
-            return back()->withErrors(['plan' => 'Cannot delete a plan that has active subscriptions.']);
+            return back()->withErrors(['plan' => __('super.plans.cannot_delete')]);
         }
 
         $plan->delete();
 
-        return redirect()->route('super.plans.index')->with('success', 'Plan deleted.');
+        return redirect()->route('super.plans.index')->with('success', __('super.plans.deleted'));
     }
 
     /**

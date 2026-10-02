@@ -9,8 +9,8 @@
       </template>
     </PageHeader>
 
-    <!-- Summary cards — real global totals across ALL customers (a separate
-         unpaginated fetch), not just the loaded page. -->
+    <!-- Summary cards — totals across every customer matching the current search
+         (a separate unpaginated fetch), not just the loaded page. -->
     <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
       <a-col :xs="12" :sm="12" :md="6">
         <a-card size="small" class="stat-card">
@@ -81,6 +81,11 @@
         <template v-else-if="column.key === 'return_Due'">
           <strong :style="{ color: Number(record.return_Due) > 0 ? '#faad14' : undefined }">
             {{ money(record.return_Due) }}
+          </strong>
+        </template>
+        <template v-else-if="column.key === 'net_balance'">
+          <strong :style="{ color: Number(record.net_balance) > 0 ? '#ff4d4f' : undefined }">
+            {{ money(record.net_balance) }}
           </strong>
         </template>
         <template v-else-if="column.key === 'actions'">
@@ -362,11 +367,15 @@ const columns = computed(() => [
   { title: t('Opening_Balance'), key: 'opening_balance', dataIndex: 'opening_balance', align: 'right', exportValue: r => money(r.opening_balance) },
   { title: t('Due'), key: 'due', dataIndex: 'due', sorter: true, align: 'right', exportValue: r => money(r.due) },
   { title: t('Total_Sell_Return_Due'), key: 'return_Due', dataIndex: 'return_Due', align: 'right', exportValue: r => money(r.return_Due) },
+  // What the customer actually owes overall. 'Due' covers sales only, so a
+  // customer whose debt is entirely an opening balance reads 0.00 there; this
+  // column is opening balance + sales due - return due, as the API computes it.
+  { title: t('Total_Due'), key: 'net_balance', dataIndex: 'net_balance', align: 'right', exportValue: r => money(r.net_balance) },
 ]);
 
 /* ------------------------------------------------- summary card totals */
-// Global sums across every customer (not the current page): one unpaginated
-// fetch that reuses the same list endpoint the exports use.
+// Sums across every customer matching the current search (not just the current
+// page): one unpaginated fetch that reuses the same list endpoint the exports use.
 const customerCount = computed(() => crud.total.value);
 const totals = ref({ due: 0, returnDue: 0, credit: 0 });
 const totalsLoading = ref(false);
@@ -375,28 +384,41 @@ const totalsLoading = ref(false);
 const initialLoading = ref(true);
 const cardsLoading = computed(() => initialLoading.value || crud.loading.value || totalsLoading.value);
 
+// Sequence guard: a slow response for an older search must not overwrite the
+// totals of a newer one.
+let totalsSeq = 0;
 async function loadTotals() {
+  const seq = ++totalsSeq;
   totalsLoading.value = true;
   try {
-    const data = await http.get('clients', { page: 1, limit: -1 });
+    const data = await http.get('clients', { page: 1, limit: -1, search: crud.search.value });
+    if (seq !== totalsSeq) return;
     const rows = data.clients || [];
     totals.value = {
-      due: rows.reduce((s, r) => s + (Number(r.due) || 0), 0),
+      // Opening balance is owed too — same basis as the Pay Due modal's total.
+      due: rows.reduce((s, r) => s + (Number(r.opening_balance) || 0) + (Number(r.due) || 0), 0),
       returnDue: rows.reduce((s, r) => s + (Number(r.return_Due) || 0), 0),
       credit: rows.reduce((s, r) => s + (Number(r.credit_limit) || 0), 0),
     };
   } catch (e) {
     // Leave the last-known totals in place on a transient failure.
   } finally {
-    totalsLoading.value = false;
+    if (seq === totalsSeq) totalsLoading.value = false;
   }
 }
 
-// Refresh the sums whenever the customer set changes size (add, delete, bulk
-// delete, filtered search) — pagination alone leaves total intact. The first
-// load is handled explicitly in onMounted, so skip it here (a total that stays
-// 0 would otherwise never trigger and leave the cards stuck loading).
-watch(() => crud.total.value, () => { if (!initialLoading.value) loadTotals(); });
+// Refresh the sums after every row fetch whose search term or row count
+// differs from the last one (typed search, add, delete, bulk delete) —
+// pagination and sorting alone leave both intact. Keyed on the fetched rows so
+// the totals request always carries the search the table actually used. The
+// first load is handled explicitly in onMounted, so skip it here.
+let totalsKey = '';
+watch(() => crud.rows.value, () => {
+  const key = `${crud.search.value}|${crud.total.value}`;
+  if (key === totalsKey) return;
+  totalsKey = key;
+  if (!initialLoading.value) loadTotals();
+});
 
 /* --------------------------------------------------- row action dispatch */
 function onAction(key, record) {
@@ -615,6 +637,7 @@ async function submitPay() {
 
 onMounted(async () => {
   await crud.fetchRows();
+  totalsKey = `${crud.search.value}|${crud.total.value}`;
   await loadTotals();
   initialLoading.value = false;
 });

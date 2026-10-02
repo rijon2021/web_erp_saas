@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Central\CentralLanguage;
 use App\Models\Central\GeneralSetting;
 use App\Models\Central\LandingFooter;
+use App\Support\IsoCurrencies;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
@@ -50,7 +51,7 @@ class GeneralSettingsController extends Controller
 
         $validated = $request->validate([
             'app_name'      => ['required', 'string', 'max:255'],
-            'currency_code'   => ['required', 'string', 'max:10', 'regex:/^[A-Z]{3}$/'],
+            'currency_code'   => ['required', 'string', 'max:10', 'regex:/^[A-Z]{3}$/', IsoCurrencies::rule()],
             'currency_symbol' => ['required', 'string', 'max:5'],
             'company_name'    => ['nullable', 'string', 'max:255'],
             'phone'        => ['nullable', 'string', 'max:50'],
@@ -89,7 +90,7 @@ class GeneralSettingsController extends Controller
             'tenant_address'           => ['nullable', 'string', 'max:500'],
             'tenant_logo'              => ['nullable', 'image', 'mimes:png,jpg,jpeg,svg,webp', 'max:2048'],
             'tenant_favicon'           => ['nullable', 'file', 'mimes:png,ico,jpg,jpeg,svg', 'max:1024'],
-            'tenant_currency_code'     => ['nullable', 'string', 'max:10', 'regex:/^[A-Za-z]{3}$/'],
+            'tenant_currency_code'     => ['nullable', 'string', 'max:10', 'regex:/^[A-Za-z]{3}$/', IsoCurrencies::rule()],
             'tenant_currency_symbol'   => ['nullable', 'string', 'max:5'],
             'tenant_default_language'  => ['nullable', 'string', 'max:10'],
             'tenant_footer_text'       => ['nullable', 'string', 'max:255'],
@@ -106,6 +107,10 @@ class GeneralSettingsController extends Controller
             'sms_gateway'                    => ['nullable', 'in:twilio,infobip,termii,custom'],
             'subscription_reminder_sms'      => ['nullable', 'string', 'max:480'],
             'trial_reminder_sms'             => ['nullable', 'string', 'max:480'],
+
+            // ── Billing cycles offered to customers ──
+            'billing_cycles'   => ['nullable', 'array'],
+            'billing_cycles.*' => ['string', 'in:monthly,yearly'],
         ]);
 
         if (! empty($validated['tenant_currency_code'])) {
@@ -167,6 +172,21 @@ class GeneralSettingsController extends Controller
         if (empty($validated['subscription_banner_threshold_days'])) {
             unset($validated['subscription_banner_threshold_days']);
         }
+
+        // ── Billing cycles on offer ──
+        // Two checkboxes, stored as two booleans. Unchecking both would leave
+        // nothing to sell, so monthly is forced back on rather than failing the
+        // whole save over a checkbox.
+        $cycles = array_values(array_intersect(
+            GeneralSetting::BILLING_CYCLES,
+            $validated['billing_cycles'] ?? []
+        ));
+        if (empty($cycles)) {
+            $cycles = ['monthly'];
+        }
+        $validated['billing_monthly_enabled'] = in_array('monthly', $cycles, true);
+        $validated['billing_yearly_enabled'] = in_array('yearly', $cycles, true);
+        unset($validated['billing_cycles']);
 
         // Normalize empty SMS strings to null so model accessors fall back to defaults.
         $validated['sms_gateway'] = $validated['sms_gateway'] ?? null;
@@ -333,7 +353,7 @@ class GeneralSettingsController extends Controller
             'contact_email'    => $validated['email'] ?? null,
         ]);
 
-        return back()->with('success', 'General settings saved successfully.');
+        return back()->with('success', __('super.flash.general_saved'));
     }
 
     public function removeLogo()
@@ -345,7 +365,7 @@ class GeneralSettingsController extends Controller
         }
         $setting->update(['logo_path' => null]);
 
-        return back()->with('success', 'Logo removed.');
+        return back()->with('success', __('super.flash.logo_removed'));
     }
 
     public function removeFavicon()
@@ -357,7 +377,7 @@ class GeneralSettingsController extends Controller
         }
         $setting->update(['favicon_path' => null]);
 
-        return back()->with('success', 'Favicon removed.');
+        return back()->with('success', __('super.flash.favicon_removed'));
     }
 
     public function removeTenantLogo()
@@ -369,7 +389,7 @@ class GeneralSettingsController extends Controller
         }
         $setting->update(['tenant_logo_path' => null]);
 
-        return back()->with('success', 'Tenant default logo removed.');
+        return back()->with('success', __('super.flash.tenant_logo_removed'));
     }
 
     public function removeTenantFavicon()
@@ -381,7 +401,7 @@ class GeneralSettingsController extends Controller
         }
         $setting->update(['tenant_favicon_path' => null]);
 
-        return back()->with('success', 'Tenant default favicon removed.');
+        return back()->with('success', __('super.flash.tenant_favicon_removed'));
     }
 
     public function clearCache()
@@ -391,7 +411,7 @@ class GeneralSettingsController extends Controller
         Artisan::call('view:clear');
         Artisan::call('cache:clear');
 
-        return back()->with('success', 'Central cache cleared successfully.');
+        return back()->with('success', __('super.flash.cache_cleared'));
     }
 
     /**

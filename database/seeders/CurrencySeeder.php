@@ -17,7 +17,7 @@ class CurrencySeeder extends Seeder
     {
         [$code, $symbol] = $this->tenantCurrency();
 
-        DB::table('currencies')->insert(
+        DB::table('currencies')->insertOrIgnore(
             [
                 'id'     => 1,
                 'code'   => $code,

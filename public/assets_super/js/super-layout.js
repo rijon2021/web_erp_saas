@@ -87,12 +87,12 @@ function swalConfirm(e, opts) {
     e.preventDefault();
     var form = e.target.closest('form') || e.target;
     var config = Object.assign({
-        title: 'Are you sure?',
+        title: __s('are_you_sure'),
         text: '',
         icon: 'warning',
         showCancelButton: true,
-        confirmButtonText: 'Yes',
-        cancelButtonText: 'Cancel',
+        confirmButtonText: __s('yes'),
+        cancelButtonText: __s('cancel'),
         confirmButtonColor: '#6366f1',
         cancelButtonColor: '#64748b',
         reverseButtons: true,

@@ -726,6 +726,8 @@ class DamageController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($damage_data);
+
         $adjustment['warehouse_name'] = $damage_data['warehouse']->name;
         $adjustment['Ref'] = $damage_data->Ref;
         $adjustment['date'] = $damage_data->date.' '.$damage_data->time;
@@ -755,6 +757,8 @@ class DamageController extends BaseController
         $settings = Setting::where('deleted_at', '=', null)->first();
         $Html = view('pdf.adjustment_pdf', [
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($damage_data->warehouse_id, $settings),
             'adjustment' => $adjustment,
             'details' => $details,
         ])->render();
@@ -811,10 +815,25 @@ class DamageController extends BaseController
         $last = DB::table('damages')->latest('id')->first();
 
         if ($last) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = isset($nwMsg[1]) ? ($nwMsg[1] + 1) : 1112;
-            $code = 'DM_'.$inMsg;
+            $item = (string) ($last->Ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $code = 'DM_'.($nwMsg[1] + 1);
+            } else {
+                $code = 'DM_1112';
+            }
         } else {
             $code = 'DM_1111';
         }

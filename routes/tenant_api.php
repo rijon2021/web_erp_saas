@@ -86,7 +86,7 @@ Route::get('/languages', 'LanguageController@load_language');
 Route::post('/webhooks/incoming/{source}', [\App\Http\Controllers\Webhooks\IncomingWebhooksController::class, 'handle']);
 
 // Zapier integration (server-to-server; authenticated by the tenant's Zapier API key)
-Route::prefix('zapier')->middleware(['zapier.auth', 'tenant.feature:zapier'])->group(function () {
+Route::prefix('zapier')->middleware(['zapier.auth', 'tenant.entitled', 'tenant.feature:zapier'])->group(function () {
     Route::get('me', [\App\Http\Controllers\Zapier\ZapierController::class, 'me']);
     Route::post('hooks', [\App\Http\Controllers\Zapier\ZapierController::class, 'subscribe']);
     Route::delete('hooks/{id}', [\App\Http\Controllers\Zapier\ZapierController::class, 'unsubscribe']);
@@ -373,8 +373,6 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::get('report/sales', 'ReportController@Report_Sales');
     Route::get('report/purchases', 'ReportController@Report_Purchases');
     Route::get('report/get_last_sales', 'ReportController@Get_last_Sales');
-    Route::get('report/stock_alert', 'ReportController@Products_Alert');
-    Route::get('report/payment_chart', 'ReportController@Payment_chart');
     Route::get('report/warehouse_report', 'ReportController@Warehouse_Report');
     Route::get('report/internal_location_report', 'ReportController@Internal_Location_Report');
     Route::get('report/sales_warehouse', 'ReportController@Sales_Warehouse');
@@ -384,12 +382,10 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::get('report/returns_purchase_warehouse', 'ReportController@Returns_Purchase_Warehouse');
     Route::get('report/expenses_warehouse', 'ReportController@Expenses_Warehouse');
     Route::get('report/warhouse_count_stock', 'ReportController@Warhouse_Count_Stock');
-    Route::get('report/report_today', 'ReportController@report_today');
     Route::get('report/count_quantity_alert', 'ReportController@count_quantity_alert');
     Route::get('report/profit_and_loss', 'ReportController@ProfitAndLoss');
     // Profit analysis by dimension: product|category|unit|customer|date|warehouse
     Route::get('report/profit/{dimension}', 'ProfitReportController@index');
-    Route::get('report/report_dashboard', 'ReportController@report_dashboard');
     Route::get('report/top_products', 'ReportController@report_top_products');
     Route::get('report/top_customers', 'ReportController@report_top_customers');
     Route::get('report/product_report', 'ReportController@product_report');
@@ -620,6 +616,7 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::post('suppliers/import', 'ProvidersController@import');
 
     Route::post('providers/delete/by_selection', 'ProvidersController@delete_by_selection');
+    Route::post('providers/{id}/adjust-opening-balance', 'ProvidersController@adjustOpeningBalance');
     Route::post('pay_supplier_due', 'ProvidersController@pay_supplier_due');
     Route::post('pay_purchase_return_due', 'ProvidersController@pay_purchase_return_due');
 
@@ -779,6 +776,9 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     // ------------------------------- PRODUCTS --------------------------\\
     // ------------------------------------------------------------------\\
 
+    // Typeahead for product pickers (any visible product). Before the resource,
+    // or its products/{product} route would answer instead.
+    Route::get('products/search-basic', 'ProductsController@search_products_basic');
     Route::resource('products', 'ProductsController')->middleware('tenant.limit:max_products');
     Route::post('products/{id}/duplicate', 'ProductsController@duplicate')->middleware('tenant.limit:max_products');
     Route::post('products/warehouse_locations', 'ProductsController@storeWarehouseLocation');
@@ -803,6 +803,7 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     // ---- count stock ----------
     Route::get('count_stock', 'ProductsController@count_stock_list');
     Route::post('store_count_stock', 'ProductsController@store_count_stock');
+    Route::get('count_stock/{id}/download', 'ProductsController@download_count_stock');
 
     // ------------------------------- Category --------------------------\\
     // ------------------------------------------------------------------\\
@@ -978,6 +979,7 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::post('mrp/production-orders/{id}/release', 'MrpProductionController@release');
         Route::post('mrp/production-orders/{id}/complete', 'MrpProductionController@complete');
         Route::post('mrp/production-orders/{id}/cancel', 'MrpProductionController@cancel');
+        Route::get('mrp/production-orders/{id}/barcodes', 'MrpProductionController@barcodes');
         Route::get('mrp/production-orders', 'MrpProductionController@index');
         Route::post('mrp/production-orders', 'MrpProductionController@store');
         Route::get('mrp/production-orders/{id}', 'MrpProductionController@show');
@@ -1566,6 +1568,12 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::get('shopify/sync/status/{id}', 'ShopifySyncController@status');
         Route::post('shopify/sync/cancel/{id}', 'ShopifySyncController@cancel');
 
+        // Pair a product with a listing that already exists in a shop.
+        Route::get('shopify/product-links', 'ShopifyProductLinkController@stores');
+        Route::get('shopify/product-links/search', 'ShopifyProductLinkController@search');
+        Route::post('shopify/product-links', 'ShopifyProductLinkController@link');
+        Route::delete('shopify/product-links', 'ShopifyProductLinkController@unlink');
+
         Route::get('shopify/mappings', 'ShopifySyncController@mappings');
         Route::post('shopify/mappings', 'ShopifySyncController@link');
         Route::delete('shopify/mappings/{id}', 'ShopifySyncController@unlink');
@@ -1775,7 +1783,10 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'tenant.subscribed
         Route::get('reports/trial-balance', 'AccountingV2\\ReportsController@trialBalance');
         Route::get('reports/profit-loss', 'AccountingV2\\ReportsController@profitAndLoss');
         Route::get('reports/balance-sheet', 'AccountingV2\\ReportsController@balanceSheet');
+        Route::get('reports/account-ledger', 'AccountingV2\\ReportsController@accountLedger');
         Route::get('reports/tax-summary', 'AccountingV2\\ReportsController@taxSummary');
+        Route::get('reports/reconciliation', 'AccountingV2\\ReportsController@reconciliation');
+        Route::get('reports/reconciliation/{accountId}', 'AccountingV2\\ReportsController@reconciliationDetail')->where('accountId', '[0-9]+');
     });
 });
 
@@ -1805,27 +1816,36 @@ Route::get('pos/customer-display/last-cart', [CustomerDisplayController::class, 
 
 // -------------------------------  Print & PDF ------------------------\\
 // ------------------------------------------------------------------\\
+// These render full documents (invoices, quotations, payment receipts) that
+// carry customer names, addresses, tax numbers and line items, so they run
+// behind the same stack as every other authenticated endpoint in this file.
+// The SPA fetches them over XHR (lib/http.js `download`/`raw`), which sends
+// the Passport `laravel_token` cookie plus the `X-XSRF-TOKEN` header, so the
+// token guard authenticates them exactly like the JSON endpoints.
+Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', 'tenant.subscribed', 'tenant.activity'])->group(function () {
 
-Route::get('sale_pdf/{id}', 'SalesController@Sale_PDF');
-Route::get('sale_print_html/{id}', 'SalesController@Sale_PDF_Inline');
-Route::get('quote_pdf/{id}', 'QuotationsController@Quotation_pdf');
-Route::get('quote_print_html/{id}', 'QuotationsController@Quotation_PDF_Inline');
-Route::get('booking_pdf/{id}', 'BookingController@booking_pdf');
-Route::get('service_job_pdf/{id}', 'ServiceJobController@service_job_pdf');
-Route::get('service_quote_pdf/{id}', 'ServiceJobController@service_quote_pdf');
-Route::get('purchase_pdf/{id}', 'PurchasesController@Purchase_pdf');
-Route::get('purchase_print_html/{id}', 'PurchasesController@Purchase_PDF_Inline');
-Route::get('return_sale_pdf/{id}', 'SalesReturnController@Return_pdf');
-Route::get('return_purchase_pdf/{id}', 'PurchasesReturnController@Return_pdf');
-Route::get('payment_purchase_pdf/{id}', 'PaymentPurchasesController@Payment_purchase_pdf');
-Route::get('payment_return_sale_pdf/{id}', 'PaymentSaleReturnsController@payment_return');
-Route::get('payment_return_purchase_pdf/{id}', 'PaymentPurchaseReturnsController@payment_return');
-Route::get('payment_sale_pdf/{id}', 'PaymentSalesController@payment_sale');
-Route::get('sales_print_invoice/{id}', 'SalesController@Print_Invoice_POS');
-Route::post('direct_network_print/{id}', 'SalesController@Direct_Network_Print_POS');
-Route::get('transfer_pdf/{id}', 'TransferController@transfer_pdf');
-Route::get('adjustment_pdf/{id}', 'AdjustmentController@adjustment_pdf');
-Route::get('damage_pdf/{id}', 'DamageController@damage_pdf');
+    Route::get('sale_pdf/{id}', 'SalesController@Sale_PDF');
+    Route::get('sale_print_html/{id}', 'SalesController@Sale_PDF_Inline');
+    Route::get('quote_pdf/{id}', 'QuotationsController@Quotation_pdf');
+    Route::get('quote_print_html/{id}', 'QuotationsController@Quotation_PDF_Inline');
+    Route::get('booking_pdf/{id}', 'BookingController@booking_pdf');
+    Route::get('service_job_pdf/{id}', 'ServiceJobController@service_job_pdf');
+    Route::get('service_quote_pdf/{id}', 'ServiceJobController@service_quote_pdf');
+    Route::get('purchase_pdf/{id}', 'PurchasesController@Purchase_pdf');
+    Route::get('purchase_print_html/{id}', 'PurchasesController@Purchase_PDF_Inline');
+    Route::get('return_sale_pdf/{id}', 'SalesReturnController@Return_pdf');
+    Route::get('return_purchase_pdf/{id}', 'PurchasesReturnController@Return_pdf');
+    Route::get('payment_purchase_pdf/{id}', 'PaymentPurchasesController@Payment_purchase_pdf');
+    Route::get('payment_return_sale_pdf/{id}', 'PaymentSaleReturnsController@payment_return');
+    Route::get('payment_return_purchase_pdf/{id}', 'PaymentPurchaseReturnsController@payment_return');
+    Route::get('payment_sale_pdf/{id}', 'PaymentSalesController@payment_sale');
+    Route::get('sales_print_invoice/{id}', 'SalesController@Print_Invoice_POS');
+    Route::post('direct_network_print/{id}', 'SalesController@Direct_Network_Print_POS');
+    Route::get('transfer_pdf/{id}', 'TransferController@transfer_pdf');
+    Route::get('adjustment_pdf/{id}', 'AdjustmentController@adjustment_pdf');
+    Route::get('damage_pdf/{id}', 'DamageController@damage_pdf');
+
+});
 
 // Route::get('/available-modules', 'ModuleSettingsController@get_modules_enabled');
 

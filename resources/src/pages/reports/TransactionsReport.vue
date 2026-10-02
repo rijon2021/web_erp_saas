@@ -35,6 +35,33 @@
         <a-tag>{{ record.payment_method }}</a-tag>
       </template>
     </template>
+
+    <!-- Summary by payment method (legacy report's bottom card) -->
+    <template #after>
+      <a-card size="small" style="margin-top: 16px" :title="tf('Summary_by_Payment_Method', 'Summary by Payment Method')">
+        <template #extra>
+          <a-button size="small" :disabled="!summaryRows.length" :loading="exportingSummary" @click="exportSummaryPdf">
+            <template #icon><FilePdfOutlined /></template>
+            {{ tf('Summary_PDF', 'Summary PDF') }}
+          </a-button>
+        </template>
+        <a-table
+          size="small" :columns="summaryColumns" :data-source="summaryRows" row-key="payment_method"
+          :pagination="false" :loading="crud.loading.value" :scroll="{ x: 'max-content' }">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.money">{{ money(record[column.dataIndex] || 0) }}</template>
+          </template>
+          <template v-if="summaryRows.length" #summary>
+            <a-table-summary-row>
+              <a-table-summary-cell v-for="(col, i) in summaryColumns" :key="col.key" :align="col.align">
+                <strong v-if="i === 0">{{ $t('Total') }}</strong>
+                <strong v-else>{{ money(summaryTotals[col.dataIndex]) }}</strong>
+              </a-table-summary-cell>
+            </a-table-summary-row>
+          </template>
+        </a-table>
+      </a-card>
+    </template>
   </ReportPage>
 </template>
 
@@ -45,6 +72,10 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { message } from 'ant-design-vue';
+import { FilePdfOutlined } from '@ant-design/icons-vue';
+import { t as tf } from '../../i18n';
+import { exportPdf } from '../../lib/exporters';
 import ReportPage from '../../components/ReportPage.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
@@ -89,6 +120,44 @@ const columns = computed(() => [
   { title: t('Amount'), key: 'montant', dataIndex: 'montant', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.montant) },
   { title: t('AddedBy'), dataIndex: 'user_name', key: 'user_name' },
 ]);
+
+// Per-method totals over the filtered date range (server-computed; not paged).
+const summaryRows = computed(() => crud.payload.value?.payment_summary || []);
+
+const summaryColumns = computed(() => [
+  { title: t('Payment_Method'), dataIndex: 'payment_method', key: 'payment_method' },
+  ...[
+    ['sale_total', tf('Total_Sales', 'Total Sales')],
+    ['sale_return_total', tf('Sale_Refunds', 'Sale Refunds')],
+    ['purchase_total', tf('Total_Purchases', 'Total Purchases')],
+    ['purchase_return_total', tf('Purchase_Refunds', 'Purchase Refunds')],
+    ['expense_total', tf('Total_Expenses', 'Total Expenses')],
+  ].map(([key, title]) => ({
+    title, dataIndex: key, key, align: 'right', money: true, exportValue: r => money(r[key] || 0),
+  })),
+]);
+
+const summaryTotals = computed(() => {
+  const out = {};
+  for (const col of summaryColumns.value) {
+    if (col.money) out[col.dataIndex] = summaryRows.value.reduce((a, r) => a + (Number(r[col.dataIndex]) || 0), 0);
+  }
+  return out;
+});
+
+const exportingSummary = ref(false);
+async function exportSummaryPdf() {
+  exportingSummary.value = true;
+  try {
+    const foot = summaryColumns.value.map((c, i) => (i === 0 ? t('Total') : money(summaryTotals.value[c.dataIndex])));
+    await exportPdf(tf('Summary_by_Payment_Method', 'Summary by Payment Method'), summaryColumns.value, summaryRows.value, { foot });
+  } catch (e) {
+    console.error('[summary-export]', e);
+    message.error(t('InvalidData'));
+  } finally {
+    exportingSummary.value = false;
+  }
+}
 
 onMounted(crud.fetchRows);
 </script>

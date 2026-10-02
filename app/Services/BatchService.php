@@ -8,6 +8,8 @@ use App\Models\AdjustmentDetailBatch;
 use App\Models\Damage;
 use App\Models\DamageDetail;
 use App\Models\DamageDetailBatch;
+use App\Models\MrpProductionOrder;
+use App\Models\MrpProductionOrderMaterialBatch;
 use App\Models\Product;
 use App\Models\product_warehouse;
 use App\Models\ProductBatch;
@@ -183,6 +185,27 @@ class BatchService
         return $out;
     }
 
+    /**
+     * Quantity-weighted average unit cost of the batch rows on a raw request
+     * detail row, or null when the row carries no priced batch. Rows without a
+     * unit cost are ignored on both sides of the division, matching the
+     * front-end's batchWeightedAvgCost() so the two never disagree.
+     */
+    public function weightedAverageCostForRow(array $row): ?float
+    {
+        $qty = 0.0;
+        $value = 0.0;
+        foreach ($this->extractBatchesFromRow($row) as $b) {
+            if ($b['unit_cost'] === null) {
+                continue;
+            }
+            $qty += (float) $b['qty'];
+            $value += (float) $b['qty'] * (float) $b['unit_cost'];
+        }
+
+        return $qty > 0 ? $value / $qty : null;
+    }
+
     protected function normalizeDate($v): ?string
     {
         if ($v === null || $v === '' || $v === 'null') {
@@ -266,16 +289,18 @@ class BatchService
      *
      * @return array<int, array<string, mixed>>
      */
-    public function availableBatchesForSale(int $productId, ?int $variantId, int $warehouseId): array
+    public function availableBatchesForSale(int $productId, ?int $variantId, int $warehouseId, bool $includeEmpty = false): array
     {
         if (! $this->isSupported() || $productId <= 0 || $warehouseId <= 0) {
             return [];
         }
 
+        // $includeEmpty: an "add" adjustment restocks a batch, so batches that
+        // are currently at zero are legitimate targets there.
         $query = ProductBatch::active()
             ->forProduct($productId)
             ->forWarehouse($warehouseId)
-            ->where('qty', '>', 0);
+            ->when(! $includeEmpty, fn ($q) => $q->where('qty', '>', 0));
 
         if ($variantId !== null) {
             $query->where('product_variant_id', $variantId);
@@ -1326,6 +1351,67 @@ class BatchService
                     'party_label' => 'Warehouse',
                     'party_name' => optional($damage->warehouse)->name,
                     'party_id' => $damage->warehouse_id ? (int) $damage->warehouse_id : null,
+                    'qty_in' => 0.0,
+                    'qty_out' => (float) $r->qty,
+                    'unit_value' => $r->unit_cost !== null ? (float) $r->unit_cost : null,
+                    'unit_label' => 'unit_cost',
+                    'pivot_id' => (int) $r->id,
+                ]);
+            }
+        }
+
+        // --- Manufacturing: finished goods received from a production order (qty IN) ---
+        if (Schema::hasTable('mrp_production_orders') && Schema::hasColumn('mrp_production_orders', 'product_batch_id')) {
+            $orders = MrpProductionOrder::with('warehouse:id,name')
+                ->whereNull('deleted_at')
+                ->where('product_batch_id', $batchId)
+                ->where('status', 'completed')
+                ->get();
+
+            foreach ($orders as $order) {
+                $date = $order->actual_end ? $order->actual_end->toDateString() : ($order->production_date ? $order->production_date->toDateString() : null);
+                $movements->push([
+                    'type' => 'production',
+                    'direction' => 'in',
+                    'date' => $date,
+                    'sort_key' => $this->buildSortKey($date, $order->id),
+                    'ref' => $order->reference,
+                    'ref_id' => (int) $order->id,
+                    'party_label' => 'Warehouse',
+                    'party_name' => optional($order->warehouse)->name,
+                    'party_id' => $order->warehouse_id ? (int) $order->warehouse_id : null,
+                    'qty_in' => (float) $order->qty_produced,
+                    'qty_out' => 0.0,
+                    'unit_value' => (float) $order->unit_cost > 0 ? (float) $order->unit_cost : null,
+                    'unit_label' => 'unit_cost',
+                    'pivot_id' => (int) $order->id,
+                ]);
+            }
+        }
+
+        // --- Manufacturing: raw material issued to a production order (qty OUT) ---
+        if (Schema::hasTable('mrp_production_order_material_batches')) {
+            $rows = MrpProductionOrderMaterialBatch::with(['material.order.warehouse:id,name'])
+                ->where('product_batch_id', $batchId)
+                ->get();
+
+            foreach ($rows as $r) {
+                $material = $r->material;
+                $order = $material ? $material->order : null;
+                if (! $order) {
+                    continue;
+                }
+                $date = $order->actual_start ? $order->actual_start->toDateString() : ($order->planned_start ? $order->planned_start->toDateString() : null);
+                $movements->push([
+                    'type' => 'production_consumption',
+                    'direction' => 'out',
+                    'date' => $date,
+                    'sort_key' => $this->buildSortKey($date, $order->id),
+                    'ref' => $order->reference,
+                    'ref_id' => (int) $order->id,
+                    'party_label' => 'Warehouse',
+                    'party_name' => optional($order->warehouse)->name,
+                    'party_id' => $order->warehouse_id ? (int) $order->warehouse_id : null,
                     'qty_in' => 0.0,
                     'qty_out' => (float) $r->qty,
                     'unit_value' => $r->unit_cost !== null ? (float) $r->unit_cost : null,

@@ -10,10 +10,17 @@
       <a-card size="small" :title="$t('Receipt') || 'Receipt'" style="margin-bottom: 16px">
         <a-row :gutter="16">
           <a-col :xs="24" :md="8">
-            <a-form-item label="Receipt paper size">
+            <a-form-item
+              :label="$t('Receipt_Paper_Size')"
+              extra="Width of the thermal receipt. For a full A4 invoice use the “Invoice format” option below."
+            >
               <a-select
                 v-model:value="s.receipt_paper_size"
-                :options="['80mm', '58mm', 'A4'].map(v => ({ value: v, label: v }))"
+                :options="[
+                  { value: 58, label: $t('Paper_58mm') },
+                  { value: 80, label: $t('Paper_80mm') },
+                  { value: 88, label: $t('Paper_88mm') },
+                ]"
               />
             </a-form-item>
           </a-col>
@@ -241,6 +248,10 @@ onMounted(async () => {
     const data = await http.get('get_pos_Settings_api');
     const ps = data.pos_settings || {};
     ALL_FLAGS.forEach(k => { ps[k] = !!Number(ps[k] ?? 0) || ps[k] === true; });
+    // Stored as an integer (58/80/88); coerce so the select matches an option.
+    ps.receipt_paper_size = [58, 80, 88].includes(Number(ps.receipt_paper_size))
+      ? Number(ps.receipt_paper_size)
+      : 80;
     s.value = ps;
     // Global invoice format comes as a top-level field on the response
     // (it lives on the `settings` row, not `pos_settings`).

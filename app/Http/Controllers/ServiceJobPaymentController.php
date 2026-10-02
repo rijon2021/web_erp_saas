@@ -84,12 +84,7 @@ class ServiceJobPaymentController extends BaseController
                     'notes' => $validated['notes'] ?? null,
                 ]);
 
-                if (! empty($validated['account_id'])) {
-                    $account = Account::find($validated['account_id']);
-                    if ($account) {
-                        $account->update(['balance' => $account->balance + $validated['montant']]);
-                    }
-                }
+                Account::adjustBalance($validated['account_id'] ?? null, $validated['montant']);
 
                 app(ServiceJobController::class)->recalcTotals($job->fresh());
             } catch (Exception $e) {
@@ -122,12 +117,7 @@ class ServiceJobPaymentController extends BaseController
 
         DB::transaction(function () use ($validated, $job, $payment) {
             // Reverse old account balance
-            if ($payment->account_id) {
-                $oldAccount = Account::find($payment->account_id);
-                if ($oldAccount) {
-                    $oldAccount->update(['balance' => $oldAccount->balance - $payment->montant]);
-                }
-            }
+            Account::adjustBalance($payment->account_id, -$payment->montant);
 
             $payment->update([
                 'date' => $validated['date'],
@@ -140,12 +130,7 @@ class ServiceJobPaymentController extends BaseController
             ]);
 
             // Apply new account balance
-            if (! empty($validated['account_id'])) {
-                $newAccount = Account::find($validated['account_id']);
-                if ($newAccount) {
-                    $newAccount->update(['balance' => $newAccount->balance + $validated['montant']]);
-                }
-            }
+            Account::adjustBalance($validated['account_id'] ?? null, $validated['montant']);
 
             app(ServiceJobController::class)->recalcTotals($job->fresh());
         }, 10);
@@ -164,12 +149,7 @@ class ServiceJobPaymentController extends BaseController
             ->findOrFail($id);
 
         DB::transaction(function () use ($job, $payment) {
-            if ($payment->account_id) {
-                $account = Account::find($payment->account_id);
-                if ($account) {
-                    $account->update(['balance' => $account->balance - $payment->montant]);
-                }
-            }
+            Account::adjustBalance($payment->account_id, -$payment->montant);
 
             $payment->update(['deleted_at' => Carbon::now()]);
             app(ServiceJobController::class)->recalcTotals($job->fresh());

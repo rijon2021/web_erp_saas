@@ -75,7 +75,7 @@
                             <div>
                                 <p class="mb-0 fw-600 fs-md"><a href="{{ route('super.tenants.show', $t) }}" class="text-reset text-decoration-none link-hover-primary" title="{{ __('super.common.view') }}">{{ $displayName }}</a></p>
                                 <p class="mb-0 text-muted fs-xs3">
-                                    {{ $t->admin_email ?? ('Created ' . $t->created_at->diffForHumans()) }}
+                                    {{ $t->admin_email ?? __('super.common.created_ago', ['time' => $t->created_at->diffForHumans()]) }}
                                 </p>
                             </div>
                         </div>

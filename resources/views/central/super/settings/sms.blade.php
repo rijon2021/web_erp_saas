@@ -48,7 +48,7 @@
                             name="twilio_sid"
                             class="form-control @error('twilio_sid') is-invalid @enderror"
                             value="{{ old('twilio_sid', $setting->twilio_sid) }}"
-                            placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                            placeholder="{{ __('super.sms_settings.ph_twilio_sid') }}"
                             autocomplete="off"
                         >
                         @error('twilio_sid')
@@ -109,7 +109,7 @@
                             name="infobip_base_url"
                             class="form-control @error('infobip_base_url') is-invalid @enderror"
                             value="{{ old('infobip_base_url', $setting->infobip_base_url) }}"
-                            placeholder="https://xxxxx.api.infobip.com"
+                            placeholder="{{ __('super.sms_settings.ph_infobip_url') }}"
                             autocomplete="off"
                         >
                         @error('infobip_base_url')
@@ -147,7 +147,7 @@
                             name="infobip_sender_from"
                             class="form-control @error('infobip_sender_from') is-invalid @enderror"
                             value="{{ old('infobip_sender_from', $setting->infobip_sender_from) }}"
-                            placeholder="InfoSMS"
+                            placeholder="{{ __('super.sms_settings.ph_infobip_from') }}"
                             autocomplete="off"
                         >
                         @error('infobip_sender_from')
@@ -218,7 +218,7 @@
                             name="termii_sender"
                             class="form-control @error('termii_sender') is-invalid @enderror"
                             value="{{ old('termii_sender', $setting->termii_sender) }}"
-                            placeholder="Stocky"
+                            placeholder="{{ __('super.sms_settings.ph_termii_from') }}"
                             autocomplete="off"
                         >
                         @error('termii_sender')
@@ -241,7 +241,7 @@
                             name="custom_api_url"
                             class="form-control @error('custom_api_url') is-invalid @enderror"
                             value="{{ old('custom_api_url', $setting->custom_api_url) }}"
-                            placeholder="https://sms-provider.com/api/send"
+                            placeholder="{{ __('super.sms_settings.ph_custom_url') }}"
                             autocomplete="off"
                         >
                         @error('custom_api_url')
@@ -265,7 +265,7 @@
                                 <label class="form-label">{{ __('central.ContentType') }}</label>
                                 <select name="custom_content_type" class="form-control">
                                     <option value="json" {{ old('custom_content_type', $setting->custom_content_type ?: 'json') === 'json' ? 'selected' : '' }}>JSON</option>
-                                    <option value="form" {{ old('custom_content_type', $setting->custom_content_type ?: 'json') === 'form' ? 'selected' : '' }}>Form</option>
+                                    <option value="form" {{ old('custom_content_type', $setting->custom_content_type ?: 'json') === 'form' ? 'selected' : '' }}>{{ __('super.sms_settings.content_type_form') }}</option>
                                 </select>
                             </div>
                         </div>

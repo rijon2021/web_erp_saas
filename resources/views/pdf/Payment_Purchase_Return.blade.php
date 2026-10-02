@@ -1,3 +1,10 @@
+@php
+    // Branch letterhead: the warehouse that issued this document supplies the
+    // name, address, phone, email and logo below. Each field falls back to the
+    // global company settings on its own, and documents with no warehouse get
+    // the plain company block.
+    $issuer = $issuer ?? \App\Services\InvoiceIssuerService::company($setting ?? null);
+@endphp
 @php $pdfLocale = app()->getLocale(); $isRtl = $pdfLocale === 'ar'; @endphp
 <!DOCTYPE html>
 <html lang="{{ $pdfLocale }}" dir="{{ $isRtl ? 'rtl' : 'ltr' }}">
@@ -47,12 +54,12 @@
             <td style="width: 30%; vertical-align: top;">
                 @php
                     $logoSrc = null;
-                    if (!empty($setting['logo'])) {
+                    if (!empty($issuer['logo'])) {
                         // Tenant-aware upload location (images/tenants/{id}/settings or images/super/settings),
                         // falling back to the legacy shared path for old files like logo-default.png.
-                        $logoPath = upload_public_path('settings/'.$setting['logo']);
+                        $logoPath = upload_public_path('settings/'.$issuer['logo']);
                         if (!is_file($logoPath)) {
-                            $logoPath = public_path('images/'.$setting['logo']);
+                            $logoPath = public_path('images/'.$issuer['logo']);
                         }
                         if (file_exists($logoPath) && is_readable($logoPath)) {
                             $logoData = @file_get_contents($logoPath);
@@ -133,11 +140,11 @@
                         <div style="color: #ffffff; font-size: 9pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.3px;">{{ __('pdf.company_info') }}</div>
                     </div>
                     <div style="padding: 10px; background: #fffbeb;">
-                        <div style="font-size: 10pt; font-weight: bold; color: #1f2937; margin-bottom: 5px;">{{$setting['CompanyName']}}</div>
+                        <div style="font-size: 10pt; font-weight: bold; color: #1f2937; margin-bottom: 5px;">{{$issuer['name']}}</div>
                         <div style="font-size: 7.5pt; color: #6b7280; line-height: 1.6;">
-                            <div><strong style="color: #1f2937;">{{ __('pdf.phone') }}{{ $isRtl ? '' : ':' }}</strong> {{$setting['CompanyPhone']}}</div>
-                            <div><strong style="color: #1f2937;">{{ __('pdf.email') }}{{ $isRtl ? '' : ':' }}</strong> {{$setting['email']}}</div>
-                            <div><strong style="color: #1f2937;">{{ __('pdf.address') }}{{ $isRtl ? '' : ':' }}</strong> {{$setting['CompanyAdress']}}</div>
+                            <div><strong style="color: #1f2937;">{{ __('pdf.phone') }}{{ $isRtl ? '' : ':' }}</strong> {{$issuer['phone']}}</div>
+                            <div><strong style="color: #1f2937;">{{ __('pdf.email') }}{{ $isRtl ? '' : ':' }}</strong> {{$issuer['email']}}</div>
+                            <div><strong style="color: #1f2937;">{{ __('pdf.address') }}{{ $isRtl ? '' : ':' }}</strong> {{$issuer['full_address']}}</div>
                         </div>
                     </div>
                 </div>
@@ -173,9 +180,13 @@
 
     <!-- Footer -->
     <div style="margin-top: 30px; padding-top: 10px; border-top: 2px solid #e5e7eb;">
-        @if($setting['is_invoice_footer'] && $setting['invoice_footer'] !==null)
+        @php
+            // A branch note replaces the global invoice footer when it is set.
+            $footerText = $issuer['footer'] !== '' ? $issuer['footer'] : ((! empty($setting['is_invoice_footer']) && $setting['invoice_footer'] !== null) ? $setting['invoice_footer'] : '');
+        @endphp
+        @if($footerText !== '')
             <div style="padding: 8px 10px; background: #fffbeb; border-left: 3px solid #f59e0b; border-radius: 3px; margin-bottom: 10px;">
-                <p style="font-size: 7.5pt; color: #6b7280; line-height: 1.5; margin: 0;">{{$setting['invoice_footer']}}</p>
+                <p style="font-size: 7.5pt; color: #6b7280; line-height: 1.5; margin: 0;">{{ $footerText }}</p>
             </div>
         @endif
         <div style="text-align: center; padding: 8px 0;">

@@ -88,6 +88,7 @@ class UserController extends BaseController
         $helpers = new Helpers;
         $user = Auth::user();
         $settings = Setting::first();
+        $branding = $settings ? $settings->effectiveBranding() : ['footer' => '', 'developed_by' => ''];
 
         $userData = [
             'id' => $user->id,
@@ -97,12 +98,22 @@ class UserController extends BaseController
             // Multi-Currency module: master toggle + the base currency id, read
             // by document forms/POS to show a currency picker (default off)
             'enable_multi_currency' => (bool) ($settings->enable_multi_currency ?? false),
+            // Settings → Features. The customer page reads the first to decide
+            // whether to render the performance card; the second is informational
+            // for the UI (the backend enforces the scope itself either way).
+            'customer_performance_enabled' => (bool) ($settings->customer_performance_enabled ?? true),
+            'restrict_master_data_by_warehouse' => (bool) ($settings->restrict_master_data_by_warehouse ?? false),
+            'restrict_products_by_warehouse' => (bool) ($settings->restrict_products_by_warehouse ?? false),
+            'product_supplier_enabled' => (bool) ($settings->product_supplier_enabled ?? false),
             'default_currency_id' => $settings->currency_id ?? null,
             'logo' => $settings->logo ?? null,
             'default_language' => $settings->default_language ?? 'en',
             'show_language' => $settings->show_language ?? false,
-            'footer' => $settings->footer ?? '',
-            'developed_by' => $settings->developed_by ?? '',
+            // Platform branding unless the plan includes white-labeling
+            // (remove_branding); the settings forms hide both fields then.
+            'footer' => $branding['footer'],
+            'developed_by' => $branding['developed_by'],
+            'can_remove_branding' => $branding['can_remove_branding'] ?? false,
             'app_name' => $settings->app_name ?? config('app.name'),
             'page_title_suffix' => $settings->page_title_suffix ?? '',
             'customize_button_visible' => (bool) ($settings->customize_button_visible ?? true),
@@ -133,8 +144,11 @@ class UserController extends BaseController
         $permissions = $user->roles()->first()?->permissions->pluck('name') ?? [];
 
         $productsAlerts = product_warehouse::join('products', 'product_warehouse.product_id', '=', 'products.id')
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
+            ->tap(fn ($q) => $this->scopeStockRowsToOwnership($q))
             ->whereRaw('qte <= stock_alert')
             ->whereNull('product_warehouse.deleted_at')
+            ->whereIn('product_warehouse.warehouse_id', $this->userWarehouseIds())
             ->count();
 
         return response()->json([
@@ -171,6 +185,9 @@ class UserController extends BaseController
         $this->authorizeForUser($request->user('api'), 'create', User::class);
         $this->validate($request, [
             'email' => 'required|unique:users',
+            // Only validated when a file is actually sent (see below); a client that
+            // echoes the current filename back as a string must keep working.
+            'avatar' => $request->hasFile('avatar') ? 'file|image|mimes:jpg,jpeg,png,webp|max:5120' : 'nullable',
         ], [
             'email.unique' => 'This Email already taken.',
         ]);
@@ -178,11 +195,15 @@ class UserController extends BaseController
             if ($request->hasFile('avatar')) {
 
                 $image = $request->file('avatar');
-                $filename = rand(11111111, 99999999).$image->getClientOriginalName();
+                $filename = rand(11111111, 99999999).'.'.strtolower($image->guessExtension() ?: 'png');
 
                 $image_resize = Image::make($image->getRealPath());
                 $image_resize->resize(128, 128);
-                $image_resize->save(public_path('/images/avatar/'.$filename));
+                $avatarDir = upload_public_path('avatar');
+                if (! is_dir($avatarDir)) {
+                    mkdir($avatarDir, 0755, true);
+                }
+                $image_resize->save($avatarDir.'/'.$filename);
 
             } else {
                 $filename = 'no_avatar.png';
@@ -264,6 +285,9 @@ class UserController extends BaseController
         $this->validate($request, [
             'email' => 'required|email|unique:users',
             'email' => Rule::unique('users')->ignore($id),
+            // Only validated when a file is actually sent (see below); a client that
+            // echoes the current filename back as a string must keep working.
+            'avatar' => $request->hasFile('avatar') ? 'file|image|mimes:jpg,jpeg,png,webp|max:5120' : 'nullable',
         ], [
             'email.unique' => 'This Email already taken.',
         ]);
@@ -288,12 +312,16 @@ class UserController extends BaseController
             if ($request->hasFile('avatar')) {
 
                 $image = $request->file('avatar');
-                $path = public_path().'/images/avatar';
-                $filename = rand(11111111, 99999999).$image->getClientOriginalName();
+                $path = upload_public_path('avatar');
+                $filename = rand(11111111, 99999999).'.'.strtolower($image->guessExtension() ?: 'png');
 
                 $image_resize = Image::make($image->getRealPath());
                 $image_resize->resize(128, 128);
-                $image_resize->save(public_path('/images/avatar/'.$filename));
+                $avatarDir = upload_public_path('avatar');
+                if (! is_dir($avatarDir)) {
+                    mkdir($avatarDir, 0755, true);
+                }
+                $image_resize->save($avatarDir.'/'.$filename);
 
                 $userPhoto = $path.'/'.$currentAvatar;
                 if (file_exists($userPhoto)) {
@@ -357,6 +385,9 @@ class UserController extends BaseController
             'username' => 'required',
             'email' => 'required|email|unique:users',
             'email' => Rule::unique('users')->ignore($id),
+            // Only validated when a file is actually sent (see below); a client that
+            // echoes the current filename back as a string must keep working.
+            'avatar' => $request->hasFile('avatar') ? 'file|image|mimes:jpg,jpeg,png,webp|max:5120' : 'nullable',
             'phone' => 'required',
         ]
         );
@@ -368,12 +399,16 @@ class UserController extends BaseController
         if ($request->hasFile('avatar')) {
 
             $image = $request->file('avatar');
-            $path = public_path().'/images/avatar';
-            $filename = rand(11111111, 99999999).$image->getClientOriginalName();
+            $path = upload_public_path('avatar');
+            $filename = rand(11111111, 99999999).'.'.strtolower($image->guessExtension() ?: 'png');
 
             $image_resize = Image::make($image->getRealPath());
             $image_resize->resize(128, 128);
-            $image_resize->save(public_path('/images/avatar/'.$filename));
+            $avatarDir = upload_public_path('avatar');
+            if (! is_dir($avatarDir)) {
+                mkdir($avatarDir, 0755, true);
+            }
+            $image_resize->save($avatarDir.'/'.$filename);
 
             $userPhoto = $path.'/'.$currentAvatar;
 

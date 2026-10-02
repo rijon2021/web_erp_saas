@@ -16,15 +16,27 @@ use Illuminate\Support\Facades\Schema;
  */
 class AccountingHelper
 {
+    /**
+     * Post a sale as a full double entry.
+     *
+     * Two entries are written. The revenue entry splits the invoice into what it
+     * is actually made of — tax collected is a liability, not income, and
+     * shipping and discounts belong in their own accounts — so the P&L shows
+     * revenue rather than the gross invoice total. The COGS entry moves the cost
+     * of what left the warehouse from Inventory to Cost of Goods Sold, which is
+     * what makes gross profit and the inventory asset meaningful.
+     *
+     * COGS is written under its own reference_type so it nets independently of
+     * the revenue entry; reverseSale() unwinds both.
+     */
     public static function fromSale($sale): void
     {
         self::safe(function () use ($sale) {
-            $arCoaId = self::getOrCreateCoa('1100-AR', 'Accounts Receivable', 'asset');
-            $revCoaId = self::getOrCreateCoa('4000-REV', 'Sales Revenue', 'income');
             $amount = (float) ($sale->GrandTotal ?? 0);
             if ($amount <= 0) {
                 return;
             }
+
             self::createBalancedEntry([
                 'journal' => [
                     'date' => self::dateFrom($sale->date ?? null),
@@ -32,19 +44,147 @@ class AccountingHelper
                     'reference_type' => 'sale',
                     'reference_id' => $sale->id ?? null,
                 ],
-                'lines' => [
-                    ['coa_id' => $arCoaId,  'debit' => $amount, 'credit' => 0,       'memo' => 'Accounts Receivable'],
-                    ['coa_id' => $revCoaId, 'debit' => 0,       'credit' => $amount, 'memo' => 'Sales Revenue'],
-                ],
+                'lines' => self::saleRevenueLines($sale),
             ]);
+
+            self::postSaleCogs($sale);
         });
+    }
+
+    /**
+     * The revenue side of a sale, as balanced lines.
+     *
+     * Debits: A/R for the whole invoice, plus discounts given (contra-revenue,
+     * held in an income-type account so the P&L nets it off). Credits: tax
+     * payable, shipping income, and whatever is left as revenue. The two sides
+     * balance by construction, so no rounding plug is needed.
+     */
+    protected static function saleRevenueLines($sale): array
+    {
+        $arCoaId = self::getOrCreateCoa('1100-AR', 'Accounts Receivable', 'asset');
+        $revCoaId = self::getOrCreateCoa('4000-REV', 'Sales Revenue', 'income');
+
+        $amount = round((float) ($sale->GrandTotal ?? 0), 6);
+        $tax = round((float) ($sale->TaxNet ?? 0), 6);
+        $shipping = round((float) ($sale->shipping ?? 0), 6);
+        $discount = round((float) ($sale->discount ?? 0) + (float) ($sale->promotion_discount ?? 0), 6);
+
+        // Never let a stray field push a component past the invoice itself.
+        $tax = max(0.0, min($tax, $amount));
+        $shipping = max(0.0, min($shipping, $amount));
+        $discount = max(0.0, $discount);
+
+        $revenue = round($amount - $tax - $shipping + $discount, 6);
+
+        $lines = [
+            ['coa_id' => $arCoaId, 'debit' => $amount, 'credit' => 0, 'memo' => 'Accounts Receivable'],
+        ];
+
+        if ($discount > 0.0001) {
+            $discountCoaId = self::getOrCreateCoa('4030-DISC', 'Sales Discounts', 'income');
+            $lines[] = ['coa_id' => $discountCoaId, 'debit' => $discount, 'credit' => 0, 'memo' => 'Discount Given'];
+        }
+
+        if ($tax > 0.0001) {
+            $taxCoaId = self::getOrCreateCoa('2200-TAX', 'Tax Payable', 'liability');
+            $lines[] = ['coa_id' => $taxCoaId, 'debit' => 0, 'credit' => $tax, 'memo' => 'Tax Collected'];
+        }
+
+        if ($shipping > 0.0001) {
+            $shipCoaId = self::getOrCreateCoa('4020-SHIP', 'Shipping Income', 'income');
+            $lines[] = ['coa_id' => $shipCoaId, 'debit' => 0, 'credit' => $shipping, 'memo' => 'Shipping'];
+        }
+
+        if (abs($revenue) > 0.0001) {
+            $lines[] = ['coa_id' => $revCoaId, 'debit' => 0, 'credit' => $revenue, 'memo' => 'Sales Revenue'];
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Move the cost of the goods sold out of Inventory.
+     *
+     * Skipped silently when the cost works out at zero — a service-only sale has
+     * no inventory to relieve, and posting a zero entry would just be noise.
+     */
+    protected static function postSaleCogs($sale): void
+    {
+        $cost = self::saleCostOfGoods($sale->id ?? 0);
+
+        if ($cost <= 0.0001) {
+            return;
+        }
+
+        $cogsCoaId = self::getOrCreateCoa('5000-COGS', 'Cost of Goods Sold', 'expense');
+        $invCoaId = self::getOrCreateCoa('1200-INV', 'Inventory', 'asset');
+
+        self::createBalancedEntry([
+            'journal' => [
+                'date' => self::dateFrom($sale->date ?? null),
+                'description' => 'COGS for Sale #'.($sale->Ref ?? $sale->id ?? ''),
+                'reference_type' => 'sale_cogs',
+                'reference_id' => $sale->id ?? null,
+            ],
+            'lines' => [
+                ['coa_id' => $cogsCoaId, 'debit' => $cost, 'credit' => 0,     'memo' => 'Cost of Goods Sold'],
+                ['coa_id' => $invCoaId,  'debit' => 0,     'credit' => $cost, 'memo' => 'Inventory'],
+            ],
+        ]);
+    }
+
+    /**
+     * Cost of the lines on a sale, in BASE units.
+     *
+     * Cost is held per base unit while a sale line is recorded in packs of a sale
+     * unit, so both conversions have to be applied — the same arithmetic the
+     * stock deduction and the profit report use. Getting this wrong understates
+     * COGS and inflates gross profit for anyone selling in packs.
+     */
+    protected static function saleCostOfGoods($saleId): float
+    {
+        return self::costOfLines('sale_details', 'sale_id', $saleId);
+    }
+
+    /**
+     * Cost of the lines on any sale-shaped document (sale or sale return), in
+     * BASE units. See saleCostOfGoods() for the unit arithmetic.
+     */
+    protected static function costOfLines(string $table, string $foreignKey, $documentId): float
+    {
+        if (! $documentId) {
+            return 0.0;
+        }
+
+        return (float) (self::safeReturn(function () use ($table, $foreignKey, $documentId) {
+            if (! Schema::hasTable($table)) {
+                return 0.0;
+            }
+
+            $packExpr = Schema::hasColumn($table, 'pack_multiplier')
+                ? 'COALESCE(sd.pack_multiplier, 1)'
+                : '1';
+
+            return (float) DB::table($table.' as sd')
+                ->join('products as p', 'p.id', '=', 'sd.product_id')
+                ->leftJoin('product_variants as pv', 'pv.id', '=', 'sd.product_variant_id')
+                ->leftJoin('units as cu', function ($j) {
+                    $j->on(DB::raw('cu.id'), '=', DB::raw('COALESCE(sd.sale_unit_id, p.unit_sale_id, p.unit_id)'));
+                })
+                ->where('sd.'.$foreignKey, $documentId)
+                ->sum(DB::raw("sd.quantity
+                               * {$packExpr}
+                               * CASE WHEN cu.operator = '/'
+                                      THEN 1 / COALESCE(NULLIF(cu.operator_value, 0), 1)
+                                      ELSE COALESCE(cu.operator_value, 1)
+                                 END
+                               * COALESCE(pv.cost, p.cost, 0)"));
+        }) ?: 0.0);
     }
 
     public static function fromPurchase($purchase): void
     {
         self::safe(function () use ($purchase) {
-            $invCoaId = self::getOrCreateCoa('1200-INV', 'Inventory', 'asset');
-            $apCoaId = self::getOrCreateCoa('2100-AP', 'Accounts Payable', 'liability');
             $amount = (float) ($purchase->GrandTotal ?? 0);
             if ($amount <= 0) {
                 return;
@@ -56,19 +196,55 @@ class AccountingHelper
                     'reference_type' => 'purchase',
                     'reference_id' => $purchase->id ?? null,
                 ],
-                'lines' => [
-                    ['coa_id' => $invCoaId, 'debit' => $amount, 'credit' => 0,       'memo' => 'Inventory'],
-                    ['coa_id' => $apCoaId,  'debit' => 0,       'credit' => $amount, 'memo' => 'Accounts Payable'],
-                ],
+                'lines' => self::purchaseLines($purchase),
             ]);
         });
     }
 
+    /**
+     * The lines of a purchase.
+     *
+     * Recoverable input tax is an asset, not part of the cost of the stock, so
+     * it is split out: capitalising it into Inventory overstates what the goods
+     * cost and therefore understates gross profit when they are sold.
+     */
+    protected static function purchaseLines($purchase): array
+    {
+        $invCoaId = self::getOrCreateCoa('1200-INV', 'Inventory', 'asset');
+        $apCoaId = self::getOrCreateCoa('2100-AP', 'Accounts Payable', 'liability');
+
+        $amount = round((float) ($purchase->GrandTotal ?? 0), 6);
+        $tax = max(0.0, min(round((float) ($purchase->TaxNet ?? 0), 6), $amount));
+        $goods = round($amount - $tax, 6);
+
+        $lines = [];
+
+        if (abs($goods) > 0.0001) {
+            $lines[] = ['coa_id' => $invCoaId, 'debit' => $goods, 'credit' => 0, 'memo' => 'Inventory'];
+        }
+
+        if ($tax > 0.0001) {
+            $taxCoaId = self::getOrCreateCoa('1300-TAXIN', 'Input Tax Receivable', 'asset');
+            $lines[] = ['coa_id' => $taxCoaId, 'debit' => $tax, 'credit' => 0, 'memo' => 'Input Tax'];
+        }
+
+        $lines[] = ['coa_id' => $apCoaId, 'debit' => 0, 'credit' => $amount, 'memo' => 'Accounts Payable'];
+
+        return $lines;
+    }
+
+    /**
+     * Post a sale return as the mirror of a sale.
+     *
+     * The revenue entry gives back the tax that was collected (it is no longer
+     * owed) and books the rest against Sales Returns. The cost entry puts the
+     * returned goods back into Inventory and takes their cost off COGS, under
+     * its own reference_type exactly like postSaleCogs(); reverseSaleReturn()
+     * unwinds both.
+     */
     public static function fromSaleReturn($saleReturn): void
     {
         self::safe(function () use ($saleReturn) {
-            $arCoaId = self::getOrCreateCoa('1100-AR', 'Accounts Receivable', 'asset');
-            $retCoaId = self::getOrCreateCoa('4010-RET', 'Sales Returns', 'income');
             $amount = (float) ($saleReturn->GrandTotal ?? 0);
             if ($amount <= 0) {
                 return;
@@ -80,95 +256,88 @@ class AccountingHelper
                     'reference_type' => 'sale_return',
                     'reference_id' => $saleReturn->id ?? null,
                 ],
-                'lines' => [
-                    ['coa_id' => $retCoaId, 'debit' => $amount, 'credit' => 0,       'memo' => 'Sales Return'],
-                    ['coa_id' => $arCoaId,  'debit' => 0,       'credit' => $amount, 'memo' => 'Reduce A/R'],
-                ],
+                'lines' => self::saleReturnLines($saleReturn),
             ]);
+
+            self::postSaleReturnCogs($saleReturn);
         });
     }
 
+    protected static function saleReturnLines($saleReturn): array
+    {
+        $arCoaId = self::getOrCreateCoa('1100-AR', 'Accounts Receivable', 'asset');
+        $retCoaId = self::getOrCreateCoa('4010-RET', 'Sales Returns', 'income');
+
+        $amount = round((float) ($saleReturn->GrandTotal ?? 0), 6);
+        $tax = max(0.0, min(round((float) ($saleReturn->TaxNet ?? 0), 6), $amount));
+        $returned = round($amount - $tax, 6);
+
+        $lines = [];
+
+        if (abs($returned) > 0.0001) {
+            $lines[] = ['coa_id' => $retCoaId, 'debit' => $returned, 'credit' => 0, 'memo' => 'Sales Return'];
+        }
+
+        if ($tax > 0.0001) {
+            $taxCoaId = self::getOrCreateCoa('2200-TAX', 'Tax Payable', 'liability');
+            $lines[] = ['coa_id' => $taxCoaId, 'debit' => $tax, 'credit' => 0, 'memo' => 'Tax Refunded'];
+        }
+
+        $lines[] = ['coa_id' => $arCoaId, 'debit' => 0, 'credit' => $amount, 'memo' => 'Reduce A/R'];
+
+        return $lines;
+    }
+
+    protected static function postSaleReturnCogs($saleReturn): void
+    {
+        $cost = self::costOfLines('sale_return_details', 'sale_return_id', $saleReturn->id ?? 0);
+
+        if ($cost <= 0.0001) {
+            return;
+        }
+
+        $cogsCoaId = self::getOrCreateCoa('5000-COGS', 'Cost of Goods Sold', 'expense');
+        $invCoaId = self::getOrCreateCoa('1200-INV', 'Inventory', 'asset');
+
+        self::createBalancedEntry([
+            'journal' => [
+                'date' => self::dateFrom($saleReturn->date ?? null),
+                'description' => 'COGS for Sale Return #'.($saleReturn->Ref ?? $saleReturn->id ?? ''),
+                'reference_type' => 'sale_return_cogs',
+                'reference_id' => $saleReturn->id ?? null,
+            ],
+            'lines' => [
+                ['coa_id' => $invCoaId,  'debit' => $cost, 'credit' => 0,     'memo' => 'Inventory Restocked'],
+                ['coa_id' => $cogsCoaId, 'debit' => 0,     'credit' => $cost, 'memo' => 'Cost of Goods Sold'],
+            ],
+        ]);
+    }
+
+    /**
+     * Re-state a sale whose total changed.
+     *
+     * Reverses whatever is currently posted for the sale — revenue entry and
+     * COGS entry alike — and posts it again from the document as it now stands.
+     * A delta against A/R would leave the tax, shipping and discount split from
+     * the original entry untouched and therefore wrong.
+     */
     public static function fromSaleAdjustment($sale): void
     {
         self::safe(function () use ($sale) {
-            $current = self::getPostedAmount('sale', $sale->id ?? 0);
-            $target = (float) ($sale->GrandTotal ?? 0);
-            $delta = round($target - $current, 6);
-            if (abs($delta) <= 0.0001) {
-                return;
-            }
-            $arCoaId = self::getOrCreateCoa('1100-AR', 'Accounts Receivable', 'asset');
-            $revCoaId = self::getOrCreateCoa('4000-REV', 'Sales Revenue', 'income');
-            if ($delta > 0) {
-                self::createBalancedEntry([
-                    'journal' => [
-                        'date' => self::dateFrom($sale->date ?? null),
-                        'description' => 'Sale Adjustment #'.($sale->Ref ?? $sale->id ?? ''),
-                        'reference_type' => 'sale',
-                        'reference_id' => $sale->id ?? null,
-                    ],
-                    'lines' => [
-                        ['coa_id' => $arCoaId,  'debit' => $delta, 'credit' => 0,      'memo' => 'A/R Adj'],
-                        ['coa_id' => $revCoaId, 'debit' => 0,      'credit' => $delta, 'memo' => 'Revenue Adj'],
-                    ],
-                ]);
-            } else {
-                $delta = abs($delta);
-                self::createBalancedEntry([
-                    'journal' => [
-                        'date' => self::dateFrom($sale->date ?? null),
-                        'description' => 'Sale Adjustment #'.($sale->Ref ?? $sale->id ?? ''),
-                        'reference_type' => 'sale',
-                        'reference_id' => $sale->id ?? null,
-                    ],
-                    'lines' => [
-                        ['coa_id' => $revCoaId, 'debit' => $delta, 'credit' => 0,      'memo' => 'Revenue Adj'],
-                        ['coa_id' => $arCoaId,  'debit' => 0,      'credit' => $delta, 'memo' => 'A/R Adj'],
-                    ],
-                ]);
-            }
+            self::reverseSale($sale);
+            self::fromSale($sale);
         });
     }
 
+    /**
+     * Re-state a purchase whose total changed. Same reasoning as
+     * fromSaleAdjustment(): the input-tax split makes delta maths wrong.
+     */
     public static function fromPurchaseAdjustment($purchase): void
     {
         self::safe(function () use ($purchase) {
-            $current = self::getPostedAmount('purchase', $purchase->id ?? 0);
-            $target = (float) ($purchase->GrandTotal ?? 0);
-            $delta = round($target - $current, 6);
-            if (abs($delta) <= 0.0001) {
-                return;
-            }
-            $invCoaId = self::getOrCreateCoa('1200-INV', 'Inventory', 'asset');
-            $apCoaId = self::getOrCreateCoa('2100-AP', 'Accounts Payable', 'liability');
-            if ($delta > 0) {
-                self::createBalancedEntry([
-                    'journal' => [
-                        'date' => self::dateFrom($purchase->date ?? null),
-                        'description' => 'Purchase Adjustment #'.($purchase->Ref ?? $purchase->id ?? ''),
-                        'reference_type' => 'purchase',
-                        'reference_id' => $purchase->id ?? null,
-                    ],
-                    'lines' => [
-                        ['coa_id' => $invCoaId, 'debit' => $delta, 'credit' => 0,      'memo' => 'Inventory Adj'],
-                        ['coa_id' => $apCoaId,  'debit' => 0,      'credit' => $delta, 'memo' => 'A/P Adj'],
-                    ],
-                ]);
-            } else {
-                $delta = abs($delta);
-                self::createBalancedEntry([
-                    'journal' => [
-                        'date' => self::dateFrom($purchase->date ?? null),
-                        'description' => 'Purchase Adjustment #'.($purchase->Ref ?? $purchase->id ?? ''),
-                        'reference_type' => 'purchase',
-                        'reference_id' => $purchase->id ?? null,
-                    ],
-                    'lines' => [
-                        ['coa_id' => $apCoaId,  'debit' => $delta, 'credit' => 0,      'memo' => 'A/P Adj'],
-                        ['coa_id' => $invCoaId, 'debit' => 0,      'credit' => $delta, 'memo' => 'Inventory Adj'],
-                    ],
-                ]);
-            }
+            self::reversePurchase($purchase);
+            self::fromPurchase($purchase);
         });
     }
 
@@ -216,7 +385,13 @@ class AccountingHelper
 
     public static function reverseSale($sale): void
     {
-        self::reverseByReference('sale', $sale->id ?? 0, 'Reverse Sale #'.($sale->Ref ?? $sale->id ?? ''));
+        $id = $sale->id ?? 0;
+        $ref = $sale->Ref ?? $sale->id ?? '';
+
+        self::reverseByReference('sale', $id, 'Reverse Sale #'.$ref);
+        // The cost side is a separate entry, so it needs its own reversal or the
+        // inventory relief would survive a deleted sale.
+        self::reverseByReference('sale_cogs', $id, 'Reverse COGS for Sale #'.$ref);
     }
 
     public static function reversePurchase($purchase): void
@@ -484,11 +659,17 @@ class AccountingHelper
         });
     }
 
+    /**
+     * Post a purchase return as the mirror of a purchase.
+     *
+     * A purchase capitalises the goods into Inventory and the tax into Input Tax
+     * Receivable, so sending goods back has to take them out of the same two
+     * accounts — crediting a separate "Purchase Returns" expense would leave
+     * Inventory overstated by everything ever returned.
+     */
     public static function fromPurchaseReturn($purchaseReturn): void
     {
         self::safe(function () use ($purchaseReturn) {
-            $apCoaId = self::getOrCreateCoa('2100-AP', 'Accounts Payable', 'liability');
-            $retCoaId = self::getOrCreateCoa('5010-PRET', 'Purchase Returns', 'expense');
             $amount = (float) ($purchaseReturn->GrandTotal ?? 0);
             if ($amount <= 0) {
                 return;
@@ -500,53 +681,46 @@ class AccountingHelper
                     'reference_type' => 'purchase_return',
                     'reference_id' => $purchaseReturn->id ?? null,
                 ],
-                'lines' => [
-                    ['coa_id' => $apCoaId,  'debit' => $amount, 'credit' => 0,       'memo' => 'Reduce A/P'],
-                    ['coa_id' => $retCoaId, 'debit' => 0,       'credit' => $amount, 'memo' => 'Purchase Return'],
-                ],
+                'lines' => self::purchaseReturnLines($purchaseReturn),
             ]);
         });
     }
 
+    protected static function purchaseReturnLines($purchaseReturn): array
+    {
+        $invCoaId = self::getOrCreateCoa('1200-INV', 'Inventory', 'asset');
+        $apCoaId = self::getOrCreateCoa('2100-AP', 'Accounts Payable', 'liability');
+
+        $amount = round((float) ($purchaseReturn->GrandTotal ?? 0), 6);
+        $tax = max(0.0, min(round((float) ($purchaseReturn->TaxNet ?? 0), 6), $amount));
+        $goods = round($amount - $tax, 6);
+
+        $lines = [
+            ['coa_id' => $apCoaId, 'debit' => $amount, 'credit' => 0, 'memo' => 'Reduce A/P'],
+        ];
+
+        if (abs($goods) > 0.0001) {
+            $lines[] = ['coa_id' => $invCoaId, 'debit' => 0, 'credit' => $goods, 'memo' => 'Inventory Returned'];
+        }
+
+        if ($tax > 0.0001) {
+            $taxCoaId = self::getOrCreateCoa('1300-TAXIN', 'Input Tax Receivable', 'asset');
+            $lines[] = ['coa_id' => $taxCoaId, 'debit' => 0, 'credit' => $tax, 'memo' => 'Input Tax Reversed'];
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Re-state a purchase return whose total changed. Same reasoning as
+     * fromPurchaseAdjustment(). Reversal nets by account, so returns posted in
+     * the old A/P-vs-Purchase-Returns shape are unwound cleanly too.
+     */
     public static function fromPurchaseReturnAdjustment($purchaseReturn): void
     {
         self::safe(function () use ($purchaseReturn) {
-            $current = self::getPostedAmount('purchase_return', $purchaseReturn->id ?? 0);
-            $target = (float) ($purchaseReturn->GrandTotal ?? 0);
-            $delta = round($target - $current, 6);
-            if (abs($delta) <= 0.0001) {
-                return;
-            }
-            $apCoaId = self::getOrCreateCoa('2100-AP', 'Accounts Payable', 'liability');
-            $retCoaId = self::getOrCreateCoa('5010-PRET', 'Purchase Returns', 'expense');
-            if ($delta > 0) {
-                self::createBalancedEntry([
-                    'journal' => [
-                        'date' => self::dateFrom($purchaseReturn->date ?? null),
-                        'description' => 'Purchase Return Adjustment #'.($purchaseReturn->Ref ?? $purchaseReturn->id ?? ''),
-                        'reference_type' => 'purchase_return',
-                        'reference_id' => $purchaseReturn->id ?? null,
-                    ],
-                    'lines' => [
-                        ['coa_id' => $apCoaId,  'debit' => $delta, 'credit' => 0,      'memo' => 'A/P Adj'],
-                        ['coa_id' => $retCoaId, 'debit' => 0,      'credit' => $delta, 'memo' => 'Return Adj'],
-                    ],
-                ]);
-            } else {
-                $delta = abs($delta);
-                self::createBalancedEntry([
-                    'journal' => [
-                        'date' => self::dateFrom($purchaseReturn->date ?? null),
-                        'description' => 'Purchase Return Adjustment #'.($purchaseReturn->Ref ?? $purchaseReturn->id ?? ''),
-                        'reference_type' => 'purchase_return',
-                        'reference_id' => $purchaseReturn->id ?? null,
-                    ],
-                    'lines' => [
-                        ['coa_id' => $retCoaId, 'debit' => $delta, 'credit' => 0,      'memo' => 'Return Adj'],
-                        ['coa_id' => $apCoaId,  'debit' => 0,      'credit' => $delta, 'memo' => 'A/P Adj'],
-                    ],
-                ]);
-            }
+            self::reversePurchaseReturn($purchaseReturn);
+            self::fromPurchaseReturn($purchaseReturn);
         });
     }
 
@@ -555,51 +729,26 @@ class AccountingHelper
         self::reverseByReference('purchase_return', $purchaseReturn->id ?? 0, 'Reverse Purchase Return #'.($purchaseReturn->Ref ?? $purchaseReturn->id ?? ''));
     }
 
+    /**
+     * Re-state a sale return whose total changed. Same reasoning as
+     * fromSaleAdjustment(): the tax split and the separate cost entry make
+     * delta maths wrong.
+     */
     public static function fromSaleReturnAdjustment($saleReturn): void
     {
         self::safe(function () use ($saleReturn) {
-            $current = self::getPostedAmount('sale_return', $saleReturn->id ?? 0);
-            $target = (float) ($saleReturn->GrandTotal ?? 0);
-            $delta = round($target - $current, 6);
-            if (abs($delta) <= 0.0001) {
-                return;
-            }
-            $arCoaId = self::getOrCreateCoa('1100-AR', 'Accounts Receivable', 'asset');
-            $retCoaId = self::getOrCreateCoa('4010-RET', 'Sales Returns', 'income');
-            if ($delta > 0) {
-                self::createBalancedEntry([
-                    'journal' => [
-                        'date' => self::dateFrom($saleReturn->date ?? null),
-                        'description' => 'Sale Return Adjustment #'.($saleReturn->Ref ?? $saleReturn->id ?? ''),
-                        'reference_type' => 'sale_return',
-                        'reference_id' => $saleReturn->id ?? null,
-                    ],
-                    'lines' => [
-                        ['coa_id' => $retCoaId, 'debit' => $delta, 'credit' => 0,      'memo' => 'Return Adj'],
-                        ['coa_id' => $arCoaId,  'debit' => 0,      'credit' => $delta, 'memo' => 'A/R Adj'],
-                    ],
-                ]);
-            } else {
-                $delta = abs($delta);
-                self::createBalancedEntry([
-                    'journal' => [
-                        'date' => self::dateFrom($saleReturn->date ?? null),
-                        'description' => 'Sale Return Adjustment #'.($saleReturn->Ref ?? $saleReturn->id ?? ''),
-                        'reference_type' => 'sale_return',
-                        'reference_id' => $saleReturn->id ?? null,
-                    ],
-                    'lines' => [
-                        ['coa_id' => $arCoaId,  'debit' => $delta, 'credit' => 0,      'memo' => 'A/R Adj'],
-                        ['coa_id' => $retCoaId, 'debit' => 0,      'credit' => $delta, 'memo' => 'Return Adj'],
-                    ],
-                ]);
-            }
+            self::reverseSaleReturn($saleReturn);
+            self::fromSaleReturn($saleReturn);
         });
     }
 
     public static function reverseSaleReturn($saleReturn): void
     {
-        self::reverseByReference('sale_return', $saleReturn->id ?? 0, 'Reverse Sale Return #'.($saleReturn->Ref ?? $saleReturn->id ?? ''));
+        $id = $saleReturn->id ?? 0;
+        $ref = $saleReturn->Ref ?? $saleReturn->id ?? '';
+
+        self::reverseByReference('sale_return', $id, 'Reverse Sale Return #'.$ref);
+        self::reverseByReference('sale_return_cogs', $id, 'Reverse COGS for Sale Return #'.$ref);
     }
 
     public static function fromPaymentSaleReturn($payment): void

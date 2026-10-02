@@ -110,6 +110,8 @@ class PortalInvoicePdfController extends Controller
         $Html = view('pdf.sale_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($sale_data->warehouse_id, $settings),
             'sale' => $sale,
             'details' => $details,
         ])->render();

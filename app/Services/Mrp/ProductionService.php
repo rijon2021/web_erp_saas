@@ -8,11 +8,15 @@ use App\Models\AccountingV2\JournalEntryLine;
 use App\Models\MrpBom;
 use App\Models\MrpProductionOrder;
 use App\Models\MrpProductionOrderMaterial;
+use App\Models\MrpProductionOrderMaterialBatch;
 use App\Models\MrpQualityCheck;
 use App\Models\MrpWorkOrder;
 use App\Models\Product;
 use App\Models\product_warehouse;
+use App\Models\ProductBatch;
+use App\Models\ProductVariant;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * The life of a production order: build it, release it, run it, finish it.
@@ -232,6 +236,10 @@ class ProductionService
                     $row->save();
                 }
 
+                // Batch-tracked components leave FEFO, so the finished batch
+                // can be traced back to the material batches that went into it.
+                $this->consumeMaterialBatches($locked, $material, $toIssue, $unitCost);
+
                 $material->qty_issued = (float) $material->qty_issued + $toIssue;
                 $material->unit_cost = $unitCost;
                 $material->total_cost = round($unitCost * $material->qtyConsumed(), 4);
@@ -303,6 +311,14 @@ class ProductionService
             ];
         }
 
+        // Batch & expiry on the finished goods. A tracked product must not be
+        // received without a batch number: an untraceable batch of a traced
+        // product is exactly what batch tracking exists to prevent.
+        $batch = $this->resolveBatchFields($order, $options);
+        if (! $batch['ok']) {
+            return ['ok' => false, 'message' => $batch['message']];
+        }
+
         // A required inspection must have happened and passed.
         if ($order->qc_required && empty($options['skip_qc'])) {
             $check = MrpQualityCheck::whereNull('deleted_at')
@@ -324,7 +340,7 @@ class ProductionService
 
         $result = null;
 
-        DB::transaction(function () use ($order, $qtyProduced, $qtyScrapped, &$result) {
+        DB::transaction(function () use ($order, $qtyProduced, $qtyScrapped, $batch, &$result) {
             $locked = MrpProductionOrder::whereKey($order->id)->lockForUpdate()->first();
             if (! $locked || $locked->isFinished()) {
                 throw new \RuntimeException('This order was completed by someone else a moment ago.');
@@ -338,9 +354,20 @@ class ProductionService
             $total = round($material + $labour + $overhead + $bomOverhead, 4);
 
             $fgWarehouse = (int) ($locked->fg_warehouse_id ?: $locked->warehouse_id);
+            $unitCost = $qtyProduced > 0 ? round($total / $qtyProduced, 4) : 0;
+
+            $locked->batch_no = $batch['batch_no'];
+            $locked->production_date = $batch['production_date'];
+            $locked->expiry_date = $batch['expiry_date'];
 
             if ($qtyProduced > 0) {
+                // Stock already on the shelf, before this batch lands, weights
+                // the new cost price.
+                $priorQty = $this->totalOnHand((int) $locked->product_id, $locked->product_variant_id);
+
                 $this->receiveFinishedGoods($locked, $fgWarehouse, $qtyProduced);
+                $this->receiveFinishedBatch($locked, $fgWarehouse, $qtyProduced, $unitCost);
+                $this->updateProductCost($locked, $qtyProduced, $unitCost, $priorQty);
             }
 
             $locked->qty_produced = $qtyProduced;
@@ -348,7 +375,7 @@ class ProductionService
             $locked->labour_cost = $labour;
             $locked->overhead_cost = round($overhead + $bomOverhead, 4);
             $locked->total_cost = $total;
-            $locked->unit_cost = $qtyProduced > 0 ? round($total / $qtyProduced, 4) : 0;
+            $locked->unit_cost = $unitCost;
             $locked->status = 'completed';
             $locked->actual_end = now();
             $locked->save();
@@ -370,6 +397,52 @@ class ProductionService
      * Add finished goods to stock, creating the warehouse row if the product
      * has never been held there — otherwise the output would vanish.
      */
+    /** Stock of a product (or one variant) across every warehouse. */
+    private function totalOnHand(int $productId, $variantId = null): float
+    {
+        $query = product_warehouse::whereNull('deleted_at')->where('product_id', $productId);
+        if ($variantId) {
+            $query->where('product_variant_id', $variantId);
+        } else {
+            $query->whereNull('product_variant_id');
+        }
+
+        return (float) $query->sum('qte');
+    }
+
+    /**
+     * Roll the production cost into the product's cost price.
+     *
+     * Weighted moving average with whatever stock was already on hand, so a
+     * cheaper or dearer run moves the figure in proportion rather than
+     * overwriting the value of goods still on the shelf. With no prior stock,
+     * or no prior cost, the production unit cost simply becomes the cost
+     * price. A variant keeps its own figure; the parent is left alone.
+     */
+    private function updateProductCost(MrpProductionOrder $order, float $qtyProduced, float $unitCost, float $priorQty): void
+    {
+        if ($qtyProduced <= 0 || $unitCost <= 0) {
+            return;
+        }
+
+        $target = $order->product_variant_id
+            ? ProductVariant::whereKey($order->product_variant_id)->lockForUpdate()->first()
+            : Product::whereKey($order->product_id)->lockForUpdate()->first();
+        if (! $target) {
+            return;
+        }
+
+        $priorCost = (float) $target->cost;
+        $priorQty = max(0.0, $priorQty);
+
+        $newCost = ($priorQty > 0 && $priorCost > 0)
+            ? ($priorQty * $priorCost + $qtyProduced * $unitCost) / ($priorQty + $qtyProduced)
+            : $unitCost;
+
+        $target->cost = round($newCost, 4);
+        $target->save();
+    }
+
     private function receiveFinishedGoods(MrpProductionOrder $order, int $warehouseId, float $qty): void
     {
         $row = $this->lockStockRow((int) $order->product_id, $warehouseId, $order->product_variant_id);
@@ -388,6 +461,203 @@ class ProductionService
             'qte' => $qty,
             'manage_stock' => 1,
         ]);
+    }
+
+    // ------------------------------------------------------------- batches --
+
+    /** Whether the batch & expiry schema is present on this tenant. */
+    private function batchTrackingSupported(): bool
+    {
+        static $supported = null;
+        if ($supported === null) {
+            $supported = Schema::hasTable('product_batches')
+                && Schema::hasColumn('mrp_production_orders', 'batch_no');
+        }
+
+        return $supported;
+    }
+
+    /**
+     * Work out the batch number and dates the finished goods will carry.
+     *
+     * Values typed at completion win over what was set when the order was
+     * raised. The expiry date, when not given, is derived from the product's
+     * shelf life counted from the production date.
+     *
+     * @return array{ok: bool, message?: string, batch_no?: ?string, production_date?: ?string, expiry_date?: ?string}
+     */
+    public function resolveBatchFields(MrpProductionOrder $order, array $options = []): array
+    {
+        $product = Product::find($order->product_id);
+        $tracked = $product ? (bool) ($product->is_batch_tracked ?? false) : false;
+
+        $batchNo = array_key_exists('batch_no', $options) && $options['batch_no'] !== null
+            ? trim((string) $options['batch_no'])
+            : trim((string) $order->batch_no);
+
+        $productionDate = ! empty($options['production_date'])
+            ? $options['production_date']
+            : ($order->production_date ? $order->production_date->format('Y-m-d') : now()->toDateString());
+
+        $expiryDate = ! empty($options['expiry_date'])
+            ? $options['expiry_date']
+            : ($order->expiry_date ? $order->expiry_date->format('Y-m-d') : null);
+
+        if ($expiryDate === null && $product && (int) ($product->shelf_life_days ?? 0) > 0) {
+            $expiryDate = \Carbon\Carbon::parse($productionDate)
+                ->addDays((int) $product->shelf_life_days)
+                ->toDateString();
+        }
+
+        if ($tracked && $this->batchTrackingSupported() && $batchNo === '') {
+            return ['ok' => false, 'message' => 'This product is batch-tracked. Enter a batch number for the finished goods.'];
+        }
+
+        if ($expiryDate !== null && $productionDate !== null && $expiryDate < $productionDate) {
+            return ['ok' => false, 'message' => 'The expiry date cannot be before the production date.'];
+        }
+
+        return [
+            'ok' => true,
+            'batch_no' => $batchNo !== '' ? $batchNo : null,
+            'production_date' => $productionDate,
+            'expiry_date' => $expiryDate,
+        ];
+    }
+
+    /**
+     * Receive the finished goods as a product batch carrying the order's batch
+     * number, production date and expiry, so the batch prints on the label and
+     * follows the stock through sales and reports.
+     *
+     * Only when a batch number exists: an order without one lands as plain
+     * stock exactly as before.
+     */
+    private function receiveFinishedBatch(MrpProductionOrder $order, int $warehouseId, float $qty, float $unitCost): void
+    {
+        if (! $this->batchTrackingSupported() || empty($order->batch_no) || $qty <= 0) {
+            return;
+        }
+
+        $variantId = $order->product_variant_id ? (int) $order->product_variant_id : null;
+
+        $batch = ProductBatch::where('product_id', $order->product_id)
+            ->where('warehouse_id', $warehouseId)
+            ->where('batch_no', $order->batch_no)
+            ->where(function ($q) use ($variantId) {
+                $variantId === null ? $q->whereNull('product_variant_id') : $q->where('product_variant_id', $variantId);
+            })
+            ->lockForUpdate()
+            ->first();
+
+        $expiry = $order->expiry_date ? $order->expiry_date->format('Y-m-d') : null;
+        $mfg = $order->production_date ? $order->production_date->format('Y-m-d') : now()->toDateString();
+
+        if ($batch) {
+            $batch->qty = (float) $batch->qty + $qty;
+            if ($expiry && empty($batch->expiry_date)) {
+                $batch->expiry_date = $expiry;
+            }
+            if (empty($batch->mfg_date)) {
+                $batch->mfg_date = $mfg;
+            }
+            if (empty($batch->unit_cost) && $unitCost > 0) {
+                $batch->unit_cost = $unitCost;
+            }
+            if (in_array($batch->status, ['expired', 'written_off'], true)) {
+                $batch->status = 'active';
+            }
+            $batch->notes = trim((string) $batch->notes."\nProduction order ".$order->reference);
+            $batch->save();
+        } else {
+            $batch = ProductBatch::create([
+                'product_id' => $order->product_id,
+                'product_variant_id' => $variantId,
+                'warehouse_id' => $warehouseId,
+                'batch_no' => $order->batch_no,
+                'expiry_date' => $expiry,
+                'mfg_date' => $mfg,
+                'qty' => $qty,
+                'unit_cost' => $unitCost > 0 ? $unitCost : null,
+                'status' => 'active',
+                'notes' => 'Production order '.$order->reference,
+            ]);
+        }
+
+        $order->product_batch_id = $batch->id;
+    }
+
+    /**
+     * Take a tracked component out of its batches, earliest expiry first, and
+     * record how much came from each so the consumption is traceable.
+     *
+     * Untracked components, or ones with no batch rows, are left alone: the
+     * product_warehouse figure stays authoritative for overall stock.
+     */
+    private function consumeMaterialBatches(MrpProductionOrder $order, MrpProductionOrderMaterial $material, float $qty, float $unitCost): void
+    {
+        if (! $this->batchTrackingSupported() || $qty <= 0) {
+            return;
+        }
+        if (! Product::whereKey($material->product_id)->value('is_batch_tracked')) {
+            return;
+        }
+
+        $variantId = $material->product_variant_id ? (int) $material->product_variant_id : null;
+
+        $batches = ProductBatch::active()
+            ->forProduct((int) $material->product_id)
+            ->forWarehouse((int) $order->warehouse_id)
+            ->where('qty', '>', 0)
+            ->where(function ($q) use ($variantId) {
+                $variantId === null ? $q->whereNull('product_variant_id') : $q->where('product_variant_id', $variantId);
+            })
+            ->fefo()
+            ->lockForUpdate()
+            ->get();
+
+        $remaining = $qty;
+        foreach ($batches as $batch) {
+            if ($remaining <= 1e-9) {
+                break;
+            }
+            $take = min((float) $batch->qty, $remaining);
+            if ($take <= 0) {
+                continue;
+            }
+
+            $batch->qty = max(0, (float) $batch->qty - $take);
+            $batch->save();
+
+            MrpProductionOrderMaterialBatch::create([
+                'production_order_material_id' => $material->id,
+                'product_batch_id' => $batch->id,
+                'qty' => round($take, 4),
+                'unit_cost' => $batch->unit_cost !== null ? (float) $batch->unit_cost : $unitCost,
+            ]);
+
+            $remaining -= $take;
+        }
+    }
+
+    /** Put a cancelled order's material back into the batches it came from. */
+    private function returnMaterialBatches(MrpProductionOrderMaterial $material): void
+    {
+        if (! $this->batchTrackingSupported()) {
+            return;
+        }
+
+        foreach ($material->batches()->get() as $row) {
+            $batch = ProductBatch::whereKey($row->product_batch_id)->lockForUpdate()->first();
+            if ($batch) {
+                $batch->qty = (float) $batch->qty + (float) $row->qty;
+                if (in_array($batch->status, ['expired', 'written_off'], true)) {
+                    $batch->status = 'active';
+                }
+                $batch->save();
+            }
+            $row->delete();
+        }
     }
 
     /**
@@ -497,6 +767,8 @@ class ProductionService
                         $row->qte = (float) $row->qte + $toReturn;
                         $row->save();
                     }
+
+                    $this->returnMaterialBatches($material);
 
                     $material->qty_returned = (float) $material->qty_returned + $toReturn;
                     $material->total_cost = 0;

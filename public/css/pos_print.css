@@ -26,6 +26,9 @@
  
 
   @page {
+    /* Thermal roll, not the printer's default A4/Letter sheet. The print
+       documents override the width per Settings → POS Receipt paper size. */
+    size: 80mm auto;
     /* Extra safety margin so content never touches the paper edges */
     margin: 4mm;
   }
@@ -622,4 +625,20 @@ text-align: center;
 
 .quantity span {
   padding: 8px;
+}
+
+/* Warehouse Letterhead: the issuing branch's own invoice footer note. Sits
+   under the customer note in every layout; kept quieter than the customer
+   note so the two read as separate lines rather than one block. */
+#invoice-POS .receipt-branch-note {
+  font-size: 9px;
+  font-style: italic;
+  color: #555;
+  margin-top: 3px;
+  line-height: 1.5;
+  white-space: pre-line;
+  text-align: center;
+}
+#invoice-POS .receipt-layout-4 .receipt-branch-note {
+  text-align: inherit;
 }

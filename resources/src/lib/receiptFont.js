@@ -38,6 +38,26 @@ export function receiptFontHeadTags(posSettings, scope = '#invoice-POS') {
 }
 
 /**
+ * Normalize the configured receipt roll width (58 / 80 / 88 mm).
+ */
+export function receiptPaperSize(posSettings) {
+  const n = Number((posSettings || {}).receipt_paper_size);
+  return [58, 80, 88].includes(n) ? n : 80;
+}
+
+/**
+ * <style> tag that sizes the printed page to the receipt roll. Without an
+ * explicit `@page size` the browser falls back to the printer's default
+ * sheet (A4/Letter), so the 80mm receipt previews and prints on a full A4
+ * page even when Settings → POS → Invoice format is "thermal". @page cannot
+ * be scoped by a body class, so each print document injects its own.
+ */
+export function receiptPageHeadTag(posSettings) {
+  const mm = receiptPaperSize(posSettings);
+  return `<style>@page { size: ${mm}mm auto; margin: 4mm; }</style>`;
+}
+
+/**
  * Fire `fn` once the popup's webfonts have applied (or after `fallbackMs` if
  * fonts.ready never resolves). Calling print() on a bare timer can snapshot
  * the page before the woff2 loads, printing the fallback font instead of the
@@ -52,6 +72,58 @@ export function whenPrintFontsReady(win, fn, fallbackMs = 1200) {
       fonts.ready.then(() => setTimeout(once, 50));
     }
   } catch (e) { /* fall through to the timer */ }
+  setTimeout(once, fallbackMs);
+}
+
+/**
+ * Fire `fn` once the popup can be snapshotted: webfonts applied, the print
+ * stylesheet parsed AND every <img> (company/branch logo, QR data-URLs)
+ * loaded or errored — with a hard ceiling so printing never hangs.
+ *
+ * A fonts-only wait calls print() ~150ms after document.write(). Chrome does
+ * not wait for pending images at print() time, so a logo that is not in the
+ * browser cache yet (first print after upload, slow hosting, a new device)
+ * prints as an empty box. The mobile iframe path already gated on images;
+ * every window.open() receipt popup goes through this instead.
+ */
+export function whenPrintReady(win, fn, fallbackMs = 3000) {
+  let done = false;
+  const once = () => { if (!done) { done = true; fn(); } };
+  let doc = null;
+  try { doc = win.document; } catch (e) { doc = null; }
+  if (!doc) { setTimeout(once, 0); return; }
+
+  const fonts = new Promise((resolve) => whenPrintFontsReady(win, resolve, Math.min(fallbackMs, 1200)));
+
+  const css = new Promise((resolve) => {
+    let links = [];
+    try { links = Array.from(doc.querySelectorAll('link[rel="stylesheet"]')); } catch (e) {}
+    let pending = 0;
+    links.forEach((link) => {
+      try { if (link.sheet) return; } catch (e) {}
+      pending++;
+      const settle = () => { pending--; if (pending <= 0) resolve(); };
+      link.addEventListener('load', settle, { once: true });
+      link.addEventListener('error', settle, { once: true });
+    });
+    if (pending === 0) resolve();
+  });
+
+  const images = new Promise((resolve) => {
+    let imgs = [];
+    try { imgs = Array.from(doc.images || []); } catch (e) {}
+    let pending = 0;
+    imgs.forEach((img) => {
+      if (img.complete) return;
+      pending++;
+      const settle = () => { pending--; if (pending <= 0) resolve(); };
+      img.addEventListener('load', settle, { once: true });
+      img.addEventListener('error', settle, { once: true });
+    });
+    if (pending === 0) resolve();
+  });
+
+  Promise.all([fonts, css, images]).then(once, once);
   setTimeout(once, fallbackMs);
 }
 

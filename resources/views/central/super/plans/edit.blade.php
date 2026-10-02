@@ -17,7 +17,7 @@
     <div class="d-flex align-items-center gap-2">
         @if($plan->tenant_subscriptions_count > 0)
             <span class="badge badge-trial fs-xs3">
-                {{ $plan->tenant_subscriptions_count }} {{ Str::plural(__('super.common.subscriber'), $plan->tenant_subscriptions_count) }}
+                {{ $plan->tenant_subscriptions_count }} {{ $plan->tenant_subscriptions_count == 1 ? __('super.common.subscriber') : __('super.common.subscribers') }}
             </span>
         @endif
         <span class="badge badge-{{ $plan->is_active ? 'yes' : 'no' }} fs-xs3">{{ $plan->is_active ? __('super.common.active') : __('super.common.inactive') }}</span>
@@ -75,9 +75,9 @@
                     <div class="form-group">
                         <label class="form-switch-label">
                             <input type="checkbox" name="is_private" value="1" class="form-check-input" {{ old('is_private', $plan->is_private) ? 'checked' : '' }}>
-                            <span><i class="bi bi-lock me-1"></i>Private Plan</span>
+                            <span><i class="bi bi-lock me-1"></i>{{ __('super.plans.private_plan') }}</span>
                         </label>
-                        <p class="form-hint">Private plans are hidden from the landing page, registration form, and tenant billing page. Only a super admin can assign them to tenants.</p>
+                        <p class="form-hint">{{ __('super.plans.private_hint') }}</p>
                     </div>
                     <div class="form-group">
                         <label class="form-switch-label">

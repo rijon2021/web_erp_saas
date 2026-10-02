@@ -110,7 +110,7 @@
             <a-empty v-if="!form.lines.length" :image="simpleImage" description="No components yet" />
             <a-table
               v-else size="small" :columns="lineColumns" :data-source="form.lines"
-              row-key="key" :pagination="false" :scroll="{ x: 760 }"
+              row-key="key" :pagination="false" :scroll="{ x: 880 }"
             >
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'product_id'">
@@ -123,11 +123,20 @@
                 <template v-else-if="column.key === 'qty'">
                   <a-input-number v-model:value="record.qty" :min="0" size="small" style="width: 100%" />
                 </template>
+                <template v-else-if="column.key === 'unit_id'">
+                  <a-select
+                    v-if="unitOptionsFor(record).length > 1"
+                    v-model:value="record.unit_id" size="small" style="width: 100%"
+                    :options="unitOptionsFor(record)" :placeholder="$t('Unit')"
+                  />
+                  <span v-else class="muted">{{ baseUnitLabel(record) || '—' }}</span>
+                </template>
                 <template v-else-if="column.key === 'scrap_pct'">
                   <a-input-number v-model:value="record.scrap_pct" :min="0" :max="99" size="small" style="width: 100%" />
                 </template>
                 <template v-else-if="column.key === 'effective'">
                   {{ number(effectiveQty(record), 4) }}
+                  <span v-if="baseUnitLabel(record)" class="muted">{{ baseUnitLabel(record) }}</span>
                 </template>
                 <template v-else-if="column.key === 'cost'">
                   {{ money(lineCost(record)) }}
@@ -237,6 +246,10 @@
  * scrap fields are labelled separately because they mean different things:
  * output scrap raises what you must START, component scrap raises what you must
  * DRAW.
+ *
+ * A component can be stated in any unit that belongs to it (its base unit or
+ * one of that unit's sub-units). "To draw" and the costing always convert back
+ * to the base unit, which is what stock is counted in.
  */
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -272,6 +285,7 @@ const products = ref([]);
 const searching = ref(false);
 const warehouses = ref([]);
 const workCenters = ref([]);
+const units = ref([]);
 
 const productOptions = computed(() => products.value.map(p => ({ value: p.id, label: p.label })));
 const warehouseOptions = computed(() => warehouses.value.map(w => ({ value: w.id, label: w.name })));
@@ -286,7 +300,9 @@ const rules = computed(() => ({
 
 function addLine() {
   rowKey += 1;
-  form.lines.push({ key: rowKey, product_id: undefined, qty: 1, scrap_pct: 0, is_optional: false, unit_cost: 0 });
+  form.lines.push({
+    key: rowKey, product_id: undefined, qty: 1, unit_id: undefined, scrap_pct: 0, is_optional: false, unit_cost: 0,
+  });
 }
 
 function removeLine(record) {
@@ -298,12 +314,43 @@ function removeLine(record) {
 function onComponentChange(record) {
   const product = products.value.find(p => p.id === record.product_id);
   record.unit_cost = product ? product.cost : 0;
+  // A unit belongs to a product; switching product resets it to that product's base.
+  if (!unitsFor(record.product_id).some(u => u.id === record.unit_id)) {
+    record.unit_id = product ? product.unit_id : undefined;
+  }
 }
 
+/** The units a component may be stated in: its base unit plus that unit's sub-units. */
+function unitsFor(productId) {
+  const product = products.value.find(p => p.id === productId);
+  if (!product || !product.unit_id) return [];
+  return units.value.filter(u => u.id === product.unit_id || u.base_unit === product.unit_id);
+}
+
+function unitOptionsFor(record) {
+  return unitsFor(record.product_id).map(u => ({ value: u.id, label: u.ShortName || u.name }));
+}
+
+function baseUnitLabel(record) {
+  const product = products.value.find(p => p.id === record.product_id);
+  const base = product ? units.value.find(u => u.id === product.unit_id) : null;
+  return base ? (base.ShortName || base.name) : '';
+}
+
+/** Multiplier from the row's unit to the component's base unit — the rule purchases use. */
+function unitFactor(record) {
+  const unit = units.value.find(u => u.id === record.unit_id);
+  if (!unit || !unit.base_unit) return 1;
+  const value = Number(unit.operator_value) || 0;
+  if (value <= 0) return 1;
+  return unit.operator === '/' ? 1 / value : value;
+}
+
+/** Quantity to draw per run, scrap included, in the component's base unit. */
 function effectiveQty(record) {
   const qty = Number(record.qty) || 0;
   const scrap = Number(record.scrap_pct) || 0;
-  return qty * (1 + scrap / 100);
+  return qty * (1 + scrap / 100) * unitFactor(record);
 }
 
 function lineCost(record) {
@@ -414,7 +461,7 @@ async function submit() {
     const payload = {
       ...form,
       lines: form.lines.map(l => ({
-        product_id: l.product_id, qty: l.qty, scrap_pct: l.scrap_pct,
+        product_id: l.product_id, qty: l.qty, unit_id: l.unit_id || null, scrap_pct: l.scrap_pct,
         is_optional: l.is_optional, notes: l.notes,
       })),
       operations: form.operations.filter(o => o.name).map(o => ({
@@ -448,6 +495,7 @@ function firstError(e) {
 const lineColumns = [
   { title: 'Component', key: 'product_id', dataIndex: 'product_id', width: 260 },
   { title: 'Qty per run', key: 'qty', dataIndex: 'qty', width: 120 },
+  { title: t('Unit'), key: 'unit_id', dataIndex: 'unit_id', width: 110 },
   { title: 'Scrap %', key: 'scrap_pct', dataIndex: 'scrap_pct', width: 100 },
   { title: 'To draw', key: 'effective', width: 110, align: 'right' },
   { title: 'Cost', key: 'cost', width: 110, align: 'right' },
@@ -472,6 +520,7 @@ async function bootstrap() {
     const meta = await http.get('mrp/meta');
     warehouses.value = meta?.warehouses || [];
     workCenters.value = meta?.work_centers || [];
+    units.value = meta?.units || [];
 
     await searchProductsNow('');
 
@@ -488,7 +537,8 @@ async function bootstrap() {
       form.lines = (res.lines || []).map((l) => {
         rowKey += 1;
         return {
-          key: rowKey, product_id: l.product_id, qty: l.qty, scrap_pct: l.scrap_pct,
+          key: rowKey, product_id: l.product_id, qty: l.qty,
+          unit_id: l.unit_id || l.product_unit_id || undefined, scrap_pct: l.scrap_pct,
           is_optional: l.is_optional, notes: l.notes, unit_cost: l.unit_cost,
         };
       });
@@ -511,7 +561,10 @@ async function bootstrap() {
           ...products.value,
           ...(res.lines || [])
             .filter(l => missing.includes(l.product_id))
-            .map(l => ({ id: l.product_id, label: `${l.product_code} — ${l.product_name}`, cost: l.unit_cost })),
+            .map(l => ({
+              id: l.product_id, label: `${l.product_code} — ${l.product_name}`,
+              cost: l.unit_cost, unit_id: l.product_unit_id,
+            })),
         ];
         if (missing.includes(res.bom.product_id)) {
           products.value.push({
@@ -552,6 +605,10 @@ onMounted(bootstrap);
   font-size: 11.5px;
   opacity: 0.55;
   margin-top: 2px;
+}
+.muted {
+  font-size: 12px;
+  opacity: 0.6;
 }
 .sticky {
   position: sticky;

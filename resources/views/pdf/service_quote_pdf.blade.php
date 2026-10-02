@@ -1,3 +1,10 @@
+@php
+    // Branch letterhead: the warehouse that issued this document supplies the
+    // name, address, phone, email and logo below. Each field falls back to the
+    // global company settings on its own, and documents with no warehouse get
+    // the plain company block.
+    $issuer = $issuer ?? \App\Services\InvoiceIssuerService::company($setting ?? null);
+@endphp
 @php $pdfLocale = app()->getLocale(); $isRtl = $pdfLocale === 'ar'; @endphp
 <!DOCTYPE html>
 <html lang="{{ $pdfLocale }}" dir="{{ $isRtl ? 'rtl' : 'ltr' }}">
@@ -23,12 +30,12 @@
             <td style="width: 30%; vertical-align: top;">
                 @php
                     $logoSrc = null;
-                    if (!empty($setting['logo'])) {
+                    if (!empty($issuer['logo'])) {
                         // Tenant-aware upload location (images/tenants/{id}/settings or images/super/settings),
                         // falling back to the legacy shared path for old files like logo-default.png.
-                        $logoPath = upload_public_path('settings/'.$setting['logo']);
+                        $logoPath = upload_public_path('settings/'.$issuer['logo']);
                         if (!is_file($logoPath)) {
-                            $logoPath = public_path('images/'.$setting['logo']);
+                            $logoPath = public_path('images/'.$issuer['logo']);
                         }
                         if (file_exists($logoPath) && is_readable($logoPath)) {
                             $logoData = @file_get_contents($logoPath);
@@ -91,11 +98,11 @@
                         <div style="color: #ffffff; font-size: 9pt; font-weight: bold; text-transform: uppercase;">FROM</div>
                     </div>
                     <div style="padding: 8px 10px; background: #fffbeb;">
-                        <div style="font-size: 10pt; font-weight: bold; margin-bottom: 4px;">{{$setting['CompanyName']}}</div>
+                        <div style="font-size: 10pt; font-weight: bold; margin-bottom: 4px;">{{$issuer['name']}}</div>
                         <div style="font-size: 7.5pt; color: #6b7280; line-height: 1.5;">
-                            <div><strong>Phone:</strong> {{$setting['CompanyPhone']}}</div>
-                            <div><strong>Email:</strong> {{$setting['email']}}</div>
-                            <div><strong>Address:</strong> {{$setting['CompanyAdress']}}</div>
+                            <div><strong>Phone:</strong> {{$issuer['phone']}}</div>
+                            <div><strong>Email:</strong> {{$issuer['email']}}</div>
+                            <div><strong>Address:</strong> {{$issuer['full_address']}}</div>
                         </div>
                     </div>
                 </div>
@@ -209,9 +216,12 @@
     </table>
 
     <!-- Footer -->
-    @if(!empty($setting['is_invoice_footer']) && !empty($setting['invoice_footer']))
+    @php
+        $footerText = $issuer['footer'] !== '' ? $issuer['footer'] : ((! empty($setting['is_invoice_footer']) && ! empty($setting['invoice_footer'])) ? $setting['invoice_footer'] : '');
+    @endphp
+    @if($footerText !== '')
     <div style="margin-top: 14px; padding: 8px 10px; background: #f9fafb; border-left: 3px solid #d97706;">
-        <p style="font-size: 7.5pt; color: #6b7280; line-height: 1.5; margin: 0;">{{$setting['invoice_footer']}}</p>
+        <p style="font-size: 7.5pt; color: #6b7280; line-height: 1.5; margin: 0;">{{ $footerText }}</p>
     </div>
     @endif
 </body>

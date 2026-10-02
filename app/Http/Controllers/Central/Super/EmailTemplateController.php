@@ -101,7 +101,7 @@ class EmailTemplateController extends Controller
 
             return redirect()
                 ->route('super.email-templates.edit', ['template' => $template->id, 'locale' => $locale])
-                ->with('success', "Translation for \"{$locale}\" saved successfully.");
+                ->with('success', __('super.flash.translation_saved', ['locale' => $locale]));
         }
 
         // Saving the default (English) template
@@ -119,7 +119,7 @@ class EmailTemplateController extends Controller
 
         return redirect()
             ->route('super.email-templates.edit', $template)
-            ->with('success', "Template \"{$template->name}\" updated successfully.");
+            ->with('success', __('super.flash.template_updated', ['name' => $template->name]));
     }
 
     /**
@@ -133,7 +133,7 @@ class EmailTemplateController extends Controller
 
         return redirect()
             ->route('super.email-templates.edit', $template)
-            ->with('success', "Translation for \"{$locale}\" removed.");
+            ->with('success', __('super.flash.translation_removed', ['locale' => $locale]));
     }
 
     public function preview(EmailTemplate $template, Request $request)
@@ -179,9 +179,9 @@ class EmailTemplateController extends Controller
                     ->html($template->render($sampleVars, $locale));
             });
 
-            return back()->with('success', "Test email{$localeSuffix} sent to {$request->test_email}.");
+            return back()->with('success', __('super.flash.test_email_sent', ['suffix' => $localeSuffix, 'email' => $request->test_email]));
         } catch (\Throwable $e) {
-            return back()->withErrors(['test_email' => 'Failed to send test email: ' . $e->getMessage()]);
+            return back()->withErrors(['test_email' => __('super.flash.test_email_failed', ['error' => $e->getMessage()])]);
         }
     }
 

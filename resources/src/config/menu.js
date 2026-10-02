@@ -290,7 +290,7 @@ export const MENU = [
         key: 'accounting',
         icon: 'wallet',
         label: 'Accounting',
-        permissions: ['expense_view', 'expense_add', 'deposit_view', 'deposit_add', 'account', 'transfer_money', 'accounting_dashboard', 'chart_of_accounts', 'journal_entries', 'trial_balance', 'accounting_profit_loss', 'balance_sheet', 'accounting_tax_report'],
+        permissions: ['expense_view', 'expense_add', 'deposit_view', 'deposit_add', 'account', 'transfer_money', 'accounting_dashboard', 'chart_of_accounts', 'journal_entries', 'trial_balance', 'accounting_profit_loss', 'balance_sheet', 'accounting_tax_report', 'accounting_reconciliation'],
         feature: 'accounting',
         children: [
             { label: 'dashboard', to: '/app/accounting-v2/dashboard', icon: 'trending-up', permissions: ['accounting_dashboard'] },
@@ -300,6 +300,7 @@ export const MENU = [
             { label: 'Profit_Loss_Title', to: '/app/accounting-v2/reports/profit-and-loss', icon: 'wallet', permissions: ['accounting_profit_loss'] },
             { label: 'Balance_Sheet_Title', to: '/app/accounting-v2/reports/balance-sheet', icon: 'pie-chart', permissions: ['balance_sheet'] },
             { label: 'Tax_Summary_Report', to: '/app/accounting-v2/reports/tax-report', icon: 'files', permissions: ['accounting_tax_report'] },
+            { label: 'Reconciliation', to: '/app/accounting-v2/reports/reconciliation', icon: 'files', permissions: ['accounting_reconciliation'] },
             { label: 'List_accounts', to: '/app/accounts', icon: 'files', permissions: ['account'] },
             { label: 'Transfers_Money', to: '/app/transfer_money', icon: 'files', permissions: ['transfer_money'] },
             { label: 'Create_Expense', to: '/app/expenses/store', icon: 'file-plus', permissions: ['expense_add'] },
@@ -348,8 +349,8 @@ export const MENU = [
                 children: [
                     { label: 'Dashboard', to: '/app/shopify/dashboard', permissions: ['shopify_stores'], feature: 'shopify' },
                     { label: 'Stores', to: '/app/shopify/stores', permissions: ['shopify_stores'], feature: 'shopify' },
-                    { label: 'Sync Centre', to: '/app/shopify/sync', permissions: ['shopify_sync'], feature: 'shopify' },
-                    { label: 'Mappings', to: '/app/shopify/mappings', permissions: ['shopify_sync'], feature: 'shopify' },
+                    { label: 'Sync Centre', raw: true, to: '/app/shopify/sync', permissions: ['shopify_sync'], feature: 'shopify' },
+                    { label: 'Mappings', raw: true, to: '/app/shopify/mappings', permissions: ['shopify_sync'], feature: 'shopify' },
                     { label: 'Logs', to: '/app/shopify/logs', permissions: ['shopify_logs'], feature: 'shopify' },
                     { label: 'Guide', to: '/app/shopify/guide', permissions: ['shopify_stores'], feature: 'shopify' },
                 ],

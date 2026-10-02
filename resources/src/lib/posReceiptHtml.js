@@ -13,6 +13,8 @@
  * (the popup has no Vue refs to mount QR canvases into).
  */
 
+import { uploadUrl } from './uploadUrl';
+
 export function normalizeReceiptLayout(raw) {
   const n = Number(raw) || 1;
   return [1, 2, 3, 4, 5].includes(n) ? n : 1;
@@ -73,8 +75,10 @@ export function buildPosReceiptHtml(opts) {
   const discountAmt = d => price(Number(d.DiscountNet) * Number(d.quantity));
   const hasImei = d => d.is_imei && d.imei_number != null;
 
+  // Tenant-aware upload URL (images/tenants/<id>/settings/<file>), same as
+  // PosPage's $imgUrl('settings', …) — a bare /images/<file> 404s on a tenant.
   const logo = on('show_logo') && setting.logo
-    ? `<img src="/images/${esc(setting.logo)}" alt width="${Number(ps.logo_size) || 60}" height="${Number(ps.logo_size) || 60}">`
+    ? `<img src="${esc(uploadUrl('settings', setting.logo))}" alt width="${Number(ps.logo_size) || 60}" height="${Number(ps.logo_size) || 60}" onerror="this.onerror=null;this.src='/images/logo-default.png'">`
     : '';
 
   const qrRow = () => {
@@ -93,6 +97,13 @@ export function buildPosReceiptHtml(opts) {
     : '';
   const customerNote = () => set('show_note') && ps.note_customer
     ? `<p class="legal" style="white-space:pre-line;"><strong>${esc(ps.note_customer)}</strong></p>`
+    : '';
+
+  // Warehouse Letterhead: the issuing branch's own invoice footer note.
+  // applyIssuer() puts it on the setting; it is empty when the feature is off
+  // or the branch has no note, and it prints below the customer note.
+  const branchNote = () => setting.issuer_footer
+    ? `<p class="legal receipt-branch-note" style="white-space:pre-line;">${esc(setting.issuer_footer)}</p>`
     : '';
 
   // Payment rows share structure; only classes/formatters differ per layout.
@@ -144,7 +155,7 @@ export function buildPosReceiptHtml(opts) {
   };
 
   const legalcopy = extraClass =>
-    `<div id="legalcopy" class="${extraClass}">${saleNote()}${customerNote()}${qrRow()}</div>`;
+    `<div id="legalcopy" class="${extraClass}">${saleNote()}${customerNote()}${branchNote()}${qrRow()}</div>`;
 
   // ------------------------- Layout 1 — Standard -------------------------
   const layout1 = () => {
@@ -365,6 +376,7 @@ export function buildPosReceiptHtml(opts) {
           <div class="bl4-thanks-en">Thank You For Shopping With Us!</div>
         </div>
         ${set('show_note') && ps.note_customer ? `<div class="bl4-policy">${esc(ps.note_customer)}</div>` : ''}
+        ${setting.issuer_footer ? `<div class="bl4-policy receipt-branch-note">${esc(setting.issuer_footer)}</div>` : ''}
         ${(setting.CompanyPhone || setting.email)
           ? `<div class="bl4-footer-contact">${setting.CompanyPhone ? `<span>${esc(setting.CompanyPhone)}</span>` : ''}${setting.CompanyPhone && setting.email ? '<span> &middot; </span>' : ''}${setting.email ? `<span>${esc(setting.email)}</span>` : ''}</div>`
           : ''}
@@ -445,6 +457,7 @@ export function buildPosReceiptHtml(opts) {
       <table class="minimal-totals"><tbody>${totals}</tbody></table>
       ${paymentsTable}
       ${set('show_note') && ps.note_customer ? `<p class="minimal-note" style="white-space:pre-line;">${esc(ps.note_customer)}</p>` : ''}
+      ${setting.issuer_footer ? `<p class="minimal-note receipt-branch-note" style="white-space:pre-line;">${esc(setting.issuer_footer)}</p>` : ''}
       ${qrRow()}
     </div>`;
   };

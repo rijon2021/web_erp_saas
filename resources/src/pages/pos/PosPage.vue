@@ -295,7 +295,7 @@
       <div class="pos-shell-user-dd-wrapper" style="display: inline-flex;">
         <b-dropdown id="user-dd" right toggle-class="dropdown-toggle-no-caret p-0 bg-transparent border-0" no-caret variant="link">
           <template #button-content>
-            <img v-if="currentUser && currentUser.avatar" :src="'/images/avatar/'+currentUser.avatar" alt="avatar" style="width: 32px; height: 32px; border-radius: 99px; object-fit: cover; display: block;" />
+            <img v-if="currentUser && currentUser.avatar" :src="$imgUrl('avatar', currentUser.avatar)" alt="avatar" style="width: 32px; height: 32px; border-radius: 99px; object-fit: cover; display: block;" />
             <div v-else style="width: 32px; height: 32px; border-radius: 99px; background: linear-gradient(135deg, #6f53d9, #b65cd6); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600;">{{ currentUser && currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U' }}</div>
           </template>
           <div style="padding: 6px; min-width: 200px;">
@@ -1197,7 +1197,7 @@
             <div v-if="currentReceiptLayout === 1">
               <div class="info">
                 <div class="invoice_logo text-center mb-2">
-                  <img v-show="pos_settings.show_logo !== 0" :src="$imgUrl('settings', invoice_pos.setting.logo)" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                  <img v-show="pos_settings.show_logo !== 0" :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
                 </div>
                 <p>
                   <span v-show="pos_settings.show_store_name !== 0"><strong>{{invoice_pos.setting.CompanyName}}</strong><br></span>
@@ -1366,6 +1366,12 @@
                 <p class="legal" v-show="pos_settings.show_note" style="white-space:pre-line;">
                   <strong>{{pos_settings.note_customer}}</strong>
                 </p>
+                <!-- Warehouse Letterhead: the issuing branch's own footer note.
+                     Empty when the feature is off or the branch has no note. -->
+                <p v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer"
+                   class="legal receipt-branch-note" style="white-space:pre-line;">
+                  {{invoice_pos.setting.issuer_footer}}
+                </p>
                 <!-- Receipt QR codes (ZATCA + Invoice URL) -->
                 <div v-if="(invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0) || (pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref) || invoice_pos.fbr_invoice_number" class="receipt-qr-row mt-2">
                   <div v-if="invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0" class="receipt-qr-block">
@@ -1389,7 +1395,7 @@
             <div v-else-if="currentReceiptLayout === 2">
               <div class="info text-center">
                 <div class="invoice_logo mb-1">
-                  <img v-show="pos_settings.show_logo !== 0" :src="$imgUrl('settings', invoice_pos.setting.logo)" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                  <img v-show="pos_settings.show_logo !== 0" :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
                 </div>
                 <div>
                   <div v-show="pos_settings.show_store_name !== 0">{{invoice_pos.setting.CompanyName}}</div>
@@ -1586,6 +1592,12 @@
                 <p class="legal" v-show="pos_settings.show_note" style="white-space:pre-line;">
                   <strong>{{pos_settings.note_customer}}</strong>
                 </p>
+                <!-- Warehouse Letterhead: the issuing branch's own footer note.
+                     Empty when the feature is off or the branch has no note. -->
+                <p v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer"
+                   class="legal receipt-branch-note" style="white-space:pre-line;">
+                  {{invoice_pos.setting.issuer_footer}}
+                </p>
                 <!-- Receipt QR codes (ZATCA + Invoice URL) -->
                 <div v-if="(invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0) || (pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref) || invoice_pos.fbr_invoice_number" class="receipt-qr-row mt-2">
                   <div v-if="invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0" class="receipt-qr-block">
@@ -1616,7 +1628,7 @@
                     <span v-show="pos_settings.show_email">{{invoice_pos.setting.email}}</span>
                   </div>
                   <div class="invoice_logo text-center mb-2" v-show="pos_settings.show_logo !== 0">
-                    <img :src="$imgUrl('settings', invoice_pos.setting.logo)" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                    <img :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
                   </div>
                 </div>
                 <div class="mt-2" style="font-size:11px;">
@@ -1788,6 +1800,12 @@
                 <p class="legal" v-show="pos_settings.show_note" style="white-space:pre-line;">
                   <strong>{{pos_settings.note_customer}}</strong>
                 </p>
+                <!-- Warehouse Letterhead: the issuing branch's own footer note.
+                     Empty when the feature is off or the branch has no note. -->
+                <p v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer"
+                   class="legal receipt-branch-note" style="white-space:pre-line;">
+                  {{invoice_pos.setting.issuer_footer}}
+                </p>
                 <!-- Receipt QR codes (ZATCA + Invoice URL) -->
                 <div v-if="(invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0) || (pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref) || invoice_pos.fbr_invoice_number" class="receipt-qr-row mt-2">
                   <div v-if="invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0" class="receipt-qr-block">
@@ -1811,7 +1829,7 @@
             <div v-else-if="currentReceiptLayout === 4" class="receipt-layout-4">
               <div class="info text-center bl4-header">
                 <div class="invoice_logo mb-1" v-show="pos_settings.show_logo !== 0">
-                  <img :src="$imgUrl('settings', invoice_pos.setting.logo)" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                  <img :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
                 </div>
                 <div class="bl4-company-ar" v-if="invoice_pos.setting.company_name_ar">{{invoice_pos.setting.company_name_ar}}</div>
                 <div class="bl4-company-en">{{invoice_pos.setting.CompanyName}}</div>
@@ -2006,6 +2024,7 @@
                   <div class="bl4-thanks-en">Thank You For Shopping With Us!</div>
                 </div>
                 <div v-show="pos_settings.show_note && pos_settings.note_customer" class="bl4-policy">{{pos_settings.note_customer}}</div>
+                <div v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer" class="bl4-policy receipt-branch-note">{{invoice_pos.setting.issuer_footer}}</div>
                 <div class="bl4-footer-contact" v-if="invoice_pos.setting.CompanyPhone || invoice_pos.setting.email">
                   <span v-if="invoice_pos.setting.CompanyPhone">{{invoice_pos.setting.CompanyPhone}}</span>
                   <span v-if="invoice_pos.setting.CompanyPhone && invoice_pos.setting.email"> &middot; </span>
@@ -2034,7 +2053,7 @@
             <div v-else-if="currentReceiptLayout === 5" class="receipt-layout-5">
               <div class="info text-center mb-2">
                 <div class="invoice_logo mb-2" v-show="pos_settings.show_logo !== 0">
-                  <img :src="$imgUrl('settings', invoice_pos.setting.logo)" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                  <img :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
                 </div>
                 <div class="minimal-store-name" v-show="pos_settings.show_store_name !== 0">{{invoice_pos.setting.CompanyName}}</div>
                 <div class="minimal-contact" v-if="invoice_pos.setting.CompanyAdress || invoice_pos.setting.CompanyPhone">
@@ -2171,6 +2190,11 @@
 
               <p class="minimal-note" v-show="pos_settings.show_note && pos_settings.note_customer" style="white-space:pre-line;">
                 {{pos_settings.note_customer}}
+              </p>
+
+              <p v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer"
+                 class="minimal-note receipt-branch-note" style="white-space:pre-line;">
+                {{invoice_pos.setting.issuer_footer}}
               </p>
 
               <div v-if="(invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0) || (pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref) || invoice_pos.fbr_invoice_number" class="receipt-qr-row mt-2">
@@ -3036,19 +3060,70 @@
     </b-modal>
 
     <!-- Close Register Modal -->
-    <b-modal id="CloseRegisterModal" :title="$t('Close Register')" hide-footer>
-      <div class="form-group">
-        <label>{{$t('Counted_Cash')}}</label>
-        <input type="text" min="0" step="0.01" class="form-control" v-model.number="closeForm.counted_cash" />
-      </div>
-      <div class="form-group">
-        <label>{{$t('Closing_Notes')}}</label>
-        <textarea class="form-control" v-model="closeForm.notes"></textarea>
-      </div>
-      <div class="text-right">
-        <b-button variant="secondary" class="mr-2" @click="$bvModal.hide('CloseRegisterModal')">{{$t('Cancel')}}</b-button>
-        <b-button variant="danger" @click="submitCloseRegister" :disabled="registerBusy">{{$t('Close Register')}}</b-button>
-      </div>
+    <b-modal id="CloseRegisterModal" :title="$t('Close Register')" hide-footer @show="closeSummary = null">
+      <!-- Before closing: take the count. After closing: show how the expected
+           figure was reached, so a difference can be read rather than guessed. -->
+      <template v-if="!closeSummary">
+        <div class="form-group">
+          <label>{{$t('Counted_Cash')}}</label>
+          <input type="text" min="0" step="0.01" class="form-control" v-model.number="closeForm.counted_cash" />
+        </div>
+        <div class="form-group">
+          <label>{{$t('Closing_Notes')}}</label>
+          <textarea class="form-control" v-model="closeForm.notes"></textarea>
+        </div>
+        <div class="text-right">
+          <b-button variant="secondary" class="mr-2" @click="$bvModal.hide('CloseRegisterModal')">{{$t('Cancel')}}</b-button>
+          <b-button variant="danger" @click="submitCloseRegister" :disabled="registerBusy">{{$t('Close Register')}}</b-button>
+        </div>
+      </template>
+      <template v-else>
+        <b-alert v-if="!closeSummary.cash_methods_configured" variant="warning" show class="mb-3">
+          {{ $t('No_Cash_Method_Configured') }}
+        </b-alert>
+        <table class="table table-sm mb-3">
+          <tbody>
+            <tr>
+              <td>{{$t('Opening_Balance')}}</td>
+              <td class="text-right">{{ formatNumber(closeSummary.opening_balance, 2) }}</td>
+            </tr>
+            <tr>
+              <td>{{$t('Cash_Received')}}</td>
+              <td class="text-right">{{ formatNumber(closeSummary.cash_received, 2) }}</td>
+            </tr>
+            <tr>
+              <td>{{$t('Cash_Refunded')}}</td>
+              <td class="text-right">-{{ formatNumber(closeSummary.cash_refunded, 2) }}</td>
+            </tr>
+            <tr>
+              <td>{{$t('Cash In')}} / {{$t('Cash Out')}}</td>
+              <td class="text-right">
+                {{ formatNumber(closeSummary.cash_in, 2) }} / -{{ formatNumber(closeSummary.cash_out, 2) }}
+              </td>
+            </tr>
+            <tr class="font-weight-bold">
+              <td>{{$t('Expected_Cash')}}</td>
+              <td class="text-right">{{ formatNumber(closeSummary.expected_cash, 2) }}</td>
+            </tr>
+            <tr>
+              <td>{{$t('Counted_Cash')}}</td>
+              <td class="text-right">{{ formatNumber(closeSummary.counted_cash, 2) }}</td>
+            </tr>
+            <tr class="font-weight-bold" :class="closeSummary.difference < 0 ? 'text-danger' : 'text-success'">
+              <td>{{$t('Difference')}}</td>
+              <td class="text-right">{{ formatNumber(closeSummary.difference, 2) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <!-- Turnover is shown apart from the drawer maths on purpose: card,
+             transfer and credit sales are part of it but never reach the till. -->
+        <p class="text-muted small mb-3">
+          {{$t('Total_Sales')}}: {{ formatNumber(closeSummary.total_sales, 2) }}
+        </p>
+        <div class="text-right">
+          <b-button variant="primary" @click="$bvModal.hide('CloseRegisterModal')">{{$t('Close')}}</b-button>
+        </div>
+      </template>
     </b-modal>
 
     <!-- Online reload confirmation modal (non-blocking) -->
@@ -3612,7 +3687,8 @@ import axios from "../../pos-compat/axios";
 import Util from "../../pos-compat/util";
 import { formatPriceDisplay, getPriceFormatSetting, getPriceDecimals } from "../../pos-compat/priceFormat";
 import { openCashDrawer } from "../../pos-compat/cashDrawerQz";
-import { receiptFontHeadTags, tenantFontHeadTags, whenPrintFontsReady } from "../../lib/receiptFont";
+import { receiptFontHeadTags, receiptPageHeadTag, tenantFontHeadTags, whenPrintFontsReady, whenPrintReady } from "../../lib/receiptFont";
+import { applyIssuer, applyWarehouseIssuer, stripIssuer } from "../../lib/invoiceIssuer";
 import posKeyboardShortcutsMixin, {
   POS_SHORTCUTS,
   posShortcutsEnabled,
@@ -3744,6 +3820,8 @@ export default {
       products_pos: [],
       // ---- Vehicle Fitment (feature-flagged; see System Settings → Features)
       vehicle_fitment_enabled: false,
+      // Flip to true once the fitment API is ported (see loadVehicleLookup).
+      vehicle_fitment_available: false,
       pos_vehicle: null, // {make_id, model_id, year, engine, label}
       vehicle_incompatible_ids: [],
       vehicle_makes: [],
@@ -3950,6 +4028,9 @@ export default {
       registerBusy: false,
       registerForm: { warehouse_id: '', opening_balance: 0, notes: '' },
       closeForm: { counted_cash: 0, notes: '' },
+      // Breakdown returned by cash-registers/close; drives the post-close
+      // view of the modal so the cashier can see how expected cash was reached.
+      closeSummary: null,
       cashMove: { type: 'in', amount: 0, notes: '' },
       warehouseOptions: [],
       selectedClientId: "",
@@ -4776,12 +4857,19 @@ export default {
       if (!this.currentRegister) return;
       this.registerBusy = true;
       try {
-        await axios.post('cash-registers/close', {
+        const res = await axios.post('cash-registers/close', {
           register_id: this.currentRegister.id,
           counted_cash: this.closeForm.counted_cash || 0,
           notes: this.closeForm.notes || ''
         });
-        this.$bvModal.hide('CloseRegisterModal');
+        const summary = res?.data?.summary || {};
+        const register = res?.data?.register || {};
+        this.closeSummary = {
+          ...summary,
+          opening_balance: Number(register.opening_balance) || 0,
+          cash_in: Number(register.cash_in) || 0,
+          cash_out: Number(register.cash_out) || 0,
+        };
         this.makeToast('success', this.$t('RegisterClosed'), this.$t('Success'));
         this.refreshCurrentRegister();
       } catch (e) {
@@ -5019,6 +5107,10 @@ export default {
       return out === key && fallback ? fallback : out;
     },
     loadVehicleLookup() {
+      // The vehicle-fitment module (`vehicles/lookup`, VehicleFitmentController)
+      // is not part of this SaaS build yet, so the request would always 404.
+      // Leave the vehicle UI hidden until the module is ported.
+      if (!this.vehicle_fitment_available) return;
       axios.get('vehicles/lookup')
         .then(({ data }) => {
           this.vehicle_fitment_enabled = !!(data && data.enabled);
@@ -5329,6 +5421,29 @@ export default {
     },
 
     // ==================== PAYMENT METHODS ====================
+
+    /**
+     * The tender that can hand `excess` back as change, mirroring the rule the
+     * server applies: it has to be a cash method (there is no change from a
+     * card) and big enough to cover the difference. Returns null when no line
+     * qualifies, which is the only case the POS still refuses.
+     */
+    changeLineFor(excess) {
+      if (!(excess > 0)) return null;
+
+      const cashIds = (this.payment_methods || [])
+        .filter(m => !!m.is_cash)
+        .map(m => Number(m.id));
+
+      return (
+        (this.paymentLines || []).find(
+          line =>
+            cashIds.includes(Number(line.payment_method_id)) &&
+            parseFloat(line.amount || 0) >= excess
+        ) || null
+      );
+    },
+
     Submit_Payment() {
       NProgress.start();
       NProgress.set(0.1);
@@ -5338,7 +5453,10 @@ export default {
       const due      = parseFloat(this.docGrandTotal.toFixed(this.priceDecimals));
       const multi    = this.paymentLines.length > 1;
 
-      if (multi && total > due) {
+      // Overpaying a split tender is fine as long as a cash line can hand the
+      // difference back — the server applies the same rule. Only refuse when
+      // nothing on the sale is able to give change.
+      if (multi && total > due && !this.changeLineFor(total - due)) {
         NProgress.done();
         this.makeToast(
           "warning",
@@ -5380,7 +5498,11 @@ export default {
     CreatePOS() {
       NProgress.start();
       NProgress.set(0.1);
-      if (this.paymentLines.length > 1 && this.totalPaid > this.docGrandTotal) {
+      if (
+        this.paymentLines.length > 1 &&
+        this.totalPaid > this.docGrandTotal &&
+        !this.changeLineFor(this.totalPaid - this.docGrandTotal)
+      ) {
         this.makeToast(
           "warning",
           this.$t("TotalPaidExceedsGrandTotalForMultiPayment"),
@@ -8114,6 +8236,22 @@ export default {
       this.points_to_convert = val;
     },
 
+    // Receipt logo fallback: a stored filename whose file is gone (or a tenant
+    // provisioned without a default logo) prints as a broken-image box. Swap
+    // the <img> to the platform default once; the print popup clones the DOM
+    // so it inherits the swapped src. Hide it if even the default is missing.
+    onReceiptLogoError(e) {
+      const img = e && e.target;
+      if (!img) return;
+      const fallback = '/images/logo-default.png';
+      if (img.getAttribute('src') !== fallback && !img.dataset.logoFallback) {
+        img.dataset.logoFallback = '1';
+        img.src = fallback;
+      } else {
+        img.style.display = 'none';
+      }
+    },
+
     // ==================== INVOICE & PRINT METHODS ====================
     // opts.forcePrint: print even when is_printable (auto-print) is off —
     // used by the explicit "print last receipt" action.
@@ -8340,7 +8478,9 @@ export default {
           this.invoice_pos.sale.discount_Method = '2';
         }
         this.invoice_pos.details = response.data.details;
-        this.invoice_pos.setting = response.data.setting;
+        // Branch letterhead: the receipt header shows the warehouse that issued
+        // the sale, not the head-office company settings.
+        this.invoice_pos.setting = applyIssuer(response.data.setting, response.data.issuer);
         this.invoice_pos.symbol = response.data.symbol;
         this.invoice_pos.zatca_qr = response.data.zatca_qr;
         this.invoice_pos.fbr_invoice_number = response.data.fbr_invoice_number || '';
@@ -9423,7 +9563,7 @@ export default {
       var a = window.open('', '', 'height=600,width=480');
       if (!a) { return; }
       const bodyClass = this.currentReceiptPaperSizeClass || '';
-      a.document.write('<html><head><link rel="stylesheet" href="/css/pos_print.css">' + this.receiptFontCssTag + '</head><body class="' + bodyClass + '">');
+      a.document.write('<html><head><link rel="stylesheet" href="/css/pos_print.css">' + receiptPageHeadTag(this.pos_settings) + this.receiptFontCssTag + '</head><body class="' + bodyClass + '">');
       // Wrap in #invoice-POS so print CSS applies correctly and centers content
       a.document.write('<div id="invoice-POS">');
       a.document.write(divContents);
@@ -9442,8 +9582,11 @@ export default {
       };
       try { window.addEventListener('focus', afterPrint); } catch(e) {}
       try { a.onafterprint = afterPrint; } catch(e) {}
-      // Wait for the custom receipt webfont (if any) before snapshotting.
-      whenPrintFontsReady(a, () => {
+      // Wait for the receipt webfont, the print stylesheet AND the logo /
+      // QR images before snapshotting — print() does not wait for pending
+      // images, so a fonts-only gate printed receipts with an empty logo box
+      // whenever the logo was not already in the browser cache.
+      whenPrintReady(a, () => {
         try { a.focus(); } catch(e) {}
         try { a.print(); } catch(e) { afterPrint(); }
       });
@@ -9479,6 +9622,7 @@ export default {
         const html = `<!doctype html><html><head>
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <link rel="stylesheet" href="/css/pos_print.css" id="pos-print-css">
+          ${receiptPageHeadTag(this.pos_settings)}
           <style>${inlineQrStyles}</style>
           ${this.receiptFontCssTag}
         </head><body class="${bodyClass}"><div id="invoice-POS">${el.innerHTML}</div></body></html>`;
@@ -9593,7 +9737,13 @@ export default {
             if (raw) cachedSetting = JSON.parse(raw);
           } catch (e) {}
         }
-        const normalizedSetting = { ...(cachedSetting || {}), ...(set || {}) };
+        let normalizedSetting = { ...stripIssuer(cachedSetting), ...(set || {}) };
+        // Branch letterhead. Online the server sends the resolved issuer; offline
+        // we rebuild it from the cached warehouse list so the queued receipt
+        // prints the same header as it would have online.
+        normalizedSetting = (data && data.issuer)
+          ? applyIssuer(normalizedSetting, data.issuer)
+          : applyWarehouseIssuer(normalizedSetting, this.warehouses, s.warehouse_id || this.sale.warehouse_id);
 
         // Keep receipt behavior consistent: use the same modal/template for both online and offline.
         try {
@@ -9693,7 +9843,7 @@ export default {
           // Hydrate company/receipt header info (also used for offline printing)
           try {
             if (response.data && response.data.setting) {
-              const merged = { ...(this.invoice_pos && this.invoice_pos.setting ? this.invoice_pos.setting : {}), ...response.data.setting };
+              const merged = { ...stripIssuer(this.invoice_pos ? this.invoice_pos.setting : {}), ...response.data.setting };
               this.invoice_pos.setting = merged;
               // Cache preferred invoice format for POS printing
               if (merged && typeof merged.invoice_format === 'string' && ['thermal', 'a4'].includes(merged.invoice_format)) {
@@ -9775,7 +9925,7 @@ export default {
           // Re-cache the receipt/company setting clearCache just removed.
           try {
             if (response.data && response.data.setting) {
-              const merged = { ...(this.invoice_pos && this.invoice_pos.setting ? this.invoice_pos.setting : {}), ...response.data.setting };
+              const merged = { ...stripIssuer(this.invoice_pos ? this.invoice_pos.setting : {}), ...response.data.setting };
               localStorage.setItem('pos_receipt_company_setting', JSON.stringify(merged));
             }
           } catch (e) {}
@@ -9865,7 +10015,7 @@ export default {
                   } catch (e) {}
                 }
                 if (setting) {
-                  this.invoice_pos.setting = { ...(this.invoice_pos && this.invoice_pos.setting ? this.invoice_pos.setting : {}), ...setting };
+                  this.invoice_pos.setting = { ...stripIssuer(this.invoice_pos ? this.invoice_pos.setting : {}), ...setting };
                   if (typeof setting.offline_sync_enabled !== 'undefined') {
                     this.offlineSyncEnabled = setting.offline_sync_enabled === true
                       || setting.offline_sync_enabled === 1
@@ -9925,7 +10075,8 @@ export default {
           this.invoice_pos.sale.discount_Method = '2';
         }
         this.invoice_pos.details = data.details || [];
-        this.invoice_pos.setting = data.setting || {};
+        // Branch letterhead of the warehouse that issued the sale.
+        this.invoice_pos.setting = applyIssuer(data.setting || {}, data.issuer);
         this.invoice_pos.symbol = data.symbol || '';
         this.invoice_pos.zatca_qr = data.zatca_qr || null;
         this.public_invoice_url = data.public_invoice_url || '';

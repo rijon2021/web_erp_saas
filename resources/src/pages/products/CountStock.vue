@@ -13,7 +13,7 @@
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'date'">{{ date(record.date) }}</template>
         <template v-else-if="column.key === 'file_stock'">
-          <a :href="uploadUrl('count_stock', record.file_stock)" target="_blank">
+          <a href="#" @click.prevent="downloadSheet(record)">
             <DownloadOutlined /> {{ $t('Download') }}
           </a>
         </template>
@@ -51,8 +51,9 @@
 <script setup>
 /**
  * GET count_stock → {stocks, warehouses, categories, totalRows}. Generate a
- * count sheet: POST store_count_stock {date, warehouse_id, category_id} →
- * produces a downloadable file under /images/count_stock/{file_stock}.
+ * count sheet: POST store_count_stock {date, warehouse_id, category_id}. The
+ * sheet is stored off the public path and fetched over XHR from
+ * count_stock/{id}/download, which checks the permission and the warehouse.
  */
 import { ref, computed } from 'vue';
 import { message } from 'ant-design-vue';
@@ -64,7 +65,6 @@ import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import http from '../../lib/http';
-import { uploadUrl } from '../../lib/uploadUrl';
 
 const { t } = useI18n();
 const { date } = useFormat();
@@ -99,6 +99,14 @@ const rules = computed(() => ({
 function openCreate() {
   form.value = { date: dayjs().format('YYYY-MM-DD'), warehouse_id: undefined, category_id: undefined };
   modalOpen.value = true;
+}
+
+async function downloadSheet(record) {
+  try {
+    await http.download(`count_stock/${record.id}/download`, record.file_stock);
+  } catch (e) {
+    message.error(e?.data?.message || t('InvalidData'));
+  }
 }
 
 async function save() {

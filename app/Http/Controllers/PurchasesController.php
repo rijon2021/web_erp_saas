@@ -37,6 +37,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Infobip\Api\SendSmsApi;
 use Infobip\Configuration;
 use Infobip\Model\SmsAdvancedTextualRequest;
@@ -220,6 +221,7 @@ class PurchasesController extends BaseController
             'supplier_id' => 'required',
             'warehouse_id' => 'required',
         ]);
+        $this->assertBatchCostsMatchLines($request);
 
         \DB::transaction(function () use ($request) {
             $order = new Purchase;
@@ -391,6 +393,45 @@ class PurchasesController extends BaseController
 
     // --------- Update Purchase  -------------\\
 
+    /**
+     * A batch-tracked line is costed at the quantity-weighted average of its
+     * batch unit costs, and the purchase form derives Unit_cost that way. Any
+     * client that posts a line cost disagreeing with its own batch rows would
+     * store a purchase whose subtotal, COGS and stock value contradict the
+     * batches, so it is refused up front with a 422 the form surfaces as-is.
+     */
+    protected function assertBatchCostsMatchLines(Request $request): void
+    {
+        $batchService = app(BatchService::class);
+        if (! $batchService->isSupported()) {
+            return;
+        }
+
+        $errors = [];
+        foreach ((array) $request->input('details', []) as $i => $row) {
+            if (! is_array($row) || ! $batchService->productIsTracked($row['product_id'] ?? null)) {
+                continue;
+            }
+            $avg = $batchService->weightedAverageCostForRow($row);
+            if ($avg === null) {
+                continue;
+            }
+            $lineCost = (float) ($row['Unit_cost'] ?? 0);
+            if (abs($lineCost - $avg) > 0.01) {
+                $label = trim((string) ($row['name'] ?? $row['code'] ?? ('#'.($i + 1))));
+                $errors["details.$i.Unit_cost"] = __('messages.BatchCostMismatch', [
+                    'product' => $label,
+                    'cost' => number_format($lineCost, helpers::price_decimals(), '.', ''),
+                    'avg' => number_format($avg, helpers::price_decimals(), '.', ''),
+                ]);
+            }
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+    }
+
     public function update(Request $request, $id)
     {
         $this->authorizeForUser($request->user('api'), 'update', Purchase::class);
@@ -399,6 +440,7 @@ class PurchasesController extends BaseController
             'warehouse_id' => 'required',
             'supplier_id' => 'required',
         ]);
+        $this->assertBatchCostsMatchLines($request);
 
         \DB::transaction(function () use ($request, $id) {
             $user = Auth::user();
@@ -796,13 +838,7 @@ class PurchasesController extends BaseController
 
                 $Payment_purchase_data = PaymentPurchase::where('purchase_id', $id)->get();
                 foreach ($Payment_purchase_data as $Payment_purchase) {
-                    $account = Account::find($Payment_purchase->account_id);
-
-                    if ($account) {
-                        $account->update([
-                            'balance' => $account->balance + $Payment_purchase->montant,
-                        ]);
-                    }
+                    Account::adjustBalance($Payment_purchase->account_id, $Payment_purchase->montant);
 
                     $Payment_purchase->delete();
                 }
@@ -932,13 +968,7 @@ class PurchasesController extends BaseController
 
                     $Payment_purchase_data = PaymentPurchase::where('purchase_id', $purchase_id)->get();
                     foreach ($Payment_purchase_data as $Payment_purchase) {
-                        $account = Account::find($Payment_purchase->account_id);
-
-                        if ($account) {
-                            $account->update([
-                                'balance' => $account->balance + $Payment_purchase->montant,
-                            ]);
-                        }
+                        Account::adjustBalance($Payment_purchase->account_id, $Payment_purchase->montant);
 
                         $Payment_purchase->delete();
                     }
@@ -981,6 +1011,7 @@ class PurchasesController extends BaseController
             $this->authorizeForUser($request->user('api'), 'check_record', $purchase);
         }
 
+        $purchase_data['id'] = $purchase->id;
         $purchase_data['Ref'] = $purchase->Ref;
         // Multi-Currency: amounts in this payload are converted into the
         // document currency — the page must render them with THIS symbol.
@@ -1105,6 +1136,8 @@ class PurchasesController extends BaseController
             'details' => $details,
             'purchase' => $purchase_data,
             'company' => $company,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($purchase->warehouse_id, $company),
         ]);
 
     }
@@ -1186,6 +1219,8 @@ class PurchasesController extends BaseController
         $Purchase_data = Purchase::with('details.product.unitPurchase')
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
+
+        $this->abortIfDocumentWarehouseDenied($Purchase_data);
 
         // Document currency: stored amounts are base currency, display = stored * rate.
         $docCurrency = helpers::Get_Document_Currency($Purchase_data);
@@ -1292,6 +1327,8 @@ class PurchasesController extends BaseController
         $Html = view('pdf.purchase_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Purchase_data->warehouse_id, $settings),
             'purchase' => $purchase,
             'details' => $details,
         ])->render();
@@ -1323,6 +1360,8 @@ class PurchasesController extends BaseController
         $Purchase_data = Purchase::with('details.product.unitPurchase')
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
+
+        $this->abortIfDocumentWarehouseDenied($Purchase_data);
 
         // Document currency: stored amounts are base currency, display = stored * rate.
         $docCurrency = helpers::Get_Document_Currency($Purchase_data);
@@ -1429,6 +1468,8 @@ class PurchasesController extends BaseController
         $Html = view('pdf.purchase_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Purchase_data->warehouse_id, $settings),
             'purchase' => $purchase,
             'details' => $details,
         ])->render();
@@ -2451,7 +2492,7 @@ class PurchasesController extends BaseController
         $purchase = Purchase::findOrFail($purchaseId);
 
         $request->validate([
-            'documents.*' => 'required|file|max:10240', // Max 10MB per file
+            'documents.*' => 'required|file|mimes:jpg,jpeg,png,webp,pdf,doc,docx,xls,xlsx,csv,txt|max:10240', // Max 10MB per file
         ]);
 
         $uploadedDocuments = [];
@@ -2469,7 +2510,9 @@ class PurchasesController extends BaseController
                 $size = $file->getSize();
                 $mimeType = $file->getMimeType();
 
-                $filename = time() . '_' . Str::random(10) . '_' . $originalName;
+                $safeBase = preg_replace('/[^A-Za-z0-9_.-]+/', '_', pathinfo($originalName, PATHINFO_FILENAME)) ?: 'document';
+                $safeExt  = strtolower($file->guessExtension() ?: pathinfo($originalName, PATHINFO_EXTENSION));
+                $filename = time() . '_' . Str::random(10) . '_' . $safeBase . ($safeExt ? '.' . $safeExt : '');
                 
                 // Move file to public/images/purchase_documents
                 $file->move($uploadPath, $filename);
@@ -2550,8 +2593,11 @@ class PurchasesController extends BaseController
             ->update(['deleted_at' => Carbon::now()]);
 
         // Optionally delete the physical file
-        $filePath = public_path($document->path);
-        if (file_exists($filePath)) {
+        // Only delete files that really live under public/images — the stored
+        // path is server-written, but keep the unlink() contained regardless.
+        $filePath = realpath(public_path($document->path));
+        $imagesRoot = realpath(public_path('images'));
+        if ($filePath && $imagesRoot && str_starts_with($filePath, $imagesRoot . DIRECTORY_SEPARATOR) && is_file($filePath)) {
             unlink($filePath);
         }
 

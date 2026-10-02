@@ -88,7 +88,13 @@ class SyncService
     /**
      * Start a run and dispatch it. Returns the finished run row.
      *
-     * @param  array  $options  ['dry_run' => bool, 'only_unsynced' => bool, 'since' => 'Y-m-d']
+     * With a `time_budget` (seconds) a sync type listed in RESUMABLE stops at
+     * the budget and comes back paused rather than finished; resume() carries
+     * it on. That is how a web request stays short enough for hosting that
+     * ends long ones. Without a budget — the scheduled command — a run goes
+     * through in one piece as it always did.
+     *
+     * @param  array  $options  ['dry_run' => bool, 'only_unsynced' => bool, 'since' => 'Y-m-d', 'time_budget' => int]
      */
     public function run(string $entity, string $direction, array $options = [], ?int $userId = null): ShopifySyncRun
     {
@@ -104,6 +110,49 @@ class SyncService
             'heartbeat_at' => now(),
         ]);
 
+        return $this->work($options);
+    }
+
+    /**
+     * Carry on a paused run from where it stopped. The caller must have
+     * claimed it first (ShopifySyncRun::claimForResume), so two requests
+     * never work the same run.
+     */
+    public function resume(ShopifySyncRun $run, array $options = []): ShopifySyncRun
+    {
+        $this->run = $run->fresh();
+
+        // Stop was pressed while it was waiting for its next slice.
+        if ($this->run->cancel_requested) {
+            $this->finish('cancelled');
+
+            return $this->run->fresh();
+        }
+
+        return $this->work($options);
+    }
+
+    /** Sync types that can stop at a time budget and be picked up again. */
+    private const RESUMABLE = ['products.push'];
+
+    /** When this slice must hand over, or null when the run is not time-boxed. */
+    private ?float $deadline = null;
+
+    private bool $paused = false;
+
+    private function work(array $options): ShopifySyncRun
+    {
+        $entity = $this->run->entity;
+        $direction = $this->run->direction;
+
+        $budget = (int) ($options['time_budget'] ?? 0);
+        $this->paused = false;
+        $this->deadline = $budget > 0 && in_array($entity.'.'.$direction, self::RESUMABLE, true)
+            ? microtime(true) + $budget
+            : null;
+
+        $this->watchForFatal();
+
         try {
             $method = 'sync'.Str::studly($entity).Str::studly($direction);
             if (! method_exists($this, $method)) {
@@ -116,10 +165,16 @@ class SyncService
             StockWatcher::muted(fn () => $this->$method($options));
 
             $this->run->refresh();
-            if (! $this->run->cancel_requested) {
-                $this->finish('completed');
-            } else {
+            if ($this->run->cancel_requested) {
                 $this->finish('cancelled');
+            } elseif ($this->paused) {
+                // Out of time, not out of work: leave it running and waiting.
+                self::$openRun = null;
+                $this->run->update(['stage' => ShopifySyncRun::STAGE_PAUSED, 'heartbeat_at' => now()]);
+
+                return $this->run->fresh();
+            } else {
+                $this->finish('completed');
             }
         } catch (\Throwable $e) {
             $this->finish('failed', $e->getMessage());
@@ -134,11 +189,78 @@ class SyncService
         return $this->run->fresh();
     }
 
+    /** The run this process is in the middle of, for closeAbandonedRun(). */
+    private static ?ShopifySyncRun $openRun = null;
+
+    private static bool $shutdownHooked = false;
+
+    /**
+     * Make a run that PHP kills say so.
+     *
+     * Running out of time or memory is a fatal error: it skips the catch in
+     * run() and ends the process with the row still "running", which the UI
+     * can only report ten minutes later as stalled, with no reason. A
+     * shutdown function still runs after a fatal, so the reason is written
+     * from there instead.
+     */
+    private function watchForFatal(): void
+    {
+        self::$openRun = $this->run;
+
+        if (! self::$shutdownHooked) {
+            self::$shutdownHooked = true;
+            register_shutdown_function([self::class, 'closeAbandonedRun']);
+        }
+    }
+
+    /** Shutdown handler: fail the run the process died in the middle of. */
+    public static function closeAbandonedRun(): void
+    {
+        $run = self::$openRun;
+        self::$openRun = null;
+
+        if (! $run) {
+            return;
+        }
+
+        $error = error_get_last();
+        $fatal = $error && in_array($error['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true);
+
+        // After running out of memory there is none left to write with.
+        @ini_set('memory_limit', '-1');
+
+        if ($fatal) {
+            $reason = 'The server stopped the sync before it finished: '.$error['message'];
+        } elseif (connection_aborted()) {
+            $reason = 'The sync stopped because the browser connection was closed before it finished.';
+        } else {
+            // No PHP error and no lost connection: the process was shut down
+            // from outside. How long it had been going is the useful clue —
+            // hosting that ends long requests does so at a fixed time.
+            $seconds = defined('LARAVEL_START') ? (int) round(microtime(true) - LARAVEL_START) : null;
+            $reason = 'The sync process was ended by the server'
+                .($seconds !== null ? ' after '.$seconds.' seconds' : '')
+                .', before it finished, with no PHP error ('.PHP_SAPI.').';
+        }
+
+        try {
+            // Counters included: they are only written at each heartbeat.
+            $run->fill(['status' => 'failed', 'finished_at' => now(), 'last_error' => mb_substr($reason, 0, 1000)])->save();
+
+            ShopifyLog::write($run->store_id, $run->entity.'.'.$run->direction, $reason.' Run it again to carry on — what was already synced is not duplicated.',
+                'error', [], $run->id, $run->entity);
+        } catch (\Throwable $e) {
+            // Nothing more can be done from a dying process.
+        }
+    }
+
     private function finish(string $status, ?string $error = null): void
     {
         if (! $this->run) {
             return;
         }
+
+        self::$openRun = null;
 
         $this->run->update([
             'status' => $status,
@@ -176,6 +298,14 @@ class SyncService
         $cancelled = (bool) ShopifySyncRun::where('id', $this->run->id)->value('cancel_requested');
         if ($cancelled) {
             $this->run->cancel_requested = true;
+        }
+
+        // Out of time for this request: stop the same clean way a cancel
+        // does, and let work() leave the run paused instead of finished.
+        if (! $cancelled && $this->deadline !== null && microtime(true) >= $this->deadline) {
+            $this->paused = true;
+
+            return true;
         }
 
         return $cancelled;
@@ -221,35 +351,61 @@ class SyncService
             $query->whereNotIn('id', $linked);
         }
 
-        $this->run->update([
-            'total_items' => (clone $query)->count(),
-            'stage' => 'pushing products',
-        ]);
+        // A resumed run carries on after the last product it finished; its
+        // total was counted when it started.
+        $after = (int) $this->run->cursor;
+
+        if ($after) {
+            $query->where('id', '>', $after);
+        } else {
+            $this->run->update([
+                'total_items' => (clone $query)->count(),
+                'stage' => 'pushing products',
+            ]);
+        }
 
         $cancelled = false;
         (clone $query)->orderBy('id')->chunkById(self::BATCH, function ($products) use (&$cancelled) {
             foreach ($products as $product) {
+                $finished = true;
                 try {
-                    $this->pushProduct($product);
+                    $finished = $this->pushProduct($product);
                 } catch (\Throwable $e) {
                     $this->bump('failed_items');
                     $this->log('error', 'product.push', 'Product #'.$product->id.': '.$e->getMessage(),
                         ['product_id' => $product->id, 'sku' => $product->code], 'products');
                 }
+
+                // Out of time, or stopped, part-way through this product's
+                // pictures. It is not done, so the cursor stays before it and
+                // the next request carries on with the rest of its gallery.
+                if (! $finished) {
+                    $cancelled = true;
+
+                    return false;
+                }
+
                 $this->bump('processed_items');
-            }
 
-            if ($this->tick('pushing products')) {
-                $cancelled = true;
+                // Per product, not per batch: one with a large gallery can
+                // take minutes, and fifty of them without a heartbeat would be
+                // taken for a dead run and started again alongside this one.
+                if ($this->tick('pushing products', (string) $product->id)) {
+                    $cancelled = true;
 
-                return false;   // stops chunking
+                    return false;   // stops chunking
+                }
             }
 
             return true;
         });
     }
 
-    private function pushProduct(Product $product): void
+    /**
+     * @return bool false when the product's gallery was left part-way — out of
+     *              time, or stopped — and a later call must carry it on
+     */
+    private function pushProduct(Product $product): bool
     {
         $payload = $this->productPayload($product);
         $images = $this->imageSources($product);
@@ -258,17 +414,55 @@ class SyncService
         // separately, because they are not sent on the same terms: a body is
         // cheap to resend, while an `images` array *replaces* the shop's whole
         // image set, so it goes only when the pictures have actually changed.
-        $textHash = $this->fingerprint($payload);
+        $textHash = $this->textFingerprint($payload);
         $imageHash = $this->imagesFingerprint($images);
         $hash = 'p1:'.$textHash.':'.$imageHash;
 
         $link = ShopifyLink::findLocal($this->store->id, 'product', $product->id);
 
+        // Its gallery ran out of time part-way through an earlier request.
+        // Carry on with the pictures rather than sending the product — and
+        // clearing the ones already up — all over again.
+        if ($link && ! $this->dryRun() && ($progress = $this->galleryProgress($link, $textHash, $imageHash))) {
+            $imageIds = $this->placedImageIds($link->shopify_id, $progress['placed']);
+
+            if ($imageIds !== null) {
+                $built = $this->buildImages($product, $images);
+
+                return $this->uploadGallery($product, $link, $hash, $built['images'], $imageIds,
+                    $progress['done'], $built['variantPositions'], []);
+            }
+        }
+
+        // Not linked yet — but the shop may already sell this product under
+        // the same SKU (listed by hand before the ERP existed, say). Creating
+        // a second listing would be the worst outcome, so ask before creating.
+        if (! $link) {
+            try {
+                $remote = $this->findRemoteProductBySku($this->skusOf($product));
+            } catch (\Throwable $e) {
+                // The search needs the read_products scope on GraphQL; an
+                // older token may lack it. Say so once and fall back to the
+                // old behaviour rather than failing every product.
+                $remote = null;
+                $this->log('warning', 'product.adopt',
+                    'Could not check Shopify for an existing SKU before creating product #'.$product->id.': '.$e->getMessage(),
+                    ['product_id' => $product->id], 'products');
+            }
+            if ($remote) {
+                $this->linkRemoteProduct($product, $remote, false);
+                $link = ShopifyLink::findLocal($this->store->id, 'product', $product->id);
+                $this->log('info', 'product.adopt',
+                    'Product #'.$product->id.' matched existing Shopify product '.$remote['id'].' by SKU; linked instead of created.',
+                    ['product_id' => $product->id, 'shopify_id' => $remote['id'], 'sku' => $product->code], 'products');
+            }
+        }
+
         // Nothing changed since the last push — skip the API call entirely.
         if ($link && $link->push_hash === $hash) {
             $this->bump('skipped_items');
 
-            return;
+            return true;
         }
 
         // Send pictures when the product is new, when they have changed, or
@@ -280,44 +474,66 @@ class SyncService
         );
 
         $variantPositions = [];
+        $entries = null;        // null: pictures are not part of this push
+        $separate = false;      // local files go up one request each, after the product
 
         if ($sendImages) {
             $built = $this->buildImages($product, $images);
-            $payload['images'] = $built['images'];
+            $entries = $built['images'];
             $variantPositions = $built['variantPositions'];
+            $separate = $built['bytes'] > self::INLINE_IMAGE_BYTES;
         }
 
         if ($this->dryRun()) {
             $this->bump($link ? 'updated_items' : 'created_items');
 
-            return;
+            return true;
         }
 
-        // Uploading pictures as base64 makes the request far larger than a
-        // text-only one, and Shopify has to store each file before answering.
-        $timeout = $sendImages ? 90 : 30;
-
-        $res = $link
-            ? $this->client->put('products/'.$link->shopify_id, ['product' => $payload], $timeout)
-            : $this->client->post('products', ['product' => $payload], $timeout);
+        [$res, $sent] = $this->sendProduct($product, $link, $payload, $entries, $separate);
 
         // A product deleted in Shopify leaves a stale link behind. Drop it and
         // let the next run recreate the product rather than failing for ever.
         if (! $res->successful() && $res->status() === 404 && $link) {
             $link->delete();
+            $link = null;
 
             // The shop no longer holds this product, so this is a create, and
             // a create always carries the pictures — the link that said they
             // were unchanged described a product that has since been deleted.
-            if ($images && ! $sendImages) {
+            if ($images && $entries === null) {
                 $built = $this->buildImages($product, $images);
-                $payload['images'] = $built['images'];
+                $entries = $built['images'];
                 $variantPositions = $built['variantPositions'];
-                $timeout = 90;
+                $separate = $built['bytes'] > self::INLINE_IMAGE_BYTES;
             }
 
-            $res = $this->client->post('products', ['product' => $payload], $timeout);
-            $link = null;
+            [$res, $sent] = $this->sendProduct($product, null, $payload, $entries, $separate);
+        }
+
+        // Shopify refuses a request body above a size it does not publish
+        // (413). The product itself is small — it is the pictures travelling
+        // with it — so send it again without them and upload those one by one.
+        if (! $res->successful() && $res->status() === 413 && $entries && ! $separate) {
+            $separate = true;
+            [$res, $sent] = $this->sendProduct($product, $link, $payload, $entries, true);
+        }
+
+        // The shop has tied one of this product's options (Color, say) to a
+        // category metafield. Its value names then belong to the metafield,
+        // and Shopify refuses any request that names them — which a variant
+        // list always does. Update the product without its options and
+        // variants, then the variants one by one, addressed by id.
+        $variantRows = null;
+        $hasOptions = isset($payload['options']);
+        if (! $res->successful() && $link && str_contains($res->body(), 'linked to a metafield')) {
+            $variantRows = $this->variantRowsById($product, $payload);
+            unset($payload['options'], $payload['variants']);
+            [$res, $sent] = $this->sendProduct($product, $link, $payload, $entries, $separate);
+
+            $this->log('info', 'product.options',
+                'Product #'.$product->id.': its options are linked to a metafield in Shopify, so option names were left as the shop has them; everything else was updated.',
+                ['product_id' => $product->id], 'products');
         }
 
         if (! $res->successful()) {
@@ -329,21 +545,353 @@ class SyncService
             throw new \RuntimeException('Shopify accepted the product but returned no id.');
         }
 
-        ShopifyLink::link($this->store->id, 'product', $product->id, $remote['id'], [
+        if ($variantRows !== null) {
+            $this->updateVariantsById($product, $variantRows, $remote, ! $hasOptions);
+        }
+
+        // Which Shopify image each of our positions became. The response lists
+        // the pictures in the order they were sent.
+        $imageIds = [];
+        foreach (array_values($remote['images'] ?? []) as $index => $image) {
+            if (isset($sent[$index]) && ! empty($image['id'])) {
+                $imageIds[$sent[$index]] = $image['id'];
+            }
+        }
+
+        // Pictures still to upload are not in the shop yet, so the fingerprint
+        // must not say they are: a run stopped half-way through the gallery
+        // would otherwise see an unchanged product next time and never send
+        // the rest. Until they are all up it records how far the gallery got.
+        $uploading = $separate && $entries;
+
+        $stored = ShopifyLink::link($this->store->id, 'product', $product->id, $remote['id'], [
             'handle' => $remote['handle'] ?? null,
-            'push_hash' => $hash,
+            'push_hash' => $uploading ? $this->uploadingHash($textHash, $imageHash, 0, array_keys($imageIds)) : $hash,
         ]);
 
         $this->linkVariants($product, $remote);
+
+        $this->bump($link ? 'updated_items' : 'created_items');
+
+        if ($uploading) {
+            return $this->uploadGallery($product, $stored, $hash, $entries, $imageIds, 0, $variantPositions, $remote);
+        }
 
         // After linking, because pointing a picture at a variant needs the
         // Shopify variant id, which only exists once the product has been
         // accepted and matched back to the local variants.
         if ($variantPositions) {
-            $this->attachVariantImages($product, $variantPositions, $remote);
+            $this->attachVariantImages($product, $variantPositions, $imageIds, $remote);
         }
 
-        $this->bump($link ? 'updated_items' : 'created_items');
+        return true;
+    }
+
+    /**
+     * The body half of a product's stored fingerprint.
+     *
+     * Shortened so the whole value — "p1:", this, ":", and the 32-character
+     * picture half — fits the 64-character column. At full length it was cut
+     * off on the way in and never matched again, so every push resent every
+     * product together with all of its pictures.
+     */
+    private function textFingerprint(array $payload): string
+    {
+        return substr($this->fingerprint($payload), 0, 28);
+    }
+
+    /**
+     * The fingerprint of a product whose gallery is still going up: which
+     * pictures it is for, how many local files have been dealt with, and which
+     * of our positions made it into the shop (a bit each, in hex).
+     */
+    private function uploadingHash(string $textHash, string $imageHash, int $done, array $placed): string
+    {
+        $mask = 0;
+        foreach ($placed as $position) {
+            $mask |= 1 << ($position - 1);
+        }
+
+        return 'p1:'.$textHash.':up'.substr($imageHash, 0, 12).'.'.$done.'.'.dechex($mask);
+    }
+
+    /**
+     * How far an interrupted gallery got, or null when the link does not hold
+     * one for the product as it is now.
+     *
+     * @return null|array{done: int, placed: int[]}
+     */
+    private function galleryProgress(ShopifyLink $link, string $textHash, string $imageHash): ?array
+    {
+        if (! preg_match('/^p1:([0-9a-f]+):up([0-9a-f]{12})\.(\d+)\.([0-9a-f]+)$/', (string) $link->push_hash, $m)) {
+            return null;
+        }
+        if ($m[1] !== $textHash || $m[2] !== substr($imageHash, 0, 12)) {
+            return null;   // edited since — send it afresh
+        }
+
+        $mask = hexdec($m[4]);
+        $placed = [];
+        for ($position = 1; $position <= self::MAX_IMAGES; $position++) {
+            if ($mask & (1 << ($position - 1))) {
+                $placed[] = $position;
+            }
+        }
+
+        return ['done' => (int) $m[3], 'placed' => $placed];
+    }
+
+    /**
+     * The shop's image ids for the positions an interrupted gallery had
+     * placed. Pictures sit in the shop in the order of our positions, so the
+     * two lists pair off — unless someone has changed the pictures there in
+     * the meantime, in which case null says to start the gallery again.
+     *
+     * @return null|array<int, mixed> our position => Shopify image id
+     */
+    private function placedImageIds($shopifyProductId, array $placed): ?array
+    {
+        $res = $this->client->get('products/'.$shopifyProductId.'/images', ['fields' => 'id,position']);
+        if (! $res->successful()) {
+            return null;
+        }
+
+        $shop = collect($res->json()['images'] ?? [])->sortBy('position')->pluck('id')->values()->all();
+        if (count($shop) !== count($placed)) {
+            return null;
+        }
+
+        return $placed ? array_combine($placed, $shop) : [];
+    }
+
+    /**
+     * Upload a product's local pictures from entry $from on, recording
+     * progress after each one, then finish the product off.
+     *
+     * @return bool false when it had to stop before the last picture
+     */
+    private function uploadGallery(Product $product, ShopifyLink $stored, string $hash, array $entries, array $imageIds, int $from, array $variantPositions, array $remote): bool
+    {
+        [, $textHash, $imageHash] = explode(':', $hash);
+        $files = array_values(array_filter($entries, fn ($entry) => isset($entry['file'])));
+
+        [$imageIds, $complete] = $this->uploadImages($product, $stored->shopify_id, $files, $imageIds, $from,
+            function (int $done, array $ids) use ($stored, $textHash, $imageHash) {
+                $stored->push_hash = $this->uploadingHash($textHash, $imageHash, $done, array_keys($ids));
+                $stored->save();
+            });
+
+        if (! $complete) {
+            return false;
+        }
+
+        $stored->push_hash = $hash;
+        $stored->save();
+
+        if ($variantPositions) {
+            $this->attachVariantImages($product, $variantPositions, $imageIds, $remote);
+        }
+
+        return true;
+    }
+
+    /**
+     * Create or update the product in the shop.
+     *
+     * With $separate the local files are left out and follow through
+     * uploadImages(). `images` is still sent — holding only the pictures given
+     * as links, or nothing — because it *replaces* the shop's whole image set:
+     * that clears the old pictures, and the uploads then add to what is left.
+     *
+     * @return array{0: Response, 1: int[]}  the response, and the positions of the pictures sent with it
+     */
+    private function sendProduct(Product $product, ?ShopifyLink $link, array $payload, ?array $entries, bool $separate): array
+    {
+        $sent = [];
+        $timeout = 30;
+
+        if ($entries !== null) {
+            $payload['images'] = [];
+
+            foreach ($entries as $entry) {
+                if ($separate && isset($entry['file'])) {
+                    continue;
+                }
+                if ($body = $this->imageBody($product, $entry)) {
+                    $payload['images'][] = $body;
+                    $sent[] = $entry['position'];
+                }
+            }
+
+            // Uploading pictures as base64 makes the request far larger than a
+            // text-only one, and Shopify has to store each file before answering.
+            $timeout = 90;
+        }
+
+        $res = $link
+            ? $this->client->put('products/'.$link->shopify_id, ['product' => $payload], $timeout)
+            : $this->client->post('products', ['product' => $payload], $timeout);
+
+        return [$res, $sent];
+    }
+
+    /**
+     * The variant rows of a product payload keyed by Shopify variant id, with
+     * the option names taken out — for a listing whose options the shop
+     * manages through a metafield.
+     *
+     * Only variants already linked can be addressed this way. One that exists
+     * only in the ERP cannot be added without naming its options, so it is
+     * reported instead.
+     *
+     * @return array<string, array> Shopify variant id => fields
+     */
+    private function variantRowsById(Product $product, array $payload): array
+    {
+        $sent = $payload['variants'] ?? [];
+        $strip = fn (array $row) => array_diff_key($row, ['option1' => 1, 'option2' => 1, 'option3' => 1]);
+
+        if (! isset($payload['options'])) {
+            // A simple product: its one Shopify variant is linked as the inventory item.
+            $link = ShopifyLink::findLocal($this->store->id, 'inventory_item', $product->id);
+
+            return $link && isset($sent[0]) ? [(string) $link->shopify_id => $strip($sent[0])] : [];
+        }
+
+        // Same query, same order, as productPayload() built the rows from.
+        $locals = ProductVariant::where('product_id', $product->id)->whereNull('deleted_at')->get()->values();
+        if ($locals->count() !== count($sent)) {
+            return [];
+        }
+
+        $rows = [];
+        $unlinked = [];
+        foreach ($locals as $index => $variant) {
+            $link = ShopifyLink::findLocal($this->store->id, 'variant', (int) $variant->id);
+            if ($link) {
+                $rows[(string) $link->shopify_id] = $strip($sent[$index]);
+            } else {
+                $unlinked[] = $variant->name;
+            }
+        }
+
+        if ($unlinked) {
+            $this->log('warning', 'product.options',
+                'Product #'.$product->id.': its options are linked to a metafield in Shopify, so these variants could not be added from here — add them in Shopify: '.implode(', ', $unlinked),
+                ['product_id' => $product->id], 'products');
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Update variants one request each, skipping any the shop already holds
+     * with the same values. Nothing is ever removed: a variant list sent with
+     * the product would delete every variant it did not mention.
+     *
+     * @param  array<string, array>  $rows  Shopify variant id => fields
+     * @param  bool  $single  the ERP product has no variants of its own
+     */
+    private function updateVariantsById(Product $product, array $rows, array $remote, bool $single): void
+    {
+        $current = [];
+        foreach ($remote['variants'] ?? [] as $rv) {
+            $current[(string) ($rv['id'] ?? '')] = $rv;
+        }
+
+        // A simple ERP product paired with a listing that has several
+        // variants: there is no telling which one its price belongs to.
+        if ($single && count($current) !== 1) {
+            return;
+        }
+
+        foreach ($rows as $variantId => $fields) {
+            if (! isset($current[$variantId])) {
+                continue;   // no longer in the shop
+            }
+
+            $same = true;
+            foreach ($fields as $key => $value) {
+                $theirs = $current[$variantId][$key] ?? null;
+                $same = $same && (is_numeric($value) && is_numeric($theirs)
+                    ? (float) $value === (float) $theirs
+                    : (string) $value === (string) $theirs);
+            }
+            if ($same) {
+                continue;
+            }
+
+            $res = $this->client->put('variants/'.$variantId, ['variant' => ['id' => $variantId] + $fields], 20);
+
+            if (! $res->successful()) {
+                $this->log('warning', 'product.options',
+                    'Product #'.$product->id.': variant '.$variantId.' was not updated: '.$this->client->explain($res),
+                    ['product_id' => $product->id, 'shopify_variant_id' => $variantId], 'products');
+            }
+        }
+    }
+
+    /**
+     * Upload local pictures one request each, for a gallery too large to
+     * travel with its product.
+     *
+     * A picture that fails is logged and skipped, never thrown: the product is
+     * already in the shop, and one bad photo should not cost the rest.
+     *
+     * It stops between two pictures when the run is out of time or has been
+     * stopped; $saved is told how far it got after every picture, so the next
+     * call can start at $from instead of at the beginning.
+     *
+     * @param  array  $entries  the file entries from buildImages(), as a list
+     * @param  array<int, mixed>  $imageIds  our position => Shopify image id, for the pictures already in the shop
+     * @param  callable(int, array): void  $saved  entries dealt with so far, and the map as it stands
+     * @return array{0: array<int, mixed>, 1: bool} the map with the uploaded pictures added, and whether every entry was dealt with
+     */
+    private function uploadImages(Product $product, $shopifyProductId, array $entries, array $imageIds, int $from, callable $saved): array
+    {
+        $count = count($entries);
+
+        for ($index = $from; $index < $count; $index++) {
+            $entry = $entries[$index];
+
+            if ($body = $this->imageBody($product, $entry)) {
+                // Where it lands among the pictures the shop holds so far — our own
+                // numbering has gaps wherever an earlier picture did not make it.
+                $body['position'] = 1 + count(array_filter(array_keys($imageIds), fn ($p) => $p < $entry['position']));
+
+                $res = $this->client->post('products/'.$shopifyProductId.'/images', ['image' => $body], 90);
+
+                // Too large even on its own. Shopify can still fetch it itself,
+                // provided this installation is reachable from the internet.
+                if ($res->status() === 413) {
+                    $res = $this->client->post('products/'.$shopifyProductId.'/images', ['image' => [
+                        'src' => product_image_url($entry['filename']),
+                        'position' => $body['position'],
+                        'alt' => $body['alt'],
+                    ]], 90);
+                }
+
+                $imageId = $res->successful() ? ($res->json()['image']['id'] ?? null) : null;
+
+                if ($imageId) {
+                    $imageIds[$entry['position']] = $imageId;
+                } else {
+                    $this->log('warning', 'product.image',
+                        'Image was not uploaded: '.$entry['filename'].' — '.$this->client->explain($res),
+                        ['product_id' => $product->id, 'bytes' => @filesize($entry['file'])], 'products');
+                }
+            }
+
+            $saved($index + 1, $imageIds);
+
+            // The heartbeat keeps a long gallery from looking like a dead
+            // run; its answer says whether to stop here.
+            if ($this->tick() && $index + 1 < $count) {
+                return [$imageIds, false];
+            }
+        }
+
+        return [$imageIds, true];
     }
 
     /**
@@ -359,19 +907,10 @@ class SyncService
      * trade.
      *
      * @param  array<int, int[]>  $variantPositions  image position => local variant ids
+     * @param  array<int, mixed>  $imageIdByPosition  image position => Shopify image id
      */
-    private function attachVariantImages(Product $product, array $variantPositions, array $remote): void
+    private function attachVariantImages(Product $product, array $variantPositions, array $imageIdByPosition, array $remote): void
     {
-        $imageIdByPosition = [];
-        foreach ($remote['images'] ?? [] as $index => $image) {
-            // Shopify honours the position we sent; the index is a fallback
-            // for the odd response that omits it.
-            $position = (int) ($image['position'] ?? ($index + 1));
-            if (! empty($image['id'])) {
-                $imageIdByPosition[$position] = $image['id'];
-            }
-        }
-
         $currentImageIdFor = [];
         foreach ($remote['variants'] ?? [] as $rv) {
             if (! empty($rv['id'])) {
@@ -420,6 +959,14 @@ class SyncService
 
     /** A single picture above this is skipped rather than posted. */
     private const MAX_IMAGE_BYTES = 8388608;   // 8 MB
+
+    /**
+     * Local pictures totalling more than this go up one request each instead
+     * of inside the product request. Shopify answers 413 to a body that is too
+     * large without publishing the limit, so this is deliberately low; a 413
+     * below it falls back to the same one-by-one upload.
+     */
+    private const INLINE_IMAGE_BYTES = 3145728;   // 3 MB
 
     /**
      * The product's pictures, main one first, as sources rather than data.
@@ -525,6 +1072,8 @@ class SyncService
      * is uploaded as base64 instead of a link, because a link only works if
      * this installation is reachable from the internet — which is exactly what
      * a shop running the ERP on a private network or a .test domain is not.
+     * The file is only named here; imageBody() reads it when it is sent, so a
+     * large gallery is never all in memory at once.
      *
      * Variant ownership travels as a position rather than in the payload,
      * because on a create the Shopify variant ids do not exist yet. Position
@@ -532,13 +1081,14 @@ class SyncService
      * built here — where images get skipped for being missing or oversized,
      * and the numbering shifts.
      *
-     * @return array{images: array, variantPositions: array<int, int[]>}
+     * @return array{images: array, variantPositions: array<int, int[]>, bytes: int}
      */
     private function buildImages(Product $product, array $sources): array
     {
         $images = [];
         $variantPositions = [];
         $position = 1;
+        $bytes = 0;
 
         foreach ($sources as $source) {
             if ($source['kind'] === 'url') {
@@ -565,27 +1115,44 @@ class SyncService
                 continue;
             }
 
-            $bytes = @file_get_contents($source['value']);
-            if ($bytes === false) {
-                $this->log('warning', 'product.image', 'Image could not be read: '.$source['name'],
-                    ['product_id' => $product->id], 'products');
-
-                continue;
-            }
-
             if ($source['variants']) {
                 $variantPositions[$position] = $source['variants'];
             }
 
+            $bytes += filesize($source['value']);
+
             $images[] = [
-                'attachment' => base64_encode($bytes),
+                'file' => $source['value'],
                 'filename' => $source['name'],
                 'position' => $position++,
                 'alt' => $product->name,
             ];
         }
 
-        return ['images' => $images, 'variantPositions' => $variantPositions];
+        return ['images' => $images, 'variantPositions' => $variantPositions, 'bytes' => $bytes];
+    }
+
+    /** One buildImages() entry as Shopify wants it, or null when its file cannot be read. */
+    private function imageBody(Product $product, array $entry): ?array
+    {
+        if (isset($entry['src'])) {
+            return $entry;
+        }
+
+        $bytes = @file_get_contents($entry['file']);
+        if ($bytes === false) {
+            $this->log('warning', 'product.image', 'Image could not be read: '.$entry['filename'],
+                ['product_id' => $product->id], 'products');
+
+            return null;
+        }
+
+        return [
+            'attachment' => base64_encode($bytes),
+            'filename' => $entry['filename'],
+            'position' => $entry['position'],
+            'alt' => $entry['alt'],
+        ];
     }
 
     /**
@@ -715,6 +1282,253 @@ class SyncService
                 ]);
             }
         }
+    }
+
+    // ------------------------------------------------- existing listings --
+
+    /**
+     * The fingerprint a push of this product would store right now.
+     *
+     * Used when adopting an existing Shopify listing in "keep the shop's
+     * data" mode: storing today's fingerprint makes the next push see an
+     * unchanged product and skip it, so nothing in the shop is overwritten
+     * until someone actually edits the product in the ERP.
+     */
+    public function pushHashFor(Product $product): string
+    {
+        return 'p1:'.$this->textFingerprint($this->productPayload($product)).':'.$this->imagesFingerprint($this->imageSources($product));
+    }
+
+    /** Every SKU the ERP knows this product by: its code and its variants' codes. */
+    public function skusOf(Product $product): array
+    {
+        $skus = [trim((string) $product->code)];
+
+        foreach (ProductVariant::where('product_id', $product->id)->whereNull('deleted_at')->pluck('code') as $code) {
+            $skus[] = trim((string) $code);
+        }
+
+        return array_values(array_unique(array_filter($skus, fn ($s) => $s !== '')));
+    }
+
+    /**
+     * The Shopify product that already carries one of these SKUs, in full
+     * REST shape, or null when the shop has none.
+     *
+     * Shopify's search is a prefix match, so the candidates it returns are
+     * checked for an exact (case-insensitive) SKU before being trusted:
+     * "TSH-1" must not adopt "TSH-10".
+     */
+    public function findRemoteProductBySku(array $skus): ?array
+    {
+        $skus = array_values(array_filter(array_map('trim', $skus), fn ($s) => $s !== ''));
+        if (! $skus) {
+            return null;
+        }
+
+        $terms = array_map(fn ($s) => 'sku:'.$this->searchTerm($s), array_slice($skus, 0, 20));
+        $wanted = array_map('mb_strtolower', $skus);
+
+        $res = $this->client->graphql(
+            'query ($q: String!) { productVariants(first: 50, query: $q) { edges { node { sku legacyResourceId product { legacyResourceId } } } } }',
+            ['q' => implode(' OR ', $terms)]
+        );
+
+        if (! $res['ok']) {
+            throw new \RuntimeException('Could not search Shopify by SKU: '.$res['error']);
+        }
+
+        foreach ($res['data']['productVariants']['edges'] ?? [] as $edge) {
+            $node = $edge['node'] ?? [];
+            if (in_array(mb_strtolower(trim((string) ($node['sku'] ?? ''))), $wanted, true) && ! empty($node['product']['legacyResourceId'])) {
+                return $this->fetchRemoteProduct($node['product']['legacyResourceId']);
+            }
+        }
+
+        return null;
+    }
+
+    /** One product as the REST API returns it (variants carry inventory_item_id, images carry src). */
+    public function fetchRemoteProduct($shopifyId): ?array
+    {
+        $res = $this->client->get('products/'.$shopifyId);
+
+        if ($res->status() === 404) {
+            return null;
+        }
+        if (! $res->successful()) {
+            throw new \RuntimeException($this->client->explain($res));
+        }
+
+        $remote = $res->json()['product'] ?? null;
+
+        return is_array($remote) && ! empty($remote['id']) ? $remote : null;
+    }
+
+    /**
+     * Live search of the shop's catalogue for the "link to an existing
+     * product" picker. Matches title, SKU, handle, barcode and id, and
+     * returns a trimmed shape the UI can show without a second call.
+     */
+    public function searchRemoteProducts(string $q, int $limit = 12): array
+    {
+        $q = trim($q);
+        if ($q === '') {
+            return [];
+        }
+
+        $term = $this->searchTerm($q);
+        $prefix = $this->searchTerm($q, true);
+        $parts = [$term, 'title:'.$prefix, 'sku:'.$prefix, 'handle:'.$prefix, 'barcode:'.$term];
+        if (ctype_digit($q)) {
+            $parts[] = 'id:'.$q;
+        }
+
+        $res = $this->client->graphql(
+            'query ($q: String!, $n: Int!) { products(first: $n, query: $q, sortKey: RELEVANCE) { edges { node {
+                legacyResourceId title handle status featuredImage { url }
+                variants(first: 100) { edges { node { legacyResourceId title sku price barcode inventoryItem { legacyResourceId } } } }
+            } } } }',
+            ['q' => implode(' OR ', $parts), 'n' => max(1, min(50, $limit))]
+        );
+
+        if (! $res['ok']) {
+            throw new \RuntimeException('Could not search Shopify: '.$res['error']);
+        }
+
+        $rows = [];
+        foreach ($res['data']['products']['edges'] ?? [] as $edge) {
+            $node = $edge['node'] ?? [];
+            if (empty($node['legacyResourceId'])) {
+                continue;
+            }
+
+            $variants = [];
+            foreach ($node['variants']['edges'] ?? [] as $ve) {
+                $v = $ve['node'] ?? [];
+                $variants[] = [
+                    'id' => (string) ($v['legacyResourceId'] ?? ''),
+                    'title' => (string) ($v['title'] ?? ''),
+                    'sku' => (string) ($v['sku'] ?? ''),
+                    'price' => $v['price'] ?? null,
+                    'barcode' => (string) ($v['barcode'] ?? ''),
+                    'inventory_item_id' => (string) ($v['inventoryItem']['legacyResourceId'] ?? ''),
+                ];
+            }
+
+            $rows[] = [
+                'id' => (string) $node['legacyResourceId'],
+                'title' => (string) ($node['title'] ?? ''),
+                'handle' => (string) ($node['handle'] ?? ''),
+                'status' => strtolower((string) ($node['status'] ?? '')),
+                'image' => $node['featuredImage']['url'] ?? null,
+                'price' => $variants[0]['price'] ?? null,
+                'variants' => $variants,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Pair an ERP product with a Shopify listing that already exists, and
+     * link its variants and inventory item so stock and orders work at once.
+     *
+     * With $keepRemote the current push fingerprint is stored, so the next
+     * product push leaves the shop's title, pictures and prices untouched
+     * until the product is edited locally. Without it the link is bare and
+     * the next push updates the listing with the ERP's data.
+     *
+     * Returns which Shopify variants were matched and which were not, so the
+     * caller can show the person what stayed unlinked.
+     */
+    public function linkRemoteProduct(Product $product, array $remote, bool $keepRemote): array
+    {
+        $shopifyId = (string) $remote['id'];
+
+        // A link to a different Shopify product must go first: the local
+        // unique index would otherwise keep the old pairing alive.
+        $this->unlinkProduct($product);
+
+        ShopifyLink::link($this->store->id, 'product', $product->id, $shopifyId, [
+            'handle' => $remote['handle'] ?? null,
+            'push_hash' => $keepRemote ? $this->pushHashFor($product) : null,
+        ]);
+
+        $this->linkVariants($product, $remote);
+
+        $local = ProductVariant::where('product_id', $product->id)->whereNull('deleted_at')->get();
+        $linkedByRemote = ShopifyLink::where('store_id', $this->store->id)
+            ->where('entity_type', 'variant')
+            ->whereIn('local_id', $local->pluck('id'))
+            ->pluck('local_id', 'shopify_id');
+        $linkedLocalIds = $linkedByRemote->values()->map(fn ($x) => (int) $x)->all();
+
+        $matched = [];
+        $unmatchedRemote = [];
+        foreach ($remote['variants'] ?? [] as $rv) {
+            $localId = $linkedByRemote[(string) $rv['id']] ?? null;
+            $row = ['shopify_id' => (string) $rv['id'], 'title' => $rv['title'] ?? '', 'sku' => $rv['sku'] ?? ''];
+            if ($localId) {
+                $row['local_id'] = (int) $localId;
+                $row['local_name'] = optional($local->firstWhere('id', (int) $localId))->name;
+                $matched[] = $row;
+            } elseif ($product->is_variant) {
+                $unmatchedRemote[] = $row;
+            } elseif (($inv = ShopifyLink::findLocal($this->store->id, 'inventory_item', $product->id)) && $inv->shopify_id === (string) $rv['id']) {
+                // A simple product has one Shopify variant, linked as its inventory item.
+                $row['local_id'] = (int) $product->id;
+                $row['local_name'] = $product->name;
+                $matched[] = $row;
+            }
+        }
+
+        $unmatchedLocal = $local->reject(fn ($v) => in_array((int) $v->id, $linkedLocalIds, true))
+            ->map(fn ($v) => ['local_id' => $v->id, 'name' => $v->name, 'sku' => $v->code])
+            ->values()->all();
+
+        ShopifyLog::write($this->store->id, 'product.link',
+            'Product #'.$product->id.' linked to existing Shopify product '.$shopifyId.($keepRemote ? " (keeping the shop's listing)" : ''),
+            'info', ['product_id' => $product->id, 'shopify_id' => $shopifyId, 'keep_remote' => $keepRemote], null, 'products');
+
+        return [
+            'shopify_id' => $shopifyId,
+            'handle' => $remote['handle'] ?? null,
+            'matched' => $matched,
+            'unmatched_remote' => $unmatchedRemote,
+            'unmatched_local' => $unmatchedLocal,
+        ];
+    }
+
+    /** Forget a product's pairing with this shop: the product row and every variant / inventory-item row under it. */
+    public function unlinkProduct(Product $product): int
+    {
+        $variantIds = ProductVariant::where('product_id', $product->id)->pluck('id')->all();
+
+        return ShopifyLink::where('store_id', $this->store->id)
+            ->where(function ($q) use ($product, $variantIds) {
+                $q->where(fn ($w) => $w->whereIn('entity_type', ['product', 'inventory_item'])->where('local_id', $product->id));
+                if ($variantIds) {
+                    $q->orWhere(fn ($w) => $w->where('entity_type', 'variant')->whereIn('local_id', $variantIds));
+                }
+            })->delete();
+    }
+
+    /**
+     * A value written for Shopify's search syntax.
+     *
+     * A prefix match (trailing *) only works on a bare token, so a value
+     * with spaces or punctuation is sent as a quoted phrase instead.
+     */
+    private function searchTerm(string $value, bool $prefix = false): string
+    {
+        $value = trim($value);
+
+        if ($prefix && preg_match('/^[\pL\pN_.\-]+$/u', $value)) {
+            return $value.'*';
+        }
+
+        return '"'.str_replace(['\\', '"'], ['\\\\', '\\"'], $value).'"';
     }
 
     /** Shopify -> ERP. */

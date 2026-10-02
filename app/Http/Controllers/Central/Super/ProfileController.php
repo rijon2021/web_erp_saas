@@ -30,7 +30,7 @@ class ProfileController extends Controller
 
         $user->update($validated);
 
-        return back()->with('success', 'Profile updated successfully.');
+        return back()->with('success', __('super.flash.profile_updated'));
     }
 
     public function updateAvatar(Request $request): RedirectResponse
@@ -57,7 +57,7 @@ class ProfileController extends Controller
 
         $user->update(['avatar' => upload_path('avatars') . '/' . $filename]);
 
-        return back()->with('success', 'Avatar updated successfully.');
+        return back()->with('success', __('super.flash.avatar_updated'));
     }
 
     public function updatePassword(Request $request): RedirectResponse
@@ -70,13 +70,13 @@ class ProfileController extends Controller
         $user = Auth::guard('central')->user();
 
         if (!Hash::check($request->current_password, $user->password)) {
-            return back()->withErrors(['current_password' => 'The current password is incorrect.']);
+            return back()->withErrors(['current_password' => __('super.flash.password_incorrect')]);
         }
 
         $user->update([
             'password' => Hash::make($request->password),
         ]);
 
-        return back()->with('success', 'Password changed successfully.');
+        return back()->with('success', __('super.flash.password_changed'));
     }
 }

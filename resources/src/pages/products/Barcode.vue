@@ -130,6 +130,16 @@
               {{ $t('Display_Price') || 'Display Price' }}
             </a-checkbox>
           </a-col>
+          <a-col :xs="12" :md="6">
+            <a-checkbox v-model:checked="label_settings.show_batch" @change="onLabelSettingChanged">
+              {{ $t('Batch_No') }}
+            </a-checkbox>
+          </a-col>
+          <a-col :xs="12" :md="6">
+            <a-checkbox v-model:checked="label_settings.show_expiry" @change="onLabelSettingChanged">
+              {{ $t('Expiry_Date') }}
+            </a-checkbox>
+          </a-col>
         </a-row>
 
         <a-row :gutter="16" style="margin-top: 12px">
@@ -225,7 +235,7 @@
         </template>
         <a-table
           :columns="selectedColumns" :data-source="products_added"
-          size="small" :pagination="false" row-key="code"
+          size="small" :pagination="false" :row-key="(r) => r.code + '|' + (r.batch_no || '')"
           :locale="{ emptyText: $t('NodataAvailable') }"
         >
           <template #bodyCell="{ column, record }">
@@ -273,6 +283,13 @@
                     />
                     <div class="bc-footer" v-if="label_settings.show_price">
                       <span class="bc-price">{{ auth.currency }} {{ sampleLabel.Net_price }}</span>
+                    </div>
+                    <div
+                      class="bc-meta"
+                      v-if="(label_settings.show_batch && sampleLabel.batch_no) || (label_settings.show_expiry && sampleLabel.expiry_date)"
+                    >
+                      <span v-if="label_settings.show_batch && sampleLabel.batch_no">B: {{ sampleLabel.batch_no }}</span>
+                      <span v-if="label_settings.show_expiry && sampleLabel.expiry_date">EXP: {{ sampleLabel.expiry_date }}</span>
                     </div>
                   </div>
                 </div>
@@ -322,6 +339,13 @@
                 />
                 <div class="bc-footer" v-if="label_settings.show_price">
                   <span class="bc-price">{{ auth.currency }} {{ bc.Net_price }}</span>
+                </div>
+                <div
+                  class="bc-meta"
+                  v-if="(label_settings.show_batch && bc.batch_no) || (label_settings.show_expiry && bc.expiry_date)"
+                >
+                  <span v-if="label_settings.show_batch && bc.batch_no">B: {{ bc.batch_no }}</span>
+                  <span v-if="label_settings.show_expiry && bc.expiry_date">EXP: {{ bc.expiry_date }}</span>
                 </div>
               </div>
             </div>
@@ -399,6 +423,8 @@ const label_settings = ref({
   show_price: true,
   show_barcode: true,
   show_barcode_number: true,
+  show_batch: true,
+  show_expiry: true,
   barcode_height: 28,
   font_size: 10,
   number_font_size: 10,
@@ -426,15 +452,15 @@ const FONT_FAMILIES = [
 // controls; changing any control afterwards flips the selector to "custom".
 const LABEL_TEMPLATES = {
   // Product name + barcode + barcode number + price
-  template1: { show_name: true, show_barcode: true, show_barcode_number: true, show_price: true, barcode_height: 28, font_size: 10, number_font_size: 10, bold_font: true },
+  template1: { show_name: true, show_barcode: true, show_barcode_number: true, show_price: true, show_batch: true, show_expiry: true, barcode_height: 28, font_size: 10, number_font_size: 10, bold_font: true },
   // Product name + price only
-  template2: { show_name: true, show_barcode: false, show_barcode_number: false, show_price: true, barcode_height: 28, font_size: 14, number_font_size: 10, bold_font: true },
+  template2: { show_name: true, show_barcode: false, show_barcode_number: false, show_price: true, show_batch: true, show_expiry: true, barcode_height: 28, font_size: 14, number_font_size: 10, bold_font: true },
   // Barcode only
-  template3: { show_name: false, show_barcode: true, show_barcode_number: true, show_price: false, barcode_height: 42, font_size: 10, number_font_size: 10, bold_font: true },
+  template3: { show_name: false, show_barcode: true, show_barcode_number: true, show_price: false, show_batch: false, show_expiry: false, barcode_height: 42, font_size: 10, number_font_size: 10, bold_font: true },
   // Product name + barcode + price, larger fonts
-  template4: { show_name: true, show_barcode: true, show_barcode_number: false, show_price: true, barcode_height: 24, font_size: 13, number_font_size: 12, bold_font: true },
+  template4: { show_name: true, show_barcode: true, show_barcode_number: false, show_price: true, show_batch: true, show_expiry: true, barcode_height: 24, font_size: 13, number_font_size: 12, bold_font: true },
   // Compact label for small accessories
-  template5: { show_name: true, show_barcode: true, show_barcode_number: true, show_price: true, barcode_height: 16, font_size: 7, number_font_size: 7, bold_font: false },
+  template5: { show_name: true, show_barcode: true, show_barcode_number: true, show_price: true, show_batch: true, show_expiry: true, barcode_height: 16, font_size: 7, number_font_size: 7, bold_font: false },
 };
 
 // Template picker cards — `parts` drives the schematic thumbnail so each card
@@ -466,9 +492,15 @@ const zoomOptions = [
 const sampleLabel = computed(() => {
   const p = products_added.value[0];
   if (p) {
-    return { name: p.name, barcode: p.barcode, Type_barcode: p.Type_barcode, Net_price: p.Net_price };
+    return {
+      name: p.name, barcode: p.barcode, Type_barcode: p.Type_barcode, Net_price: p.Net_price,
+      batch_no: p.batch_no || null, expiry_date: p.expiry_date || null,
+    };
   }
-  return { name: t('Label_Sample_Product'), barcode: '628112345678', Type_barcode: 'CODE128', Net_price: '49.99' };
+  return {
+    name: t('Label_Sample_Product'), barcode: '628112345678', Type_barcode: 'CODE128', Net_price: '49.99',
+    batch_no: 'B-2409', expiry_date: '2027-09-30',
+  };
 });
 
 const SHEET_ITEM_SIZES = {
@@ -497,6 +529,7 @@ const autocompleteOptions = computed(() => product_filter.value.map((p) => ({
 const selectedColumns = computed(() => [
   { title: t('ProductName'), dataIndex: 'name', key: 'name' },
   { title: t('CodeProduct'), dataIndex: 'code', key: 'code' },
+  { title: t('Batch_No'), dataIndex: 'batch_no', key: 'batch_no', width: 150 },
   { title: t('Quantity'), key: 'qte', width: 130, align: 'center' },
   { title: t('Actions') || 'Actions', key: 'actions', width: 80, align: 'center' },
 ]);
@@ -606,6 +639,17 @@ function applyLabelSettingsStyle() {
       font-weight: ${weight};
       font-family: ${family};
     }
+    .barcode-item .bc-meta {
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+      font-size: ${Math.max(6, fontSize - 2)}px;
+      line-height: ${Math.max(8, fontSize)}px;
+      font-weight: ${weight};
+      font-family: ${family};
+      white-space: nowrap;
+      text-transform: none;
+    }
   `;
 }
 
@@ -621,7 +665,7 @@ function onLabelSettingChanged() {
 
 function applySavedLabelSettings(saved) {
   if (!saved || typeof saved !== 'object') return;
-  ['template', 'show_name', 'show_price', 'show_barcode', 'show_barcode_number', 'barcode_height', 'font_size', 'number_font_size', 'bold_font', 'font_family']
+  ['template', 'show_name', 'show_price', 'show_barcode', 'show_barcode_number', 'show_batch', 'show_expiry', 'barcode_height', 'font_size', 'number_font_size', 'bold_font', 'font_family']
     .forEach((key) => {
       if (saved[key] !== undefined && saved[key] !== null) label_settings.value[key] = saved[key];
     });
@@ -717,6 +761,9 @@ function generatePages() {
         barcode: product.barcode,
         Type_barcode: product.Type_barcode,
         Net_price: product.Net_price,
+        batch_no: product.batch_no || null,
+        expiry_date: product.expiry_date || null,
+        mfg_date: product.mfg_date || null,
       });
     }
   });
@@ -804,6 +851,9 @@ function SearchProduct(result) {
       Type_barcode: result.Type_barcode,
       Net_price: result.Net_price,
       qte: 1,
+      batch_no: null,
+      expiry_date: null,
+      mfg_date: null,
     });
   }
   search_input.value = '';
@@ -878,8 +928,18 @@ function print_all_Barcode(isRetry = false) {
 }
 
 function loadPurchaseBarcodes(purchaseId) {
+  loadDocumentBarcodes('purchases/' + purchaseId + '/barcodes');
+}
+
+// Finished goods off a production order: one label per unit, each carrying
+// the batch number and expiry the order was completed with.
+function loadProductionOrderBarcodes(orderId) {
+  loadDocumentBarcodes('mrp/production-orders/' + orderId + '/barcodes');
+}
+
+function loadDocumentBarcodes(url) {
   startProgress();
-  http.get('purchases/' + purchaseId + '/barcodes')
+  http.get(url)
     .then((data) => {
       data = data || {};
       if (data.warehouse_id) barcode.value.warehouse_id = data.warehouse_id;
@@ -891,6 +951,9 @@ function loadPurchaseBarcodes(purchaseId) {
         Type_barcode: p.Type_barcode,
         Net_price: p.Net_price,
         qte: p.qte,
+        batch_no: p.batch_no || null,
+        expiry_date: p.expiry_date || null,
+        mfg_date: p.mfg_date || null,
       }));
       if (!paper_size.value) {
         paper_size.value = 'style40';
@@ -999,6 +1062,8 @@ onMounted(async () => {
 
   const purchaseId = route.query ? route.query.purchase_id : null;
   if (purchaseId) loadPurchaseBarcodes(purchaseId);
+  const productionOrderId = route.query ? route.query.production_order_id : null;
+  if (productionOrderId) loadProductionOrderBarcodes(productionOrderId);
 });
 
 onBeforeUnmount(() => {

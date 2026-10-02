@@ -19,12 +19,13 @@
               <a-input v-model:value="setting.page_title_suffix" />
             </a-form-item>
           </a-col>
-          <a-col :xs="24" :md="12">
+          <!-- White-labeling is a plan feature (remove_branding). -->
+          <a-col v-if="auth.canRemoveBranding" :xs="24" :md="12">
             <a-form-item label="Developed by">
               <a-input v-model:value="setting.developed_by" />
             </a-form-item>
           </a-col>
-          <a-col :xs="24" :md="12">
+          <a-col v-if="auth.canRemoveBranding" :xs="24" :md="12">
             <a-form-item label="Footer">
               <a-input v-model:value="setting.footer" />
             </a-form-item>

@@ -93,6 +93,7 @@ class SettingsApiController extends Controller
             'warehouses' => $warehouses,
             'currencies' => $currencies,
             'pending_customers_count' => $pendingCustomersCount,
+            'font_options' => \App\Models\Setting::fontOptions(),
         ]);
     }
 
@@ -300,7 +301,8 @@ class SettingsApiController extends Controller
         $s = StoreSetting::first() ?: new StoreSetting;
 
         // --- Ensure storage directory exists ---
-        $targetDir = public_path('images/store');
+        $targetDir = upload_public_path('store');
+        $storeRel  = upload_path('store');
         if (! File::exists($targetDir)) {
             File::makeDirectory($targetDir, 0755, true);
         }
@@ -326,7 +328,7 @@ class SettingsApiController extends Controller
                 ->encode($ext, 85)
                 ->save($targetDir.'/'.$filename);
 
-            $data['logo_path'] = 'images/store/'.$filename;
+            $data['logo_path'] = $storeRel.'/'.$filename;
         }
 
         // --- GCASH QR (600x600 max) ---
@@ -346,7 +348,7 @@ class SettingsApiController extends Controller
                 ->encode($ext, 88)
                 ->save($targetDir.'/'.$filename);
 
-            $data['gcash_qr_path'] = 'images/store/'.$filename;
+            $data['gcash_qr_path'] = $storeRel.'/'.$filename;
         }
 
         // --- FAVICON ---
@@ -370,7 +372,7 @@ class SettingsApiController extends Controller
                     ->save($targetDir.'/'.$filename);
             }
 
-            $data['favicon_path'] = 'images/store/'.$filename;
+            $data['favicon_path'] = $storeRel.'/'.$filename;
         }
 
         // --- HERO IMAGE (1600x800 max) ---
@@ -390,7 +392,7 @@ class SettingsApiController extends Controller
                 ->encode($ext, 82)
                 ->save($targetDir.'/'.$filename);
 
-            $data['hero_image_path'] = 'images/store/'.$filename;
+            $data['hero_image_path'] = $storeRel.'/'.$filename;
         }
 
         // --- THEME OPTIONS (skin themes: electronics, toys, …) ---
@@ -411,7 +413,8 @@ class SettingsApiController extends Controller
                 $incoming = [\App\Support\ElectronicsTheme::KEY => $incoming];
             }
 
-            $themeDir = public_path('images/store/theme');
+            $themeDir = upload_public_path('store/theme');
+            $themeRel = upload_path('store/theme');
             foreach (\App\Support\StoreThemes::SKINS as $themeKey) {
                 if (! array_key_exists($themeKey, $incoming)) {
                     continue;
@@ -444,10 +447,10 @@ class SettingsApiController extends Controller
                         ->save($themeDir.'/'.$filename);
 
                     $old = (string) ($clean[$list][$idx]['image'] ?? '');
-                    if ($old !== '' && Str::startsWith($old, 'images/store/theme/') && File::exists(public_path($old))) {
+                    if ($old !== '' && Str::startsWith($old, [$themeRel.'/', 'images/store/theme/']) && File::exists(public_path($old))) {
                         File::delete(public_path($old));
                     }
-                    $clean[$list][$idx]['image'] = 'images/store/theme/'.$filename;
+                    $clean[$list][$idx]['image'] = $themeRel.'/'.$filename;
                 }
 
                 $existing[$themeKey] = $clean;

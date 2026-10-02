@@ -9,7 +9,7 @@ class SmsMessagesSeeder extends Seeder
 {
     public function run()
     {
-        DB::table('sms_messages')->insert([
+        DB::table('sms_messages')->insertOrIgnore([
             [
                 'id' => 1,
                 'name' => 'sale',

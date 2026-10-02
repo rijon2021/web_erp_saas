@@ -294,10 +294,15 @@
                     @error('plan_id') <p class="field-error">{{ $message }}</p> @enderror
                 </div>
 
-                {{-- Billing cycle --}}
+                {{-- Billing cycle. With a single cycle on offer there is nothing
+                     to choose, so the group is replaced by a hidden field and
+                     register.js bails out (it requires #billing-cycle-group). --}}
+                @php $cycles = $billingCycles ?? ['monthly', 'yearly']; @endphp
+                @if (count($cycles) > 1)
                 <div class="form-group cycle-group" id="billing-cycle-group">
                     <label>{{ __('landing.billing_cycle') }}</label>
                     <div class="cycle-options">
+                        @if (in_array('monthly', $cycles))
                         <label class="cycle-option">
                             <input type="radio" name="billing_cycle" value="monthly" class="billing-cycle-radio" {{ old('billing_cycle', 'monthly') === 'monthly' ? 'checked' : '' }}>
                             <div class="cycle-card">
@@ -305,6 +310,8 @@
                                 <span class="cycle-price" id="monthly-price"></span>
                             </div>
                         </label>
+                        @endif
+                        @if (in_array('yearly', $cycles))
                         <label class="cycle-option">
                             <input type="radio" name="billing_cycle" value="yearly" class="billing-cycle-radio" {{ old('billing_cycle') === 'yearly' ? 'checked' : '' }}>
                             <div class="cycle-card">
@@ -312,8 +319,12 @@
                                 <span class="cycle-price" id="yearly-price"></span>
                             </div>
                         </label>
+                        @endif
                     </div>
                 </div>
+                @else
+                <input type="hidden" name="billing_cycle" value="{{ $cycles[0] }}">
+                @endif
                 @endif
 
                 <button type="submit" class="btn-register" id="btn-register">

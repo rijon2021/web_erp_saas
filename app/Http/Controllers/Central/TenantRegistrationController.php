@@ -24,8 +24,9 @@ class TenantRegistrationController extends Controller
     public function showRegistrationForm()
     {
         $plans = Plan::public()->orderBy('price')->get();
+        $billingCycles = GeneralSetting::enabledBillingCycles();
 
-        return view('central.register', compact('plans'));
+        return view('central.register', compact('plans', 'billingCycles'));
     }
 
     public function register(Request $request)
@@ -74,7 +75,8 @@ class TenantRegistrationController extends Controller
                     }
                 },
             ],
-            'billing_cycle'  => ['nullable', 'in:monthly,yearly'],
+            // Only the cycles the super admin currently sells.
+            'billing_cycle'  => ['nullable', GeneralSetting::billingCycleRule()],
         ], [
             'plan_id.required' => __('landing.plan_required'),
         ]);
@@ -87,7 +89,9 @@ class TenantRegistrationController extends Controller
             return back()->withErrors(['plan_id' => 'No plans available. Please contact support.']);
         }
 
-        $billingCycle = $validated['billing_cycle'] ?? 'monthly';
+        // An omitted cycle must land on one that is actually offered, so a
+        // yearly-only platform never writes a monthly subscription by default.
+        $billingCycle = GeneralSetting::defaultBillingCycle($validated['billing_cycle'] ?? null);
 
         if ($plan->isFree() || $plan->hasTrial()) {
             return $this->handleFreeOrTrialSignup($validated, $plan, $billingCycle);

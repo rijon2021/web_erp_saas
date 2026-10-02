@@ -4561,3 +4561,101 @@ body.dark-mode .payment-proof-upload-area:hover { border-color: rgba(255,255,255
 .proof-check-icon { font-size: 1.25rem; color: #059669; }
 .proof-file-name { font-size: 0.82rem; font-weight: 600; }
 .proof-remove-btn { font-size: 0.78rem; }
+
+/* ── Tenant Admin Actions: hover descriptions ─────────────────────── */
+.action-tip {
+    position: relative;
+    display: inline-block;
+}
+.action-tip .action-tip-icon {
+    margin-inline-start: 6px;
+    font-size: 0.72rem;
+    opacity: 0.65;
+}
+.action-tip-bubble {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    inset-inline-start: 0;
+    width: 290px;
+    max-width: calc(100vw - 32px);
+    padding: 11px 13px 12px;
+    background: #111827;
+    color: #f3f4f6;
+    border-radius: 10px;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.28);
+    font-size: 0.76rem;
+    line-height: 1.5;
+    text-align: start;
+    z-index: 60;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(6px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+    pointer-events: none;
+}
+.action-tip-bubble::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    inset-inline-start: 22px;
+    border: 7px solid transparent;
+    border-top-color: #111827;
+}
+.action-tip:hover .action-tip-bubble,
+.action-tip:focus-within .action-tip-bubble {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+.action-tip-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 700;
+    font-size: 0.8rem;
+    margin-bottom: 5px;
+}
+.action-tip-head i {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    font-size: 0.85rem;
+}
+.action-tip-migration .action-tip-head i { background: rgba(245,158,11,0.22); color: #fcd34d; }
+.action-tip-reseed .action-tip-head i { background: rgba(129,140,248,0.22); color: #c7d2fe; }
+.action-tip-reprovision .action-tip-head i { background: rgba(249,115,22,0.22); color: #fdba74; }
+.action-tip-reset .action-tip-head i { background: rgba(239,68,68,0.22); color: #fca5a5; }
+.action-tip-bubble p {
+    margin: 0 0 8px;
+    color: #d1d5db;
+}
+.action-tip-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+.action-tip-tag.is-safe { background: rgba(16,185,129,0.18); color: #6ee7b7; }
+.action-tip-tag.is-danger { background: rgba(239,68,68,0.18); color: #fca5a5; }
+.admin-actions-hint {
+    font-size: 0.76rem;
+    color: #6b7280;
+    margin: 0 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+body.dark-mode .action-tip-bubble {
+    background: #1f2937;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+body.dark-mode .action-tip-bubble::after { border-top-color: #1f2937; }
+body.dark-mode .admin-actions-hint { color: #9ca3af; }

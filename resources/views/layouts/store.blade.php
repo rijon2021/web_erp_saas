@@ -167,6 +167,8 @@
 
   @if(!empty($s->favicon_path))
     <link rel="icon" href="{{ $assetPath($s->favicon_path) }}" />
+  @elseif($fallbackFavicon = tenant_favicon_url())
+    <link rel="icon" href="{{ $fallbackFavicon }}" />
   @endif
 
   {{-- PWA --}}
@@ -204,6 +206,9 @@
     .dark { --color-accent-glow: rgba({{ $accent500Rgb }}, 0.45); }
 
     body { font-family: {{ $s->font_family ?? 'Inter, system-ui, sans-serif' }}; }
+    /* Never let a stray wide element side-scroll the page on phones. clip (not
+       hidden) creates no scroll container, so sticky headers keep working. */
+    html, body { overflow-x: clip; }
 
     .mega-panel { box-shadow: 0 24px 48px -12px rgba(0,0,0,0.5); }
 
@@ -213,7 +218,12 @@
        sits on the text baseline and reads a couple of pixels low next to a
        label; this puts it on the optical centre instead and keeps flex parents
        from squashing it. Shared by every theme that extends this layout. */
-    .store-ico { display: inline-block; vertical-align: middle; flex: 0 0 auto; }
+    .store-ico { vertical-align: middle; flex: 0 0 auto; }
+    /* display sits at element weight (0,0,1): later than preflight's
+       svg { display: block } so it still wins there, but any display utility
+       the caller adds (hidden, dark:inline, md:block ...) beats it. As a plain
+       class rule it overrode .hidden and both theme-toggle glyphs showed. */
+    svg:where(.store-ico) { display: inline-block; }
     /* Zero-specificity floor: an svg with no width or height resolves to the
        replaced-element default (300x150), so if a size utility is ever missing
        from the build the icon still comes out 20px. Any width utility or theme
@@ -231,6 +241,8 @@
   @elseif($storeTheme === 'default')
     @include('store.partials.theme-default-style')
   @endif
+  {{-- Tenant-selected Google font; after the theme head so it wins over the theme body font. --}}
+  @include('store.partials.store-font')
 </head>
 <body x-data class="bg-bg-base text-fg-primary antialiased min-h-screen flex flex-col">
 

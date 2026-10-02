@@ -102,9 +102,9 @@ const emptyForm = () => ({
   adresse: '', opening_balance: 0, credit_limit: 0,
 });
 const form = ref(emptyForm());
-// The providers update endpoint ignores opening_balance — it is changed only
-// via providers/{id}/adjust-opening-balance. Remember the loaded value so an
-// edit can push a "set" adjustment when (and only when) it changes.
+// ProvidersController@update saves opening_balance only when it is in the
+// payload. Remember the loaded value so an edit sends it when (and only when)
+// it changes — otherwise a stale form would undo due payments made meanwhile.
 const loadedOpeningBalance = ref(0);
 
 const rules = computed(() => ({
@@ -137,9 +137,9 @@ async function submit() {
   submitting.value = true;
   try {
     if (isEdit.value) {
-      // This API's ProvidersController@update takes opening_balance in the
-      // payload (no separate adjust-opening-balance endpoint, unlike stocky).
-      await http.put(`providers/${id.value}`, body());
+      const payload = body();
+      if (payload.opening_balance === loadedOpeningBalance.value) delete payload.opening_balance;
+      await http.put(`providers/${id.value}`, payload);
       await customFieldsRef.value?.save(id.value);
       message.success(t('Successfully_Updated'));
     } else {

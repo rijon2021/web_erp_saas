@@ -971,10 +971,12 @@ class AdjustmentController extends BaseController
             : null;
 
         $batchService = app(BatchService::class);
+        // include_empty=1: "add" adjustments may restock a batch that is at zero.
+        $includeEmpty = filter_var($request->query('include_empty', false), FILTER_VALIDATE_BOOLEAN);
 
         return response()->json([
             'supported' => $batchService->isSupported(),
-            'batches' => $batchService->availableBatchesForSale($productId, $variantId, $warehouseId),
+            'batches' => $batchService->availableBatchesForSale($productId, $variantId, $warehouseId, $includeEmpty),
         ]);
     }
 
@@ -1206,6 +1208,8 @@ class AdjustmentController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($adjustment_data);
+
         $batchesByDetail = app(BatchService::class)->batchesForAdjustmentDetails($adjustment_data['details']);
 
         $adjustment['warehouse_name'] = $adjustment_data['warehouse']->name;
@@ -1261,6 +1265,8 @@ class AdjustmentController extends BaseController
         $Html = view('pdf.adjustment_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($adjustment_data->warehouse_id, $settings),
             'adjustment' => $adjustment,
             'details' => $details,
         ])->render();

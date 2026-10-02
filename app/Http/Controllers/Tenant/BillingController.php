@@ -25,14 +25,18 @@ class BillingController extends Controller
             ->latest()
             ->first() : null;
 
-        return view('billing.plans', compact('plans', 'subscription'));
+        $billingCycles = GeneralSetting::enabledBillingCycles();
+
+        return view('billing.plans', compact('plans', 'subscription', 'billingCycles'));
     }
 
     public function checkout(Request $request, $planId)
     {
         $plan = Plan::where('is_active', true)->findOrFail($planId);
         $tenant = tenant();
-        $cycle = $request->query('cycle', 'monthly');
+        // A ?cycle= that is no longer sold falls back to one that is, so the
+        // page never prices a cycle the POST would then reject.
+        $cycle = GeneralSetting::defaultBillingCycle($request->query('cycle'));
         $amount = $plan->getPriceForCycle($cycle);
 
         // Free plans: activate immediately without payment
@@ -70,6 +74,7 @@ class BillingController extends Controller
             'currencyCode'   => $settings->currency_code ?? 'USD',
             'currencySymbol' => $settings->currency_symbol ?? '$',
             'bankDetails'    => $settings->getBankDetails(),
+            'billingCycles'  => GeneralSetting::enabledBillingCycles(),
         ]);
     }
 
@@ -130,7 +135,7 @@ class BillingController extends Controller
 
         $rules = [
             'gateway'       => ['required', 'string', 'in:stripe,paypal,paystack,flutterwave,mollie,razorpay,payfast,ligdicash,dodo,waafipay,bkash,sslcommerz,paymob,myfatoorah,moyasar,xpay,offline'],
-            'billing_cycle' => ['required', 'in:monthly,yearly'],
+            'billing_cycle' => ['required', GeneralSetting::billingCycleRule()],
         ];
 
         $gatewayKey = $request->input('gateway');
@@ -247,12 +252,27 @@ class BillingController extends Controller
 
         // Resolve currency conversion
         $currencyConfig = PaymentGatewayFactory::getGatewayCurrencyConfig($gatewayKey);
-        $conversion = CurrencyConversionService::resolve(
-            $amount,
-            $systemCurrency,
-            $currencyConfig['supported_currencies'],
-            $currencyConfig['default_currency']
-        );
+
+        try {
+            $conversion = CurrencyConversionService::resolve(
+                $amount,
+                $systemCurrency,
+                $currencyConfig['supported_currencies'],
+                $currencyConfig['default_currency']
+            );
+        } catch (\Throwable $e) {
+            // Typically an unknown/misspelled platform currency code (e.g. "DBT"
+            // instead of "BDT") that no exchange-rate provider can resolve.
+            // Surface it on the billing page instead of a bare 500.
+            Log::error("Tenant billing currency conversion failed: {$e->getMessage()}", [
+                'tenant_id'        => $tenant->id,
+                'system_currency'  => $systemCurrency,
+                'gateway'          => $gatewayKey,
+                'gateway_currency' => $currencyConfig['default_currency'],
+            ]);
+
+            return back()->withErrors(['payment' => $e->getMessage()]);
+        }
 
         $payment = $lifecycle->createPayment($subscription, [
             'amount'                 => $amount,

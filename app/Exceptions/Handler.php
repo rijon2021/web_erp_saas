@@ -26,7 +26,7 @@ class Handler extends ExceptionHandler
         // Unknown hosts (server IP, bot Host headers, unregistered domains) are
         // expected traffic on a SaaS and already handled in render() with a
         // redirect to the central app — don't spam laravel.log / system_logs.
-        \Stancl\Tenancy\Exceptions\TenantCouldNotBeIdentifiedException::class,
+        \Stancl\Tenancy\Contracts\TenantCouldNotBeIdentifiedException::class,
     ];
 
     /**
@@ -108,7 +108,7 @@ class Handler extends ExceptionHandler
     public function render($request, Throwable $exception)
     {
         // Unrecognised domain/subdomain (e.g. server IP) — redirect to the central app URL
-        if ($exception instanceof \Stancl\Tenancy\Exceptions\TenantCouldNotBeIdentifiedException) {
+        if ($exception instanceof \Stancl\Tenancy\Contracts\TenantCouldNotBeIdentifiedException) {
             $centralUrl = config('app.url', '/');
 
             if ($request->expectsJson()) {

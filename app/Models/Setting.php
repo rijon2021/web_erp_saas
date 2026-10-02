@@ -30,9 +30,14 @@ class Setting extends Model
         'offline_sync_enabled', 'enable_3_decimal_pricing', 'show_product_gtin', 'show_serial_tracking',
         'enable_kitchen_display', 'enable_multi_pack_selling', 'allow_overselling', 'enable_multi_currency',
         'accounting_auto_generate_journals',
+        'require_payment_account',
         // Settings → Modules: JSON map of switched-off business modules
         'module_flags',
         'purchase_extra_charges_enabled', 'purchase_custom_fields_enabled',
+        // Settings → Features: warehouse-scoped master data + customer rating
+        'restrict_master_data_by_warehouse', 'customer_performance_enabled', 'product_supplier_enabled',
+        // Settings → Features: products belong to the warehouse they were created for
+        'restrict_products_by_warehouse',
         // PWA manifest overrides (empty = fall back to app_name / built-in default)
         'pwa_enabled', 'pwa_name', 'pwa_short_name', 'pwa_description', 'pwa_start_url',
         'pwa_display', 'pwa_orientation', 'pwa_theme_color', 'pwa_background_color',
@@ -68,6 +73,10 @@ class Setting extends Model
         'enable_multi_pack_selling' => 'boolean',
         'allow_overselling' => 'boolean',
         'enable_multi_currency' => 'boolean',
+        'restrict_master_data_by_warehouse' => 'boolean',
+        'restrict_products_by_warehouse' => 'boolean',
+        'customer_performance_enabled' => 'boolean',
+        'product_supplier_enabled' => 'boolean',
         'accounting_auto_generate_journals' => 'boolean',
         'purchase_extra_charges_enabled' => 'boolean',
         'purchase_custom_fields_enabled' => 'boolean',
@@ -137,6 +146,66 @@ class Setting extends Model
             array_keys(self::DASHBOARD_GOOGLE_FONTS),
             array_keys(self::DASHBOARD_SYSTEM_FONTS)
         );
+    }
+
+    /**
+     * Option lists for the font pickers on System Settings (dashboard font) and
+     * Store Settings (storefront font). Google families carry an `arabic` flag
+     * so the UI can group them; system entries are raw CSS stacks. Served as
+     * `font_options` by get_Settings_data_api and admin/store/settings.
+     */
+    public static function fontOptions(): array
+    {
+        $google = [];
+        foreach (self::DASHBOARD_GOOGLE_FONTS as $family => $meta) {
+            $google[] = ['value' => $family, 'label' => $meta['label'], 'arabic' => (bool) $meta['arabic']];
+        }
+        $system = [];
+        foreach (self::DASHBOARD_SYSTEM_FONTS as $stack => $label) {
+            $system[] = ['value' => $stack, 'label' => $label];
+        }
+
+        return ['google' => $google, 'system' => $system];
+    }
+
+    /**
+     * White-labeling: only plans with the `remove_branding` feature may replace
+     * the platform footer line and "developed by" credit. No active plan means
+     * no white-labeling.
+     */
+    public static function canRemoveBranding(): bool
+    {
+        try {
+            return app(\App\Services\TenantLimitsService::class)->hasFeature('remove_branding');
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Footer + "developed by" as the tenant UI should show them: the tenant's
+     * own values when its plan allows white-labeling, otherwise the Super
+     * Admin's platform branding (Tenant Settings defaults) — so a custom value
+     * saved before a downgrade stops showing. Also returns the entitlement
+     * (can_remove_branding) so callers resolve the plan only once.
+     */
+    public function effectiveBranding(): array
+    {
+        if (self::canRemoveBranding()) {
+            return ['footer' => $this->footer ?? '', 'developed_by' => $this->developed_by ?? '', 'can_remove_branding' => true];
+        }
+
+        try {
+            $defaults = \App\Models\Central\GeneralSetting::instance()->getTenantDefaults();
+        } catch (\Throwable) {
+            $defaults = [];
+        }
+
+        return [
+            'footer' => $defaults['footer_text'] ?? 'Stocky - Ultimate Inventory With POS',
+            'developed_by' => $defaults['developed_by'] ?? 'Stocky',
+            'can_remove_branding' => false,
+        ];
     }
 
     public function Currency()

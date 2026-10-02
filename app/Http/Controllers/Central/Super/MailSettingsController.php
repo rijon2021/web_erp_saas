@@ -43,7 +43,7 @@ class MailSettingsController extends Controller
 
         $setting->update($data);
 
-        return back()->with('success', 'Mail settings saved successfully.');
+        return back()->with('success', __('super.flash.mail_saved'));
     }
 
     public function sendTest(Request $request)
@@ -66,9 +66,9 @@ class MailSettingsController extends Controller
                 }
             });
 
-            return back()->with('success', "Test email sent to {$request->test_email}.");
+            return back()->with('success', __('super.flash.test_email_sent', ['suffix' => '', 'email' => $request->test_email]));
         } catch (\Throwable $e) {
-            return back()->withErrors(['test_email' => 'Failed to send test email: ' . $e->getMessage()]);
+            return back()->withErrors(['test_email' => __('super.flash.test_email_failed', ['error' => $e->getMessage()])]);
         }
     }
 

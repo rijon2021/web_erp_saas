@@ -119,10 +119,28 @@ class LandingPageController extends Controller
             'items'     => $featureItems,
         ];
 
+        // Which cycles the pricing section may show. The platform setting is
+        // the hard gate (a cycle that is not sold must never be advertised);
+        // the per-section CMS checkboxes can hide one further. Those checkboxes
+        // existed but were read by nothing before this.
+        $showMonthly = GeneralSetting::billingCycleEnabled('monthly')
+            && ($pricingSection->show_monthly_pricing ?? true);
+        $showYearly = GeneralSetting::billingCycleEnabled('yearly')
+            && ($pricingSection->show_yearly_pricing ?? true);
+
+        // Never end up advertising nothing — if the CMS hid the only cycle on
+        // sale, the platform setting wins.
+        if (! $showMonthly && ! $showYearly) {
+            $showMonthly = GeneralSetting::billingCycleEnabled('monthly');
+            $showYearly = ! $showMonthly;
+        }
+
         $pricing = [
-            'is_active' => $pricingSection->is_active ?? true,
-            'settings'  => $pricingSection,
-            'plans'     => $plans,
+            'is_active'    => $pricingSection->is_active ?? true,
+            'settings'     => $pricingSection,
+            'plans'        => $plans,
+            'show_monthly' => $showMonthly,
+            'show_yearly'  => $showYearly,
         ];
 
         $howItWorks = [

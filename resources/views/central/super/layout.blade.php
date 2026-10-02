@@ -5,14 +5,15 @@
     $faviconUrl = $generalSettings->getFaviconUrl();
     $assetVersion = time();
     $appVersion = is_file(base_path('version.txt')) ? trim(@file_get_contents(base_path('version.txt'))) : null;
+    $isRtl = in_array(app()->getLocale(), ['ar', 'he', 'fa', 'ur']);
 @endphp
 <!DOCTYPE html>
-<html lang="{{ app()->getLocale() }}">
+<html lang="{{ app()->getLocale() }}" @if($isRtl) dir="rtl" @endif>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>@yield('title', 'Super Admin') — {{ $appName }}</title>
+    <title>@yield('title', __('super.topbar.super_admin')) — {{ $appName }}</title>
     <link rel="icon" href="{{ $faviconUrl ?: asset('images/super/settings/favicon.ico') }}?v={{ $assetVersion }}" type="image/x-icon">
     <link rel="shortcut icon" href="{{ $faviconUrl ?: asset('images/super/settings/favicon.ico') }}?v={{ $assetVersion }}">
     <link href="{{ asset('assets_super/css/plus-jakarta-sans.css') }}?v={{ $assetVersion }}" rel="stylesheet">
@@ -22,6 +23,10 @@
     <link href="{{ asset('assets_super/css/super-layout.css') }}?v={{ $assetVersion }}" rel="stylesheet">
     <link href="{{ asset('assets_super/css/super-customizer.css') }}?v={{ $assetVersion }}" rel="stylesheet">
     @stack('styles')
+    {{-- RTL overrides load last so they also win over per-page stylesheets --}}
+    @if($isRtl)
+        <link href="{{ asset('assets_super/css/super-rtl.css') }}?v={{ $assetVersion }}" rel="stylesheet">
+    @endif
 </head>
 <body>
     <script>if(localStorage.getItem('super_theme')==='dark')document.body.classList.add('dark-mode');</script>
@@ -397,7 +402,7 @@
 
         <div class="main-content">
             <header class="topbar">
-                <button type="button" class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">
+                <button type="button" class="sidebar-toggle" id="sidebarToggle" aria-label="{{ __('super.topbar.toggle_sidebar') }}">
                     <i class="bi bi-layout-sidebar-inset"></i>
                 </button>
                 <div class="topbar-right ms-auto">
@@ -431,7 +436,7 @@
                         $switcherLanguages = \App\Models\Central\CentralLanguage::active();
                     @endphp
                     <div class="dropdown">
-                        <button type="button" class="lang-switcher-btn" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Language">
+                        <button type="button" class="lang-switcher-btn" data-bs-toggle="dropdown" aria-expanded="false" aria-label="{{ __('super.topbar.language') }}">
                             <span class="lang-flag-icon">{!! $flagSvgs[$currentLocale] ?? '' !!}</span>
                             <span class="lang-code">{{ strtoupper($currentLocale) }}</span>
                             <i class="bi bi-chevron-down lang-chevron"></i>
@@ -452,7 +457,7 @@
                     </div>
 
                     {{-- Dark mode toggle --}}
-                    <button type="button" class="topbar-icon-btn" id="themeToggle" aria-label="Toggle dark mode">
+                    <button type="button" class="topbar-icon-btn" id="themeToggle" aria-label="{{ __('super.topbar.toggle_dark_mode') }}">
                         <i class="bi bi-moon-stars-fill"></i>
                         <i class="bi bi-sun-fill"></i>
                     </button>
@@ -500,10 +505,10 @@
                                 <li>
                                     <a class="notification-item d-block text-decoration-none text-dark" href="{{ route('super.payments.pending-registrations') }}">
                                         <div class="d-flex align-items-center gap-2">
-                                            <span class="badge badge-bank-transfer">Bank Transfer</span>
+                                            <span class="badge badge-bank-transfer">{{ __('super.topbar.bank_transfer') }}</span>
                                             <strong class="text-truncate notification-name-truncate">{{ $reg->company_name }}</strong>
                                         </div>
-                                        <div class="small mt-1">Offline payment proof awaiting verification</div>
+                                        <div class="small mt-1">{{ __('super.topbar.offline_proof_pending') }}</div>
                                         <div class="small text-muted">{{ $reg->created_at->diffForHumans() }}</div>
                                     </a>
                                 </li>
@@ -514,10 +519,10 @@
                                 <li>
                                     <a class="notification-item d-block text-decoration-none text-dark" href="{{ route('super.payments.index', ['status' => 'pending', 'gateway' => $billingPayment->gateway]) }}">
                                         <div class="d-flex align-items-center gap-2">
-                                            <span class="badge badge-bank-transfer">Bank Transfer</span>
+                                            <span class="badge badge-bank-transfer">{{ __('super.topbar.bank_transfer') }}</span>
                                             <strong class="text-truncate notification-name-truncate">{{ $billingPayment->tenant->company_name ?? $billingPayment->tenant_id }}</strong>
                                         </div>
-                                        <div class="small mt-1">Billing payment proof awaiting verification — {{ $billingPayment->plan->name ?? 'N/A' }} ({{ ucfirst($billingPayment->billing_cycle) }})</div>
+                                        <div class="small mt-1">{{ __('super.topbar.billing_proof_pending') }} — {{ $billingPayment->plan->name ?? __('super.common.not_available') }} ({{ Lang::has('super.plans.' . $billingPayment->billing_cycle) ? __('super.plans.' . $billingPayment->billing_cycle) : ucfirst($billingPayment->billing_cycle) }})</div>
                                         <div class="small text-muted">{{ $billingPayment->created_at->diffForHumans() }}</div>
                                     </a>
                                 </li>
@@ -551,14 +556,14 @@
                                 @if($__navPendingOffline->count())
                                 <li>
                                     <a class="dropdown-item text-center small" href="{{ route('super.payments.pending-registrations') }}">
-                                        View {{ $__navPendingOffline->count() }} pending {{ Str::plural('registration', $__navPendingOffline->count()) }}
+                                        {{ trans_choice('super.topbar.view_pending_registrations', $__navPendingOffline->count(), ['count' => $__navPendingOffline->count()]) }}
                                     </a>
                                 </li>
                                 @endif
                                 @if($__navPendingBilling->count())
                                 <li>
                                     <a class="dropdown-item text-center small" href="{{ route('super.payments.index', ['status' => 'pending', 'gateway' => 'offline']) }}">
-                                        View {{ $__navPendingBilling->count() }} pending billing {{ Str::plural('payment', $__navPendingBilling->count()) }}
+                                        {{ trans_choice('super.topbar.view_pending_billing', $__navPendingBilling->count(), ['count' => $__navPendingBilling->count()]) }}
                                     </a>
                                 </li>
                                 @endif
@@ -575,19 +580,19 @@
                     </div>
                     @php $user = auth()->guard('central')->user(); @endphp
                     <div class="dropdown">
-                        <button type="button" class="topbar-profile-btn" id="profileDropdown" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Profile menu">
+                        <button type="button" class="topbar-profile-btn" id="profileDropdown" data-bs-toggle="dropdown" aria-expanded="false" aria-label="{{ __('super.topbar.profile_menu') }}">
                             @if($user && $user->avatar)
                                 <img src="{{ asset($user->avatar) }}" alt="" class="avatar-img-round">
                             @else
                                 <span class="avatar">{{ $user ? strtoupper(mb_substr($user->name ?? 'A', 0, 1)) : 'A' }}</span>
                             @endif
-                            <span class="name d-none d-md-inline">{{ $user->name ?? 'Super Admin' }}</span>
+                            <span class="name d-none d-md-inline">{{ $user->name ?? __('super.topbar.super_admin') }}</span>
                             <i class="bi bi-chevron-down text-muted small"></i>
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end">
                             <li>
                                 <div class="px-3 py-2">
-                                    <p class="mb-0 fw-600">{{ $user->name ?? 'Super Admin' }}</p>
+                                    <p class="mb-0 fw-600">{{ $user->name ?? __('super.topbar.super_admin') }}</p>
                                     <p class="mb-0 small text-muted">{{ $user->email ?? '' }}</p>
                                 </div>
                             </li>
@@ -634,6 +639,21 @@
         </div>
     </div>
 
+    <script>
+        // Strings the super-admin JS renders client-side. Keyed the same as
+        // resources/lang/*/super.php -> 'js'; __s() mirrors Laravel's :param
+        // replacement so those scripts hold no English of their own.
+        window.SuperI18n = @json(__('super.js'));
+        window.__s = function (key, params) {
+            var s = (window.SuperI18n && window.SuperI18n[key] !== undefined) ? window.SuperI18n[key] : key;
+            if (params) {
+                Object.keys(params).forEach(function (p) {
+                    s = s.split(':' + p).join(params[p]);
+                });
+            }
+            return s;
+        };
+    </script>
     <script src="{{ asset('assets_super/js/bootstrap.bundle.min.js') }}?v={{ $assetVersion }}"></script>
     <script src="{{ asset('assets_super/js/sweetalert2.all.min.js') }}?v={{ $assetVersion }}"></script>
     <script src="{{ asset('assets_super/js/super-layout.js') }}?v={{ $assetVersion }}"></script>
@@ -643,45 +663,45 @@
     {{-- Primary Color Customizer (floating button + drawer)    --}}
     {{-- ====================================================== --}}
     @if($generalSettings->show_customizer_button ?? true)
-    <button type="button" class="super-customizer-fab" id="superCustomizerFab" aria-label="Customize theme color" title="Customize theme color">
+    <button type="button" class="super-customizer-fab" id="superCustomizerFab" aria-label="{{ __('super.customizer.open') }}" title="{{ __('super.customizer.open') }}">
         <i class="bi bi-palette-fill"></i>
     </button>
     <div class="super-customizer-backdrop" id="superCustomizerBackdrop"></div>
     <aside class="super-customizer-drawer" id="superCustomizerDrawer" role="dialog" aria-labelledby="superCustomizerTitle" aria-hidden="true">
         <div class="super-customizer-header">
-            <h3 id="superCustomizerTitle"><i class="bi bi-palette-fill"></i> Theme Customizer</h3>
-            <button type="button" class="super-customizer-close" id="superCustomizerClose" aria-label="Close customizer">
+            <h3 id="superCustomizerTitle"><i class="bi bi-palette-fill"></i> {{ __('super.customizer.title') }}</h3>
+            <button type="button" class="super-customizer-close" id="superCustomizerClose" aria-label="{{ __('super.customizer.close') }}">
                 <i class="bi bi-x-lg"></i>
             </button>
         </div>
         <div class="super-customizer-body">
             <div class="super-customizer-section">
-                <p class="super-customizer-section-title">Primary Color</p>
-                <p class="super-customizer-section-help">Pick a preset or choose any custom color. Changes apply instantly and are remembered on this browser.</p>
+                <p class="super-customizer-section-title">{{ __('super.customizer.primary_color') }}</p>
+                <p class="super-customizer-section-help">{{ __('super.customizer.primary_help') }}</p>
                 <div class="super-customizer-swatches" id="superCustomizerSwatches">
-                    <button type="button" class="super-customizer-swatch" data-color="#018A00" style="background:#018A00" aria-label="Green"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#6366f1" style="background:#6366f1" aria-label="Indigo"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#3b82f6" style="background:#3b82f6" aria-label="Blue"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#06b6d4" style="background:#06b6d4" aria-label="Cyan"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#14b8a6" style="background:#14b8a6" aria-label="Teal"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#8b5cf6" style="background:#8b5cf6" aria-label="Purple"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#ec4899" style="background:#ec4899" aria-label="Pink"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#ef4444" style="background:#ef4444" aria-label="Red"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#f97316" style="background:#f97316" aria-label="Orange"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#f59e0b" style="background:#f59e0b" aria-label="Amber"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#0f172a" style="background:#0f172a" aria-label="Slate"></button>
-                    <button type="button" class="super-customizer-swatch" data-color="#64748b" style="background:#64748b" aria-label="Gray"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#018A00" style="background:#018A00" aria-label="{{ __('super.customizer.color_green') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#6366f1" style="background:#6366f1" aria-label="{{ __('super.customizer.color_indigo') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#3b82f6" style="background:#3b82f6" aria-label="{{ __('super.customizer.color_blue') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#06b6d4" style="background:#06b6d4" aria-label="{{ __('super.customizer.color_cyan') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#14b8a6" style="background:#14b8a6" aria-label="{{ __('super.customizer.color_teal') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#8b5cf6" style="background:#8b5cf6" aria-label="{{ __('super.customizer.color_purple') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#ec4899" style="background:#ec4899" aria-label="{{ __('super.customizer.color_pink') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#ef4444" style="background:#ef4444" aria-label="{{ __('super.customizer.color_red') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#f97316" style="background:#f97316" aria-label="{{ __('super.customizer.color_orange') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#f59e0b" style="background:#f59e0b" aria-label="{{ __('super.customizer.color_amber') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#0f172a" style="background:#0f172a" aria-label="{{ __('super.customizer.color_slate') }}"></button>
+                    <button type="button" class="super-customizer-swatch" data-color="#64748b" style="background:#64748b" aria-label="{{ __('super.customizer.color_gray') }}"></button>
                 </div>
             </div>
 
             <div class="super-customizer-section">
-                <p class="super-customizer-section-title">Custom Color</p>
+                <p class="super-customizer-section-title">{{ __('super.customizer.custom_color') }}</p>
                 <div class="super-customizer-picker-row">
-                    <input type="color" id="superCustomizerColorInput" value="#018A00" aria-label="Pick a custom color">
-                    <input type="text" id="superCustomizerHexInput" value="#018A00" maxlength="7" aria-label="Hex color value">
+                    <input type="color" id="superCustomizerColorInput" value="#018A00" aria-label="{{ __('super.customizer.pick_custom') }}">
+                    <input type="text" id="superCustomizerHexInput" value="#018A00" maxlength="7" aria-label="{{ __('super.customizer.hex_value') }}">
                 </div>
                 <div class="super-customizer-actions">
-                    <button type="button" class="super-customizer-btn super-customizer-btn-secondary" id="superCustomizerReset">Reset to default</button>
+                    <button type="button" class="super-customizer-btn super-customizer-btn-secondary" id="superCustomizerReset">{{ __('super.customizer.reset_default') }}</button>
                 </div>
             </div>
         </div>

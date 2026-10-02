@@ -22,6 +22,10 @@
           <template #icon><CheckOutlined /></template>
           Complete
         </a-button>
+        <a-button v-if="order.status === 'completed'" @click="printLabels">
+          <template #icon><BarcodeOutlined /></template>
+          Print labels
+        </a-button>
         <a-button v-if="canCancel(order)" danger @click="confirmCancel">
           <template #icon><StopOutlined /></template>
           Cancel
@@ -71,6 +75,15 @@
             <template v-else-if="order.yield_pct !== null">{{ order.yield_pct }}% yield</template>
           </span>
         </div>
+        <div class="kpi">
+          <span class="kpi-label">Batch</span>
+          <span class="kpi-value kpi-value--sm">{{ order.batch_no || '—' }}</span>
+          <span class="kpi-sub">
+            <template v-if="order.expiry_date">expires {{ order.expiry_date }}</template>
+            <template v-else-if="order.is_batch_tracked">batch-tracked product</template>
+            <template v-else>no batch set</template>
+          </span>
+        </div>
         <div class="kpi kpi--accent">
           <span class="kpi-label">Actual cost</span>
           <span class="kpi-value">{{ money(order.total_cost || 0) }}</span>
@@ -117,6 +130,15 @@
                     {{ number(record.on_hand, 2) }}
                   </span>
                 </template>
+                <template v-else-if="column.key === 'batches'">
+                  <template v-if="record.batches?.length">
+                    <a-tag v-for="b in record.batches" :key="b.id" style="margin: 1px 4px 1px 0">
+                      {{ b.batch_no }} × {{ number(b.qty, 2) }}
+                    </a-tag>
+                  </template>
+                  <span v-else-if="record.is_batch_tracked" class="muted">FEFO on release</span>
+                  <span v-else class="muted">—</span>
+                </template>
                 <template v-else-if="column.key === 'shortfall'">
                   <a-tag v-if="record.shortfall > 0" color="warning">{{ number(record.shortfall, 2) }}</a-tag>
                   <span v-else class="muted">—</span>
@@ -130,7 +152,7 @@
               </template>
               <template #summary>
                 <a-table-summary-row>
-                  <a-table-summary-cell :col-span="6" />
+                  <a-table-summary-cell :col-span="7" />
                   <a-table-summary-cell align="right"><strong>Material cost</strong></a-table-summary-cell>
                   <a-table-summary-cell align="right">
                     <strong>{{ money(order.material_cost || 0) }}</strong>
@@ -254,6 +276,9 @@
                   <a-descriptions-item label="Planned">{{ number(order.qty_planned, 2) }}</a-descriptions-item>
                   <a-descriptions-item label="Produced">{{ number(order.qty_produced, 2) }}</a-descriptions-item>
                   <a-descriptions-item label="Scrapped">{{ number(order.qty_scrapped, 2) }}</a-descriptions-item>
+                  <a-descriptions-item label="Batch No.">{{ order.batch_no || '—' }}</a-descriptions-item>
+                  <a-descriptions-item label="Production date">{{ order.production_date || '—' }}</a-descriptions-item>
+                  <a-descriptions-item label="Expiry date">{{ order.expiry_date || '—' }}</a-descriptions-item>
                   <a-descriptions-item label="Yield">
                     {{ order.yield_pct !== null ? order.yield_pct + '%' : '—' }}
                   </a-descriptions-item>
@@ -289,9 +314,33 @@
         <a-form-item label="Good units produced *">
           <a-input-number v-model:value="completeForm.qty_produced" :min="0" style="width: 100%" />
         </a-form-item>
-        <a-form-item label="Scrapped" style="margin-bottom: 0">
+        <a-form-item label="Scrapped">
           <a-input-number v-model:value="completeForm.qty_scrapped" :min="0" style="width: 100%" />
         </a-form-item>
+        <a-divider style="margin: 4px 0 14px; font-size: 13px">Batch on the finished goods</a-divider>
+        <a-form-item
+          :label="order.is_batch_tracked ? 'Batch No. *' : 'Batch No.'"
+          :extra="order.is_batch_tracked
+            ? 'Required — this product is batch-tracked, so the output lands in stock as this batch'
+            : 'Optional — leave blank to receive the output as plain stock'"
+        >
+          <a-input v-model:value="completeForm.batch_no" allow-clear />
+        </a-form-item>
+        <a-row :gutter="12">
+          <a-col :span="12">
+            <a-form-item label="Production date" style="margin-bottom: 0">
+              <a-date-picker v-model:value="completeForm.production_date" style="width: 100%" value-format="YYYY-MM-DD" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item
+              label="Expiry date" style="margin-bottom: 0"
+              :extra="order.shelf_life_days ? `Blank = ${order.shelf_life_days} days after production` : ''"
+            >
+              <a-date-picker v-model:value="completeForm.expiry_date" style="width: 100%" value-format="YYYY-MM-DD" />
+            </a-form-item>
+          </a-col>
+        </a-row>
       </a-form>
       <p v-if="estimatedUnitCost" class="estimate">
         At those numbers the unit cost lands near <strong>{{ money(estimatedUnitCost) }}</strong>.
@@ -350,11 +399,11 @@
  * mid-shift needs to know where the order is before anything else.
  */
 import { ref, reactive, computed, onMounted } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { message, Modal, Empty } from 'ant-design-vue';
 import {
   ArrowLeftOutlined, EditOutlined, PlayCircleOutlined, CheckOutlined,
-  StopOutlined, PlusOutlined,
+  StopOutlined, PlusOutlined, BarcodeOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import QualityCheckModal from './QualityCheckModal.vue';
@@ -367,6 +416,7 @@ import {
 import http from '../../lib/http';
 
 const route = useRoute();
+const router = useRouter();
 const { money, number } = useFormat();
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE;
 const badgeStyle = { backgroundColor: 'rgba(128,128,128,0.25)', color: 'inherit', boxShadow: 'none' };
@@ -415,6 +465,7 @@ const materialColumns = [
   { title: 'Required', dataIndex: 'qty_required', key: 'qty_required', width: 100, align: 'right' },
   { title: 'Issued', dataIndex: 'qty_issued', key: 'qty_issued', width: 100, align: 'right' },
   { title: 'Consumed', dataIndex: 'qty_consumed', key: 'qty_consumed', width: 100, align: 'right' },
+  { title: 'Batches used', key: 'batches', width: 200 },
   { title: 'On hand', key: 'on_hand', dataIndex: 'on_hand', width: 100, align: 'right' },
   { title: 'Short', key: 'shortfall', dataIndex: 'shortfall', width: 90, align: 'right' },
   { title: 'Unit cost', key: 'unit_cost', dataIndex: 'unit_cost', width: 110, align: 'right' },
@@ -469,11 +520,27 @@ async function release(allowShortage = false) {
 }
 
 const completeOpen = ref(false);
-const completeForm = reactive({ qty_produced: 0, qty_scrapped: 0 });
+const completeForm = reactive({ qty_produced: 0, qty_scrapped: 0, batch_no: '', production_date: null, expiry_date: null });
+
+function today() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Finished-goods labels carry the batch and expiry: hand the order to the barcode page. */
+function printLabels() {
+  router.push({ path: '/products/barcode', query: { production_order_id: id } });
+}
 
 function openComplete() {
   completeForm.qty_produced = Number(order.value.qty_planned) || 0;
   completeForm.qty_scrapped = 0;
+  // Whatever was set when the order was raised is the starting point; a
+  // tracked product with nothing set falls back to the order reference.
+  completeForm.batch_no = order.value.batch_no || (order.value.is_batch_tracked ? order.value.reference : '');
+  completeForm.production_date = order.value.production_date || today();
+  completeForm.expiry_date = order.value.expiry_date || null;
   completeOpen.value = true;
 }
 
@@ -484,8 +551,15 @@ async function submitComplete(allowOverproduction = false) {
       qty_produced: completeForm.qty_produced,
       qty_scrapped: completeForm.qty_scrapped,
       allow_overproduction: allowOverproduction,
+      batch_no: completeForm.batch_no,
+      production_date: completeForm.production_date,
+      expiry_date: completeForm.expiry_date,
     });
-    message.success(`Completed — unit cost ${money(res?.unit_cost || 0)}`);
+    message.success(
+      `Completed — unit cost ${money(res?.unit_cost || 0)}`
+      + (res?.product_cost != null ? ` · cost price now ${money(res.product_cost)}` : '')
+      + (res?.batch_no ? ` · batch ${res.batch_no}` : ''),
+    );
     completeOpen.value = false;
     load();
   } catch (e) {

@@ -47,6 +47,13 @@
           {{ record.product_name }}
           <div class="sub">{{ record.product_code }}</div>
         </template>
+        <template v-else-if="column.key === 'batch_no'">
+          <template v-if="record.batch_no">
+            {{ record.batch_no }}
+            <div v-if="record.expiry_date" class="sub">exp {{ record.expiry_date }}</div>
+          </template>
+          <span v-else class="sub">—</span>
+        </template>
         <template v-else-if="column.key === 'qty'">
           <div class="qty">
             <strong>{{ number(record.qty_produced, 0) }}</strong>
@@ -192,6 +199,7 @@ const totals = computed(() => crud.payload.value?.totals || {});
 const columns = computed(() => [
   { title: 'Reference', key: 'reference', dataIndex: 'reference', sorter: true, width: 170 },
   { title: 'Product', key: 'product', dataIndex: 'product_name', sorter: true },
+  { title: 'Batch', key: 'batch_no', dataIndex: 'batch_no', sorter: true, width: 150 },
   { title: 'Progress', key: 'qty', width: 150 },
   { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 150 },
   { title: 'Priority', key: 'priority', dataIndex: 'priority', sorter: true, width: 110 },

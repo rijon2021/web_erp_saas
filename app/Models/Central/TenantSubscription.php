@@ -74,8 +74,27 @@ class TenantSubscription extends Model
     }
 
     /**
-     * Subscriptions that currently entitle the tenant to their plan: active or
-     * trial rows, plus cancelled rows whose paid period has not run out yet.
+     * Statuses that can lapse purely through the passage of time (trial window
+     * or paid period running out). Everything else changes only by an explicit
+     * action (payment, admin, cancellation).
+     */
+    public const LAPSABLE_STATUSES = [
+        self::STATUS_ACTIVE,
+        self::STATUS_TRIAL,
+        self::STATUS_CANCELLED,
+    ];
+
+    /**
+     * Subscriptions that currently entitle the tenant to their plan, judged by
+     * DATE at query time — the SQL twin of grantsAccess():
+     *   - active rows with no end date or an end date in the future,
+     *   - trial rows whose trial window is still open,
+     *   - cancelled rows whose paid period has not run out yet.
+     *
+     * The status column alone is never trusted: it is only flipped to
+     * "expired" by the daily cron or lazily by the access middleware, and a
+     * host without cron must still lock a lapsed trial out everywhere this
+     * scope is used (plan features, storefront, portal, Zapier).
      *
      * A cancelled row only counts while ends_at is still in the future — the
      * same condition isCancelled() applies. Without the date check a
@@ -85,13 +104,23 @@ class TenantSubscription extends Model
      */
     public function scopeGrantingAccess($query)
     {
-        return $query->where(function ($q) {
-            $q->whereIn('status', [self::STATUS_ACTIVE, self::STATUS_TRIAL])
-              ->orWhere(function ($q2) {
-                  $q2->where('status', self::STATUS_CANCELLED)
-                     ->whereNotNull('ends_at')
-                     ->where('ends_at', '>', now());
-              });
+        $now = now();
+
+        return $query->where(function ($q) use ($now) {
+            $q->where(function ($active) use ($now) {
+                $active->where('status', self::STATUS_ACTIVE)
+                       ->where(function ($period) use ($now) {
+                           $period->whereNull('ends_at')->orWhere('ends_at', '>', $now);
+                       });
+            })->orWhere(function ($trial) use ($now) {
+                $trial->where('status', self::STATUS_TRIAL)
+                      ->whereNotNull('trial_ends_at')
+                      ->where('trial_ends_at', '>', $now);
+            })->orWhere(function ($cancelled) use ($now) {
+                $cancelled->where('status', self::STATUS_CANCELLED)
+                          ->whereNotNull('ends_at')
+                          ->where('ends_at', '>', $now);
+            });
         });
     }
 
@@ -112,6 +141,67 @@ class TenantSubscription extends Model
     public function isCancelled(): bool
     {
         return $this->status === self::STATUS_CANCELLED && $this->ends_at && $this->ends_at->isFuture();
+    }
+
+    /**
+     * Does this row entitle the tenant to use the workspace right now?
+     * Single source of truth for every access decision (PHP twin of
+     * scopeGrantingAccess()). Date-based — never depends on the cron having
+     * flipped the status.
+     */
+    public function grantsAccess(): bool
+    {
+        return $this->isActive() || $this->isCancelled();
+    }
+
+    /**
+     * A lapsable row whose window has closed but whose status label has not
+     * caught up yet (cron not run / not installed).
+     */
+    public function hasLapsed(): bool
+    {
+        return match ($this->status) {
+            self::STATUS_TRIAL     => $this->trial_ends_at !== null && $this->trial_ends_at->isPast(),
+            self::STATUS_ACTIVE,
+            self::STATUS_CANCELLED => $this->ends_at !== null && $this->ends_at->isPast(),
+            default                => false,
+        };
+    }
+
+    /**
+     * Flip a lapsed row to "expired" on the spot so the admin panel, counts
+     * and reports reflect reality without waiting for the daily cron.
+     * Returns true when a change was written.
+     */
+    public function expireIfLapsed(): bool
+    {
+        if (! $this->hasLapsed()) {
+            return false;
+        }
+
+        $this->update(['status' => self::STATUS_EXPIRED]);
+
+        return true;
+    }
+
+    /**
+     * Bulk twin of expireIfLapsed(): mark every lapsed row as expired, for one
+     * tenant or platform-wide. Cheap enough to run before list screens.
+     * Returns the number of rows changed.
+     */
+    public static function expireLapsed(?string $tenantId = null): int
+    {
+        $now  = now();
+        $base = static::query()->when($tenantId !== null, fn ($q) => $q->where('tenant_id', $tenantId));
+
+        $changed  = (clone $base)->where('status', self::STATUS_TRIAL)
+            ->whereNotNull('trial_ends_at')->where('trial_ends_at', '<=', $now)
+            ->update(['status' => self::STATUS_EXPIRED, 'updated_at' => $now]);
+        $changed += (clone $base)->whereIn('status', [self::STATUS_ACTIVE, self::STATUS_CANCELLED])
+            ->whereNotNull('ends_at')->where('ends_at', '<=', $now)
+            ->update(['status' => self::STATUS_EXPIRED, 'updated_at' => $now]);
+
+        return (int) $changed;
     }
 
     public function canResume(): bool

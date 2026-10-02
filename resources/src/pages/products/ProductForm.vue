@@ -101,6 +101,26 @@
                   <a class="quick-add" @click="openQuickBrand">+ {{ $t('Add') }} {{ $t('Brand') }}</a>
                 </a-form-item>
               </a-col>
+              <!-- Default supplier — Settings → Features → Product supplier -->
+              <a-col v-if="productSupplierEnabled" :xs="24" :md="12">
+                <a-form-item :label="$t('Supplier')">
+                  <a-select
+                    v-model:value="product.provider_id" allow-clear show-search option-filter-prop="label"
+                    :placeholder="$t('Choose_Supplier')" :options="providerOptions"
+                  />
+                  <div class="supplier-hint">{{ $t('Default_Supplier_Hint') }}</div>
+                </a-form-item>
+              </a-col>
+              <!-- Home warehouse — Settings → Features → Restrict products by warehouse -->
+              <a-col v-if="restrictProductsByWarehouse" :xs="24" :md="12">
+                <a-form-item :label="$t('Home_Warehouse')" :required="homeWarehouseRequired">
+                  <a-select
+                    v-model:value="product.warehouse_id" :allow-clear="!homeWarehouseRequired" show-search
+                    option-filter-prop="label" :placeholder="$t('Choose_Warehouse')" :options="homeWarehouseOptions"
+                  />
+                  <div class="supplier-hint">{{ $t('Home_Warehouse_Hint') }}</div>
+                </a-form-item>
+              </a-col>
               <!-- FBR (Pakistan) e-invoicing fields — shown when FBR is enabled (SaaS) -->
               <a-col v-if="fbrEnabled" :xs="24" :md="12">
                 <a-form-item :label="$t('HS_Code')">
@@ -498,6 +518,16 @@
             </a-form-item>
           </a-card>
 
+          <!-- Shopify: pair with a listing that already exists in a shop -->
+          <ShopifyLinkCard
+            v-if="shopifyAvailable && product.type !== 'is_combo'"
+            ref="shopifyCardRef"
+            :product-id="isEdit ? Number(id) : null"
+            :variants="variants"
+            :product-code="product.code || ''"
+            :is-variant="product.type === 'is_variant'"
+          />
+
           <!-- Pharmacy (only when batch/expiry tracking is enabled in the right column) -->
           <a-card v-if="product.is_batch_tracked" size="small" :title="'Pharmacy'" style="margin-bottom: 16px">
             <a-alert type="info" show-icon :message="$t('Pharmacy_Batch_Expiry_Note')" style="margin-bottom: 16px" />
@@ -736,13 +766,18 @@ import { useI18n } from 'vue-i18n';
 import { UploadOutlined, PlusOutlined, DeleteOutlined, ShopOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import ProductScanModal from '../../components/ProductScanModal.vue';
+import ShopifyLinkCard from './ShopifyLinkCard.vue';
 import http from '../../lib/http';
 import { uploadUrl } from '../../lib/uploadUrl';
 import { barcodeValueError, generateBarcodeValue } from '../../lib/barcodeSymbology';
+import { useAuthStore } from '../../stores/auth';
+import { usePlanStore } from '../../stores/plan';
 
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
+const plan = usePlanStore();
 
 const id = computed(() => route.params.id);
 const isEdit = computed(() => !!id.value);
@@ -750,13 +785,27 @@ const isEdit = computed(() => !!id.value);
 const loadingRecord = ref(true);
 const submitting = ref(false);
 const formRef = ref();
+const shopifyCardRef = ref();
 const codeExists = ref('');
+
+// The Shopify card asks the server for the tenant's shops as soon as it is
+// shown. Without the module in the plan that request is answered with the
+// upgrade prompt, so the card is only mounted for a tenant that has Shopify
+// and a user allowed to see its stores.
+const shopifyAvailable = computed(() => plan.featureEnabled('shopify') && auth.can('shopify_stores'));
 
 const categories = ref([]);
 const subcategories = ref([]);
 const brands = ref([]);
 const sizeGuides = ref([]); // unused here (no size guides on this API)
 const fbrEnabled = ref(false); // SaaS: FBR e-invoicing fields
+// Settings → Features → Restrict products by warehouse: the branch a product
+// belongs to. Required for a warehouse-restricted user (the API auto-picks
+// it when they have exactly one warehouse); optional for an all-warehouses user.
+const restrictProductsByWarehouse = ref(false);
+const homeWarehouseRequired = ref(false);
+const providers = ref([]);
+const productSupplierEnabled = ref(false);
 const units = ref([]);
 const subUnits = ref([]);
 const warehouses = ref([]);
@@ -834,7 +883,7 @@ const product = ref({
   type: 'is_single',
   name: '', code: '', gtin: '', points: 0, Type_barcode: 'CODE128',
   cost: null, price: null, wholesale_price: null, min_price: null,
-  brand_id: undefined, category_id: '', sub_category_id: '',
+  brand_id: undefined, provider_id: undefined, warehouse_id: undefined, category_id: '', sub_category_id: '',
   assigned_category_ids: [], assigned_subcategory_ids: [],
   TaxNet: 0, tax_method: '1', discount_method: '1', discount: 0,
   unit_id: undefined, unit_sale_id: undefined, unit_purchase_id: undefined,
@@ -867,6 +916,16 @@ const subcategoryOptions = computed(() => {
     .map(s => ({ value: s.id, label: catName(s.category_id) ? `${s.name} (${catName(s.category_id)})` : s.name }));
 });
 const brandOptions = computed(() => brands.value.map(b => ({ value: b.id, label: b.name })));
+const providerOptions = computed(() => providers.value.map(p => ({ value: p.id, label: p.name })));
+// Only the caller's own warehouses are offered — the API returns exactly those.
+const homeWarehouseOptions = computed(() => warehouses.value.map(w => ({ value: w.id, label: w.name })));
+function applyHomeWarehouse(data) {
+  restrictProductsByWarehouse.value = data.restrict_products_by_warehouse === true;
+  homeWarehouseRequired.value = restrictProductsByWarehouse.value && data.home_warehouse_required === true;
+  if (restrictProductsByWarehouse.value && !product.value.warehouse_id && data.default_warehouse_id) {
+    product.value.warehouse_id = data.default_warehouse_id;
+  }
+}
 const unitOptions = computed(() => units.value.map(u => ({ value: u.id, label: u.name })));
 const subUnitOptions = computed(() => subUnits.value.map(u => ({ value: u.id, label: u.name })));
 const comboOptions = computed(() => {
@@ -1174,18 +1233,25 @@ async function saveQuickUnit() {
     const resp = await http.post('units', { ...quickUnit.value, base_unit: quickUnit.value.base_unit || '' });
     const data = await http.get('products/create');
     units.value = data.units || [];
+    // `units` only holds BASE units, so a new sub-unit can only be identified
+    // from the store response.
     const created = resp?.unit
       || units.value.find(u => u.name === quickUnit.value.name && u.ShortName === quickUnit.value.ShortName);
+    const baseId = quickUnit.value.base_unit;
     if (created?.id) {
-      if (!quickUnit.value.base_unit) {
+      if (!baseId) {
         // New BASE unit → select it as the product unit (clears sale/purchase
         // sub-units like a manual change would).
         product.value.unit_id = created.id;
         onBaseUnitChange(created.id);
-      } else if (String(product.value.unit_id) === String(quickUnit.value.base_unit)) {
-        // New sub-unit of the currently selected base → refresh the
-        // sale/purchase options so it is offered immediately.
-        loadSubUnits(product.value.unit_id);
+      } else if (!product.value.unit_id || String(product.value.unit_id) === String(baseId)) {
+        // New sub-unit of the selected base (or no base picked yet) → load
+        // its sale/purchase options and select it. A sub-unit of some other
+        // base is left alone; it shows up once that base is chosen.
+        if (!product.value.unit_id) product.value.unit_id = units.value.find(u => String(u.id) === String(baseId))?.id ?? baseId;
+        await loadSubUnits(baseId);
+        product.value.unit_sale_id = created.id;
+        product.value.unit_purchase_id = created.id;
       }
     }
     quickUnitOpen.value = false;
@@ -1226,13 +1292,24 @@ async function submit() {
   syncLegacyCategoryFields();
   product.value.is_variant = product.value.type === 'is_variant' && variants.value.length > 0;
 
+  if (homeWarehouseRequired.value && !product.value.warehouse_id) {
+    message.error(t('Home_Warehouse_Required'));
+    submitting.value = false;
+    return;
+  }
+
   const fd = new FormData();
   const { assigned_category_ids: cats, assigned_subcategory_ids: subs, ...rest } = product.value;
   Object.entries(rest).forEach(([k, v]) => fd.append(k, v === null || v === undefined ? '' : v));
   fd.append('multi_category_ids', JSON.stringify(cats || []));
   fd.append('multi_subcategory_ids', JSON.stringify(subs || []));
 
-  if (materiels.value.length && product.value.type === 'is_combo') {
+  if (product.value.type === 'is_combo') {
+    if (!materiels.value.length) {
+      message.error(t('Combo_products_required'));
+      submitting.value = false;
+      return;
+    }
     fd.append('materiels', JSON.stringify(materiels.value));
   }
 
@@ -1331,8 +1408,14 @@ async function submit() {
       await http.postForm(`products/${id.value}`, fd);
       message.success(t('Successfully_Updated'));
     } else {
-      await http.postForm('products', fd);
+      const created = await http.postForm('products', fd);
       message.success(t('Successfully_Created'));
+      // A Shopify listing picked before the product existed is paired now
+      // that it has an id. A failure here must not look like a failed save.
+      if (created?.id && shopifyCardRef.value?.hasPending()) {
+        const linked = await shopifyCardRef.value.commit(created.id);
+        if (!linked) message.warning(t('Shopify_Link_After_Save_Failed'));
+      }
     }
     router.push('/products');
   } catch (e) {
@@ -1371,6 +1454,8 @@ onMounted(async () => {
       categories.value = data.categories || [];
       subcategories.value = data.all_subcategories || data.subcategories || [];
       brands.value = data.brands || [];
+      providers.value = data.providers || [];
+      productSupplierEnabled.value = data.product_supplier_enabled === true;
       fbrEnabled.value = data.fbr_enabled === true; // SaaS: FBR e-invoicing fields
       units.value = data.units || [];
       subUnits.value = data.units_sub || [];
@@ -1382,6 +1467,7 @@ onMounted(async () => {
       enableWholesalePricing.value = data.enable_wholesale_pricing === true;
 
       product.value = { ...product.value, ...p };
+      applyHomeWarehouse(data);
       // legacy: seed the multi-selects from the scalar columns when empty
       if (!Array.isArray(product.value.assigned_category_ids) || !product.value.assigned_category_ids.length) {
         product.value.assigned_category_ids = p.category_id ? [p.category_id] : [];
@@ -1445,6 +1531,8 @@ onMounted(async () => {
       categories.value = data.categories || [];
       subcategories.value = data.subcategories || [];
       brands.value = data.brands || [];
+      providers.value = data.providers || [];
+      productSupplierEnabled.value = data.product_supplier_enabled === true;
       fbrEnabled.value = data.fbr_enabled === true; // SaaS: FBR e-invoicing fields
       units.value = data.units || [];
       warehouses.value = data.warehouses || [];
@@ -1454,6 +1542,7 @@ onMounted(async () => {
       enableMultiPack.value = data.enable_multi_pack_selling === true;
       enableWholesalePricing.value = data.enable_wholesale_pricing === true;
       if (enableMultiPack.value) ensureDefaultPack();
+      applyHomeWarehouse(data);
       warehouseRows.value = Object.fromEntries(
         warehouses.value.map(w => [w.id, { qte: w.qte ?? 0, warehouse_location_id: null }]));
     }
@@ -1468,6 +1557,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.supplier-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.6;
+  line-height: 1.4;
+}
 .quick-add {
   font-size: 12px;
   display: inline-block;

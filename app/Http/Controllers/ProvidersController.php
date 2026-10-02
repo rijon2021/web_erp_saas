@@ -17,6 +17,7 @@ use DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
 use Maatwebsite\Excel\Facades\Excel;
 
 class ProvidersController extends BaseController
@@ -32,7 +33,9 @@ class ProvidersController extends BaseController
         $pageStart = \Request::get('page', 1);
         // Start displaying items from this number;
         $offSet = ($pageStart * $perPage) - $perPage;
-        $order = $request->SortField;
+        // Whitelisted, and defaulted: an absent SortField previously reached
+        // orderBy('') and the query died with "Unknown column ''".
+        $order = in_array($request->SortField, ['id', 'name', 'code', 'phone', 'email'], true) ? $request->SortField : 'id';
         $dir = strtolower((string) $request->input('SortType')) === 'asc' ? 'asc' : 'desc';
         $helpers = new helpers;
         // Filter fields With Params to retrieve
@@ -41,6 +44,14 @@ class ProvidersController extends BaseController
         $data = [];
 
         $providers = Provider::where('deleted_at', '=', null);
+
+        // Settings -> Features: optionally show only suppliers this user's
+        // warehouses have bought from. A supplier with no purchases anywhere
+        // stays visible so a newly created one is not hidden from its author.
+        $this->scopeMasterDataToWarehouses($providers, fn ($ids) => DB::table('purchases')
+            ->whereNull('purchases.deleted_at')
+            ->whereColumn('purchases.provider_id', 'providers.id')
+            ->when($ids !== null, fn ($q) => $q->whereIn('purchases.warehouse_id', $ids)));
 
         // Multiple Filter
         $Filtred = $helpers->filter($providers, $columns, $param, $request)
@@ -99,6 +110,9 @@ class ProvidersController extends BaseController
             $item['country'] = $provider->country;
             $item['city'] = $provider->city;
             $item['adresse'] = $provider->adresse;
+            $item['opening_balance'] = $provider->opening_balance ?? 0;
+            $item['credit_limit'] = $provider->credit_limit ?? 0;
+            $item['net_balance'] = ($provider->opening_balance ?? 0) + $item['due'] - $item['return_Due'];
             $data[] = $item;
         }
 
@@ -167,9 +181,10 @@ class ProvidersController extends BaseController
 
         request()->validate([
             'name' => 'required',
+            'opening_balance' => 'nullable|numeric',
         ]);
 
-        Provider::whereId($id)->update([
+        $data = [
             'name' => $request['name'],
             'adresse' => $request['adresse'],
             'phone' => $request['phone'],
@@ -178,10 +193,56 @@ class ProvidersController extends BaseController
             'city' => $request['city'],
             'tax_number' => $request['tax_number'],
             'credit_limit' => $request->input('credit_limit', 0),
-        ]);
+        ];
+
+        // Only touch opening_balance when the client sends it, so a stale edit
+        // form can't overwrite a balance already reduced by due payments.
+        if ($request->has('opening_balance')) {
+            $data['opening_balance'] = round((float) $request->input('opening_balance', 0), 2);
+        }
+
+        Provider::whereId($id)->update($data);
 
         return response()->json(['success' => true]);
 
+    }
+
+    // ----------- Adjust Supplier Opening Balance (add / subtract / set) -------\\
+
+    public function adjustOpeningBalance(Request $request, $id)
+    {
+        $this->authorizeForUser($request->user('api'), 'update', Provider::class);
+
+        $request->validate([
+            'mode' => ['required', Rule::in(['add', 'subtract', 'set'])],
+            'amount' => ['required', 'numeric'],
+        ]);
+
+        $provider = Provider::whereNull('deleted_at')->findOrFail($id);
+        $current = (float) ($provider->opening_balance ?? 0);
+        $amount = (float) $request->input('amount');
+
+        switch ($request->input('mode')) {
+            case 'add':
+                $new = $current + abs($amount);
+                break;
+            case 'subtract':
+                $new = $current - abs($amount);
+                break;
+            case 'set':
+            default:
+                $new = $amount;
+                break;
+        }
+
+        $provider->opening_balance = round($new, 2);
+        $provider->save();
+
+        return response()->json([
+            'success' => true,
+            'previous_opening_balance' => round($current, 2),
+            'opening_balance' => round((float) $provider->opening_balance, 2),
+        ]);
     }
 
     // ----------- Remdeleteove Provider-------\\
@@ -501,13 +562,7 @@ class ProvidersController extends BaseController
                 $payment_opening_balance->user_id = Auth::user()->id;
                 $payment_opening_balance->save();
 
-                $account = Account::where('id', $request['account_id'])->exists();
-                if ($account) {
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance - $opening_balance_paid,
-                    ]);
-                }
+                Account::adjustBalance($request['account_id'], -$opening_balance_paid);
             }
 
             $provider_purchases_due = Purchase::where('deleted_at', '=', null)
@@ -543,15 +598,7 @@ class ProvidersController extends BaseController
                 $payment_purchase->user_id = Auth::user()->id;
                 $payment_purchase->save();
 
-                $account = Account::where('id', $request['account_id'])->exists();
-
-                if ($account) {
-                    // Account exists, perform the update
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance - $amount,
-                    ]);
-                }
+                Account::adjustBalance($request['account_id'], -$amount);
 
                 $provider_purchase->paid_amount += $amount;
                 $provider_purchase->payment_statut = $payment_status;
@@ -606,15 +653,7 @@ class ProvidersController extends BaseController
                 $payment_purchase_return->user_id = Auth::user()->id;
                 $payment_purchase_return->save();
 
-                $account = Account::where('id', $request['account_id'])->exists();
-
-                if ($account) {
-                    // Account exists, perform the update
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance + $amount,
-                    ]);
-                }
+                Account::adjustBalance($request['account_id'], $amount);
 
                 $supplier_purchase_return->paid_amount += $amount;
                 $supplier_purchase_return->payment_statut = $payment_status;

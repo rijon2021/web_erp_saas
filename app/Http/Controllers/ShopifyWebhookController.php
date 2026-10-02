@@ -323,7 +323,7 @@ class ShopifyWebhookController extends Controller
             'entity' => $entity,
             'direction' => $direction,
             'status' => 'running',
-            'stage' => 'webhook',
+            'stage' => \App\Models\ShopifySyncRun::STAGE_WEBHOOK,
             'total_items' => 1,
             'started_at' => now(),
             'heartbeat_at' => now(),

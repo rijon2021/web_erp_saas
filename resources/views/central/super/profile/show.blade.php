@@ -20,7 +20,7 @@
                     @else
                         <div class="profile-avatar-fallback">{{ strtoupper(mb_substr($user->name, 0, 1)) }}</div>
                     @endif
-                    <label for="avatarInput" class="avatar-upload-btn" title="Change avatar">
+                    <label for="avatarInput" class="avatar-upload-btn" title="{{ __('super.profile.change_avatar') }}">
                         <i class="bi bi-camera-fill"></i>
                     </label>
                 </div>

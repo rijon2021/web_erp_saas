@@ -31,6 +31,9 @@
       <a-space wrap>
         <DateRangePicker v-model:value="range" allow-clear @change="fetchReport" />
         <a-select
+          v-model:value="groupBy" style="width: 190px"
+          :options="groupByOptions" @change="fetchReport" />
+        <a-select
           v-model:value="warehouseId" style="width: 180px" allow-clear show-search option-filter-prop="label"
           :placeholder="tf('Till', 'Till')" :options="opts(warehouses)" @change="fetchReport" />
         <a-select
@@ -88,22 +91,23 @@
       </template>
 
       <a-spin :spinning="loading">
-        <a-empty v-if="!categories.length && !loading" :description="$t('NodataAvailable')" style="padding: 48px 0" />
+        <a-empty v-if="!groups.length && !loading" :description="$t('NodataAvailable')" style="padding: 48px 0" />
 
         <div v-else class="summary-table-wrap">
           <table class="summary-table">
             <thead>
               <tr>
-                <th style="width: 55%">{{ $t('ProductName') }}</th>
-                <th class="num" style="width: 15%">{{ $t('Quantity') }}</th>
-                <th class="num" style="width: 30%">{{ $t('Total') }}</th>
+                <th style="width: 44%">{{ $t('ProductName') }}</th>
+                <th class="num" style="width: 14%">{{ $t('Quantity') }}</th>
+                <th class="num" style="width: 20%">{{ tf('Unit_Price', 'Unit price') }}</th>
+                <th class="num" style="width: 22%">{{ $t('Total') }}</th>
               </tr>
             </thead>
-            <tbody v-for="group in categories" :key="group.category_id ?? 'none'">
+            <tbody v-for="group in groups" :key="group.group_id ?? 'none'">
               <tr class="group-row">
-                <th colspan="3">{{ catName(group) }}</th>
+                <th colspan="4">{{ groupName(group) }}</th>
               </tr>
-              <tr v-for="item in group.items" :key="(group.category_id ?? 0) + '-' + item.product_id + '-' + item.product_name">
+              <tr v-for="item in group.items" :key="(group.group_id ?? 0) + '-' + item.product_id + '-' + item.product_name">
                 <td>
                   {{ item.product_name }}
                   <a-typography-text v-if="item.product_code" type="secondary" style="display: block; font-size: 12px">
@@ -111,11 +115,19 @@
                   </a-typography-text>
                 </td>
                 <td class="num">{{ qty(item.quantity) }} <a-typography-text type="secondary" style="font-size: 12px">{{ item.unit }}</a-typography-text></td>
+                <td class="num">
+                  <span v-if="item.unit_price === null">—</span>
+                  <template v-else>{{ money(item.unit_price) }}</template>
+                  <a-tooltip v-if="item.price_varies" :title="tf('Sold_at_several_prices', 'Sold at several prices in this period; this is the weighted average.')">
+                    <a-typography-text type="secondary" style="font-size: 12px"> ~</a-typography-text>
+                  </a-tooltip>
+                </td>
                 <td class="num">{{ money(item.total) }}</td>
               </tr>
               <tr class="subtotal-row">
                 <td class="num bold">{{ tf('Sub_Total', 'Sub Total') }}</td>
                 <td class="num bold">{{ qty(group.sub_total_quantity) }}</td>
+                <td class="num"></td>
                 <td class="num bold">{{ money(group.sub_total) }}</td>
               </tr>
             </tbody>
@@ -123,6 +135,7 @@
               <tr class="grand-row">
                 <td class="num bold">{{ tf('Grand_Total', 'Grand Total') }}</td>
                 <td class="num bold">{{ qty(totals.quantity) }}</td>
+                <td class="num"></td>
                 <td class="num bold">{{ money(totals.total) }}</td>
               </tr>
             </tfoot>
@@ -139,8 +152,11 @@
  * sold in the range, grouped by category with SUB TOTAL lines and a GRAND
  * TOTAL, plus an 58/80/88mm thermal printout that mirrors the paper original.
  *
- * Payload: { categories:[{category_id, category_name, items, sub_total_quantity,
+ * Payload: { groups:[{group_id, group_name, items, sub_total_quantity,
  * sub_total}], totals, meta, company, warehouses, users, categories_list }.
+ * `group_by` (category|warehouse) picks what a group IS: the original receipt
+ * groups by category; warehouse answers "what did each warehouse sell, and
+ * what did it come to" without re-running the report per warehouse.
  * Grouped shape, so it renders its own table instead of ReportPage/DataTable.
  */
 import { ref, computed, onMounted } from 'vue';
@@ -174,13 +190,18 @@ const paperWidth = ref(80);
 
 const loading = ref(true);
 const exporting = ref('');
-const categories = ref([]);
+const groups = ref([]);
 const totals = ref({ quantity: 0, total: 0, items: 0 });
 const meta = ref({});
 const company = ref({});
 const warehouses = ref([]);
 const users = ref([]);
 const categoriesList = ref([]);
+const groupBy = ref('category');
+const groupByOptions = computed(() => [
+  { value: 'category', label: `${tf('Group_by', 'Group by')}: ${t('Categorie')}` },
+  { value: 'warehouse', label: `${tf('Group_by', 'Group by')}: ${t('warehouse')}` },
+]);
 
 const statusOptions = computed(() => [
   { value: 'completed', label: tf('Completed', 'Completed') },
@@ -198,9 +219,13 @@ function qty(v) {
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
 }
 
-// The backend labels category-less products in English; translate it here.
-function catName(group) {
-  return group.category_id === null ? tf('Uncategorized', 'Uncategorized') : group.category_name;
+// The backend labels the catch-all group in English; translate it here. Which
+// catch-all it is depends on the grouping the response was built with.
+function groupName(group) {
+  if (group.group_id !== null) return group.group_name;
+  return meta.value.group_by === 'warehouse'
+    ? tf('Unassigned', 'Unassigned')
+    : tf('Uncategorized', 'Uncategorized');
 }
 
 const kpiTiles = computed(() => [
@@ -212,6 +237,7 @@ const kpiTiles = computed(() => [
 
 /* ---------------------------------------------------------------- data */
 const filterParams = () => ({
+  group_by: groupBy.value,
   ...(range.value?.[0] ? { from: range.value[0].format('YYYY-MM-DD') } : {}),
   ...(range.value?.[1] ? { to: range.value[1].format('YYYY-MM-DD') } : {}),
   ...(warehouseId.value ? { warehouse_id: warehouseId.value } : {}),
@@ -225,7 +251,7 @@ async function fetchReport() {
   loading.value = true;
   try {
     const data = await http.get('report/products_sold_summary', filterParams());
-    categories.value = Array.isArray(data.categories) ? data.categories : [];
+    groups.value = Array.isArray(data.groups) ? data.groups : [];
     totals.value = data.totals || { quantity: 0, total: 0, items: 0 };
     meta.value = data.meta || {};
     company.value = data.company || {};
@@ -243,35 +269,37 @@ async function fetchReport() {
 // Flat rows: one line per item plus subtotal/grand-total lines.
 function flatRows() {
   const out = [];
-  categories.value.forEach(group => {
+  groups.value.forEach(group => {
     group.items.forEach(item => out.push({
-      category_name: catName(group),
+      group_name: groupName(group),
       product_code: item.product_code || '',
       product_name: item.product_name,
       unit: item.unit || '',
       quantity: item.quantity,
+      unit_price: item.unit_price === null ? '' : item.unit_price,
       total: item.total,
     }));
     out.push({
-      category_name: catName(group), product_code: '', product_name: tf('Sub_Total', 'Sub Total'),
-      unit: '', quantity: group.sub_total_quantity, total: group.sub_total,
+      group_name: groupName(group), product_code: '', product_name: tf('Sub_Total', 'Sub Total'),
+      unit: '', quantity: group.sub_total_quantity, unit_price: '', total: group.sub_total,
     });
   });
   if (out.length) {
     out.push({
-      category_name: '', product_code: '', product_name: tf('Grand_Total', 'Grand Total'),
-      unit: '', quantity: totals.value.quantity, total: totals.value.total,
+      group_name: '', product_code: '', product_name: tf('Grand_Total', 'Grand Total'),
+      unit: '', quantity: totals.value.quantity, unit_price: '', total: totals.value.total,
     });
   }
   return out;
 }
 
 const exportColumns = () => [
-  { title: t('Categorie'), dataIndex: 'category_name' },
+  { title: groupBy.value === 'warehouse' ? t('warehouse') : t('Categorie'), dataIndex: 'group_name' },
   { title: t('Code'), dataIndex: 'product_code' },
   { title: t('ProductName'), dataIndex: 'product_name' },
   { title: tf('Unit', 'Unit'), dataIndex: 'unit' },
   { title: t('Quantity'), dataIndex: 'quantity' },
+  { title: tf('Unit_Price', 'Unit price'), dataIndex: 'unit_price', exportValue: r => (r.unit_price === '' ? '' : money(r.unit_price)) },
   { title: t('Total'), dataIndex: 'total', exportValue: r => money(r.total) },
 ];
 
@@ -309,13 +337,18 @@ function printReceipt() {
     `<div class="kv"><span class="k">${esc(label)}</span><span class="s">:</span><span class="v">${esc(value)}</span></div>`;
 
   let body = '';
-  categories.value.forEach(group => {
-    body += `<div class="cat">${esc(catName(group))}</div>`;
+  groups.value.forEach(group => {
+    body += `<div class="cat">${esc(groupName(group))}</div>`;
     body += '<table class="items">';
     group.items.forEach(item => {
+      // A 58mm roll has no room for a fourth column, so the unit price rides in
+      // the quantity cell using the usual receipt idiom, "2 x 5.00".
+      const qtyCell = item.unit_price === null
+        ? qty(item.quantity)
+        : `${qty(item.quantity)} x ${numFmt(item.unit_price)}`;
       body += `<tr>
         <td class="name">${esc(item.product_name)}</td>
-        <td class="qty">${esc(qty(item.quantity))}</td>
+        <td class="qty">${esc(qtyCell)}</td>
         <td class="amt">${esc(numFmt(item.total))}</td>
       </tr>`;
     });
@@ -380,7 +413,7 @@ function printReceipt() {
   </head>
   <body>
     <div class="center company">${esc(company.value.name)}</div>
-    <div class="center">${esc(company.value.address)}</div>
+    <div class="center">${esc(company.value.full_address || company.value.address)}</div>
     <div class="center">${esc(company.value.email)}</div>
     <div class="center">${esc(company.value.phone)}</div>
 

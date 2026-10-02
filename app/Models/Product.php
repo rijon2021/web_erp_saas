@@ -18,6 +18,11 @@ class Product extends Model
         'is_preorder', 'preorder_available_date', 'preorder_limit', 'preorder_note',
         'is_batch_tracked', 'shelf_life_days', 'generic_name', 'strength', 'dosage_form',
         'pack_size', 'manufacturer', 'prescription_required', 'drug_schedule',
+        // Default supplier to reorder this product from (Settings -> Features)
+        'provider_id',
+        // Home warehouse the product was created for (Settings -> Features:
+        // restrict products by warehouse). NULL = not assigned to any branch.
+        'warehouse_id',
     ];
 
     protected $casts = [
@@ -33,6 +38,8 @@ class Product extends Model
         'is_variant' => 'integer',
         'is_imei' => 'integer',
         'brand_id' => 'integer',
+        'provider_id' => 'integer',
+        'warehouse_id' => 'integer',
         'is_active' => 'integer',
         'cost' => 'double',
         'price' => 'double',
@@ -150,6 +157,41 @@ class Product extends Model
     public function brand()
     {
         return $this->belongsTo('App\Models\Brand');
+    }
+
+    /** Home warehouse (see the warehouse_id column note above). */
+    public function warehouse()
+    {
+        return $this->belongsTo('App\Models\Warehouse', 'warehouse_id');
+    }
+
+    /**
+     * Products a user assigned to the given warehouses may see: the home
+     * warehouse is one of theirs, or real stock (qte > 0) sits in one of
+     * theirs — a product transferred or purchased into a branch belongs to
+     * that branch's day-to-day work even if it was created elsewhere. The
+     * zero-quantity rows every product gets in every warehouse do NOT count,
+     * which is the whole point of the home warehouse column.
+     */
+    public function scopeVisibleInWarehouses($query, array $warehouseIds, string $table = 'products')
+    {
+        return $query->where(function ($q) use ($warehouseIds, $table) {
+            $q->whereIn($table.'.warehouse_id', $warehouseIds)
+                ->orWhereExists(function ($e) use ($warehouseIds, $table) {
+                    $e->select(\Illuminate\Support\Facades\DB::raw(1))
+                        ->from('product_warehouse')
+                        ->whereColumn('product_warehouse.product_id', $table.'.id')
+                        ->whereNull('product_warehouse.deleted_at')
+                        ->whereIn('product_warehouse.warehouse_id', $warehouseIds)
+                        ->where('product_warehouse.qte', '>', 0);
+                });
+        });
+    }
+
+    /** Default supplier to reorder this product from. */
+    public function provider()
+    {
+        return $this->belongsTo('App\Models\Provider');
     }
 
     // Relationship for products that are combined in a combo

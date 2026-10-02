@@ -16,6 +16,10 @@ class TenantSubscriptionController extends Controller
 {
     public function index(Request $request): View
     {
+        // Date-based status refresh so lapsed trials read "expired" even on
+        // hosts where the scheduler cron never runs.
+        TenantSubscription::expireLapsed();
+
         $query = TenantSubscription::with([
             'tenant',
             'plan',
@@ -111,7 +115,7 @@ class TenantSubscriptionController extends Controller
     public function activate(Request $request, TenantSubscription $subscription): RedirectResponse
     {
         if (! $subscription->canTransitionTo(TenantSubscription::STATUS_ACTIVE)) {
-            return back()->with('error', "Cannot activate subscription from \"{$subscription->status}\" status.");
+            return back()->with('error', __('super.flash.sub_cannot_activate_from', ['status' => $subscription->status]));
         }
 
         // Pending subscriptions require at least one paid payment before
@@ -131,33 +135,33 @@ class TenantSubscriptionController extends Controller
 
                 if ($pendingPayment) {
                     return redirect()->route('super.payments.show', $pendingPayment)
-                        ->with('error', 'Payment must be approved before activating this subscription. Please review and approve the payment first.');
+                        ->with('error', __('super.flash.sub_payment_approve_first'));
                 }
 
-                return back()->with('error', 'Cannot activate: no confirmed payment found for this subscription.');
+                return back()->with('error', __('super.flash.sub_no_confirmed_payment'));
             }
         }
 
         $subscription->activate();
 
-        return back()->with('success', 'Subscription activated successfully.');
+        return back()->with('success', __('super.flash.sub_activated'));
     }
 
     public function suspend(Request $request, TenantSubscription $subscription): RedirectResponse
     {
         if (! $subscription->canTransitionTo(TenantSubscription::STATUS_SUSPENDED)) {
-            return back()->with('error', "Cannot suspend subscription from \"{$subscription->status}\" status.");
+            return back()->with('error', __('super.flash.sub_cannot_suspend_from', ['status' => $subscription->status]));
         }
 
         $subscription->transitionTo(TenantSubscription::STATUS_SUSPENDED);
 
-        return back()->with('success', 'Subscription suspended.');
+        return back()->with('success', __('super.flash.sub_suspended'));
     }
 
     public function cancel(Request $request, TenantSubscription $subscription): RedirectResponse
     {
         if (! $subscription->canTransitionTo(TenantSubscription::STATUS_CANCELLED)) {
-            return back()->with('error', "Cannot cancel subscription from \"{$subscription->status}\" status.");
+            return back()->with('error', __('super.flash.sub_cannot_cancel_from', ['status' => $subscription->status]));
         }
 
         $subscription->cancel();
@@ -229,7 +233,7 @@ class TenantSubscriptionController extends Controller
             if (! $subscription->canTransitionTo($newStatus)) {
                 return back()
                     ->withInput()
-                    ->with('error', "Cannot transition subscription from \"{$subscription->status}\" to \"{$newStatus}\".");
+                    ->with('error', __('super.flash.sub_cannot_transition', ['from' => $subscription->status, 'to' => $newStatus]));
             }
 
             $extra = collect($validated)->except('status')->toArray();
@@ -237,7 +241,7 @@ class TenantSubscriptionController extends Controller
             if (! $subscription->transitionTo($newStatus, $extra)) {
                 return back()
                     ->withInput()
-                    ->with('error', "Transition to \"{$newStatus}\" failed — check that the subscription meets the required conditions.");
+                    ->with('error', __('super.flash.sub_transition_failed', ['to' => $newStatus]));
             }
 
             if ($newStatus === TenantSubscription::STATUS_CANCELLED) {
@@ -248,6 +252,6 @@ class TenantSubscriptionController extends Controller
             $subscription->update(collect($validated)->except('status')->toArray());
         }
 
-        return redirect()->route('super.subscriptions.index')->with('success', 'Subscription updated.');
+        return redirect()->route('super.subscriptions.index')->with('success', __('super.flash.sub_updated'));
     }
 }

@@ -77,7 +77,7 @@
     <a-modal
       :open="linkOpen" title="Link a record by hand" :width="520"
       :confirm-loading="saving" ok-text="Link" :cancel-text="$t('Cancel')"
-      @ok="submitLink" @cancel="linkOpen = false"
+      @ok="submitLink(false)" @cancel="linkOpen = false"
     >
       <p class="lead">
         Use this when a record exists on both sides but the automatic match failed —
@@ -93,12 +93,51 @@
         <a-form-item label="Record type *">
           <a-select v-model:value="linkForm.entity_type" :options="LINK_TYPES" />
         </a-form-item>
-        <a-form-item label="ERP record id *" extra="The numeric id of the product, customer, order or category">
-          <a-input-number v-model:value="linkForm.local_id" :min="1" style="width: 100%" />
-        </a-form-item>
-        <a-form-item label="Shopify id *" style="margin-bottom: 0">
-          <a-input v-model:value="linkForm.shopify_id" placeholder="e.g. 8123456789012" allow-clear />
-        </a-form-item>
+        <template v-if="linkForm.entity_type === 'product'">
+          <a-form-item :label="$t('Shopify_ERP_Product') + ' *'">
+            <a-select
+              v-model:value="linkForm.local_id" show-search :filter-option="false" allow-clear
+              :placeholder="$t('Shopify_Pick_Product')" :options="productOptions"
+              :not-found-content="productSearching ? undefined : null" @search="searchProducts"
+            >
+              <template v-if="productSearching" #notFoundContent><a-spin size="small" /></template>
+            </a-select>
+          </a-form-item>
+          <a-form-item :label="$t('Shopify_Pick_Listing') + ' *'">
+            <a-select
+              v-model:value="linkForm.shopify_id" show-search :filter-option="false" allow-clear
+              :placeholder="linkForm.store_id ? $t('Shopify_Search_Placeholder') : $t('Shopify_Store_Search_First')"
+              :disabled="!linkForm.store_id" :options="remoteOptions"
+              @search="searchRemote"
+            >
+              <template v-if="remoteSearching" #notFoundContent><a-spin size="small" /></template>
+              <template #option="{ title, handle, value, skus, taken }">
+                <div class="opt-title">{{ title }}</div>
+                <div class="sub">{{ handle }} · #{{ value }}<template v-if="skus"> · {{ skus }}</template></div>
+                <div v-if="taken" class="sub warn">{{ $t('Shopify_Already_Linked_To') }} {{ taken }}</div>
+              </template>
+            </a-select>
+          </a-form-item>
+          <a-radio-group v-model:value="linkForm.mode" class="mode">
+            <a-radio value="keep" class="mode-item">
+              {{ $t('Shopify_Keep_Listing') }}
+              <div class="sub">{{ $t('Shopify_Keep_Listing_Hint') }}</div>
+            </a-radio>
+            <a-radio value="replace" class="mode-item">
+              {{ $t('Shopify_Replace_Listing') }}
+              <div class="sub">{{ $t('Shopify_Replace_Listing_Hint') }}</div>
+            </a-radio>
+          </a-radio-group>
+          <a-checkbox v-model:checked="linkForm.copy_remote" style="margin-top: 8px">{{ $t('Shopify_Copy_Remote') }}</a-checkbox>
+        </template>
+        <template v-else>
+          <a-form-item label="ERP record id *" extra="The numeric id of the customer, order or category">
+            <a-input-number v-model:value="linkForm.local_id" :min="1" style="width: 100%" />
+          </a-form-item>
+          <a-form-item label="Shopify id *" style="margin-bottom: 0">
+            <a-input v-model:value="linkForm.shopify_id" placeholder="e.g. 8123456789012" allow-clear />
+          </a-form-item>
+        </template>
       </a-form>
     </a-modal>
   </div>
@@ -115,7 +154,8 @@
  */
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
-import { message } from 'ant-design-vue';
+import { message, Modal } from 'ant-design-vue';
+import { useI18n } from 'vue-i18n';
 import { LinkOutlined, DisconnectOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
@@ -125,6 +165,7 @@ import { LINK_TYPES, labelOf } from './shopifyOptions';
 import http from '../../lib/http';
 
 const route = useRoute();
+const { t } = useI18n();
 const { dateTime } = useFormat();
 
 const filters = reactive({
@@ -177,24 +218,94 @@ const linkForm = reactive({
   entity_type: 'product',
   local_id: null,
   shopify_id: '',
+  mode: 'keep',
+  copy_remote: false,
 });
 
-async function submitLink() {
+// Products get pickers instead of two ids to type: the ERP side searches the
+// catalogue, the Shopify side asks the shop live, and the pairing goes through
+// the product-link endpoint so variants and the inventory item are linked too.
+const productOptions = ref([]);
+const productSearching = ref(false);
+let productTimer = null;
+function searchProducts(q) {
+  clearTimeout(productTimer);
+  productTimer = setTimeout(async () => {
+    productSearching.value = true;
+    try {
+      const data = await http.get('products/search-basic', { q: q || '' });
+      productOptions.value = (data?.products || []).map(p => ({ value: p.id, label: `${p.name} (${p.code})` }));
+    } catch (e) { productOptions.value = []; } finally { productSearching.value = false; }
+  }, 250);
+}
+
+const remoteOptions = ref([]);
+const remoteSearching = ref(false);
+let remoteTimer = null;
+function searchRemote(q) {
+  clearTimeout(remoteTimer);
+  if (!q || !linkForm.store_id) { remoteOptions.value = []; return; }
+  remoteTimer = setTimeout(async () => {
+    remoteSearching.value = true;
+    try {
+      const data = await http.get('shopify/product-links/search', { store_id: linkForm.store_id, q });
+      remoteOptions.value = (data?.products || []).map(r => ({
+        value: r.id,
+        label: r.title,
+        title: r.title,
+        handle: r.handle,
+        skus: r.variants.map(v => v.sku).filter(Boolean).slice(0, 5).join(', '),
+        taken: r.linked_to ? r.linked_to.name : null,
+      }));
+    } catch (e) {
+      remoteOptions.value = [];
+      message.error(e?.data?.message || 'Could not search the shop');
+    } finally { remoteSearching.value = false; }
+  }, 350);
+}
+
+async function submitLink(force = false) {
   if (!linkForm.store_id || !linkForm.local_id || !linkForm.shopify_id) {
-    message.error('Fill in the store, the ERP id and the Shopify id');
+    message.error('Fill in the store, the ERP record and the Shopify record');
     return;
   }
 
   saving.value = true;
   try {
-    await http.post('shopify/mappings', { ...linkForm });
+    if (linkForm.entity_type === 'product') {
+      await http.post('shopify/product-links', {
+        store_id: linkForm.store_id,
+        product_id: linkForm.local_id,
+        shopify_id: String(linkForm.shopify_id),
+        mode: linkForm.mode,
+        copy_remote: linkForm.copy_remote ? 1 : 0,
+        force: force ? 1 : 0,
+      });
+    } else {
+      await http.post('shopify/mappings', {
+        store_id: linkForm.store_id,
+        entity_type: linkForm.entity_type,
+        local_id: linkForm.local_id,
+        shopify_id: String(linkForm.shopify_id),
+      });
+    }
     message.success('Linked');
     linkOpen.value = false;
     linkForm.local_id = null;
     linkForm.shopify_id = '';
+    linkForm.copy_remote = false;
     crud.fetchRows();
   } catch (e) {
-    message.error(e?.data?.message || 'Could not link those records');
+    if (e?.status === 409 && e?.data?.code === 'claimed') {
+      Modal.confirm({
+        title: e.data.message,
+        okText: 'Move the link',
+        cancelText: t('Cancel'),
+        onOk: () => submitLink(true),
+      });
+    } else {
+      message.error(e?.data?.message || 'Could not link those records');
+    }
   } finally {
     saving.value = false;
   }
@@ -228,6 +339,22 @@ onMounted(async () => {
   margin-bottom: 14px;
   font-size: 13px;
   opacity: 0.7;
+}
+.opt-title {
+  font-weight: 500;
+}
+.warn {
+  color: #faad14;
+  opacity: 1;
+}
+.mode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mode-item {
+  align-items: flex-start;
+  white-space: normal;
 }
 .toolbar {
   display: flex;

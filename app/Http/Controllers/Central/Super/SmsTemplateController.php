@@ -82,7 +82,7 @@ class SmsTemplateController extends Controller
 
             return redirect()
                 ->route('super.sms-templates.edit', ['template' => $template->id, 'locale' => $locale])
-                ->with('success', "Translation for \"{$locale}\" saved successfully.");
+                ->with('success', __('super.flash.translation_saved', ['locale' => $locale]));
         }
 
         // Saving the default template
@@ -98,7 +98,7 @@ class SmsTemplateController extends Controller
 
         return redirect()
             ->route('super.sms-templates.edit', $template)
-            ->with('success', "Template \"{$template->name}\" updated successfully.");
+            ->with('success', __('super.flash.template_updated', ['name' => $template->name]));
     }
 
     /**
@@ -112,7 +112,7 @@ class SmsTemplateController extends Controller
 
         return redirect()
             ->route('super.sms-templates.edit', $template)
-            ->with('success', "Translation for \"{$locale}\" removed.");
+            ->with('success', __('super.flash.translation_removed', ['locale' => $locale]));
     }
 
     public function sendTest(Request $request, SmsTemplate $template)
@@ -124,7 +124,7 @@ class SmsTemplateController extends Controller
         $setting = SmsSetting::instance();
 
         if (! $setting->sms_gateway) {
-            return back()->withErrors(['test_phone' => 'Configure and save an SMS gateway in Settings > SMS Settings first.']);
+            return back()->withErrors(['test_phone' => __('super.flash.sms_gateway_configure')]);
         }
 
         $template->load('translations');
@@ -141,9 +141,9 @@ class SmsTemplateController extends Controller
                 $setting->credentials()
             );
 
-            return back()->with('success', "Test SMS{$localeSuffix} sent to {$request->test_phone}.");
+            return back()->with('success', __('super.flash.test_sms_sent', ['suffix' => $localeSuffix, 'phone' => $request->test_phone]));
         } catch (\Throwable $e) {
-            return back()->withErrors(['test_phone' => 'Failed to send test SMS: ' . $e->getMessage()]);
+            return back()->withErrors(['test_phone' => __('super.flash.test_sms_failed', ['error' => $e->getMessage()])]);
         }
     }
 

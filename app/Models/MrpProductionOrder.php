@@ -24,6 +24,7 @@ class MrpProductionOrder extends Model
     protected $fillable = [
         'reference', 'bom_id', 'product_id', 'product_variant_id',
         'qty_planned', 'qty_produced', 'qty_scrapped',
+        'batch_no', 'production_date', 'expiry_date', 'product_batch_id',
         'warehouse_id', 'fg_warehouse_id', 'status', 'priority',
         'planned_start', 'planned_end', 'actual_start', 'actual_end',
         'material_cost', 'labour_cost', 'overhead_cost', 'total_cost',
@@ -46,6 +47,8 @@ class MrpProductionOrder extends Model
         'qc_required' => 'boolean',
         'qc_passed' => 'boolean',
         'planned_start' => 'date',
+        'production_date' => 'date',
+        'expiry_date' => 'date',
         'planned_end' => 'date',
         'actual_start' => 'datetime',
         'actual_end' => 'datetime',
@@ -72,6 +75,12 @@ class MrpProductionOrder extends Model
     public function materials()
     {
         return $this->hasMany(MrpProductionOrderMaterial::class, 'production_order_id');
+    }
+
+    /** The product_batches row the finished goods were received into. */
+    public function productBatch()
+    {
+        return $this->belongsTo(ProductBatch::class, 'product_batch_id');
     }
 
     public function workOrders()

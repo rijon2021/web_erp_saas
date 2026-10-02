@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Sale;
 use App\Models\UserWarehouse;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -51,9 +52,10 @@ class TodaySummaryController extends Controller
         };
 
         /* ------------------------------------------------------------ sales */
+        // Percentage discounts are converted to their money amount before summing.
         $s = $own($wh(DB::table('sales')->whereNull('deleted_at')->whereDate('date', $today)))
             ->selectRaw('COUNT(*) c, COALESCE(SUM(GrandTotal),0) net, COALESCE(SUM(TaxNet),0) tax,
-                         COALESCE(SUM(discount),0) disc, COALESCE(SUM(shipping),0) ship')
+                         COALESCE(SUM('.Sale::discountAmountSql().'),0) disc, COALESCE(SUM(shipping),0) ship')
             ->first();
         $itemsSold = (float) $own($wh(
             DB::table('sale_details')

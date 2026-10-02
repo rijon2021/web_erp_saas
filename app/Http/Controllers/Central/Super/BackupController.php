@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Central\Super;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class BackupController extends Controller
@@ -20,8 +21,25 @@ class BackupController extends Controller
 
     public function store(Request $request)
     {
-        $exitCode = Artisan::call('central:backup');
-        $output   = Artisan::output();
+        // Slow shared hosts + a large central DB can outrun the web time limit.
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(0);
+        }
+
+        try {
+            $exitCode = Artisan::call('central:backup');
+            $output   = Artisan::output();
+        } catch (\Throwable $e) {
+            // Never let the exception bubble into the generic "Server Error"
+            // JSON — the settings page shows this message to the admin.
+            Log::error('Central backup threw: ' . $e->getMessage(), ['exception' => $e]);
+
+            return response()->json([
+                'success' => false,
+                'message' => __('super.general_settings.backup_failed'),
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
 
         if ($exitCode !== 0) {
             $errorMsg = trim($output);

@@ -197,6 +197,7 @@ import { ref, computed, createVNode, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message, Modal } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
+import { applyIssuer } from '../../lib/invoiceIssuer';
 import {
   ArrowLeftOutlined, PrinterOutlined, EditOutlined, DeleteOutlined,
   ExclamationCircleOutlined, MailOutlined, MessageOutlined, FilePdfOutlined,
@@ -319,7 +320,9 @@ onMounted(async () => {
     const data = await http.get(`sales/${route.params.id}`);
     sale.value = data.sale || {};
     details.value = data.details || [];
-    company.value = data.company || {};
+    // Branch letterhead: the invoice header shows the warehouse that issued
+    // the document, each field falling back to the company settings.
+    company.value = applyIssuer(data.company || {}, data.issuer);
   } catch (e) {
     message.error(t('InvalidData'));
     router.push('/sales');

@@ -55,4 +55,11 @@ class Quotation extends Model
     {
         return $this->belongsTo('App\Models\Warehouse');
     }
+
+    // Set when the quotation has been turned into a sale — drives the
+    // "Already Converted" link on the list and the detail page.
+    public function convertedSale()
+    {
+        return $this->belongsTo('App\Models\Sale', 'converted_sale_id');
+    }
 }

@@ -45,7 +45,7 @@
 {{-- Dashboard Header --}}
 <div class="dash-header">
     <div>
-        <h1 class="dash-greeting">{{ $greeting }}, {{ $adminUser->name ?? 'Admin' }}</h1>
+        <h1 class="dash-greeting">{{ $greeting }}, {{ $adminUser->name ?? __('super.common.admin') }}</h1>
         <p class="dash-subtitle">{{ __('super.dashboard.welcome') }}</p>
     </div>
     <div class="dash-date-badge">
@@ -353,7 +353,7 @@
         <div class="content-card h-100">
             <div class="card-header-custom">
                 <h2><i class="bi bi-bar-chart me-2 text-muted"></i>{{ __('super.dashboard.subs_by_plan') }}</h2>
-                <span class="dash-chart-period">Top 5</span>
+                <span class="dash-chart-period">{{ __('super.common.top_n', ['count' => 5]) }}</span>
             </div>
             <div class="card-body-custom">
                 <div id="chart-plans" class="chart-min-height"></div>

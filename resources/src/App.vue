@@ -14,6 +14,7 @@ import frFR from 'ant-design-vue/es/locale/fr_FR';
 import esES from 'ant-design-vue/es/locale/es_ES';
 import arEG from 'ant-design-vue/es/locale/ar_EG';
 import { useUiStore } from './stores/ui';
+import { isRtlLocale } from './i18n';
 import LimitReachedModal from './components/LimitReachedModal.vue';
 
 const ui = useUiStore();
@@ -22,6 +23,9 @@ ui.initTheme();
 // No session keepalive ping here: the stocky reference's /session/keepalive
 // route does not exist on this backend (and the legacy SaaS admin never had
 // one); the session lifetime behaves exactly as it does for the legacy SPA.
+
+// Keep in sync with the [dir="rtl"] body rule in assets/theme.css.
+const RTL_FONT_STACK = "'Cairo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, Arial, sans-serif";
 
 const ANT_LOCALES = { en: enUS, fr: frFR, es: esES, ar: arEG };
 const antLocale = computed(() => ANT_LOCALES[ui.locale] || enUS);
@@ -35,9 +39,13 @@ const theme = computed(() => ({
     borderRadius: 10,
     // Light app background behind the content; dark mode keeps its own.
     ...(ui.dark ? {} : { colorBgLayout: '#fafafa' }),
-    // No fontFamily override: `inherit` made every component (tables included)
-    // pick up the page font instead of Ant's own stack. The tenant font
-    // (partials.tenant-font) still applies to plain elements via --tenant-font.
+    // No fontFamily override in LTR: `inherit` made every component (tables
+    // included) pick up the page font instead of Ant's own stack. The tenant
+    // font (partials.tenant-font) still applies to plain elements via
+    // --tenant-font. In RTL with no tenant font chosen, Cairo replaces Ant's
+    // Latin stack, whose Arabic fallback renders poorly. Keyed on the locale, like
+    // the <html dir> attribute the theme.css rule matches.
+    ...(isRtlLocale(ui.locale) && !window.__tenantFontStack ? { fontFamily: RTL_FONT_STACK } : {}),
   },
 }));
 </script>

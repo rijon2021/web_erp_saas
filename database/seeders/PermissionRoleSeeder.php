@@ -15,7 +15,7 @@ class PermissionRoleSeeder extends Seeder
     public function run()
     {
         // Insert some stuff
-        DB::table('permission_role')->insert(
+        DB::table('permission_role')->insertOrIgnore(
             [
                 [
                     'id' => 1,
@@ -1664,6 +1664,12 @@ class PermissionRoleSeeder extends Seeder
                 [
                     'id' => 312,
                     'permission_id' => 312,
+                    'role_id' => 1,
+                ],
+                // Accounting V2 → Reconciliation
+                [
+                    'id' => 313,
+                    'permission_id' => 313,
                     'role_id' => 1,
                 ],
 

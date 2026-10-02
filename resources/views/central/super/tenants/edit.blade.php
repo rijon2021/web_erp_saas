@@ -124,7 +124,7 @@
                                 <span class="text-mono fw-500 fs-sm3">{{ $d->domain }}</span>
                             </div>
                             @if($tenant->domains->count() > 1)
-                            <form method="POST" action="{{ route('super.tenants.domains.destroy', [$tenant, $d->id]) }}" data-swal-confirm="{{ json_encode(['title' => __('super.tenants.remove_domain'), 'text' => $d->domain, 'icon' => 'warning', 'confirmButtonText' => 'Yes, remove', 'confirmButtonColor' => '#ef4444']) }}">
+                            <form method="POST" action="{{ route('super.tenants.domains.destroy', [$tenant, $d->id]) }}" data-swal-confirm="{{ json_encode(['title' => __('super.tenants.remove_domain'), 'text' => $d->domain, 'icon' => 'warning', 'confirmButtonText' => __('super.common.yes_remove'), 'confirmButtonColor' => '#ef4444']) }}">
                                 @csrf @method('DELETE')
                                 <button type="submit" class="btn btn-xs btn-ghost btn-ghost-danger">
                                     <i class="bi bi-trash"></i>
@@ -146,7 +146,7 @@
                     @csrf
                     <div class="form-group">
                         <label class="form-label">{{ __('super.tenants.add_new_domain') }}</label>
-                        <input type="text" name="domain" class="form-control" placeholder="app.customer.com" required>
+                        <input type="text" name="domain" class="form-control" placeholder="{{ __('super.tenants.ph_custom_domain') }}" required>
                         <p class="form-hint">{{ __('super.tenants.domain_hint') }}</p>
                     </div>
                     <button type="submit" class="btn btn-primary btn-sm w-100">

@@ -54,6 +54,8 @@
           size="middle"
           :row-key="(r, i) => r.detail_id"
           :scroll="{ x: 'max-content' }"
+          :expanded-row-keys="expandedKeys"
+          :expand-icon="() => null"
         >
           <template #bodyCell="{ column, record, index }">
             <template v-if="column.key === 'product'">
@@ -85,6 +87,20 @@
                 <template #icon><DeleteOutlined /></template>
               </a-button>
             </template>
+          </template>
+          <!-- Batch picker for batch-tracked lines. Keyed by warehouse AND type:
+               a subtraction lists only batches holding stock, an addition may
+               restock an emptied batch, so the availability call differs. -->
+          <template #expandedRowRender="{ record }">
+            <div class="muted" style="margin-bottom: 6px">
+              {{ record.type === 'add' ? $t('Adjustment_Add_Batch_Hint') : $t('Adjustment_Sub_Batch_Hint') }}
+            </div>
+            <BatchAllocator
+              :key="record.detail_id + '-' + (adjustment.warehouse_id || 0) + '-' + record.type"
+              :line="record" :warehouse-id="adjustment.warehouse_id" endpoint="batches_for_adjustment"
+              :query="record.type === 'add' ? { include_empty: 1 } : null"
+              :unlimited="record.type === 'add'"
+            />
           </template>
           <template #emptyText>
             <a-empty :description="$t('NodataAvailable')" style="padding: 24px 0" />
@@ -118,9 +134,12 @@
  * - lines are qty + type (add|sub) only, no pricing
  * - validation = legacy: NaN qty resets to `current`; type 'sub' caps qty at
  *   `current` (LowStock + reset); submit = AddProductToList + AddQuantity +
- *   Select_Batch_Required_For on batch-tracked lines (no picker in v1)
+ *   batch picks (BatchAllocator ← batches_for_adjustment, lib/batchValidation
+ *   select rules). 'sub' lines may leave batches unselected (backend deducts
+ *   FEFO); 'add' lines must name the batch and are not capped by its stock.
  * - POST adjustments / PUT adjustments/{id} {warehouse_id, date, notes,
- *   details}; non-batch lines OMIT the batches key entirely (legacy deletes it)
+ *   details}; batch lines send batches as [{product_batch_id, qty}] (rows
+ *   with a batch and qty > 0 only); non-batch lines OMIT the key entirely
  */
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -130,7 +149,9 @@ import { DeleteOutlined } from '@ant-design/icons-vue';
 import dayjs from 'dayjs';
 import PageHeader from '../../components/PageHeader.vue';
 import ProductScanModal from '../../components/ProductScanModal.vue';
+import BatchAllocator from '../../components/BatchAllocator.vue';
 import { resolveScan } from '../../lib/scanMatch';
+import { hasBatchSelectErrors, firstBatchSelectError } from '../../lib/batchValidation';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -170,6 +191,41 @@ function filterProduct(input, option) {
   return `${option.label} ${p?.product_code ?? ''}`
     .toLowerCase()
     .includes(String(input).toLowerCase());
+}
+
+/** Batch-tracked lines stay expanded so their picker is always in view. */
+const expandedKeys = computed(() => lines.value.filter(l => l.is_batch_tracked).map(l => l.detail_id));
+
+// Per-type batch rules (see the contract note at the top of this file).
+const batchRules = {
+  optional: l => l.type !== 'add',
+  unlimited: l => l.type === 'add',
+};
+
+/**
+ * Saved allocations come back without qty_available, since the edit endpoint
+ * does not know current stock. Refetch availability so the picker can
+ * validate. Stock a subtraction already took is counted back in, because it
+ * has already left the batch; include_empty so an added-to batch that has
+ * since been emptied still resolves.
+ */
+async function hydrateBatchAvailability() {
+  await Promise.all(lines.value
+    .filter(l => l.is_batch_tracked && (l.batches || []).length)
+    .map(async (l) => {
+      try {
+        const data = await http.get(
+          `batches_for_adjustment/${l.product_id}/${adjustment.value.warehouse_id}/${l.product_variant_id || 0}`,
+          { include_empty: 1 }
+        );
+        const available = Array.isArray(data?.batches) ? data.batches : [];
+        l.batches.forEach((b) => {
+          const found = available.find(a => a.id === b.product_batch_id);
+          const held = found ? Number(found.qty_available) || 0 : 0;
+          b.qty_available = held + (b.direction === 'out' ? Number(b.qty) || 0 : 0);
+        });
+      } catch (e) { /* leave the saved rows as they are */ }
+    }));
 }
 
 const lineColumns = computed(() => [
@@ -276,9 +332,8 @@ function validateForm() {
     message.warning(t('AddQuantity'));
     return false;
   }
-  const missingBatch = lines.value.find(l => l.is_batch_tracked && !(l.batches || []).length);
-  if (missingBatch) {
-    message.warning(`${t('Select_Batch_Required_For')} ${missingBatch.name}`);
+  if (hasBatchSelectErrors(lines.value, batchRules)) {
+    message.warning(firstBatchSelectError(lines.value, t, batchRules));
     return false;
   }
   return true;
@@ -301,9 +356,13 @@ function detailsPayload() {
       unit: l.unit,
       is_batch_tracked: !!l.is_batch_tracked,
     };
-    // Legacy omits the key entirely for non-batch lines.
-    if (l.is_batch_tracked && Array.isArray(l.batches) && l.batches.length) {
-      out.batches = l.batches;
+    // Legacy omits the key entirely for non-batch lines. Rows left without a
+    // batch are dropped: on a 'sub' line that means "deduct FEFO".
+    if (l.is_batch_tracked && Array.isArray(l.batches)) {
+      const picked = l.batches
+        .filter(b => b && b.product_batch_id && Number(b.qty) > 0)
+        .map(b => ({ product_batch_id: Number(b.product_batch_id), qty: Number(b.qty) || 0 }));
+      if (picked.length) out.batches = picked;
     }
     return out;
   });
@@ -354,6 +413,7 @@ onMounted(async () => {
         batches: Array.isArray(d.batches) ? d.batches : [],
       }));
       await loadProducts();
+      await hydrateBatchAvailability();
     } else {
       const data = await http.get('adjustments/create');
       warehouses.value = data.warehouses || [];

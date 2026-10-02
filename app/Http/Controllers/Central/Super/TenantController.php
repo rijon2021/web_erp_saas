@@ -34,6 +34,10 @@ class TenantController extends Controller
 {
     public function index(Request $request): View
     {
+        // Keep status labels honest without relying on the cron: any trial or
+        // paid period that has run out is shown as expired, not as live.
+        TenantSubscription::expireLapsed();
+
         $query = Tenant::with(['domains', 'subscription.plan']);
 
         if ($search = $request->input('search')) {
@@ -206,7 +210,7 @@ class TenantController extends Controller
                     $payment->update($updateData);
 
                     return redirect()->route('super.tenants.show', $tenant)
-                        ->with('success', 'Tenant created with payment confirmed. Approve to provision the workspace.');
+                        ->with('success', __('super.flash.tenant_created_paid'));
                 }
 
                 $successUrl = route('super.tenants.payment-preparing', $tenant);
@@ -219,7 +223,7 @@ class TenantController extends Controller
 
             // ── Free / Trial: no payment needed — redirect to tenant page for approval ──
             return redirect()->route('super.tenants.show', $tenant)
-                ->with('success', 'Tenant created in pending status. Approve to provision the workspace.');
+                ->with('success', __('super.flash.tenant_created_pending'));
 
         } catch (\Throwable $e) {
             Log::error("Admin tenant creation failed: {$e->getMessage()}", ['exception' => $e]);
@@ -233,7 +237,7 @@ class TenantController extends Controller
                 $tenant->delete();
             }
 
-            return back()->withInput()->with('error', 'Failed to create tenant: ' . $e->getMessage());
+            return back()->withInput()->with('error', __('super.flash.tenant_create_failed', ['error' => $e->getMessage()]));
         }
     }
 
@@ -321,7 +325,7 @@ class TenantController extends Controller
 
         $tenant->update($updateData);
 
-        return redirect()->route('super.tenants.show', $tenant)->with('success', 'Tenant updated.');
+        return redirect()->route('super.tenants.show', $tenant)->with('success', __('super.flash.tenant_updated'));
     }
 
     public function suspend(Tenant $tenant): RedirectResponse
@@ -334,7 +338,7 @@ class TenantController extends Controller
         $tenant->status = Tenant::STATUS_SUSPENDED;
         $tenant->save();
 
-        return back()->with('success', 'Tenant suspended.');
+        return back()->with('success', __('super.flash.tenant_suspended'));
     }
 
     public function reactivate(Tenant $tenant): RedirectResponse
@@ -345,20 +349,20 @@ class TenantController extends Controller
         $tenant->status_before_suspension = null;
         $tenant->save();
 
-        return back()->with('success', 'Tenant reactivated.');
+        return back()->with('success', __('super.flash.tenant_reactivated'));
     }
 
     public function cancel(Tenant $tenant): RedirectResponse
     {
         $tenant->update(['status' => 'cancelled']);
 
-        return back()->with('success', 'Tenant cancelled.');
+        return back()->with('success', __('super.flash.tenant_cancelled'));
     }
 
     public function approve(Request $request, Tenant $tenant): RedirectResponse
     {
         if (! $tenant->isPending()) {
-            return back()->with('error', 'This tenant is not in pending status.');
+            return back()->with('error', __('super.flash.tenant_not_pending'));
         }
 
         // Payment guard: tenant must be paid, free, or on trial
@@ -371,7 +375,7 @@ class TenantController extends Controller
                 ->exists();
 
             if (! $hasPaidPayment) {
-                return back()->with('error', 'Payment must be confirmed before approval. Mark the payment as paid first.');
+                return back()->with('error', __('super.flash.tenant_payment_first'));
             }
         }
 
@@ -408,15 +412,15 @@ class TenantController extends Controller
 
                     $pdo->exec("CREATE DATABASE `{$dbName}` CHARACTER SET {$charset} COLLATE {$collation}");
                 } catch (\Throwable $createErr) {
-                    return back()->with('error', "Database \"{$creds['database']}\" does not exist and could not be created: {$createErr->getMessage()}")
+                    return back()->with('error', __('super.flash.db_create_failed', ['name' => $creds['database'], 'error' => $createErr->getMessage()]))
                                  ->withInput();
                 }
             } else {
-                return back()->with('error', "Connection failed: {$e->getMessage()}")
+                return back()->with('error', __('super.flash.db_connection_failed', ['error' => $e->getMessage()]))
                              ->withInput();
             }
         } catch (\Throwable $e) {
-            return back()->with('error', "Connection failed: {$e->getMessage()}")
+            return back()->with('error', __('super.flash.db_connection_failed', ['error' => $e->getMessage()]))
                          ->withInput();
         }
 
@@ -478,7 +482,7 @@ class TenantController extends Controller
             }
         });
 
-        return back()->with('success', 'Tenant approved. Provisioning started — refresh this page to check progress.');
+        return back()->with('success', __('super.flash.tenant_approved'));
     }
 
     /**
@@ -511,7 +515,7 @@ class TenantController extends Controller
         try {
             $this->attemptDatabaseConnection($creds);
 
-            return response()->json(['success' => true, 'message' => 'Connection successful.']);
+            return response()->json(['success' => true, 'message' => __('super.flash.conn_successful')]);
         } catch (\Throwable $e) {
             // Check if this is specifically "unknown database" (MySQL error 1049)
             if ($e instanceof \PDOException && $e->getCode() == 1049) {
@@ -545,7 +549,7 @@ class TenantController extends Controller
                 'source'          => 'tenant.test_connection',
             ]);
 
-            return response()->json(['success' => false, 'message' => "Connection failed: {$e->getMessage()}"]);
+            return response()->json(['success' => false, 'message' => __('super.flash.db_connection_failed', ['error' => $e->getMessage()])]);
         }
     }
 
@@ -719,9 +723,9 @@ class TenantController extends Controller
 
             $pdo->exec("CREATE DATABASE `{$dbName}` CHARACTER SET {$charset} COLLATE {$collation}");
 
-            return response()->json(['success' => true, 'message' => "Database \"{$dbName}\" created successfully."]);
+            return response()->json(['success' => true, 'message' => __('super.flash.db_created', ['name' => $dbName])]);
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => "Failed to create database: {$e->getMessage()}"]);
+            return response()->json(['success' => false, 'message' => __('super.flash.db_create_error', ['error' => $e->getMessage()])]);
         }
     }
 
@@ -731,13 +735,13 @@ class TenantController extends Controller
     public function rerunMigrations(Tenant $tenant): RedirectResponse
     {
         if (! $tenant->hasDatabaseCredentials()) {
-            return back()->with('error', 'No database credentials configured for this tenant.');
+            return back()->with('error', __('super.flash.db_no_credentials'));
         }
 
         try {
             $this->attemptDatabaseConnection($tenant->getDatabaseCredentials());
         } catch (\Throwable $e) {
-            return back()->with('error', "Cannot connect to tenant database: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_cannot_connect', ['error' => $e->getMessage()]));
         }
 
         try {
@@ -757,9 +761,9 @@ class TenantController extends Controller
                 }
             });
 
-            return back()->with('success', 'Migrations re-run successfully.');
+            return back()->with('success', __('super.flash.db_migrations_ok'));
         } catch (\Throwable $e) {
-            return back()->with('error', "Migration failed: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_migrations_failed', ['error' => $e->getMessage()]));
         }
     }
 
@@ -787,7 +791,7 @@ class TenantController extends Controller
         try {
             $this->attemptDatabaseConnection($creds);
 
-            return response()->json(['success' => true, 'message' => 'Connection successful.']);
+            return response()->json(['success' => true, 'message' => __('super.flash.conn_successful')]);
         } catch (\Throwable $e) {
             if ($e instanceof \PDOException && $e->getCode() == 1049) {
                 try {
@@ -803,7 +807,7 @@ class TenantController extends Controller
                 }
             }
 
-            return response()->json(['success' => false, 'message' => "Connection failed: {$e->getMessage()}"]);
+            return response()->json(['success' => false, 'message' => __('super.flash.db_connection_failed', ['error' => $e->getMessage()])]);
         }
     }
 
@@ -837,9 +841,9 @@ class TenantController extends Controller
 
             $pdo->exec("CREATE DATABASE `{$dbName}` CHARACTER SET {$charset} COLLATE {$collation}");
 
-            return response()->json(['success' => true, 'message' => "Database \"{$dbName}\" created successfully."]);
+            return response()->json(['success' => true, 'message' => __('super.flash.db_created', ['name' => $dbName])]);
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => "Failed to create database: {$e->getMessage()}"]);
+            return response()->json(['success' => false, 'message' => __('super.flash.db_create_error', ['error' => $e->getMessage()])]);
         }
     }
 
@@ -919,11 +923,11 @@ class TenantController extends Controller
         try {
             $this->attemptDatabaseConnection($tenant->getDatabaseCredentials());
         } catch (\Throwable $e) {
-            return back()->with('error', "Credentials saved but connection failed: {$e->getMessage()}")
+            return back()->with('error', __('super.flash.db_creds_saved_failed', ['error' => $e->getMessage()]))
                          ->withInput();
         }
 
-        return back()->with('success', 'Database credentials updated and connection verified.');
+        return back()->with('success', __('super.flash.db_creds_verified'));
     }
 
     /**
@@ -937,7 +941,7 @@ class TenantController extends Controller
         // a failed auto-provisioned tenant whose DB the job creates itself.
         $creds = $tenant->getEffectiveDatabaseCredentials();
         if (empty($creds['database'])) {
-            return back()->with('error', 'No database configured for this tenant.');
+            return back()->with('error', __('super.flash.db_none_configured'));
         }
 
         try {
@@ -949,7 +953,7 @@ class TenantController extends Controller
             try {
                 $this->attemptServerConnection($creds);
             } catch (\Throwable $serverError) {
-                return back()->with('error', "Cannot connect to tenant database server: {$serverError->getMessage()}");
+                return back()->with('error', __('super.flash.db_cannot_connect_server', ['error' => $serverError->getMessage()]));
             }
         }
 
@@ -998,7 +1002,7 @@ class TenantController extends Controller
             }
         });
 
-        return back()->with('success', 'Re-provisioning started. The page will show "Provisioning" status — refresh to check when it completes.');
+        return back()->with('success', __('super.flash.tenant_reprovision'));
     }
 
     /**
@@ -1007,13 +1011,13 @@ class TenantController extends Controller
     public function resetDatabase(Tenant $tenant): RedirectResponse
     {
         if (! $tenant->hasDatabaseCredentials()) {
-            return back()->with('error', 'No database credentials configured for this tenant.');
+            return back()->with('error', __('super.flash.db_no_credentials'));
         }
 
         try {
             $this->attemptDatabaseConnection($tenant->getDatabaseCredentials());
         } catch (\Throwable $e) {
-            return back()->with('error', "Cannot connect to tenant database: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_cannot_connect', ['error' => $e->getMessage()]));
         }
 
         try {
@@ -1032,9 +1036,9 @@ class TenantController extends Controller
                 ]);
             });
 
-            return back()->with('success', 'Database reset successfully. All tables dropped and migrations re-run.');
+            return back()->with('success', __('super.flash.db_reset_ok'));
         } catch (\Throwable $e) {
-            return back()->with('error', "Database reset failed: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_reset_failed', ['error' => $e->getMessage()]));
         }
     }
 
@@ -1044,13 +1048,13 @@ class TenantController extends Controller
     public function reseed(Tenant $tenant): RedirectResponse
     {
         if (! $tenant->hasDatabaseCredentials()) {
-            return back()->with('error', 'No database credentials configured for this tenant.');
+            return back()->with('error', __('super.flash.db_no_credentials'));
         }
 
         try {
             $this->attemptDatabaseConnection($tenant->getDatabaseCredentials());
         } catch (\Throwable $e) {
-            return back()->with('error', "Cannot connect to tenant database: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_cannot_connect', ['error' => $e->getMessage()]));
         }
 
         try {
@@ -1090,9 +1094,9 @@ class TenantController extends Controller
                 }
             }
 
-            return back()->with('success', 'Database re-seeded and default images restored successfully.');
+            return back()->with('success', __('super.flash.db_reseed_ok'));
         } catch (\Throwable $e) {
-            return back()->with('error', "Re-seeding failed: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_reseed_failed', ['error' => $e->getMessage()]));
         }
     }
 
@@ -1166,7 +1170,7 @@ class TenantController extends Controller
         ]);
 
         if (! $tenant->isPending()) {
-            return back()->with('error', 'This tenant is not in pending status.');
+            return back()->with('error', __('super.flash.tenant_not_pending'));
         }
 
         $adminEmail = $tenant->admin_email;
@@ -1193,6 +1197,6 @@ class TenantController extends Controller
             Log::warning("Failed to send tenant rejection email: {$e->getMessage()}");
         }
 
-        return back()->with('success', 'Tenant rejected and notified.');
+        return back()->with('success', __('super.flash.tenant_rejected'));
     }
 }

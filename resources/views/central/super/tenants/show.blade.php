@@ -203,7 +203,7 @@
                 <div>
                     <p class="form-label mb-2 text-section-label">{{ __('super.tenants.feature_access') }}</p>
                     <div class="d-flex flex-wrap gap-2">
-                        @foreach(\App\Models\Central\Plan::AVAILABLE_FEATURES as $fKey => $fMeta)
+                        @foreach(\App\Models\Central\Plan::availableFeatures() as $fKey => $fMeta)
                         @php $enabled = $plan->hasFeature($fKey); @endphp
                         <div class="d-flex align-items-center gap-2 px-3 py-2 rounded-2 {{ $enabled ? 'feature-badge-enabled' : 'feature-badge-disabled' }}">
                             <i class="bi {{ $enabled ? 'bi-check-circle-fill' : 'bi-x-circle' }}"></i>
@@ -540,38 +540,71 @@
         <h2><i class="bi bi-gear-wide-connected me-2 text-muted"></i>{{ __('central.AdminActions') }}</h2>
     </div>
     <div class="card-body-custom">
+        <p class="admin-actions-hint"><i class="bi bi-info-circle"></i>{{ __('central.AdminActionsHint') }}</p>
+        {{-- Each button sits in an .action-tip wrapper; the .action-tip-bubble
+             sibling is revealed on hover / keyboard focus (CSS only, see
+             central-shared.css) and explains what the action does and whether
+             it keeps or destroys tenant data. --}}
         <div class="d-flex flex-wrap gap-2">
             {{-- Re-run Migrations --}}
-            <form method="POST" action="{{ route('super.tenants.rerun-migrations', $tenant) }}" class="d-inline" id="form-rerun-migrations">
-                @csrf
-                <button type="button" class="btn btn-sm btn-migration" data-swal-action='{"title":@json(__('central.RerunMigrationsTitle')),"text":@json(__('central.RerunMigrationsText')),"icon":"info","confirmText":@json(__('central.YesRunMigrations')),"color":"#d97706"}'>
-                    <i class="bi bi-arrow-repeat me-1"></i>{{ __('central.RerunMigrations') }}
-                </button>
-            </form>
+            <div class="action-tip action-tip-migration">
+                <form method="POST" action="{{ route('super.tenants.rerun-migrations', $tenant) }}" class="d-inline" id="form-rerun-migrations">
+                    @csrf
+                    <button type="button" class="btn btn-sm btn-migration" aria-describedby="tip-rerun-migrations" data-swal-action='{"title":@json(__('central.RerunMigrationsTitle')),"text":@json(__('central.RerunMigrationsText')),"icon":"info","confirmText":@json(__('central.YesRunMigrations')),"color":"#d97706"}'>
+                        <i class="bi bi-arrow-repeat me-1"></i>{{ __('central.RerunMigrations') }}<i class="bi bi-info-circle action-tip-icon"></i>
+                    </button>
+                </form>
+                <div class="action-tip-bubble" role="tooltip" id="tip-rerun-migrations">
+                    <div class="action-tip-head"><i class="bi bi-arrow-repeat"></i>{{ __('central.RerunMigrations') }}</div>
+                    <p>{{ __('central.RerunMigrationsHint') }}</p>
+                    <span class="action-tip-tag is-safe"><i class="bi bi-shield-check"></i>{{ __('central.ActionKeepsData') }}</span>
+                </div>
+            </div>
 
             {{-- Re-seed --}}
-            <form method="POST" action="{{ route('super.tenants.reseed', $tenant) }}" class="d-inline" id="form-reseed">
-                @csrf
-                <button type="button" class="btn btn-sm btn-reseed" data-swal-action='{"title":@json(__('central.ReseedTitle')),"text":@json(__('central.ReseedText')),"icon":"info","confirmText":@json(__('central.YesReseed')),"color":"#6366f1"}'>
-                    <i class="bi bi-database-down me-1"></i>{{ __('central.Reseed') }}
-                </button>
-            </form>
+            <div class="action-tip action-tip-reseed">
+                <form method="POST" action="{{ route('super.tenants.reseed', $tenant) }}" class="d-inline" id="form-reseed">
+                    @csrf
+                    <button type="button" class="btn btn-sm btn-reseed" aria-describedby="tip-reseed" data-swal-action='{"title":@json(__('central.ReseedTitle')),"text":@json(__('central.ReseedText')),"icon":"info","confirmText":@json(__('central.YesReseed')),"color":"#6366f1"}'>
+                        <i class="bi bi-database-down me-1"></i>{{ __('central.Reseed') }}<i class="bi bi-info-circle action-tip-icon"></i>
+                    </button>
+                </form>
+                <div class="action-tip-bubble" role="tooltip" id="tip-reseed">
+                    <div class="action-tip-head"><i class="bi bi-database-down"></i>{{ __('central.Reseed') }}</div>
+                    <p>{{ __('central.ReseedHint') }}</p>
+                    <span class="action-tip-tag is-safe"><i class="bi bi-shield-check"></i>{{ __('central.ActionKeepsData') }}</span>
+                </div>
+            </div>
 
             {{-- Re-provision (Full Re-install) --}}
-            <form method="POST" action="{{ route('super.tenants.reprovision', $tenant) }}" class="d-inline" id="form-reprovision">
-                @csrf
-                <button type="button" class="btn btn-sm btn-reprovision" data-swal-action='{"title":@json(__('central.ReprovisionTitle')),"html":@json(__('central.ReprovisionHtml')),"icon":"warning","confirmText":@json(__('central.YesReprovision')),"color":"#ea580c"}'>
-                    <i class="bi bi-arrow-clockwise me-1"></i>{{ __('central.Reprovision') }}
-                </button>
-            </form>
+            <div class="action-tip action-tip-reprovision">
+                <form method="POST" action="{{ route('super.tenants.reprovision', $tenant) }}" class="d-inline" id="form-reprovision">
+                    @csrf
+                    <button type="button" class="btn btn-sm btn-reprovision" aria-describedby="tip-reprovision" data-swal-action='{"title":@json(__('central.ReprovisionTitle')),"html":@json(__('central.ReprovisionHtml')),"icon":"warning","confirmText":@json(__('central.YesReprovision')),"color":"#ea580c"}'>
+                        <i class="bi bi-arrow-clockwise me-1"></i>{{ __('central.Reprovision') }}<i class="bi bi-info-circle action-tip-icon"></i>
+                    </button>
+                </form>
+                <div class="action-tip-bubble" role="tooltip" id="tip-reprovision">
+                    <div class="action-tip-head"><i class="bi bi-arrow-clockwise"></i>{{ __('central.Reprovision') }}</div>
+                    <p>{{ __('central.ReprovisionHint') }}</p>
+                    <span class="action-tip-tag is-danger"><i class="bi bi-exclamation-octagon"></i>{{ __('central.ActionDeletesData') }}</span>
+                </div>
+            </div>
 
             {{-- Reset Database (Drop & Migrate) --}}
-            <form method="POST" action="{{ route('super.tenants.reset-database', $tenant) }}" class="d-inline" id="form-reset-db">
-                @csrf
-                <button type="button" class="btn btn-sm btn-reset-db" data-swal-action='{"title":@json(__('central.ResetDatabaseTitle')),"html":@json(__('central.ResetDatabaseHtml')),"icon":"error","confirmText":@json(__('central.YesResetDatabase')),"color":"#dc2626"}'>
-                    <i class="bi bi-exclamation-triangle me-1"></i>{{ __('central.ResetDatabase') }}
-                </button>
-            </form>
+            <div class="action-tip action-tip-reset">
+                <form method="POST" action="{{ route('super.tenants.reset-database', $tenant) }}" class="d-inline" id="form-reset-db">
+                    @csrf
+                    <button type="button" class="btn btn-sm btn-reset-db" aria-describedby="tip-reset-db" data-swal-action='{"title":@json(__('central.ResetDatabaseTitle')),"html":@json(__('central.ResetDatabaseHtml')),"icon":"error","confirmText":@json(__('central.YesResetDatabase')),"color":"#dc2626"}'>
+                        <i class="bi bi-exclamation-triangle me-1"></i>{{ __('central.ResetDatabase') }}<i class="bi bi-info-circle action-tip-icon"></i>
+                    </button>
+                </form>
+                <div class="action-tip-bubble" role="tooltip" id="tip-reset-db">
+                    <div class="action-tip-head"><i class="bi bi-exclamation-triangle"></i>{{ __('central.ResetDatabase') }}</div>
+                    <p>{{ __('central.ResetDatabaseHint') }}</p>
+                    <span class="action-tip-tag is-danger"><i class="bi bi-exclamation-octagon"></i>{{ __('central.ActionDeletesData') }}</span>
+                </div>
+            </div>
         </div>
     </div>
 </div>

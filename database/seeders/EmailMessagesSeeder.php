@@ -9,7 +9,7 @@ class EmailMessagesSeeder extends Seeder
 {
     public function run()
     {
-        DB::table('email_messages')->insert([
+        DB::table('email_messages')->insertOrIgnore([
             [
                 'id' => 1,
                 'name' => 'sale',

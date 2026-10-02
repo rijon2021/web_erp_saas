@@ -77,8 +77,11 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item :label="$t('Font_Family')">
-              <a-input v-model:value="form.font_family" />
+            <a-form-item :label="$t('Font_Family')" :help="$t('Store_Font_Help')">
+              <a-select
+                v-model:value="form.font_family" :options="fontFamilyOptions"
+                show-search option-filter-prop="label" style="width: 100%"
+              />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
@@ -829,6 +832,7 @@ import PageHeader from '../../components/PageHeader.vue';
 import TranslatableInput from '../../components/TranslatableInput.vue';
 import http from '../../lib/http';
 import { uploadForm } from '../../lib/upload';
+import { buildFontOptions } from '../../lib/fontOptions';
 
 const { t } = useI18n();
 
@@ -1265,6 +1269,14 @@ function buildHomeRows() {
   homeRows.value = rows;
 }
 
+/* ---------- fonts ---------- */
+// Grouped Google + system font options (served as font_options by the API).
+// A legacy free-text stack saved before the dropdown existed stays selectable.
+const fontOptionsPayload = ref(null);
+const fontFamilyOptions = computed(() => buildFontOptions(fontOptionsPayload.value, t, {
+  current: form.value.font_family,
+}));
+
 /* ---------- IO ---------- */
 async function fetch() {
   try {
@@ -1275,6 +1287,7 @@ async function fetch() {
     warehouses.value = Array.isArray(payload.warehouses) ? payload.warehouses : [];
     currencies.value = Array.isArray(payload.currencies) ? payload.currencies : [];
     pendingCustomersCount.value = payload.pending_customers_count || 0;
+    fontOptionsPayload.value = payload.font_options || null;
 
     const curated = Array.isArray(payload.curated_products) ? payload.curated_products : [];
     productOptions.value = curated.map(p => ({ id: p.id, name: p.name }));

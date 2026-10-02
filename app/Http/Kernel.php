@@ -115,6 +115,8 @@ class Kernel extends HttpKernel
         'tenant.feature' => \App\Http\Middleware\CheckTenantFeature::class,
         // Tenant: require active subscription
         'tenant.subscribed' => \App\Http\Middleware\EnsureActiveSubscription::class,
+        // Tenant: pause outward-facing services (portal, Zapier) when no subscription grants access
+        'tenant.entitled' => \App\Http\Middleware\EnsureTenantEntitled::class,
         // Tenant: track last activity timestamp
         'tenant.activity' => \App\Http\Middleware\TrackTenantActivity::class,
 

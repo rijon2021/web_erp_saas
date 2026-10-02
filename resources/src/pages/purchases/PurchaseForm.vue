@@ -256,8 +256,11 @@
       <a-form v-else-if="editingLine" layout="vertical">
         <a-row :gutter="12">
           <a-col :span="12">
-            <a-form-item :label="$t('ProductCost')">
-              <a-input-number v-model:value="lineDraft.Unit_cost" style="width: 100%" :min="0" />
+            <a-form-item :label="$t('ProductCost')" :extra="batchCostLocked ? $t('Cost_From_Batches') : undefined">
+              <!-- Batch-tracked lines are costed at the weighted average of
+                   their batch rows (see syncLineCostFromBatches), so the
+                   field only shows that figure once a priced batch exists. -->
+              <a-input-number v-model:value="lineDraft.Unit_cost" style="width: 100%" :min="0" :disabled="batchCostLocked" />
             </a-form-item>
           </a-col>
           <a-col :span="12">
@@ -352,7 +355,7 @@
  * - POST purchases / PUT purchases/{id}; no payment section (payments are
  *   added from the list like legacy)
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
@@ -366,7 +369,7 @@ import QuickAddParty from '../../components/QuickAddParty.vue';
 import { useFormat } from '../../composables/useFormat';
 import { useDocCurrency } from '../../composables/useDocCurrency';
 import { recomputeCostLine, computeSimpleTotals } from '../../lib/lineCalc';
-import { hasBatchEntryErrors, batchTotalQty } from '../../lib/batchValidation';
+import { hasBatchEntryErrors, batchTotalQty, batchWeightedAvgCost, syncLineCostFromBatches } from '../../lib/batchValidation';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -614,10 +617,13 @@ const units = ref([]);
 
 async function openLineEdit(line) {
   editingLine.value = line;
+  // A stored line may predate the batch-average rule: show the figure it will
+  // be saved with, not the stale one, whenever its batches carry costs.
+  const batchAvg = line.is_batch_tracked ? batchWeightedAvgCost(line) : null;
   lineDraft.value = {
     // The modal is typed in the document currency (fixed amounts only —
     // percentages pass through); applyLineEdit converts back to base.
-    Unit_cost: toDocAmt(line.Unit_cost),
+    Unit_cost: toDocAmt(batchAvg !== null ? batchAvg : line.Unit_cost),
     tax_method: String(line.tax_method || '1'),
     tax_percent: line.tax_percent,
     discount_Method: String(line.discount_Method || '2'),
@@ -637,6 +643,29 @@ async function openLineEdit(line) {
   }
 }
 
+// Batch-tracked lines take their cost from the batch rows: the weighted
+// average by quantity, so 50 @ 170 + 50 @ 160 costs the line at 165, not at
+// whatever was typed in Product Cost. The field is locked while that holds,
+// and the draft follows every batch qty/cost edit so the modal shows the
+// figure the line will be saved with.
+const batchCostLocked = computed(() =>
+  !!editingLine.value?.is_batch_tracked && batchWeightedAvgCost(editingLine.value) !== null
+);
+watch(
+  () => editingLine.value?.batches,
+  () => {
+    if (!lineEditOpen.value || !batchCostLocked.value) return;
+    lineDraft.value.Unit_cost = toDocAmt(batchWeightedAvgCost(editingLine.value));
+  },
+  { deep: true }
+);
+// Batch rows are edited on the line itself (not the draft), so a Cancel still
+// leaves new costs behind: resync the line when the modal closes either way.
+watch(lineEditOpen, open => {
+  if (open || !editingLine.value) return;
+  if (syncLineCostFromBatches(editingLine.value)) recomputeCostLine(editingLine.value);
+});
+
 function applyLineEdit() {
   const line = editingLine.value;
   Object.assign(line, {
@@ -652,6 +681,9 @@ function applyLineEdit() {
     // serial_numbers) straight onto the line, so a stale draft copy here would
     // wipe serials entered in this same modal.
   });
+  // Base-currency average written straight onto the line, bypassing the
+  // doc-currency round trip the draft went through.
+  syncLineCostFromBatches(line);
   recomputeCostLine(line);
   lineEditOpen.value = false;
 }
@@ -719,6 +751,11 @@ function detailsPayload() {
 
 async function submit() {
   if (!validateForm()) return;
+  // Last word on batch-tracked line costs before totals are read: the
+  // backend rejects a line whose cost disagrees with its batch average.
+  lines.value.forEach(l => {
+    if (syncLineCostFromBatches(l)) recomputeCostLine(l);
+  });
   submitting.value = true;
   const body = {
     date: purchase.value.date,
@@ -793,6 +830,9 @@ onMounted(async () => {
             ? d.serial_numbers
             : String(d.imei_number || '').split(',').map(s => s.trim()).filter(Boolean),
         };
+        // Stored purchases from before the batch-average rule: re-cost the
+        // line from its batches so the table shows what a save will store.
+        syncLineCostFromBatches(line);
         recomputeCostLine(line);
         return line;
       });

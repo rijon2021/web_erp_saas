@@ -173,7 +173,7 @@ class PaymentController extends Controller
         TenantBillingPayment::create($validated);
 
         return redirect()->route('super.payments.index')
-            ->with('success', 'Payment recorded successfully.');
+            ->with('success', __('super.flash.payment_recorded'));
     }
 
     // ── Status changes ──────────────────────────────────────────────
@@ -181,23 +181,23 @@ class PaymentController extends Controller
     public function markPaid(TenantBillingPayment $payment, SubscriptionLifecycleService $lifecycle): RedirectResponse
     {
         if ($payment->isPaid()) {
-            return back()->with('info', 'Payment is already marked as paid.');
+            return back()->with('info', __('super.flash.payment_already_paid'));
         }
 
         if ($payment->status !== TenantBillingPayment::STATUS_PENDING) {
-            return back()->with('error', 'Only pending payments can be marked as paid. This payment is ' . $payment->status . '.');
+            return back()->with('error', __('super.flash.payment_only_pending_paid', ['status' => $payment->status]));
         }
 
         $result = $lifecycle->markPaid($payment);
 
-        $message = 'Payment marked as paid.';
+        $message = __('super.flash.payment_marked_paid');
         if ($result['subscription_activated']) {
-            $message .= ' Subscription activated.';
+            $message .= __('super.flash.sub_activated_extra');
         } elseif ($result['subscription_renewed']) {
-            $message .= ' Subscription renewed.';
+            $message .= __('super.flash.sub_renewed_extra');
         }
         if ($result['provisioning_dispatched']) {
-            $message .= ' Tenant workspace provisioning dispatched.';
+            $message .= __('super.flash.provisioning_extra');
         }
 
         return back()->with('success', $message);
@@ -206,19 +206,19 @@ class PaymentController extends Controller
     public function markFailed(TenantBillingPayment $payment, SubscriptionLifecycleService $lifecycle): RedirectResponse
     {
         if ($payment->status !== TenantBillingPayment::STATUS_PENDING) {
-            return back()->with('error', 'Only pending payments can be marked as failed.');
+            return back()->with('error', __('super.flash.payment_only_pending_failed'));
         }
 
         $lifecycle->markFailed($payment);
 
-        return back()->with('success', 'Payment marked as failed.');
+        return back()->with('success', __('super.flash.payment_marked_failed'));
     }
 
     public function markRefunded(TenantBillingPayment $payment, SubscriptionLifecycleService $lifecycle): RedirectResponse
     {
         $lifecycle->markRefunded($payment);
 
-        return back()->with('success', 'Payment marked as refunded.');
+        return back()->with('success', __('super.flash.payment_marked_refunded'));
     }
 
     // ── Invoice PDF ─────────────────────────────────────────────────
@@ -248,7 +248,7 @@ class PaymentController extends Controller
     public function approveRegistration(PendingRegistration $registration, Request $request): RedirectResponse|JsonResponse
     {
         if ($registration->gateway !== 'offline' || $registration->status !== PendingRegistration::STATUS_PROCESSING) {
-            $msg = 'This registration cannot be approved.';
+            $msg = __('super.flash.reg_cannot_approve');
             return $request->wantsJson()
                 ? response()->json(['success' => false, 'message' => $msg], 422)
                 : back()->with('error', $msg);
@@ -265,7 +265,7 @@ class PaymentController extends Controller
             $webhook = app(WebhookController::class);
             $webhook->provisionFromRegistration($registration, 'offline', skipProvisioning: true);
 
-            $successMsg = "Payment approved for {$registration->company_name}. The tenant is now pending workspace configuration on the dashboard.";
+            $successMsg = __('super.flash.reg_approved', ['company' => $registration->company_name]);
 
             if ($request->wantsJson()) {
                 return response()->json([
@@ -278,7 +278,7 @@ class PaymentController extends Controller
             return back()->with('success', $successMsg);
         } catch (\Throwable $e) {
             Log::error("Failed to approve offline registration {$registration->id}: {$e->getMessage()}", ['exception' => $e]);
-            $msg = 'Failed to approve registration: ' . $e->getMessage();
+            $msg = __('super.flash.reg_approve_failed', ['error' => $e->getMessage()]);
             return $request->wantsJson()
                 ? response()->json(['success' => false, 'message' => $msg], 500)
                 : back()->with('error', $msg);
@@ -288,14 +288,14 @@ class PaymentController extends Controller
     public function rejectRegistration(PendingRegistration $registration): RedirectResponse
     {
         if ($registration->gateway !== 'offline' || $registration->status !== PendingRegistration::STATUS_PROCESSING) {
-            return back()->with('error', 'This registration cannot be rejected.');
+            return back()->with('error', __('super.flash.reg_cannot_reject'));
         }
 
         $registration->update([
             'status' => PendingRegistration::STATUS_FAILED,
         ]);
 
-        return back()->with('success', "Registration for {$registration->company_name} has been rejected.");
+        return back()->with('success', __('super.flash.reg_rejected', ['company' => $registration->company_name]));
     }
 
     // ── Invoices list ───────────────────────────────────────────────

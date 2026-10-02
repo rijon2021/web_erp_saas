@@ -16,8 +16,11 @@ class ProfitReportController extends Controller
      * Profit analysis grouped by one dimension:
      *   GET report/profit/{dimension}  — product | category | unit | customer | date | warehouse
      *
-     * Line revenue = sale_details.total; line cost = quantity * COALESCE(variant
-     * cost, product cost). Returns {rows, totalRows, kpis, chart, warehouses}.
+     * Line revenue = sale_details.total; line cost is the quantity converted to
+     * BASE units — pack multiplier and sale-unit operator applied, exactly as
+     * stock is deducted — times COALESCE(variant cost, product cost), because
+     * cost is held per base unit. Returns {rows, totalRows, kpis, chart,
+     * warehouses}.
      * KPIs and chart cover the WHOLE filtered set; rows are paginated.
      */
     public function index(Request $request, $dimension)
@@ -53,12 +56,29 @@ class ProfitReportController extends Controller
             $warehouseId = null;
         }
 
-        $costExpr = 'sd.quantity * COALESCE(pv.cost, p.cost, 0)';
+        // Cost is stored per BASE unit, while a sale line is recorded in packs of
+        // a sale unit: a case of 24 stores quantity = 1 with pack_multiplier = 24,
+        // and a line sold in a unit such as "box of 6" carries an operator on that
+        // unit. Both conversions have to be applied or the cost of anything not
+        // sold in single base units comes out far too low and the profit far too
+        // high. This mirrors the stock deduction in PosController.
+        $costExpr = "sd.quantity
+                     * COALESCE(sd.pack_multiplier, 1)
+                     * CASE WHEN cu.operator = '/'
+                            THEN 1 / COALESCE(NULLIF(cu.operator_value, 0), 1)
+                            ELSE COALESCE(cu.operator_value, 1)
+                       END
+                     * COALESCE(pv.cost, p.cost, 0)";
 
         $base = fn () => DB::table('sale_details as sd')
             ->join('sales as s', 's.id', '=', 'sd.sale_id')
             ->join('products as p', 'p.id', '=', 'sd.product_id')
             ->leftJoin('product_variants as pv', 'pv.id', '=', 'sd.product_variant_id')
+            // Unit the line was sold in, for the base-unit conversion in $costExpr.
+            // Aliased 'cu' so the 'unit' dimension can still join 'units as u'.
+            ->leftJoin('units as cu', function ($j) {
+                $j->on(DB::raw('cu.id'), '=', DB::raw('COALESCE(sd.sale_unit_id, p.unit_sale_id, p.unit_id)'));
+            })
             ->whereNull('s.deleted_at')
             ->whereBetween('s.date', [$from, $to])
             ->when($allowed !== null, fn ($q) => $q->whereIn('s.warehouse_id', $allowed))

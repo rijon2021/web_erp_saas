@@ -63,6 +63,7 @@ import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useAuthStore } from '../../stores/auth';
 import http from '../../lib/http';
+import { uploadUrl } from '../../lib/uploadUrl';
 
 const { t } = useI18n();
 const auth = useAuthStore();

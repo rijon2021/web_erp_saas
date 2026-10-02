@@ -74,7 +74,7 @@
                 size="small"
               />
               <div class="ec-stage">
-                {{ running[entity.value].stage || 'working' }} ·
+                {{ stageLabel(running[entity.value].stage) }} ·
                 {{ running[entity.value].processed }}/{{ running[entity.value].total || '?' }}
               </div>
             </template>
@@ -300,21 +300,39 @@ function syncPoller() {
   }
 }
 
+/**
+ * A run we have just asked for has no id yet: the start request only answers
+ * once the run is over. Pick its row up as soon as the server has created it.
+ */
+async function adoptStarted() {
+  try {
+    const res = await http.get('shopify/sync/latest', { store_id: storeId.value });
+    Object.entries(res?.latest || {}).forEach(([entity, run]) => {
+      // Only a card still waiting — the start request may have answered meanwhile.
+      if (running[entity] && !running[entity].id && run && isLive(run.status)) running[entity] = run;
+    });
+  } catch (e) { /* keep the placeholder; the next tick tries again */ }
+}
+
 async function refreshRunning() {
-  const entries = Object.entries(running);
-  if (!entries.length) {
+  if (!Object.keys(running).length) {
     syncPoller();
     return;
   }
+
+  if (Object.values(running).some(run => !run.id)) await adoptStarted();
+
+  const entries = Object.entries(running).filter(([, run]) => run.id);
 
   await Promise.all(entries.map(async ([entity, run]) => {
     try {
       const res = await http.get(`shopify/sync/status/${run.id}`);
       const fresh = res?.run;
       if (!fresh) return;
-      latest[entity] = fresh;
-      if (isLive(fresh.status)) running[entity] = fresh;
-      else delete running[entity];
+      settle(entity, fresh);
+      // Paused with nobody carrying it on (the page that started it was
+      // closed): this page takes over.
+      if (fresh.waiting && !driving[entity]) carryOn(entity, fresh);
     } catch (e) {
       delete running[entity];
     }
@@ -324,6 +342,53 @@ async function refreshRunning() {
   if (!Object.keys(running).length) loadRuns();
 }
 
+/** The moment between two slices of a run is not worth a label of its own. */
+function stageLabel(stage) {
+  return !stage || stage === 'paused' || stage === 'continuing' ? 'working' : stage;
+}
+
+function settle(entity, run) {
+  if (!run) return;
+  latest[entity] = run;
+  if (isLive(run.status)) running[entity] = run;
+  else delete running[entity];
+}
+
+/** Entities whose run this page is carrying on, slice by slice. */
+const driving = {};
+
+/**
+ * See a run through. A long one comes back in slices — each request works for
+ * a few seconds and answers `continue`, which keeps every request short enough
+ * for hosting that ends long ones — so keep calling until it is over.
+ */
+async function drive(entity, payload) {
+  driving[entity] = true;
+  try {
+    let res = await http.post('shopify/sync/start', payload);
+    while (res?.continue && res.run) {
+      settle(entity, res.run);
+      res = await http.post('shopify/sync/start', { ...payload, resume: res.run.id });
+    }
+    return res?.run;
+  } finally {
+    delete driving[entity];
+  }
+}
+
+async function carryOn(entity, run) {
+  try {
+    settle(entity, await drive(entity, {
+      store_id: storeId.value, entity, direction: run.direction, resume: run.id,
+    }));
+  } catch (e) {
+    // Another page took it, or the request failed: the poll shows which.
+  } finally {
+    syncPoller();
+    loadRuns();
+  }
+}
+
 async function start(entity, direction) {
   starting.value = `${entity}:${direction}`;
   // Show progress from the first tick rather than after the request returns.
@@ -331,7 +396,7 @@ async function start(entity, direction) {
   syncPoller();
 
   try {
-    const res = await http.post('shopify/sync/start', {
+    const run = await drive(entity, {
       store_id: storeId.value,
       entity,
       direction,
@@ -339,12 +404,7 @@ async function start(entity, direction) {
       since: entity === 'orders' ? since.value : null,
     });
 
-    const run = res?.run;
-    if (run) {
-      latest[entity] = run;
-      if (isLive(run.status)) running[entity] = run;
-      else delete running[entity];
-    }
+    settle(entity, run);
 
     if (run?.status === 'completed') {
       message.success(`${entityOf(entity).label}: ${run.created} created, ${run.updated} updated`
@@ -357,8 +417,10 @@ async function start(entity, direction) {
   } catch (e) {
     delete running[entity];
     message.error(e?.data?.message || 'Could not start that sync');
-    // 409: something is already running. Re-read so the card shows it.
-    if (e?.status === 409) loadLatest();
+    // Re-read so the card shows what is really going on: on a 409 the run
+    // that is in the way, and on a gateway timeout our own run, which carries
+    // on working on the server after the browser has given up waiting.
+    loadLatest();
   } finally {
     starting.value = null;
     syncPoller();

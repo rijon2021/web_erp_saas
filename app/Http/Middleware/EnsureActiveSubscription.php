@@ -5,9 +5,22 @@ namespace App\Http\Middleware;
 use App\Models\Central\TenantSubscription;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
+/**
+ * Gate the tenant admin app (web SPA shell + /api) behind a subscription that
+ * grants access RIGHT NOW, judged by date — a lapsed trial or paid period is
+ * locked out the moment it ends, whether or not the scheduler cron runs.
+ *
+ * The status column is treated as a cached label: any row found lapsed here
+ * is flipped to "expired" immediately, so the super admin panel shows the
+ * truth on hosts without cron. The daily subscriptions:check-expiry command
+ * remains the backstop for tenants who never come back (and for emails).
+ */
 class EnsureActiveSubscription
 {
+    public const MESSAGE = 'Your subscription is inactive or expired. Please renew to continue.';
+
     public function handle(Request $request, Closure $next)
     {
         $tenant = tenant();
@@ -16,31 +29,41 @@ class EnsureActiveSubscription
             return $next($request);
         }
 
-        // A tenant can legitimately have more than one row with status
-        // active/trial (e.g. a stale row whose ends_at has passed but the
-        // expiry cron hasn't flipped it to "expired" yet, plus a freshly
-        // renewed/activated row). Grant access if ANY of them is genuinely
-        // active rather than gambling on an arbitrary first() row.
-        $hasActive = TenantSubscription::where('tenant_id', $tenant->id)
-            ->whereIn('status', [
-                TenantSubscription::STATUS_ACTIVE,
-                TenantSubscription::STATUS_TRIAL,
-            ])
-            ->get()
-            ->contains(fn (TenantSubscription $subscription) => $subscription->isActive());
+        // A tenant can legitimately hold several candidate rows (a stale
+        // trial plus a freshly activated paid row, a cancelled row still
+        // inside its paid period, ...). Grant access if ANY of them does.
+        $rows = TenantSubscription::where('tenant_id', $tenant->id)
+            ->whereIn('status', TenantSubscription::LAPSABLE_STATUSES)
+            ->get();
 
-        if (! $hasActive) {
-            if ($request->expectsJson()) {
-                return response()->json([
-                    'status'  => 'subscription_required',
-                    'message' => 'Your subscription is inactive or expired. Please renew to continue.',
-                ], 403);
+        $granted = false;
+
+        foreach ($rows as $row) {
+            if ($row->grantsAccess()) {
+                $granted = true;
+                continue;
             }
 
-            return redirect()->route('billing.plans')
-                ->with('error', 'Your subscription is inactive or expired. Please renew to continue.');
+            try {
+                $row->expireIfLapsed();
+            } catch (\Throwable $e) {
+                // Never let bookkeeping break the request — the lockout below
+                // does not depend on the status flip succeeding.
+                Log::warning("Could not flag lapsed subscription {$row->id} as expired: {$e->getMessage()}");
+            }
         }
 
-        return $next($request);
+        if ($granted) {
+            return $next($request);
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'status'  => 'subscription_required',
+                'message' => self::MESSAGE,
+            ], 403);
+        }
+
+        return redirect()->route('billing.plans')->with('error', self::MESSAGE);
     }
 }

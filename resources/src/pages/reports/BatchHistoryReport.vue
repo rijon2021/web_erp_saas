@@ -208,7 +208,7 @@ const EXPIRY_COLOR = { expired: 'error', near: 'warning', valid: 'success' };
 const TYPE_COLOR = {
   purchase: 'success', sale_return: 'processing', sale: 'error', purchase_return: 'warning',
   adjustment: 'blue', transfer_in: 'processing', transfer_out: 'default', damage: 'default',
-  quotation: 'default',
+  quotation: 'default', production: 'success', production_consumption: 'error',
 };
 const TYPE_LABEL = {
   purchase: ['Purchase', 'Purchase'],
@@ -220,6 +220,8 @@ const TYPE_LABEL = {
   transfer_out: ['Transfer_Out', 'Transfer Out'],
   damage: ['Damage', 'Damage'],
   quotation: ['Quotation', 'Quotation'],
+  production: ['Production', 'Production'],
+  production_consumption: ['Used_In_Production', 'Used in production'],
 };
 
 function typeLabel(type) {
@@ -281,6 +283,8 @@ function sourceLink(row) {
     transfer_out: `/transfers/${row.ref_id}`,
     damage: `/damages/${row.ref_id}/edit`,
     quotation: `/quotations/${row.ref_id}`,
+    production: `/mrp/production-orders/${row.ref_id}`,
+    production_consumption: `/mrp/production-orders/${row.ref_id}`,
   };
   return map[row.type] || null;
 }

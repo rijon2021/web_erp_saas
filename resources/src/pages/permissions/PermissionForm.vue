@@ -49,6 +49,12 @@
         </div>
       </a-card>
 
+      <a-alert
+        v-if="lockedPermissions.length"
+        type="info" show-icon style="margin-bottom: 16px"
+        :message="tf('Plan_Permissions_Hidden_Note', 'Only permissions included in your current plan are shown. Features outside your plan are hidden here and blocked by the system.')"
+      />
+
       <!-- Permission groups -->
       <a-row :gutter="[16, 16]">
         <a-col v-for="group in visibleGroups" :key="group.label" :xs="24" :md="12" :xl="8">
@@ -116,7 +122,7 @@ const auth = useAuthStore();
 const id = route.params.id || null;
 const isEdit = !!id;
 
-const isLoading = ref(isEdit);
+const isLoading = ref(true);
 const submitting = ref(false);
 const formRef = ref();
 const search = ref('');
@@ -127,7 +133,27 @@ const rules = computed(() => ({
   name: [{ required: true, message: t('Field_is_required') }],
 }));
 
-const totalCount = PERMISSION_GROUPS.reduce((s, g) => s + g.items.length, 0);
+// Plan gating (legacy loadAvailablePermissions): slugs the tenant's plan does
+// not include are hidden and never resubmitted — the API rejects a role that
+// carries one with a 422.
+const lockedPermissions = ref([]);
+const lockedSet = computed(() => new Set(lockedPermissions.value));
+const availableGroups = computed(() =>
+  PERMISSION_GROUPS
+    .map(g => ({ ...g, items: g.items.filter(i => !lockedSet.value.has(i.v)) }))
+    .filter(g => g.items.length)
+);
+
+async function loadLockedPermissions() {
+  try {
+    const data = await http.get('roles/available_permissions');
+    lockedPermissions.value = Array.isArray(data?.locked) ? data.locked : [];
+  } catch (e) {
+    lockedPermissions.value = []; // fail open: the API still enforces the plan on save
+  }
+}
+
+const totalCount = computed(() => availableGroups.value.reduce((s, g) => s + g.items.length, 0));
 
 /** Label helpers — `l` is an i18n key, `f` the legacy fallback text. */
 function itemLabel(item) {
@@ -141,8 +167,8 @@ function groupLabel(group) {
 
 const visibleGroups = computed(() => {
   const q = search.value.trim().toLowerCase();
-  if (!q) return PERMISSION_GROUPS;
-  return PERMISSION_GROUPS
+  if (!q) return availableGroups.value;
+  return availableGroups.value
     .map(g => ({
       ...g,
       items: g.items.filter(i =>
@@ -167,7 +193,7 @@ function selectAll(on) {
     permissions.value = [];
     return;
   }
-  permissions.value = PERMISSION_GROUPS.flatMap(g => g.items.map(i => i.v));
+  permissions.value = availableGroups.value.flatMap(g => g.items.map(i => i.v));
 }
 
 async function submit() {
@@ -195,26 +221,36 @@ async function submit() {
     } catch (e) { /* non-fatal */ }
     router.push('/permissions');
   } catch (e) {
-    message.error(t('InvalidData'));
+    // A 422 (e.g. the plan gate) names the problem; show it rather than a
+    // generic error.
+    const errors = e?.data?.errors;
+    const first = errors ? Object.values(errors).flat()[0] : null;
+    message.error(first ? String(first) : t('InvalidData'));
   } finally {
     submitting.value = false;
   }
 }
 
 onMounted(async () => {
-  if (!isEdit) return;
   // Role #1 (Owner) is not editable: the API answers roles/1/edit with HTTP
   // 401, which lib/http.js treats as an expired session and logs the user
   // out. The list hides the button; guard the direct URL too.
-  if (String(id) === '1') {
+  if (isEdit && String(id) === '1') {
     message.warning(t('InvalidData'));
     router.replace('/permissions');
+    return;
+  }
+  await loadLockedPermissions();
+  if (!isEdit) {
+    isLoading.value = false;
     return;
   }
   try {
     const data = await http.get(`roles/${id}/edit`);
     role.value = data.role || { name: '', description: '' };
-    permissions.value = Array.isArray(data.permissions) ? data.permissions : [];
+    // Never resubmit a slug the plan no longer covers.
+    permissions.value = (Array.isArray(data.permissions) ? data.permissions : [])
+      .filter(p => !lockedSet.value.has(p));
   } catch (e) {
     message.error(t('InvalidData'));
   } finally {

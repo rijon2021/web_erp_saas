@@ -2,9 +2,11 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\Central\TenantSubscription;
 use App\Services\TenantLimitsService;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class CheckTenantFeature
 {
@@ -27,9 +29,11 @@ class CheckTenantFeature
 
         $plan = $this->limits->getActivePlan();
 
-        // No active plan → block
+        // No subscription grants access right now (trial/paid period lapsed,
+        // judged by date) → this is a subscription problem, not a plan-tier
+        // one: lock the surface rather than "upgrade your plan".
         if (! $plan) {
-            return $this->deny($request, $features);
+            return $this->denyNoSubscription($request);
         }
 
         // Allow if the plan has at least one of the listed features
@@ -40,6 +44,36 @@ class CheckTenantFeature
         }
 
         return $this->deny($request, $features);
+    }
+
+    /**
+     * The workspace has no access-granting subscription. Staff go to billing
+     * (same contract as EnsureActiveSubscription, so the SPA redirects too);
+     * everyone else — storefront shoppers, guests — gets a plain "paused"
+     * response instead of a live shop running on an expired trial.
+     */
+    protected function denyNoSubscription(Request $request): mixed
+    {
+        if ($tenant = tenant()) {
+            try {
+                TenantSubscription::expireLapsed($tenant->id);
+            } catch (\Throwable) {
+                // bookkeeping only — the lockout never depends on it
+            }
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'status'  => 'subscription_required',
+                'message' => EnsureActiveSubscription::MESSAGE,
+            ], 403);
+        }
+
+        if (Auth::guard('web')->check()) {
+            return redirect()->route('billing.plans')->with('error', EnsureActiveSubscription::MESSAGE);
+        }
+
+        abort(503, 'This store is temporarily unavailable.');
     }
 
     protected function deny(Request $request, array $features): mixed

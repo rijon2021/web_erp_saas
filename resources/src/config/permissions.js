@@ -250,6 +250,11 @@ export const PERMISSION_GROUPS = [
                 "f": "Accounting tax report"
             },
             {
+                "v": "accounting_reconciliation",
+                "l": "accounting_reconciliation",
+                "f": "Accounting reconciliation"
+            },
+            {
                 "v": "account",
                 "l": "List_accounts"
             },

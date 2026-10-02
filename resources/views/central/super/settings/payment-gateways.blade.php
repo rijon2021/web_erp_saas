@@ -105,7 +105,7 @@
                                     name="gateways[{{ $key }}][supported_currencies]"
                                     class="form-control"
                                     value="{{ implode(', ', $gw['supported_currencies'] ?? []) }}"
-                                    placeholder="e.g. USD, EUR, GBP, NGN"
+                                    placeholder="{{ __('super.payments.ph_currency_codes') }}"
                                 >
                                 <p class="form-hint mt-1">{{ __('central.SupportedCurrenciesHint') }}</p>
                             </div>
@@ -116,7 +116,7 @@
                                     name="gateways[{{ $key }}][default_currency]"
                                     class="form-control text-upper-currency"
                                     value="{{ $gw['default_currency'] ?? '' }}"
-                                    placeholder="e.g. USD"
+                                    placeholder="{{ __('super.payments.ph_currency_code') }}"
                                     maxlength="3"
                                 >
                                 <p class="form-hint mt-1">{{ __('central.DefaultCurrencyHint') }}</p>

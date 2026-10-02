@@ -328,17 +328,25 @@
                                         {{ __('landing.for_growing_teams') ?? 'For growing teams' }}
                                     @endif
                                 </p>
+                                {{-- When monthly is not sold, the yearly price becomes the
+                                     headline and the "or … / yr" line below is dropped. --}}
+                                @php
+                                    $showMonthly = $pricing['show_monthly'] ?? true;
+                                    $showYearly  = $pricing['show_yearly'] ?? true;
+                                    $mainAmount  = $showMonthly ? $plan->price : $plan->getPriceForCycle('yearly');
+                                    $mainPeriod  = $showMonthly ? __('landing.mo') : __('landing.yr');
+                                @endphp
                                 <div class="pricing-tier__price-block">
                                     @if($plan->price == 0 && $plan->yearly_price == 0)
                                         <span class="pricing-tier__amount pricing-tier__amount--free">{{ __('landing.free') }}</span>
                                     @else
                                         <span class="pricing-tier__amount">
-                                            <span class="pricing-tier__currency">{{ $currencySymbol }}</span>{{ $plan->price == floor($plan->price) ? number_format($plan->price, 0) : number_format($plan->price, 2) }}
+                                            <span class="pricing-tier__currency">{{ $currencySymbol }}</span>{{ $mainAmount == floor($mainAmount) ? number_format($mainAmount, 0) : number_format($mainAmount, 2) }}
                                         </span>
-                                        <span class="pricing-tier__period">/ {{ __('landing.mo') }}</span>
+                                        <span class="pricing-tier__period">/ {{ $mainPeriod }}</span>
                                     @endif
                                 </div>
-                                @if($plan->yearly_price > 0)
+                                @if($showMonthly && $showYearly && $plan->yearly_price > 0)
                                     <p class="pricing-tier__yearly">
                                         {{ __('landing.or') }} {{ $currencySymbol }}{{ $plan->yearly_price == floor($plan->yearly_price) ? number_format($plan->yearly_price, 0) : number_format($plan->yearly_price, 2) }} / {{ __('landing.yr') }}
                                         @if($plan->getYearlySavingsPercent() > 0)
@@ -352,7 +360,7 @@
                                 @endphp
                                 <ul class="pricing-tier__features">
                                     @foreach($limits as $key => $value)
-                                        @php $meta = \App\Models\Central\Plan::AVAILABLE_LIMITS[$key] ?? null; @endphp
+                                        @php $meta = \App\Models\Central\Plan::availableLimits()[$key] ?? null; @endphp
                                         @if($meta)
                                             <li>
                                                 <i class="bi bi-check-lg pricing-tier__check" aria-hidden="true"></i>
@@ -361,7 +369,7 @@
                                         @endif
                                     @endforeach
                                     @foreach($planFeatures as $fKey)
-                                        @php $fMeta = \App\Models\Central\Plan::AVAILABLE_FEATURES[$fKey] ?? null; @endphp
+                                        @php $fMeta = \App\Models\Central\Plan::availableFeatures()[$fKey] ?? null; @endphp
                                         @if($fMeta)
                                             <li>
                                                 <i class="bi bi-check-lg pricing-tier__check" aria-hidden="true"></i>

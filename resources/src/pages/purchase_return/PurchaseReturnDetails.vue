@@ -59,8 +59,9 @@
             <tr>
               <td>{{ $t('Status') }}</td>
               <td>
-                <a-tag :color="ret.statut === 'received' ? 'success' : 'processing'">
-                  {{ ret.statut === 'received' ? $t('Received') : $t('Pending') }}
+                <!-- Purchase returns are 'completed' | 'pending', not 'received'. -->
+                <a-tag :color="ret.statut === 'completed' ? 'success' : 'processing'">
+                  {{ ret.statut === 'completed' ? $t('complete') : $t('Pending') }}
                 </a-tag>
               </td>
             </tr>
@@ -158,6 +159,7 @@ import { ref, computed, createVNode, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message, Modal } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
+import { applyIssuer } from '../../lib/invoiceIssuer';
 import {
   ArrowLeftOutlined, PrinterOutlined, EditOutlined, DeleteOutlined,
   FilePdfOutlined, ExclamationCircleOutlined,
@@ -245,7 +247,9 @@ onMounted(async () => {
     const data = await http.get(`returns/purchase/${route.params.id}`);
     ret.value = data.purchase_return || {};
     details.value = data.details || [];
-    company.value = data.company || {};
+    // Branch letterhead: the invoice header shows the warehouse that issued
+    // the document, each field falling back to the company settings.
+    company.value = applyIssuer(data.company || {}, data.issuer);
   } catch (e) {
     message.error(t('InvalidData'));
     router.push('/purchase-returns');

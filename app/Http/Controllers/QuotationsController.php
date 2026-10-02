@@ -85,7 +85,7 @@ class QuotationsController extends BaseController
         $data = [];
 
         // Check If User Has Permission View  All Records
-        $Quotations = Quotation::with('client', 'warehouse')
+        $Quotations = Quotation::with('client', 'warehouse', 'convertedSale')
             ->where('deleted_at', '=', null)
             ->where(function ($query) use ($view_records) {
                 if (! $view_records) {
@@ -144,6 +144,7 @@ class QuotationsController extends BaseController
             $item['statut'] = $Quotation->statut;
             $item['source'] = $Quotation->source;
             $item['converted_sale_id'] = $Quotation->converted_sale_id;
+            $item['converted_sale_ref'] = $Quotation->convertedSale?->Ref;
             $item['warehouse_name'] = $Quotation['warehouse']->name;
             $item['client_name'] = $Quotation['client']->name;
             $item['client_email'] = $Quotation['client']->email;
@@ -524,7 +525,7 @@ class QuotationsController extends BaseController
         // New way: Check user's record_view field (user-level boolean)
         // Backward compatibility: If record_view is null, fall back to role permission check
         $view_records = $user->hasRecordView();
-        $quotation_data = Quotation::with('details.product.unitSale')
+        $quotation_data = Quotation::with('details.product.unitSale', 'convertedSale')
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
@@ -543,7 +544,12 @@ class QuotationsController extends BaseController
             $this->authorizeForUser($request->user('api'), 'check_record', $quotation_data);
         }
 
+        $quote['id'] = $quotation_data->id;
         $quote['Ref'] = $quotation_data->Ref;
+        // Mirrors the list payload so the detail page can show the
+        // "Already Converted" link too.
+        $quote['converted_sale_id'] = $quotation_data->converted_sale_id;
+        $quote['converted_sale_ref'] = $quotation_data->convertedSale?->Ref;
         // Multi-Currency: amounts in this payload are converted into the
         // document currency — the page must render them with THIS symbol.
         $quote['currency_symbol'] = $docCurrency['symbol'];
@@ -579,9 +585,9 @@ class QuotationsController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -644,6 +650,8 @@ class QuotationsController extends BaseController
             'quote' => $quote,
             'details' => $details,
             'company' => $company,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($quotation_data->warehouse_id, $company),
         ]);
 
     }
@@ -692,6 +700,8 @@ class QuotationsController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($Quotation);
+
         // Document currency: stored amounts are base currency, display = stored * rate.
         $docCurrency = helpers::Get_Document_Currency($Quotation);
 
@@ -721,9 +731,9 @@ class QuotationsController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -778,6 +788,8 @@ class QuotationsController extends BaseController
         $Html = view('pdf.quotation_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Quotation->warehouse_id, $settings),
             'quote' => $quote,
             'details' => $details,
         ])->render();
@@ -810,6 +822,8 @@ class QuotationsController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($Quotation);
+
         // Document currency: stored amounts are base currency, display = stored * rate.
         $docCurrency = helpers::Get_Document_Currency($Quotation);
 
@@ -839,9 +853,9 @@ class QuotationsController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -896,6 +910,8 @@ class QuotationsController extends BaseController
         $Html = view('pdf.quotation_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Quotation->warehouse_id, $settings),
             'quote' => $quote,
             'details' => $details,
         ])->render();
@@ -1047,9 +1063,9 @@ class QuotationsController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
                 $data['no_unit'] = 0;
             }
 

@@ -33,6 +33,8 @@
   <meta name="description" content="@yield('meta_description', $s->seo_meta_description ?? '')">
   @if($s && $s->favicon_path)
     <link rel="icon" href="{{ Str::startsWith($s->favicon_path, ['http://', 'https://', '/']) ? $s->favicon_path : global_asset($s->favicon_path) }}">
+  @elseif($fallbackFavicon = tenant_favicon_url())
+    <link rel="icon" href="{{ $fallbackFavicon }}">
   @endif
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -48,7 +50,8 @@
     /* Storefront icons -- same base as layouts/store.blade.php: an <svg> is
        inline by default and reads low against its label, and the directional
        glyphs have to mirror in Arabic. */
-    .store-ico{display:inline-block;vertical-align:middle;flex:0 0 auto}
+    .store-ico{vertical-align:middle;flex:0 0 auto}
+    svg:where(.store-ico){display:inline-block}
     :where(.store-ico){width:1.25rem;height:1.25rem}
     [dir=rtl] .store-ico-flip{transform:scaleX(-1)}
     *{box-sizing:border-box}
@@ -257,6 +260,7 @@
       .re-cta h2{font-size:26px}
     }
   </style>
+  @include('store.partials.store-font')
   @stack('head')
 </head>
 <body>

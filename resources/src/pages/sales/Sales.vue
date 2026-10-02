@@ -401,8 +401,9 @@ import {
   SALE_STATUSES, PAYMENT_STATUSES, SHIPPING_STATUSES, statusKey, shipStatusColor,
 } from './saleVocab';
 import http from '../../lib/http';
-import { receiptFontHeadTags, whenPrintFontsReady } from '../../lib/receiptFont';
+import { receiptFontHeadTags, receiptPageHeadTag, whenPrintReady } from '../../lib/receiptFont';
 import { buildPosReceiptHtml } from '../../lib/posReceiptHtml';
+import { applyIssuer } from '../../lib/invoiceIssuer';
 
 const { t } = useI18n();
 const { money, number, dateTime, roundMoney } = useFormat();
@@ -615,7 +616,9 @@ async function invoicePos(record) {
   try {
     const data = await http.get(`sales_print_invoice/${record.id}`);
     const s = data.sale || {};
-    const setting = data.setting || {};
+    // Branch letterhead: the receipt header shows the warehouse that issued the
+    // sale, each field falling back to the company settings.
+    const setting = applyIssuer(data.setting || {}, data.issuer);
     const ps = data.pos_settings || {};
 
     // QR data URLs are rendered up-front — the popup document can't host the
@@ -651,6 +654,7 @@ async function invoicePos(record) {
 
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <link rel="stylesheet" href="/css/pos_print.css">
+${receiptPageHeadTag(ps)}
 <style>
   #invoice-POS .receipt-qr-row{display:flex;flex-direction:row;flex-wrap:nowrap;justify-content:center;align-items:flex-start;gap:10px;width:100%;margin-top:8px;}
   #invoice-POS .receipt-qr-block{display:flex;flex-direction:column;align-items:center;flex:0 0 auto;width:100px;margin:0;}
@@ -665,7 +669,8 @@ async function invoicePos(record) {
     w.document.write(html);
     w.document.close();
     w.focus();
-    whenPrintFontsReady(w, () => { try { w.print(); } catch (e) {} });
+    // Fonts + stylesheet + logo/QR images, so the logo is never missing.
+    whenPrintReady(w, () => { try { w.print(); } catch (e) {} });
   } catch (e) {
     message.error(t('InvalidData'));
   }

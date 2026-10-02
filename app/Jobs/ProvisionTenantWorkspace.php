@@ -230,23 +230,33 @@ class ProvisionTenantWorkspace implements ShouldQueue
             return;
         }
 
-        $tenant->run(function () use ($email, $passwordHash) {
+        // Registration collects no personal name, so the company name stands in
+        // for the seeded "John Doe" placeholder; the owner phone replaces the
+        // seeded dummy number.
+        $displayName = trim((string) ($tenant->company_name ?? '')) ?: 'Admin';
+        $phone       = trim((string) ($tenant->owner_phone ?? ''));
+
+        $tenant->run(function () use ($email, $passwordHash, $displayName, $phone) {
             $user = DB::table('users')->where('id', 1)->first();
 
             if ($user) {
                 DB::table('users')->where('id', 1)->update([
-                    'email'    => $email,
-                    'password' => $passwordHash,
+                    'firstname' => $displayName,
+                    'lastname'  => '',
+                    'username'  => $displayName,
+                    'email'     => $email,
+                    'password'  => $passwordHash,
+                    'phone'     => $phone,
                 ]);
             } else {
                 DB::table('users')->insert([
                     'id'        => 1,
-                    'firstname' => 'Admin',
+                    'firstname' => $displayName,
                     'lastname'  => '',
-                    'username'  => $email,
+                    'username'  => $displayName,
                     'email'     => $email,
                     'password'  => $passwordHash,
-                    'phone'     => '',
+                    'phone'     => $phone,
                     'role_id'   => 1,
                     'statut'    => 1,
                     'is_all_warehouses' => 1,
@@ -300,7 +310,22 @@ class ProvisionTenantWorkspace implements ShouldQueue
             return;
         }
 
-        $tenant->run(function () use ($companyName) {
+        $email = $tenant->admin_email ?? null;
+        $phone = trim((string) ($tenant->owner_phone ?? ''));
+
+        $tenant->run(function () use ($companyName, $email, $phone) {
+            // SettingSeeder fills the row with the Super Admin's platform
+            // defaults; replace the company identity with the tenant's own so
+            // invoices, receipts and the store show the right business.
+            $settings = ['CompanyName' => $companyName];
+            if ($email) {
+                $settings['email'] = $email;
+            }
+            if ($phone !== '') {
+                $settings['CompanyPhone'] = $phone;
+            }
+            DB::table('settings')->where('id', 1)->update($settings);
+
             $exists = DB::table('companies')->where('id', 1)->exists();
 
             if ($exists) {
@@ -329,6 +354,19 @@ class ProvisionTenantWorkspace implements ShouldQueue
         }
 
         File::copyDirectory($source, $destination);
+
+        // The tenant settings row references "logo-default.png"; if the template
+        // shipped without it, seed it from the shared platform default so the
+        // receipt / login logo is never a missing file.
+        $settingsDir = $destination . DIRECTORY_SEPARATOR . 'settings';
+        File::ensureDirectoryExists($settingsDir);
+        foreach (['logo-default.png', 'favicon.ico'] as $file) {
+            $target = $settingsDir . DIRECTORY_SEPARATOR . $file;
+            $fallback = public_path('images' . DIRECTORY_SEPARATOR . $file);
+            if (! is_file($target) && is_file($fallback)) {
+                @copy($fallback, $target);
+            }
+        }
 
         // If the tenant-default template has no PWA icons of its own, seed the
         // tenant's pwa/ folder from the shared /pwa_images defaults so the copy

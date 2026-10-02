@@ -257,12 +257,21 @@
         v-if="product.is_batch_tracked"
         size="small" :title="$t('Batches')" :body-style="{ padding: 0 }"
       >
+        <!-- Batches can carry different purchase costs; the stock-weighted
+             average is what the product is effectively worth per unit. -->
+        <template v-if="batchAvgCost !== null" #extra>
+          <span class="muted">{{ $t('Avg_Batch_Cost') }}:</span>
+          <strong style="margin-inline-start: 6px">{{ money(batchAvgCost) }}</strong>
+        </template>
         <a-table
           :columns="batchColumns" :data-source="batches" :loading="batchesLoading"
           :pagination="false" size="middle" :row-key="r => r.id" :scroll="{ x: 'max-content' }"
         >
           <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'expiry'">
+            <template v-if="column.key === 'unit_cost'">
+              {{ record.unit_cost === null || record.unit_cost === undefined ? '—' : money(record.unit_cost) }}
+            </template>
+            <template v-else-if="column.key === 'expiry'">
               <span :style="{ color: expiryColor(record) }">{{ record.expiry_date || '—' }}</span>
               <div v-if="record.days_to_expiry !== null && record.days_to_expiry !== undefined" class="muted">
                 {{ record.days_to_expiry < 0 ? $t('Expired') : `${$t('Expires_in')} ${record.days_to_expiry} ${$t('Days')}` }}
@@ -340,6 +349,9 @@ const gallery = computed(() => {
   return files.length ? files.map(f => uploadUrl('products', f)) : [NO_IMAGE];
 });
 const carouselRef = ref(null);
+// Template ref on the on-screen barcode — the print sheet clones its <svg>
+// and the PDF rasterizes it, so both need it declared here.
+const barcodeWrap = ref(null);
 const currentSlide = ref(0);
 // The image currently in view — the print sheet and PDF reuse it.
 const mainImage = computed(() => gallery.value[currentSlide.value] || gallery.value[0] || NO_IMAGE);
@@ -462,6 +474,24 @@ function buildSections() {
 }
 
 // ---- Print ----
+// Product images are either a tenant upload path ("/images/products/x.png") or
+// an absolute remote URL — the print popup has no base URL, so relative paths
+// are resolved here while absolute ones are left alone.
+function absoluteUrl(src) {
+  try {
+    return new URL(src, window.location.href).href;
+  } catch (e) {
+    return src;
+  }
+}
+function isCrossOrigin(src) {
+  try {
+    return new URL(src, window.location.href).origin !== window.location.origin;
+  } catch (e) {
+    return false;
+  }
+}
+
 function printSheet() {
   const w = window.open('', '_blank', 'height=700,width=900');
   if (!w) {
@@ -475,7 +505,7 @@ function printSheet() {
   const svg = barcodeWrap.value?.querySelector('svg');
   const barcodeHtml = svg ? svg.outerHTML : '';
   const imgHtml = mainImage.value && !mainImage.value.endsWith('no-image.png')
-    ? `<img class="photo" src="${window.location.origin}${mainImage.value}" alt="" />`
+    ? `<img class="photo" src="${esc(absoluteUrl(mainImage.value))}" alt="" />`
     : '';
   const infoHtml = infoRows.value
     .map(r => `<tr><th>${esc(r.label)}</th><td>${esc(r.value)}</td></tr>`)
@@ -525,7 +555,16 @@ function printSheet() {
   w.document.close();
   w.focus();
   // Give the product image time to load before the dialog opens.
-  setTimeout(() => { w.print(); }, 600);
+  const photoEl = w.document.querySelector('img.photo');
+  if (photoEl && !photoEl.complete) {
+    let printed = false;
+    const go = () => { if (!printed) { printed = true; w.print(); } };
+    photoEl.addEventListener('load', go);
+    photoEl.addEventListener('error', go);
+    setTimeout(go, 5000);
+  } else {
+    setTimeout(() => { w.print(); }, 400);
+  }
 }
 
 // ---- PDF export ----
@@ -558,6 +597,9 @@ function imageToPng(src) {
   return new Promise((resolve) => {
     if (!src || src.endsWith('no-image.png')) return resolve(null);
     const img = new Image();
+    // Remote product images taint the canvas — and toDataURL() then throws —
+    // unless they are fetched with CORS.
+    if (isCrossOrigin(src)) img.crossOrigin = 'anonymous';
     img.onload = () => {
       try {
         const canvas = document.createElement('canvas');
@@ -660,9 +702,26 @@ const batchColumns = computed(() => [
   { title: t('Batch_No'), dataIndex: 'batch_no', key: 'batch_no' },
   { title: t('warehouse'), dataIndex: 'warehouse_name', key: 'warehouse_name' },
   { title: t('Quantity'), dataIndex: 'qty', key: 'qty', align: 'right' },
+  { title: t('UnitCost'), key: 'unit_cost', align: 'right' },
   { title: t('Mfg_Date'), dataIndex: 'mfg_date', key: 'mfg_date' },
   { title: t('Expiry_Date'), key: 'expiry' },
 ]);
+
+// Quantity-weighted average unit cost across the active batches still in
+// stock. Batches without a cost are left out of both sides of the division;
+// null when nothing priced is in stock, which hides the line.
+const batchAvgCost = computed(() => {
+  let qty = 0;
+  let value = 0;
+  for (const b of batches.value) {
+    const q = Number(b.qty);
+    const c = b.unit_cost === null || b.unit_cost === undefined ? NaN : Number(b.unit_cost);
+    if (b.status !== 'active' || !(q > 0) || !Number.isFinite(c)) continue;
+    qty += q;
+    value += q * c;
+  }
+  return qty > 0 ? value / qty : null;
+});
 
 function expiryColor(b) {
   const d = Number(b.days_to_expiry);

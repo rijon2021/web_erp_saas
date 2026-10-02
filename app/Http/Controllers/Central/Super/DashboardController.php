@@ -13,6 +13,10 @@ class DashboardController extends Controller
 {
     public function index()
     {
+        // Flip lapsed trials/periods to expired first so the counts below are
+        // truthful without the cron.
+        TenantSubscription::expireLapsed();
+
         $tenantsCount = Tenant::count();
         $activeSubscriptions = TenantSubscription::whereIn('status', ['active', 'trial'])->count();
         $plansCount = Plan::where('is_active', true)->count();

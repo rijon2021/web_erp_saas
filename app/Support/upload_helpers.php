@@ -30,6 +30,45 @@ if (!function_exists('upload_public_path')) {
 }
 
 /**
+ * Root-relative URL of a company / branch logo that is guaranteed to exist.
+ *
+ * Logos are stored by filename and served from upload_path('settings'), but
+ * older tenants (and branch logos saved before they moved next to the company
+ * logo) may still hold the file in the tenant root or the shared public/images
+ * folder — and a tenant provisioned without a default logo has no file at all.
+ * A receipt <img> pointing at a missing file prints as a broken-image box, so
+ * the receipt APIs pass the stored filename through here and ship a URL to
+ * the first location that really has the file, falling back to the platform
+ * default logo. The SPA's uploadUrl() passes root-relative URLs through.
+ */
+if (!function_exists('receipt_logo_url')) {
+    function receipt_logo_url(?string $file, string $default = 'logo-default.png'): ?string
+    {
+        $file = trim((string) $file);
+        if ($file !== '' && preg_match('#^(https?:)?//|^data:|^/#i', $file)) {
+            return $file; // already a URL
+        }
+
+        $names = array_values(array_unique(array_filter([$file, $default])));
+        foreach ($names as $name) {
+            $candidates = [
+                upload_path('settings') . '/' . $name,
+                upload_path() . '/' . $name,
+                'images/settings/' . $name,
+                'images/' . $name,
+            ];
+            foreach ($candidates as $relative) {
+                if (is_file(public_path($relative))) {
+                    return '/' . ltrim(str_replace('\\', '/', $relative), '/');
+                }
+            }
+        }
+
+        return null;
+    }
+}
+
+/**
  * Resolve the URL of a tenant's PWA icon (192 or 512).
  *
  * Tenants get their own icons under images/tenants/{id}/pwa/ generated at
@@ -48,5 +87,35 @@ if (!function_exists('pwa_icon_url')) {
         }
 
         return '/pwa_images/pwa-icon-' . $size . '.png';
+    }
+}
+
+/**
+ * Favicon for tenant pages that have no icon of their own (the storefront when
+ * Store Settings has no favicon). Order: the tenant's app favicon under
+ * images/tenants/{id}/settings (provisioning seeds it from the Super Admin
+ * branding), then the Super Admin tenant default, then the platform file.
+ */
+if (!function_exists('tenant_favicon_url')) {
+    function tenant_favicon_url(): ?string
+    {
+        try {
+            $file = trim((string) \App\Models\Setting::query()->value('favicon')) ?: 'favicon.ico';
+            $relative = upload_path('settings') . '/' . $file;
+            if (is_file(public_path($relative))) {
+                return global_asset($relative) . '?v=' . filemtime(public_path($relative));
+            }
+        } catch (\Throwable) {
+            // No tenant settings table (central context) — fall through.
+        }
+
+        try {
+            if ($url = \App\Models\Central\GeneralSetting::instance()->getTenantFaviconUrl()) {
+                return $url;
+            }
+        } catch (\Throwable) {
+        }
+
+        return is_file(public_path('images/favicon.ico')) ? '/images/favicon.ico' : null;
     }
 }

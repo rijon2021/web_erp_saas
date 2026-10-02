@@ -146,6 +146,7 @@
     "/app/accounting-v2/reports/profit-and-loss": "/accounting-v2/reports/profit-and-loss",
     "/app/accounting-v2/reports/balance-sheet": "/accounting-v2/reports/balance-sheet",
     "/app/accounting-v2/reports/tax-report": "/accounting-v2/reports/tax-report",
+    "/app/accounting-v2/reports/reconciliation": "/accounting-v2/reports/reconciliation",
     "/app/protocol/requests": "/protocol/requests",
     "/app/protocol/desks": "/protocol/desks",
     "/app/meeting/dashboard": "/meeting/dashboard",

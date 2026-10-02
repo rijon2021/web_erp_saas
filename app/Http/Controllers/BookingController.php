@@ -525,10 +525,25 @@ class BookingController extends BaseController
         $last = DB::table('bookings')->latest('id')->first();
 
         if ($last && $last->Ref) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = isset($nwMsg[1]) ? ($nwMsg[1] + 1) : 1112;
-            $code = 'BK_'.$inMsg;
+            $item = (string) ($last->Ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $code = 'BK_'.($nwMsg[1] + 1);
+            } else {
+                $code = 'BK_1112';
+            }
         } else {
             $code = 'BK_1111';
         }

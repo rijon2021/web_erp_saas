@@ -55,7 +55,9 @@ class MeetingController extends Controller
         if (! is_dir($destination)) {
             mkdir($destination, 0755, true);
         }
-        $filename = Str::random(20) . '.' . $file->getClientOriginalExtension();
+        // Extension from the sniffed MIME type, never from the client-supplied name.
+        $ext = strtolower($file->guessExtension() ?: $file->getClientOriginalExtension());
+        $filename = Str::random(20) . ($ext ? '.' . preg_replace('/[^a-z0-9]/', '', $ext) : '');
         $file->move($destination, $filename);
 
         return 'images/meetings/' . $filename;
@@ -455,7 +457,7 @@ class MeetingController extends Controller
 
         $request->validate([
             'meeting_id' => 'required|exists:meetings,id',
-            'file'       => 'required|file|max:10240',
+            'file'       => 'required|file|mimes:jpg,jpeg,png,webp,pdf,doc,docx,xls,xlsx,ppt,pptx,csv,txt|max:10240',
         ]);
 
         $file = $request->file('file');

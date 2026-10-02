@@ -85,16 +85,44 @@ export default {
 </script>
 
 <style scoped>
+.portal-request-new { padding-bottom: 1rem; }
+.pc-page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; gap: 1rem; flex-wrap: wrap; }
+.pc-page-title { font-size: 1.5rem; font-weight: 700; color: var(--pc-text); margin: 0 0 0.2rem; }
+.pc-page-sub { font-size: 0.9rem; color: var(--pc-text-muted); margin: 0; }
+.pc-link-back { color: var(--pc-text-muted); text-decoration: none; font-size: 0.88rem; }
+.pc-link-back:hover { color: var(--pc-primary); }
+.pc-card { background: var(--pc-surface); border: 1px solid var(--pc-border); border-radius: var(--pc-radius); box-shadow: var(--pc-shadow-sm); }
+.pc-form { padding: 1.5rem; display: flex; flex-direction: column; gap: 1.15rem; }
+.pc-form-row { display: flex; flex-direction: column; gap: 0.45rem; }
+.pc-form-row label { font-size: 0.85rem; font-weight: 600; color: var(--pc-text); }
+.pc-muted { color: var(--pc-text-soft); font-weight: 400; font-size: 0.78rem; }
+.pc-required { color: var(--pc-danger); }
+.pc-form-row input, .pc-form-row textarea { width: 100%; padding: 0.6rem 0.85rem; border: 1px solid var(--pc-border-strong); border-radius: 10px; font-size: 0.92rem; background: var(--pc-surface-alt); box-sizing: border-box; font-family: inherit; }
+.pc-form-row input:focus, .pc-form-row textarea:focus { outline: none; background: var(--pc-surface); border-color: var(--pc-primary); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15); }
+.pc-icon-btn { background: transparent; border: 1px solid var(--pc-border-strong); width: 26px; height: 26px; border-radius: 8px; cursor: pointer; color: var(--pc-text-soft); display: inline-flex; align-items: center; justify-content: center; }
+.pc-icon-btn:hover { border-color: var(--pc-danger); color: var(--pc-danger); }
+.pc-btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.55rem 1rem; border-radius: 10px; font-size: 0.9rem; font-weight: 600; text-decoration: none; border: 1px solid transparent; cursor: pointer; }
+.pc-btn-primary { background: var(--pc-primary); color: #fff; }
+.pc-btn-primary:hover:not(:disabled) { background: var(--pc-primary-600); }
+.pc-btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+.pc-btn-ghost { background: var(--pc-surface); border-color: var(--pc-border-strong); color: var(--pc-text); }
+.pc-btn-ghost:hover { border-color: var(--pc-primary); color: var(--pc-primary); }
+.pc-btn-spinner { display: inline-block; width: 0.95rem; height: 0.95rem; border: 2px solid rgba(255, 255, 255, 0.35); border-top-color: #fff; border-radius: 50%; animation: pc-spin 0.7s linear infinite; }
+@keyframes pc-spin { to { transform: rotate(360deg); } }
+.pc-form-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.5rem; }
+.pc-alert { padding: 0.7rem 0.95rem; border-radius: 10px; font-size: 0.88rem; }
+.pc-alert-error { background: var(--pc-danger-bg); color: #b91c1c; border: 1px solid #fecaca; }
 .rq-select {
   width: 100%;
   height: 40px;
   padding: 0 10px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--pc-border-strong);
+  border-radius: 10px;
+  background: var(--pc-surface-alt);
   font: inherit;
   color: inherit;
 }
+.rq-select:focus { outline: none; background: var(--pc-surface); border-color: var(--pc-primary); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15); }
 .rq-files { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
 .rq-files li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
 </style>

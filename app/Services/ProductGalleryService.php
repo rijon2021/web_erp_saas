@@ -239,7 +239,7 @@ class ProductGalleryService
     }
 
     /** Absolute http(s) URL, max 255 chars (column size), else null. */
-    protected static function sanitizeRemoteImageUrl($url): ?string
+    public static function sanitizeRemoteImageUrl($url): ?string
     {
         $url = trim((string) $url);
         if ($url === '' || strlen($url) > 255 || ! preg_match('#^https?://\S+$#i', $url)) {

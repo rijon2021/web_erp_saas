@@ -183,6 +183,7 @@ const TrialBalance = lazy('TrialBalance', () => import('../pages/accounting/v2/T
 const ProfitAndLossV2 = lazy('ProfitAndLossV2', () => import('../pages/accounting/v2/ProfitAndLoss.vue'));
 const BalanceSheet = lazy('BalanceSheet', () => import('../pages/accounting/v2/BalanceSheet.vue'));
 const TaxReportV2 = lazy('TaxReportV2', () => import('../pages/accounting/v2/TaxReport.vue'));
+const ReconciliationV2 = lazy('ReconciliationV2', () => import('../pages/accounting/v2/Reconciliation.vue'));
 const MeetingDashboard = lazy('MeetingDashboard', () => import('../pages/meeting/MeetingDashboard.vue'));
 const MeetingDetails = lazy('MeetingDetails', () => import('../pages/meeting/MeetingDetails.vue'));
 const MeetingCalendar = lazy('MeetingCalendar', () => import('../pages/meeting/MeetingCalendar.vue'));
@@ -675,6 +676,8 @@ const routes = [
             { path: 'accounting-v2/reports/balance-sheet', name: 'accounting-v2-balance-sheet', component: BalanceSheet, meta: { title: 'Balance Sheet', permission: 'balance_sheet' } },
 
             { path: 'accounting-v2/reports/tax-report', name: 'accounting-v2-tax-report', component: TaxReportV2, meta: { title: 'Tax Summary Report', permission: 'accounting_tax_report' } },
+
+            { path: 'accounting-v2/reports/reconciliation', name: 'accounting-v2-reconciliation', component: ReconciliationV2, meta: { title: 'Reconciliation', permission: 'accounting_reconciliation' } },
 
             // Protocol & Requests
             { path: 'protocol/requests', name: 'protocol-requests', component: ProtocolRequests, meta: { title: 'Protocol & Requests', permission: ['protocol_view', 'protocol_manage'] } },

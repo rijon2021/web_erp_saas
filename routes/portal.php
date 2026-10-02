@@ -28,8 +28,10 @@ Route::prefix('api/portal')->middleware(['web', 'throttle:60,1'])->group(functio
     Route::get('validate-invite', [PortalAuthController::class, 'validateInviteToken']);
     Route::post('set-password', [PortalAuthController::class, 'setPassword']);
 
-    // Protected - portal guard only (separate from admin and store)
-    Route::middleware('portal.auth')->group(function () {
+    // Protected - portal guard only (separate from admin and store).
+    // tenant.entitled pauses the portal while the workspace's own
+    // subscription has lapsed (date-based, no cron needed).
+    Route::middleware(['portal.auth', 'tenant.entitled'])->group(function () {
         Route::post('logout', [PortalAuthController::class, 'logout']);
         Route::get('me', [PortalAuthController::class, 'me']);
 

@@ -1008,6 +1008,8 @@ class AutoUpdateController extends Controller
             147 => 'shopify_stores',
             148 => 'shopify_sync',
             149 => 'shopify_logs',
+            // Accounting V2 → Reconciliation
+            150 => 'accounting_reconciliation',
         ];
 
         foreach ($permissions as $permission_slug) {
@@ -1040,6 +1042,17 @@ class AutoUpdateController extends Controller
                     }
                 }
             });
+
+        // 1.5: avatars and store images moved from the shared public/images
+        // tree into the per-tenant folder. Copy this tenant's existing files
+        // across and rewrite the stored paths so nothing shows as broken.
+        try {
+            // Tenant-triggered update: fix this tenant. Central-triggered: fix all.
+            Artisan::call('uploads:relocate-tenant', tenancy()->initialized ? [] : ['--all' => true]);
+            $this->logUpdate('Relocated legacy uploads: '.trim(Artisan::output()));
+        } catch (\Throwable $e) {
+            $this->logUpdate('Legacy upload relocation skipped: '.$e->getMessage());
+        }
     }
 
     private function runMigrations(): void

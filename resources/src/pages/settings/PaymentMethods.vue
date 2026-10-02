@@ -21,6 +21,18 @@
             @change="v => toggleActive(record, v)"
           />
         </template>
+        <!-- Drives the cash register close: only methods flagged here are
+             expected in the drawer at the end of a shift. -->
+        <template v-else-if="column.key === 'is_cash'">
+          <a-tooltip :title="$t('Counts_As_Cash_Hint')">
+            <a-switch
+              :checked="!!record.is_cash"
+              :loading="togglingCashId === record.id"
+              size="small"
+              @change="v => toggleCash(record, v)"
+            />
+          </a-tooltip>
+        </template>
         <template v-else-if="column.key === 'actions'">
           <!-- Methods 1-3 are system defaults — legacy blocks touching them. -->
           <span v-if="[1, 2, 3].includes(record.id)" style="color: #faad14; font-size: 12px">
@@ -66,6 +78,10 @@
  * PUT payment_methods/{id}/active {is_active}. Inactive methods are hidden
  * from every new-payment picker (POS, sales/purchases/returns/expenses);
  * reports and historical payments still show them.
+ *
+ * PUT payment_methods/{id}/cash {is_cash} marks a method as physical cash.
+ * That flag is what the cash register close reconciles the drawer against —
+ * card, transfer and credit tenders are excluded from expected cash.
  */
 import { ref, computed } from 'vue';
 import { message } from 'ant-design-vue';
@@ -84,10 +100,12 @@ crud.fetchRows();
 const columns = computed(() => [
   { title: t('Name'), dataIndex: 'name', key: 'name', sorter: true },
   { title: t('Status'), key: 'is_active', width: 90, align: 'center' },
+  { title: t('Counts_As_Cash'), key: 'is_cash', width: 130, align: 'center' },
   { title: t('Action'), key: 'actions', width: 280, align: 'center' },
 ]);
 
 const togglingId = ref(null);
+const togglingCashId = ref(null);
 
 async function toggleActive(record, checked) {
   togglingId.value = record.id;
@@ -99,6 +117,19 @@ async function toggleActive(record, checked) {
     message.error(e?.data?.message || t('InvalidData'));
   } finally {
     togglingId.value = null;
+  }
+}
+
+async function toggleCash(record, checked) {
+  togglingCashId.value = record.id;
+  try {
+    await http.put(`payment_methods/${record.id}/cash`, { is_cash: !!checked });
+    record.is_cash = !!checked;
+    message.success(t('Successfully_Updated'));
+  } catch (e) {
+    message.error(e?.data?.message || t('InvalidData'));
+  } finally {
+    togglingCashId.value = null;
   }
 }
 

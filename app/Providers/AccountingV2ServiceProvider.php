@@ -40,90 +40,17 @@ class AccountingV2ServiceProvider extends ServiceProvider
     {
         // Softly dispatch domain events from model lifecycle without touching controllers
         try {
-            if (class_exists(\App\Models\Sale::class)) {
-                \App\Models\Sale::created(function ($sale) {
-                    try {
-                        event(new \App\Events\SaleCreated($sale));
-                    } catch (\Throwable $e) {
-                        Log::warning('[AccountingV2] SaleCreated dispatch failed: '.$e->getMessage());
-                    }
-                });
-                \App\Models\Sale::updated(function ($sale) {
-                    try {
-                        if (method_exists($sale, 'wasChanged') && $sale->wasChanged('GrandTotal')) {
-                            event(new \App\Events\SaleUpdated($sale));
-                        }
-                    } catch (\Throwable $e) {
-                        Log::warning('[AccountingV2] SaleUpdated dispatch failed: '.$e->getMessage());
-                    }
-                });
-                \App\Models\Sale::deleted(function ($sale) {
-                    try {
-                        event(new \App\Events\SaleDeleted($sale));
-                    } catch (\Throwable $e) {
-                        Log::warning('[AccountingV2] SaleDeleted dispatch failed: '.$e->getMessage());
-                    }
-                });
-            }
-            if (class_exists(\App\Models\Purchase::class)) {
-                \App\Models\Purchase::created(function ($purchase) {
-                    try {
-                        event(new \App\Events\PurchaseCreated($purchase));
-                    } catch (\Throwable $e) {
-                        Log::warning('[AccountingV2] PurchaseCreated dispatch failed: '.$e->getMessage());
-                    }
-                });
-                \App\Models\Purchase::updated(function ($purchase) {
-                    try {
-                        if (method_exists($purchase, 'wasChanged') && $purchase->wasChanged('GrandTotal')) {
-                            event(new \App\Events\PurchaseUpdated($purchase));
-                        }
-                    } catch (\Throwable $e) {
-                        Log::warning('[AccountingV2] PurchaseUpdated dispatch failed: '.$e->getMessage());
-                    }
-                });
-                \App\Models\Purchase::deleted(function ($purchase) {
-                    try {
-                        event(new \App\Events\PurchaseDeleted($purchase));
-                    } catch (\Throwable $e) {
-                        Log::warning('[AccountingV2] PurchaseDeleted dispatch failed: '.$e->getMessage());
-                    }
-                });
-            }
-            if (class_exists(\App\Models\Expense::class)) {
-                \App\Models\Expense::created(function ($expense) {
-                    try {
-                        event(new \App\Events\ExpenseCreated($expense));
-                    } catch (\Throwable $e) {
-                        Log::warning('[AccountingV2] ExpenseCreated dispatch failed: '.$e->getMessage());
-                    }
-                });
-                \App\Models\Expense::updated(function ($expense) {
-                    try {
-                        if (method_exists($expense, 'wasChanged') && $expense->wasChanged('amount')) {
-                            event(new \App\Events\ExpenseUpdated($expense));
-                        }
-                    } catch (\Throwable $e) {
-                        Log::warning('[AccountingV2] ExpenseUpdated dispatch failed: '.$e->getMessage());
-                    }
-                });
-                \App\Models\Expense::deleted(function ($expense) {
-                    try {
-                        event(new \App\Events\ExpenseDeleted($expense));
-                    } catch (\Throwable $e) {
-                        Log::warning('[AccountingV2] ExpenseDeleted dispatch failed: '.$e->getMessage());
-                    }
-                });
-            }
-            if (class_exists(\App\Models\SaleReturn::class)) {
-                \App\Models\SaleReturn::created(function ($saleReturn) {
-                    try {
-                        event(new \App\Events\SaleReturned($saleReturn));
-                    } catch (\Throwable $e) {
-                        Log::warning('[AccountingV2] SaleReturned dispatch failed: '.$e->getMessage());
-                    }
-                });
-            }
+            // Documents: sales, purchases, expenses and both kinds of return.
+            $this->observeDocument(\App\Models\Sale::class, 'GrandTotal',
+                \App\Events\SaleCreated::class, \App\Events\SaleUpdated::class, \App\Events\SaleDeleted::class);
+            $this->observeDocument(\App\Models\Purchase::class, 'GrandTotal',
+                \App\Events\PurchaseCreated::class, \App\Events\PurchaseUpdated::class, \App\Events\PurchaseDeleted::class);
+            $this->observeDocument(\App\Models\Expense::class, 'amount',
+                \App\Events\ExpenseCreated::class, \App\Events\ExpenseUpdated::class, \App\Events\ExpenseDeleted::class);
+            $this->observeDocument(\App\Models\SaleReturn::class, 'GrandTotal',
+                \App\Events\SaleReturned::class, \App\Events\SaleReturnUpdated::class, \App\Events\SaleReturnDeleted::class);
+            $this->observeDocument(\App\Models\PurchaseReturn::class, 'GrandTotal',
+                \App\Events\PurchaseReturnCreated::class, \App\Events\PurchaseReturnUpdated::class, \App\Events\PurchaseReturnDeleted::class);
             // Dispatch PaymentCreated when a PaymentSale is created
             if (class_exists(\App\Models\PaymentSale::class)) {
                 \App\Models\PaymentSale::created(function ($payment) {
@@ -163,6 +90,60 @@ class AccountingV2ServiceProvider extends ServiceProvider
             }
         } catch (\Throwable $e) {
             Log::warning('[AccountingV2] Observer registration failed: '.$e->getMessage());
+        }
+    }
+
+    /**
+     * Wire a document model's lifecycle to its created / updated / deleted events.
+     *
+     * Two things the naive model hooks got wrong:
+     *  - Controllers save the header row first and insert its detail lines
+     *    afterwards, inside one transaction. Dispatching on `created` therefore
+     *    ran the journal listeners before any lines existed, so COGS came out
+     *    as zero. Events are now dispatched after the transaction commits (or
+     *    at once when there is none), when the document is complete.
+     *  - These models are not SoftDeletes: controllers delete by writing
+     *    `deleted_at`, which fires `updated`, never `deleted`. A newly set
+     *    `deleted_at` is treated as the delete, as the payment hooks already do.
+     */
+    protected function observeDocument(string $model, string $totalColumn, string $created, string $updated, string $deleted): void
+    {
+        if (! class_exists($model)) {
+            return;
+        }
+
+        $model::created(function ($doc) use ($created) {
+            $this->dispatchAfterCommit($doc, $created);
+        });
+
+        $model::updated(function ($doc) use ($totalColumn, $updated, $deleted) {
+            if ($doc->wasChanged('deleted_at') && ! is_null($doc->deleted_at)) {
+                $this->dispatchAfterCommit($doc, $deleted);
+            } elseif ($doc->wasChanged($totalColumn)) {
+                $this->dispatchAfterCommit($doc, $updated);
+            }
+        });
+
+        $model::deleted(function ($doc) use ($deleted) {
+            $this->dispatchAfterCommit($doc, $deleted);
+        });
+    }
+
+    protected function dispatchAfterCommit($doc, string $eventClass): void
+    {
+        $dispatch = function () use ($doc, $eventClass) {
+            try {
+                event(new $eventClass($doc));
+            } catch (\Throwable $e) {
+                Log::warning('[AccountingV2] '.class_basename($eventClass).' dispatch failed: '.$e->getMessage());
+            }
+        };
+
+        try {
+            $doc->getConnection()->afterCommit($dispatch);
+        } catch (\RuntimeException $e) {
+            // No transactions manager on this connection; nothing to wait for.
+            $dispatch();
         }
     }
 }

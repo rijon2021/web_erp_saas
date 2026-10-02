@@ -15,7 +15,7 @@ class PermissionsSeeder extends Seeder
     public function run()
     {
         // Insert some stuff
-        DB::table('permissions')->insert(
+        DB::table('permissions')->insertOrIgnore(
             [[
                 'id' => 1,
                 'name' => 'users_view',
@@ -1362,6 +1362,12 @@ class PermissionsSeeder extends Seeder
                 [
                     'id' => 312,
                     'name' => 'business_modules',
+                ],
+
+                // Accounting V2 → Reconciliation (operational balances vs GL)
+                [
+                    'id' => 313,
+                    'name' => 'accounting_reconciliation',
                 ],
 
             ]

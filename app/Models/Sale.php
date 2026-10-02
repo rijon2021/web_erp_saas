@@ -52,6 +52,20 @@ class Sale extends Model
         'exchange_rate' => 'float',
     ];
 
+    /**
+     * SQL for the order-level discount as a money amount. `discount` holds a
+     * percentage when discount_Method is '1' (applied to the sum of the line
+     * totals, as the sale form does), so it can never be summed as-is.
+     */
+    public static function discountAmountSql(string $table = 'sales'): string
+    {
+        return "(CASE WHEN {$table}.discount_Method = '1'
+            THEN ROUND(COALESCE({$table}.discount, 0) / 100 * (
+                SELECT COALESCE(SUM(sale_details.total), 0) FROM sale_details WHERE sale_details.sale_id = {$table}.id
+            ), 2)
+            ELSE COALESCE({$table}.discount, 0) END)";
+    }
+
     public function currency()
     {
         return $this->belongsTo('App\Models\Currency');

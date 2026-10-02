@@ -38,7 +38,7 @@
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Quantity *" name="qty_planned">
+                <a-form-item label="Quantity (batch size) *" name="qty_planned">
                   <a-input-number v-model:value="form.qty_planned" :min="0.0001" style="width: 100%" />
                 </a-form-item>
               </a-col>
@@ -74,6 +74,21 @@
               <a-col :xs="12" :md="6">
                 <a-form-item label="Due" name="planned_end">
                   <a-date-picker v-model:value="form.planned_end" style="width: 100%" value-format="YYYY-MM-DD" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="8">
+                <a-form-item label="Batch No." name="batch_no" :extra="batchHint">
+                  <a-input v-model:value="form.batch_no" allow-clear placeholder="Leave blank to use the order reference" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="12" :md="8">
+                <a-form-item label="Production date" name="production_date" extra="Blank = the day the order completes">
+                  <a-date-picker v-model:value="form.production_date" style="width: 100%" value-format="YYYY-MM-DD" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="12" :md="8">
+                <a-form-item label="Expiry date" name="expiry_date" :extra="expiryHint">
+                  <a-date-picker v-model:value="form.expiry_date" style="width: 100%" value-format="YYYY-MM-DD" />
                 </a-form-item>
               </a-col>
               <a-col :span="24">
@@ -150,6 +165,7 @@ const form = reactive({
   reference: '', product_id: undefined, bom_id: undefined, qty_planned: 1,
   warehouse_id: undefined, fg_warehouse_id: undefined, priority: 'normal',
   planned_start: new Date().toISOString().slice(0, 10), planned_end: null, notes: '',
+  batch_no: '', production_date: null, expiry_date: null,
 });
 
 const products = ref([]);
@@ -168,6 +184,37 @@ const bomHint = computed(() => {
     ? `${bomOptions.value.length} recipe(s) available`
     : 'No active recipe — the order will have no materials';
 });
+
+// ---------------- batch & expiry ----------------
+
+const selectedProduct = computed(() => products.value.find(p => p.id === form.product_id) || null);
+
+const batchHint = computed(() => {
+  if (!selectedProduct.value) return 'Printed on the finished-goods label';
+  return selectedProduct.value.is_batch_tracked
+    ? 'This product is batch-tracked — the finished goods are received as this batch'
+    : 'Optional. Set one to receive the finished goods as a tracked batch';
+});
+
+const expiryHint = computed(() => {
+  const days = Number(selectedProduct.value?.shelf_life_days) || 0;
+  return days ? `Blank = ${days} days after the production date` : 'Optional';
+});
+
+/** Suggest an expiry from the product's shelf life once a production date is known. */
+watch(() => [form.product_id, form.production_date], () => {
+  const days = Number(selectedProduct.value?.shelf_life_days) || 0;
+  if (!days || !form.production_date || form.expiry_date) return;
+  form.expiry_date = addDays(form.production_date, days);
+});
+
+function addDays(date, days) {
+  const d = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + days);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
 const required = () => [{ required: true, message: t('Field_is_required', 'This field is required') }];
 const rules = computed(() => ({
@@ -272,10 +319,14 @@ async function bootstrap() {
         qty_planned: o.qty_planned, warehouse_id: o.warehouse_id,
         fg_warehouse_id: o.fg_warehouse_id, priority: o.priority,
         planned_start: o.planned_start, planned_end: o.planned_end, notes: o.notes,
+        batch_no: o.batch_no || '', production_date: o.production_date, expiry_date: o.expiry_date,
       });
 
       if (!products.value.some(p => p.id === o.product_id)) {
-        products.value.push({ id: o.product_id, label: `${o.product_code} — ${o.product_name}`, cost: 0 });
+        products.value.push({
+          id: o.product_id, label: `${o.product_code} — ${o.product_name}`, cost: 0,
+          is_batch_tracked: !!o.is_batch_tracked, shelf_life_days: o.shelf_life_days || 0,
+        });
       }
       loadPreview();
     } else if (warehouses.value.length === 1) {

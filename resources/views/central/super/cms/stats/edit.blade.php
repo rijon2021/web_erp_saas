@@ -29,13 +29,13 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label">{{ __('super.stats.field_label') }} <span class="text-danger">*</span></label>
-                    <input type="text" name="label" class="form-control" value="{{ old('label', $stat->label) }}" placeholder="e.g. Businesses" required>
+                    <input type="text" name="label" class="form-control" value="{{ old('label', $stat->label) }}" placeholder="{{ __('super.cms.ph_stat_label') }}" required>
                 </div>
             </div>
             <div class="form-row mb-4">
                 <div class="form-group">
                     <label class="form-label">{{ __('super.stats.field_icon') }}</label>
-                    <input type="text" name="icon" class="form-control" value="{{ old('icon', $stat->icon) }}" placeholder="e.g. bi bi-building">
+                    <input type="text" name="icon" class="form-control" value="{{ old('icon', $stat->icon) }}" placeholder="{{ __('super.cms.ph_stat_icon') }}">
                     <p class="form-hint">{{ __('super.stats.icon_hint') }}</p>
                 </div>
                 <div class="form-group">

@@ -16,6 +16,12 @@
           </a-button>
         </template>
 
+        <a-alert
+          v-if="setting.enable_warehouse_letterhead"
+          type="info" show-icon style="margin-bottom: 16px"
+          :message="$t('Warehouse_Letterhead_Receipt_Notice')"
+        />
+
         <div style="display: flex; justify-content: center; margin-bottom: 20px">
           <a-segmented
             v-model:value="pos_settings.receipt_layout"
@@ -117,6 +123,9 @@
                           </table>
                           <p class="mt-2 mb-0 text-center" v-show="pos_settings.show_note" style="white-space:pre-line;">
                             <small><strong>{{ pos_settings.note_customer || 'Thank you for your purchase!' }}</strong></small>
+                          </p>
+                          <p v-if="setting.enable_warehouse_letterhead" class="mt-1 mb-0 text-center receipt-branch-note" style="white-space:pre-line;">
+                            <small>{{ branchNoteDemo }}</small>
                           </p>
                           <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
                             <div class="zatca-qr">
@@ -241,6 +250,9 @@
                           <p class="mt-2 mb-0 text-center" v-show="pos_settings.show_note" style="white-space:pre-line;">
                             <small><strong>{{ pos_settings.note_customer || 'Thank you for your purchase!' }}</strong></small>
                           </p>
+                          <p v-if="setting.enable_warehouse_letterhead" class="mt-1 mb-0 text-center receipt-branch-note" style="white-space:pre-line;">
+                            <small>{{ branchNoteDemo }}</small>
+                          </p>
                           <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
                             <div class="zatca-qr">
                               <div class="zatca-qr-title">ZATCA</div>
@@ -357,6 +369,9 @@
                           </table>
                           <p class="mt-2 mb-0 text-center" v-show="pos_settings.show_note" style="white-space:pre-line;">
                             <small><strong>{{ pos_settings.note_customer || 'Thank you for your purchase!' }}</strong></small>
+                          </p>
+                          <p v-if="setting.enable_warehouse_letterhead" class="mt-1 mb-0 text-center receipt-branch-note" style="white-space:pre-line;">
+                            <small>{{ branchNoteDemo }}</small>
                           </p>
                           <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
                             <div class="zatca-qr">
@@ -533,6 +548,7 @@
                               <div class="bl4-thanks-en">Thank You For Shopping With Us!</div>
                             </div>
                             <div v-show="pos_settings.show_note" class="bl4-policy">{{ pos_settings.note_customer || 'Thank you for your purchase!' }}</div>
+                            <div v-if="setting.enable_warehouse_letterhead" class="bl4-policy receipt-branch-note">{{ branchNoteDemo }}</div>
                             <div class="bl4-footer-contact">+123 456 789 &middot; demo@example.com</div>
                           </div>
                           <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
@@ -668,6 +684,10 @@
 
                           <p class="minimal-note" v-show="pos_settings.show_note" style="white-space:pre-line;">
                             {{ pos_settings.note_customer || 'Thank you for your purchase!' }}
+                          </p>
+
+                          <p v-if="setting.enable_warehouse_letterhead" class="minimal-note receipt-branch-note" style="white-space:pre-line;">
+                            {{ branchNoteDemo }}
                           </p>
 
                           <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
@@ -806,14 +826,22 @@ import { PrinterOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import BarcodeSvg from '../../components/BarcodeSvg.vue';
 import http from '../../lib/http';
-import { receiptFontHeadTags, whenPrintFontsReady } from '../../lib/receiptFont';
+import { receiptFontHeadTags, receiptPageHeadTag, whenPrintReady } from '../../lib/receiptFont';
 
 const { t } = useI18n();
 
 const isLoading = ref(true);
 const logoSizeType = ref('medium');
 const noteTouched = ref(false);
-const setting = ref({ vat_number: '' });
+const setting = ref({ vat_number: '', enable_warehouse_letterhead: false });
+
+/**
+ * Warehouse Letterhead preview. The real receipt prints the issuing warehouse's
+ * own name/address/phone and its invoice footer note; the demo receipts below
+ * stand in for it with sample text so the admin can see where it lands. Shown
+ * only while the module is on (System Settings -> Features).
+ */
+const branchNoteDemo = computed(() => t('Warehouse_Letterhead_Receipt_Demo'));
 
 const pos_settings = ref({
   note_customer: '',
@@ -979,6 +1007,7 @@ function printPosDemo() {
     const w = window.open('', '', 'height=600,width=400');
     w.document.write('<html><head>');
     w.document.write('<link rel="stylesheet" href="/css/pos_print.css">');
+    w.document.write(receiptPageHeadTag(pos_settings.value));
     w.document.write(receiptFontHeadTags(pos_settings.value, 'body'));
     w.document.write('</head><body>');
     // Same wrapper as the real POS print path (PosPage._writePrintWindow):
@@ -987,7 +1016,7 @@ function printPosDemo() {
     w.document.write(el.innerHTML);
     w.document.write('</div></body></html>');
     w.document.close();
-    whenPrintFontsReady(w, () => { try { w.print(); } catch (e) {} });
+    whenPrintReady(w, () => { try { w.print(); } catch (e) {} });
   } catch (e) { /* preview print errors are non-fatal, like legacy */ }
 }
 
@@ -1004,6 +1033,7 @@ async function loadSettings() {
   try {
     const data = await http.get('get_Settings_data_api');
     setting.value.vat_number = data?.settings?.vat_number || '';
+    setting.value.enable_warehouse_letterhead = !!data?.settings?.enable_warehouse_letterhead;
   } catch (e) { /* display-only */ }
   isLoading.value = false;
 }

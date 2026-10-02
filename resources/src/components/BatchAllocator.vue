@@ -16,7 +16,7 @@
           v-model:value="row.qty"
           :min="0"
           style="width: 110px"
-          :status="Number(row.qty) > (Number(row.qty_available) || 0) ? 'error' : undefined"
+          :status="!unlimited && Number(row.qty) > (Number(row.qty_available) || 0) ? 'error' : undefined"
         />
         <a-button type="text" size="small" danger @click="line.batches.splice(i, 1)">
           <template #icon><DeleteOutlined /></template>
@@ -53,6 +53,11 @@ const props = defineProps({
   warehouseId: { type: [Number, String], required: true },
   // batches_for_sale | batches_for_quotation — same response shape.
   endpoint: { type: String, default: 'batches_for_sale' },
+  // Extra query string for the availability call (e.g. include_empty=1 so an
+  // "add" adjustment can restock a batch that is currently at zero).
+  query: { type: Object, default: null },
+  // Stock goes INTO the picked batches, so the held quantity is no cap.
+  unlimited: { type: Boolean, default: false },
 });
 
 const { t } = useI18n();
@@ -99,7 +104,8 @@ onMounted(async () => {
   const variantSeg = props.line.product_variant_id ?? 0;
   try {
     const data = await http.get(
-      `${props.endpoint}/${props.line.product_id}/${props.warehouseId}/${variantSeg || 0}`
+      `${props.endpoint}/${props.line.product_id}/${props.warehouseId}/${variantSeg || 0}`,
+      props.query || undefined
     );
     available.value = Array.isArray(data?.batches) ? data.batches : [];
     // Seed a first row when availability exists and none allocated yet.
@@ -119,6 +125,9 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   align-items: center;
+  /* Phone-width modals cannot fit select + available + qty + delete on one
+     line; without wrapping, the qty input is pushed past the modal edge. */
+  flex-wrap: wrap;
   margin-bottom: 8px;
 }
 .muted {

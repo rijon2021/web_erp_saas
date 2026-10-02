@@ -81,6 +81,7 @@ import { useI18n } from 'vue-i18n';
 import { PrinterOutlined } from '@ant-design/icons-vue';
 import { useFormat } from '../composables/useFormat';
 import http from '../lib/http';
+import { receiptPageHeadTag } from '../lib/receiptFont';
 
 const props = defineProps({
   /** { id, name } — the customer being paid. */
@@ -181,7 +182,7 @@ function printReceipt() {
     return;
   }
   win.document.write(
-    `<html><head><link rel="stylesheet" href="/css/pos_print.css" /></head><body>${node.innerHTML}</body></html>`
+    `<html><head><link rel="stylesheet" href="/css/pos_print.css" />${receiptPageHeadTag()}</head><body>${node.innerHTML}</body></html>`
   );
   win.document.close();
   setTimeout(() => win.print(), 600);

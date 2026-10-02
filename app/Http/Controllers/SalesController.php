@@ -458,15 +458,7 @@ class SalesController extends BaseController
                             'user_id' => Auth::user()->id,
                         ]);
 
-                        $account = Account::where('id', $request->payment['account_id'])->exists();
-
-                        if ($account) {
-                            // Account exists, perform the update
-                            $account = Account::find($request->payment['account_id']);
-                            $account->update([
-                                'balance' => $account->balance + $request['amount'],
-                            ]);
-                        }
+                        Account::adjustBalance($request->payment['account_id'], $request['amount']);
 
                         $sale->update([
                             'paid_amount' => $total_paid,
@@ -1226,9 +1218,7 @@ class SalesController extends BaseController
                         $card->delete();
                     }
                 }
-                if ($p->account_id && ($acct = \App\Models\Account::find($p->account_id))) {
-                    $acct->update(['balance' => $acct->balance - (float) $p->montant]);
-                }
+                \App\Models\Account::adjustBalance($p->account_id, -(float) $p->montant);
                 $p->delete();
             }
 
@@ -1453,13 +1443,7 @@ class SalesController extends BaseController
                             }
                         }
 
-                        $account = Account::find($Payment_Sale->account_id);
-
-                        if ($account) {
-                            $account->update([
-                                'balance' => $account->balance - $Payment_Sale->montant,
-                            ]);
-                        }
+                        Account::adjustBalance($Payment_Sale->account_id, -$Payment_Sale->montant);
 
                         $Payment_Sale->delete();
                     }
@@ -1499,6 +1483,7 @@ class SalesController extends BaseController
             $this->authorizeForUser($request->user('api'), 'check_record', $sale_data);
         }
 
+        $sale_details['id'] = $sale_data->id;
         $sale_details['Ref'] = $sale_data->Ref;
         $sale_details['date'] = $sale_data->date.' '.$sale_data->time;
         $sale_details['note'] = $sale_data->notes;
@@ -1528,6 +1513,10 @@ class SalesController extends BaseController
         $sale_details['paid_amount'] = number_format($sale_data->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $sale_details['due'] = number_format($sale_details['GrandTotal'] - $sale_details['paid_amount'], helpers::price_decimals(), '.', '');
         $sale_details['payment_status'] = $sale_data->payment_statut;
+        $sale_details['previous_dues'] = number_format(
+            $this->clientPreviousDues($sale_data->client_id, $sale_data->id) * $docCurrency['rate'],
+            helpers::price_decimals(), '.', ''
+        );
         $sale_details['discount_from_points'] = ($sale_data->discount_from_points ?? 0) * $docCurrency['rate'];
 
         if (SaleReturn::where('sale_id', $id)->where('deleted_at', '=', null)->exists()) {
@@ -1562,9 +1551,9 @@ class SalesController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -1621,6 +1610,8 @@ class SalesController extends BaseController
             'details' => $details,
             'sale' => $sale_details,
             'company' => $company,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($sale_data->warehouse_id, $company),
         ]);
 
     }
@@ -1635,6 +1626,8 @@ class SalesController extends BaseController
         $sale = Sale::with('details.product.unitSale')
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
+
+        $this->abortIfDocumentWarehouseDenied($sale);
 
         $docCurrency = helpers::Get_Document_Currency($sale);
 
@@ -1669,10 +1662,17 @@ class SalesController extends BaseController
         $item['tax_rate'] = $sale->tax_rate;
         $item['client_name'] = $sale['client']->name;
         $item['warehouse_name'] = $sale['warehouse']->name;
+        // Lets the POS rebuild this sale's branch letterhead offline, when no
+        // server-resolved issuer came with the payload.
+        $item['warehouse_id'] = $sale->warehouse_id;
         $item['seller_name'] = $sale['user']->username;
         $item['GrandTotal'] = number_format($sale->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $item['paid_amount'] = number_format($sale->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $item['notes'] = $sale->notes;
+        $item['previous_dues'] = number_format(
+            $this->clientPreviousDues($sale->client_id, $sale->id) * $docCurrency['rate'],
+            helpers::price_decimals(), '.', ''
+        );
 
         foreach ($sale['details'] as $detail) {
 
@@ -1693,9 +1693,9 @@ class SalesController extends BaseController
                     ->first();
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -1781,10 +1781,22 @@ class SalesController extends BaseController
         $fbrDocument = \App\Models\FbrDocument::forSource($sale);
         $fbrInvoiceNumber = ($fbrDocument && $fbrDocument->isAccepted()) ? $fbrDocument->fbr_invoice_number : null;
 
+        // Branch letterhead: the warehouse that rang up this sale. The
+        // receipt header uses it in place of the company settings, each
+        // field falling back to the company value when the branch has none.
+        $issuer = \App\Services\InvoiceIssuerService::resolve($sale->warehouse_id, $settings);
+        // Ship logo URLs that point at a file that exists (see receipt_logo_url)
+        // so the receipt never prints a broken-image box.
+        $issuer['logo'] = receipt_logo_url($issuer['logo'] ?? null);
+        if ($settings) {
+            $settings->logo = receipt_logo_url($settings->logo);
+        }
+
         return response()->json([
             'symbol' => $symbol,
             'payments' => $payments,
             'setting' => $settings,
+            'issuer' => $issuer,
             'pos_settings' => $pos_settings,
             'sale' => $item,
             'details' => $details,
@@ -1826,6 +1838,8 @@ class SalesController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($sale);
+
         $settings = Setting::where('deleted_at', '=', null)->first();
         $docCurrency = helpers::Get_Document_Currency($sale);
         $symbol = $docCurrency['code'];
@@ -1856,17 +1870,22 @@ class SalesController extends BaseController
             return $left . str_repeat(' ', $space) . $right . chr(10);
         };
 
+        // Branch letterhead: the warehouse that rang up the sale, falling back
+        // to the company settings field by field (and wholly, when the module
+        // is off).
+        $issuer = \App\Services\InvoiceIssuerService::resolve($sale->warehouse_id, $settings);
+
         $out  = $initPrinter;
         $out .= $alignCenter . $boldOn;
-        if ($settings && !empty($settings->CompanyName)) {
-            $out .= $settings->CompanyName . $LF;
+        if ($issuer['name'] !== '') {
+            $out .= $issuer['name'] . $LF;
         }
         $out .= $boldOff;
-        if ($settings && !empty($settings->CompanyAdress)) {
-            $out .= $settings->CompanyAdress . $LF;
+        if ($issuer['full_address'] !== '') {
+            $out .= $issuer['full_address'] . $LF;
         }
-        if ($settings && !empty($settings->CompanyPhone)) {
-            $out .= $settings->CompanyPhone . $LF;
+        if ($issuer['phone'] !== '') {
+            $out .= $issuer['phone'] . $LF;
         }
 
         $out .= $alignLeft . $line;
@@ -1927,6 +1946,9 @@ class SalesController extends BaseController
         }
 
         $out .= $LF . $alignCenter . 'Thank you!' . $LF;
+        if ($issuer['footer'] !== '') {
+            $out .= $issuer['footer'] . $LF;
+        }
         $out .= str_repeat($LF, 4);
         $out .= $cut;
 
@@ -1996,6 +2018,37 @@ class SalesController extends BaseController
     }
 
     // ------------- Reference Number Order SALE -----------\\
+
+    /**
+     * Outstanding balance the client carried BEFORE this sale.
+     *
+     * Mirrors the netBalance formula in ClientController (opening balance +
+     * unpaid sales - what is owed back on returns) but leaves THIS sale out,
+     * so that previous_dues + this sale's due equals the client's net balance.
+     * Not warehouse-scoped: it is the customer's balance, not the viewer's.
+     */
+    private function clientPreviousDues($client_id, $sale_id)
+    {
+        if (! $client_id) {
+            return 0.0;
+        }
+
+        $opening = (float) (Client::where('id', $client_id)->value('opening_balance') ?? 0);
+
+        $sales_due = (float) DB::table('sales')
+            ->whereNull('deleted_at')
+            ->where('client_id', $client_id)
+            ->where('statut', 'completed')
+            ->where('id', '!=', $sale_id)
+            ->sum(DB::raw('GrandTotal - paid_amount'));
+
+        $returns_due = (float) DB::table('sale_returns')
+            ->whereNull('deleted_at')
+            ->where('client_id', $client_id)
+            ->sum(DB::raw('GrandTotal - paid_amount'));
+
+        return round($opening + $sales_due - $returns_due, 2);
+    }
 
     public function getNumberOrder()
     {
@@ -2575,6 +2628,8 @@ class SalesController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($sale_data);
+
         $docCurrency = helpers::Get_Document_Currency($sale_data);
 
         $sale['client_name'] = $sale_data['client']->name;
@@ -2647,9 +2702,9 @@ class SalesController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -2703,6 +2758,8 @@ class SalesController extends BaseController
         $Html = view('pdf.sale_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($sale_data->warehouse_id, $settings),
             'sale' => $sale,
             'details' => $details,
         ])->render();
@@ -2736,6 +2793,8 @@ class SalesController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($sale_data);
+
         $docCurrency = helpers::Get_Document_Currency($sale_data);
 
         $sale['client_name'] = $sale_data['client']->name;
@@ -2808,8 +2867,9 @@ class SalesController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
             }
 
             if ($detail->product_variant_id) {
@@ -2863,6 +2923,8 @@ class SalesController extends BaseController
         $Html = view('pdf.sale_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($sale_data->warehouse_id, $settings),
             'sale' => $sale,
             'details' => $details,
         ])->render();
@@ -3059,9 +3121,9 @@ class SalesController extends BaseController
 
                     if ($product_unit_sale_id['unitSale']) {
                         $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                    } else {
+                        $unit = null;
                     }
-                    $unit = null;
-
                     $data['no_unit'] = 0;
                 }
 
@@ -3440,9 +3502,9 @@ class SalesController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
                 $data['no_unit'] = 0;
             }
 
@@ -3939,7 +4001,7 @@ class SalesController extends BaseController
         $sale = Sale::findOrFail($saleId);
 
         $request->validate([
-            'documents.*' => 'required|file|max:10240', // Max 10MB per file
+            'documents.*' => 'required|file|mimes:jpg,jpeg,png,webp,pdf,doc,docx,xls,xlsx,csv,txt|max:10240', // Max 10MB per file
         ]);
 
         $uploadedDocuments = [];
@@ -3957,7 +4019,9 @@ class SalesController extends BaseController
                 $size = $file->getSize();
                 $mimeType = $file->getMimeType();
 
-                $filename = time() . '_' . Str::random(10) . '_' . $originalName;
+                $safeBase = preg_replace('/[^A-Za-z0-9_.-]+/', '_', pathinfo($originalName, PATHINFO_FILENAME)) ?: 'document';
+                $safeExt  = strtolower($file->guessExtension() ?: pathinfo($originalName, PATHINFO_EXTENSION));
+                $filename = time() . '_' . Str::random(10) . '_' . $safeBase . ($safeExt ? '.' . $safeExt : '');
                 
                 // Move file to public/images/sale_documents
                 $file->move($uploadPath, $filename);
@@ -4038,8 +4102,11 @@ class SalesController extends BaseController
             ->update(['deleted_at' => Carbon::now()]);
 
         // Optionally delete the physical file
-        $filePath = public_path($document->path);
-        if (file_exists($filePath)) {
+        // Only delete files that really live under public/images — the stored
+        // path is server-written, but keep the unlink() contained regardless.
+        $filePath = realpath(public_path($document->path));
+        $imagesRoot = realpath(public_path('images'));
+        if ($filePath && $imagesRoot && str_starts_with($filePath, $imagesRoot . DIRECTORY_SEPARATOR) && is_file($filePath)) {
             unlink($filePath);
         }
 
@@ -4118,6 +4185,8 @@ class SalesController extends BaseController
             'details' => $details,
             'payments' => $payments,
             'setting' => $settings,
+            // Branch letterhead: the warehouse that issued the scanned invoice.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($sale->warehouse_id, $settings),
             'symbol' => $symbol,
         ]);
     }

@@ -88,7 +88,10 @@ class PendingWorkController extends Controller
                 // lives on product_warehouse, and only the user's warehouses
                 // count.
                 'count' => fn () => \App\Models\product_warehouse::join('products', 'product_warehouse.product_id', '=', 'products.id')
+                    ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
+                    ->tap(fn ($q) => $this->scopeStockRowsToOwnership($q))
                     ->whereRaw('qte <= stock_alert')
+                    ->whereNull('product_warehouse.deleted_at')
                     ->whereIn('product_warehouse.warehouse_id', $this->userWarehouseIds())
                     ->count(),
             ],

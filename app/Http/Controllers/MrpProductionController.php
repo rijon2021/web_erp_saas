@@ -9,9 +9,11 @@ use App\Models\MrpQualityCheckLine;
 use App\Models\MrpWorkOrder;
 use App\Models\Permission;
 use App\Models\Product;
+use App\Models\ProductVariant;
 use App\Models\User;
 use App\Notifications\MrpShortageNotification;
 use App\Services\Mrp\ProductionService;
+use App\utils\helpers;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -124,6 +126,8 @@ class MrpProductionController extends BaseController
                 'qty_planned' => round((float) $o->qty_planned, 4),
                 'qty_produced' => round((float) $o->qty_produced, 4),
                 'qty_scrapped' => round((float) $o->qty_scrapped, 4),
+                'batch_no' => $o->batch_no,
+                'expiry_date' => $o->expiry_date ? $o->expiry_date->format('Y-m-d') : null,
                 'status' => $o->status,
                 'priority' => $o->priority,
                 'planned_start' => $o->planned_start ? $o->planned_start->format('Y-m-d') : null,
@@ -162,7 +166,7 @@ class MrpProductionController extends BaseController
         $this->authorizeForUser($request->user('api'), 'view', MrpProductionOrder::class);
 
         $order = MrpProductionOrder::whereNull('deleted_at')
-            ->with(['materials', 'workOrders.workCenter', 'workOrders.employee', 'qualityChecks.lines', 'bom', 'warehouse', 'product'])
+            ->with(['materials.batches.batch', 'workOrders.workCenter', 'workOrders.employee', 'qualityChecks.lines', 'bom', 'warehouse', 'product'])
             ->findOrFail($id);
 
         // A production order consumes and produces stock in its warehouse.
@@ -181,11 +185,21 @@ class MrpProductionController extends BaseController
                 'qty_issued' => round((float) $m->qty_issued, 4),
                 'qty_returned' => round((float) $m->qty_returned, 4),
                 'qty_consumed' => $m->qtyConsumed(),
-                'shortfall' => $m->shortfall(),
+                'qty_outstanding' => $m->qtyOutstanding(),
+                'shortfall' => $m->shortfall($onHand),
                 'on_hand' => round($onHand, 4),
                 'unit_cost' => round((float) $m->unit_cost, 4),
                 'total_cost' => round((float) $m->total_cost, 4),
                 'is_optional' => (bool) $m->is_optional,
+                'is_batch_tracked' => $product ? (bool) ($product->is_batch_tracked ?? false) : false,
+                // Which raw-material batches this line was drawn from, FEFO.
+                'batches' => $m->batches->map(fn ($b) => [
+                    'id' => $b->id,
+                    'product_batch_id' => $b->product_batch_id,
+                    'batch_no' => $b->batch ? $b->batch->batch_no : null,
+                    'expiry_date' => $b->batch && $b->batch->expiry_date ? $b->batch->expiry_date->format('Y-m-d') : null,
+                    'qty' => round((float) $b->qty, 4),
+                ])->values(),
             ];
         });
 
@@ -249,6 +263,12 @@ class MrpProductionController extends BaseController
                 'qty_planned' => round((float) $order->qty_planned, 4),
                 'qty_produced' => round((float) $order->qty_produced, 4),
                 'qty_scrapped' => round((float) $order->qty_scrapped, 4),
+                'batch_no' => $order->batch_no,
+                'production_date' => $order->production_date ? $order->production_date->format('Y-m-d') : null,
+                'expiry_date' => $order->expiry_date ? $order->expiry_date->format('Y-m-d') : null,
+                'product_batch_id' => $order->product_batch_id,
+                'is_batch_tracked' => $order->product ? (bool) ($order->product->is_batch_tracked ?? false) : false,
+                'shelf_life_days' => $order->product ? (int) ($order->product->shelf_life_days ?? 0) : 0,
                 'status' => $order->status,
                 'priority' => $order->priority,
                 'planned_start' => $order->planned_start ? $order->planned_start->format('Y-m-d') : null,
@@ -291,6 +311,9 @@ class MrpProductionController extends BaseController
             'bom_id' => 'nullable|exists:mrp_boms,id',
             'priority' => 'nullable|in:low,normal,high,urgent',
             'planned_end' => 'nullable|date|after_or_equal:planned_start',
+            'batch_no' => 'nullable|string|max:100',
+            'production_date' => 'nullable|date',
+            'expiry_date' => 'nullable|date|after_or_equal:production_date',
         ]);
 
         // The order books stock in this warehouse — it must be the caller's.
@@ -312,8 +335,17 @@ class MrpProductionController extends BaseController
 
         $order = null;
         DB::transaction(function () use ($request, $bom, &$order) {
+            $reference = MrpProductionOrder::nextReference('MO');
+
+            // A batch-tracked product always gets a batch number: the order
+            // reference is a sensible default that can be changed later.
+            $batchNo = trim((string) $request->batch_no);
+            if ($batchNo === '' && Product::whereKey($request->product_id)->value('is_batch_tracked')) {
+                $batchNo = $reference;
+            }
+
             $order = MrpProductionOrder::create([
-                'reference' => MrpProductionOrder::nextReference('MO'),
+                'reference' => $reference,
                 'bom_id' => $bom ? $bom->id : null,
                 'product_id' => $request->product_id,
                 'product_variant_id' => $request->product_variant_id ?: null,
@@ -324,6 +356,9 @@ class MrpProductionController extends BaseController
                 'priority' => $request->priority ?: 'normal',
                 'planned_start' => $request->planned_start ?: now()->toDateString(),
                 'planned_end' => $request->planned_end,
+                'batch_no' => $batchNo !== '' ? $batchNo : null,
+                'production_date' => $request->production_date ?: null,
+                'expiry_date' => $request->expiry_date ?: null,
                 'sale_id' => $request->sale_id ?: null,
                 'notes' => $request->notes,
                 'created_by' => optional($request->user('api'))->id,
@@ -362,6 +397,9 @@ class MrpProductionController extends BaseController
             'qty_planned' => 'required|numeric|min:0.0001',
             'priority' => 'nullable|in:low,normal,high,urgent',
             'planned_end' => 'nullable|date|after_or_equal:planned_start',
+            'batch_no' => 'nullable|string|max:100',
+            'production_date' => 'nullable|date',
+            'expiry_date' => 'nullable|date|after_or_equal:production_date',
         ]);
 
         // Once material has left the store, changing the quantity would make the
@@ -382,6 +420,9 @@ class MrpProductionController extends BaseController
                 'priority' => $request->priority ?: $order->priority,
                 'planned_start' => $request->planned_start ?: $order->planned_start,
                 'planned_end' => $request->planned_end,
+                'batch_no' => trim((string) $request->batch_no) !== '' ? trim((string) $request->batch_no) : null,
+                'production_date' => $request->production_date ?: null,
+                'expiry_date' => $request->expiry_date ?: null,
                 'notes' => $request->notes,
             ]);
 
@@ -481,6 +522,9 @@ class MrpProductionController extends BaseController
         $request->validate([
             'qty_produced' => 'required|numeric|min:0',
             'qty_scrapped' => 'nullable|numeric|min:0',
+            'batch_no' => 'nullable|string|max:100',
+            'production_date' => 'nullable|date',
+            'expiry_date' => 'nullable|date',
         ]);
 
         $order = MrpProductionOrder::whereNull('deleted_at')->findOrFail($id);
@@ -493,6 +537,9 @@ class MrpProductionController extends BaseController
                 [
                     'allow_overproduction' => $request->boolean('allow_overproduction'),
                     'skip_qc' => $request->boolean('skip_qc'),
+                    'batch_no' => $request->has('batch_no') ? $request->batch_no : null,
+                    'production_date' => $request->production_date ?: null,
+                    'expiry_date' => $request->expiry_date ?: null,
                 ]
             );
         } catch (\Throwable $e) {
@@ -509,11 +556,81 @@ class MrpProductionController extends BaseController
 
         $order = $result['order'];
 
+        // The cost price the product carries now that this run is rolled in.
+        $costTarget = $order->product_variant_id
+            ? \App\Models\ProductVariant::find($order->product_variant_id)
+            : Product::find($order->product_id);
+
         return response()->json([
             'success' => true,
             'unit_cost' => round((float) $order->unit_cost, 4),
             'total_cost' => round((float) $order->total_cost, 4),
             'cost_variance' => $order->costVariance(),
+            'product_cost' => $costTarget ? round((float) $costTarget->cost, 4) : null,
+            'batch_no' => $order->batch_no,
+            'expiry_date' => $order->expiry_date ? $order->expiry_date->format('Y-m-d') : null,
+            'product_batch_id' => $order->product_batch_id,
+        ]);
+    }
+
+    /**
+     * What the label printer needs for this order's finished goods: the product
+     * barcode plus the batch number, production date and expiry, one label per
+     * good unit produced. Same shape as the purchase barcode feed so the
+     * barcode page treats both alike.
+     */
+    public function barcodes(Request $request, $id)
+    {
+        $this->authorizeForUser($request->user('api'), 'view', MrpProductionOrder::class);
+
+        $order = MrpProductionOrder::whereNull('deleted_at')->with('product')->findOrFail($id);
+        $this->abortIfWarehouseDenied($order->warehouse_id);
+
+        $product = $order->product;
+        if (! $product) {
+            return response()->json(['warehouse_id' => $order->fg_warehouse_id ?: $order->warehouse_id, 'products' => []]);
+        }
+
+        $code = $product->code;
+        $name = $product->name;
+        $price = $product->price;
+
+        if ($order->product_variant_id) {
+            $variant = ProductVariant::where('product_id', $product->id)->find($order->product_variant_id);
+            if ($variant) {
+                $code = $variant->code;
+                $name = '['.$variant->name.']'.$product->name;
+                $price = $variant->price ?? $product->price;
+            }
+        }
+
+        // Same net-price arithmetic as the purchase label feed.
+        $discounted = $price;
+        if ((float) $product->discount != 0.0) {
+            $discounted = $product->discount_method == '1'
+                ? $price - ($price * $product->discount / 100)
+                : $price - $product->discount;
+        }
+        $net = $discounted;
+        if ((float) $product->TaxNet != 0.0 && $product->tax_method == '1') {
+            $net = $discounted + ($discounted * $product->TaxNet / 100);
+        }
+
+        $qty = (float) $order->qty_produced > 0 ? $order->qty_produced : $order->qty_planned;
+
+        return response()->json([
+            'warehouse_id' => $order->fg_warehouse_id ?: $order->warehouse_id,
+            'products' => [[
+                'code' => $code,
+                'barcode' => $code,
+                'name' => $name,
+                'Type_barcode' => $product->Type_barcode ?: 'CODE128',
+                'Net_price' => number_format((float) $net, helpers::price_decimals(), '.', ''),
+                'qte' => (int) max(1, ceil($qty)),
+                'batch_no' => $order->batch_no,
+                'expiry_date' => $order->expiry_date ? $order->expiry_date->format('Y-m-d') : null,
+                'mfg_date' => $order->production_date ? $order->production_date->format('Y-m-d') : null,
+            ]],
         ]);
     }
 

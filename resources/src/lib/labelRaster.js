@@ -35,7 +35,7 @@ function dotScale(design) {
 }
 
 /**
- * @param {object} label  {name, barcode, Type_barcode, Net_price, qte}
+ * @param {object} label  {name, barcode, Type_barcode, Net_price, qte, batch_no?, expiry_date?}
  * @param {object} design {width_mm, height_mm, show_name, show_price,
  *                        show_barcode, show_barcode_number, barcode_height,
  *                        font_size, number_font_size, bold_font, font_family,
@@ -106,11 +106,31 @@ export function renderLabelRaster(label, design) {
     ? upper(`${currency} ${label.Net_price ?? ''}`.trim())
     : '';
 
+  // ---- Batch / expiry: bottom-left, sharing the price row when both fit,
+  // otherwise on its own row just above the price. ----
+  const metaParts = [];
+  if (design.show_batch !== false && label.batch_no) metaParts.push(`B: ${label.batch_no}`);
+  if (design.show_expiry !== false && label.expiry_date) metaParts.push(`EXP: ${label.expiry_date}`);
+  const meta = upper(metaParts.join('  '));
+  const metaDots = Math.round(px(Math.max(6, fontPx - 2)));
+  const priceInset = Math.max(mm(3), Math.round(width * 0.1));
+  let metaOwnRow = false;
+  let metaMaxWidth = width - 2 * sideMargin;
+  if (meta !== '' && price !== '') {
+    ctx.font = `${weight} ${fontDots}px ${family}`;
+    const priceSpan = ctx.measureText(price).width + priceInset;
+    ctx.font = `${weight} ${metaDots}px ${family}`;
+    metaMaxWidth = width - sideMargin - priceSpan - mm(1);
+    metaOwnRow = ctx.measureText(meta).width > metaMaxWidth;
+    if (metaOwnRow) metaMaxWidth = width - 2 * sideMargin;
+  }
+  const metaReserve = meta !== '' && (price === '' || metaOwnRow) ? mm(0.5) + metaDots : 0;
+
   // ---- Product name: centred, as many lines as the space allows (up to 3)
   // after reserving the price line and a minimum-height barcode. A fixed
   // 2-line clamp truncated longer product names even with room to spare.
   if (design.show_name !== false) {
-    const priceReserve = price !== '' ? mm(0.5) + fontDots : 0;
+    const priceReserve = (price !== '' ? mm(0.5) + fontDots : 0) + metaReserve;
     const numberDots = Math.round(px(Math.max(6, Number(design.number_font_size) || 10)));
     const barcodeReserve = design.show_barcode !== false && label.barcode
       ? 24 + (design.show_barcode_number !== false ? numberDots + 4 : 0)
@@ -137,8 +157,22 @@ export function renderLabelRaster(label, design) {
     // Right edge aligned with the barcode's right edge (10% inset): scales
     // with the label and keeps the price well clear of the sticker edge and
     // corner radius on any roll.
-    const priceInset = Math.max(mm(3), Math.round(width * 0.1));
     ctx.fillText(price, width - priceInset, bottom, width - 2 * sideMargin);
+  }
+
+  // ---- Batch / expiry line ----
+  if (meta !== '') {
+    ctx.font = `${weight} ${metaDots}px ${family}`;
+    ctx.textAlign = 'left';
+    let metaTop;
+    if (price !== '' && !metaOwnRow) {
+      // Same row as the price, bottoms aligned.
+      metaTop = bottom + Math.max(0, fontDots - metaDots);
+    } else {
+      bottom -= mm(0.5) + metaDots;
+      metaTop = bottom;
+    }
+    ctx.fillText(meta, sideMargin, metaTop, metaMaxWidth);
   }
 
   // ---- Barcode: right below the name (vertically centering it in the

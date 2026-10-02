@@ -218,7 +218,7 @@ function pollApproveStatus(tenantId) {
         if (stepEl) {
             var mins = Math.floor(seconds / 60);
             var secs = seconds % 60;
-            stepEl.textContent = 'Elapsed: ' + (mins > 0 ? mins + 'm ' : '') + secs + 's';
+            stepEl.textContent = __s('elapsed') + ' ' + (mins > 0 ? mins + 'm ' : '') + secs + 's';
         }
 
         if (seconds >= 600) {

@@ -61,6 +61,8 @@ class GeneralSetting extends Model
         'whatsapp_enabled',
         'whatsapp_provider',
         'whatsapp_default_templates',
+        'billing_monthly_enabled',
+        'billing_yearly_enabled',
     ];
 
     protected $casts = [
@@ -78,7 +80,12 @@ class GeneralSetting extends Model
         'demo_data_enabled' => 'boolean',
         'whatsapp_enabled' => 'boolean',
         'whatsapp_default_templates' => 'array',
+        'billing_monthly_enabled' => 'boolean',
+        'billing_yearly_enabled' => 'boolean',
     ];
+
+    /** Every billing cycle the codebase knows how to price and renew. */
+    public const BILLING_CYCLES = ['monthly', 'yearly'];
 
     /**
      * Curated list of Google Font families offered for the landing pages.
@@ -355,6 +362,59 @@ class GeneralSetting extends Model
     public static function whatsappEnabled(): bool
     {
         return (bool) (static::instance()->whatsapp_enabled ?? false);
+    }
+
+    /**
+     * Billing cycles customers may actually choose, in display order.
+     *
+     * A missing column (migration not run yet) reads as null, which must mean
+     * "offered" rather than "hidden" — otherwise upgrading the code before the
+     * database would silently take checkout offline. Turning both off is not a
+     * reachable state through the settings form, but a direct DB edit could do
+     * it, so monthly is restored as the floor.
+     *
+     * @return list<string>
+     */
+    public static function enabledBillingCycles(): array
+    {
+        $setting = static::instance();
+
+        $cycles = [];
+        if ($setting->billing_monthly_enabled ?? true) {
+            $cycles[] = 'monthly';
+        }
+        if ($setting->billing_yearly_enabled ?? true) {
+            $cycles[] = 'yearly';
+        }
+
+        return $cycles ?: ['monthly'];
+    }
+
+    /** Whether a given cycle is on offer. */
+    public static function billingCycleEnabled(?string $cycle): bool
+    {
+        return in_array($cycle, static::enabledBillingCycles(), true);
+    }
+
+    /**
+     * The cycle a fresh checkout should start on — the caller's preference when
+     * it is still offered, otherwise the first cycle that is.
+     */
+    public static function defaultBillingCycle(?string $preferred = null): string
+    {
+        $cycles = static::enabledBillingCycles();
+
+        return in_array($preferred, $cycles, true) ? $preferred : $cycles[0];
+    }
+
+    /**
+     * Validation rule for a customer-facing `billing_cycle` field. Super-admin
+     * screens deliberately keep the full `in:monthly,yearly` list so support
+     * can still place a tenant on a cycle that is no longer publicly sold.
+     */
+    public static function billingCycleRule(): string
+    {
+        return 'in:' . implode(',', static::enabledBillingCycles());
     }
 
     /**

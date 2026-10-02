@@ -163,24 +163,40 @@ class ReportController extends BaseController
             ->selectRaw('ROUND(SUM(sales.GrandTotal), 2) as amount, ROUND(SUM(sales.paid_amount), 2) as paid, COUNT(DISTINCT sales.client_id) as active')
             ->first();
 
-        $debtors = $salesBase()
-            ->groupBy('sales.client_id')
-            ->havingRaw('SUM(sales.GrandTotal) - SUM(sales.paid_amount) > 0.009')
-            ->pluck('sales.client_id')
-            ->count();
+        $perClient = $salesBase()
+            ->groupBy('sales.client_id', 'c.name')
+            ->selectRaw('sales.client_id as id, c.name as name, ROUND(SUM(sales.GrandTotal), 2) as amount, ROUND(SUM(sales.GrandTotal) - SUM(sales.paid_amount), 2) as due');
+
+        // A customer's total due is their opening balance plus unpaid sales, so
+        // customers who owe only an opening balance (no sales yet) count too.
+        $owed = [];
+        foreach ((clone $perClient)->get() as $r) {
+            $owed[$r->id] = ['name' => $r->name, 'amount' => (float) $r->amount, 'due' => (float) $r->due];
+        }
+        $withOpening = (clone $clients)->where('opening_balance', '!=', 0)->get(['id', 'name', 'opening_balance']);
+        foreach ($withOpening as $c) {
+            $owed[$c->id] = $owed[$c->id] ?? ['name' => $c->name, 'amount' => 0.0, 'due' => 0.0];
+            $owed[$c->id]['due'] += (float) $c->opening_balance;
+        }
+        $debtorRows = collect($owed)
+            ->map(fn ($r) => (object) ['name' => $r['name'], 'amount' => $r['amount'], 'due' => round($r['due'], 2)])
+            ->filter(fn ($r) => $r->due > 0.009)
+            ->sortByDesc('due')
+            ->values();
+
+        $salesDue = round(((float) ($totalsRow->amount ?? 0)) - ((float) ($totalsRow->paid ?? 0)), 2);
+        $openingTotal = round((float) (clone $clients)->sum('opening_balance'), 2);
 
         $summary = [
             'customers' => (int) $totalRows,
             'active' => (int) ($totalsRow->active ?? 0),
             'amount' => (float) ($totalsRow->amount ?? 0),
             'paid' => (float) ($totalsRow->paid ?? 0),
-            'due' => round(((float) ($totalsRow->amount ?? 0)) - ((float) ($totalsRow->paid ?? 0)), 2),
-            'debtors' => (int) $debtors,
+            'due' => $salesDue,
+            'opening_balance' => $openingTotal,
+            'total_due' => round($salesDue + $openingTotal, 2),
+            'debtors' => $debtorRows->count(),
         ];
-
-        $perClient = $salesBase()
-            ->groupBy('sales.client_id', 'c.name')
-            ->selectRaw('c.name as name, ROUND(SUM(sales.GrandTotal), 2) as amount, ROUND(SUM(sales.GrandTotal) - SUM(sales.paid_amount), 2) as due');
 
         // Revenue concentration: top 7 customers + Other.
         $topRows = (clone $perClient)->orderByDesc('amount')->limit(7)->get()
@@ -195,11 +211,7 @@ class ReportController extends BaseController
             $top_customers[] = ['name' => 'Other', 'value' => $otherAmount];
         }
 
-        $top_debtors = (clone $perClient)
-            ->havingRaw('SUM(sales.GrandTotal) - SUM(sales.paid_amount) > 0.009')
-            ->orderByDesc('due')
-            ->limit(8)
-            ->get();
+        $top_debtors = $debtorRows->take(8)->values();
         // --------------------------------------------------------------------
 
         $clients = $clients->offset($offSet)
@@ -239,6 +251,9 @@ class ReportController extends BaseController
 
             $item['return_Due'] = $item['total_amount_return'] - $item['total_paid_return'];
 
+            $item['opening_balance'] = (float) ($client->opening_balance ?? 0);
+            $item['total_due'] = $item['opening_balance'] + $item['due'];
+
             $item['name'] = $client->name;
             $item['phone'] = $client->phone;
             $item['code'] = $client->code;
@@ -271,24 +286,22 @@ class ReportController extends BaseController
 
         $client = Client::where('deleted_at', '=', null)->findOrFail($id);
 
-        $data['total_sales'] = DB::table('sales')
-            ->where('deleted_at', '=', null)
-            ->where('client_id', $id)
-            ->count();
+        // Restricted to the warehouses this user may see, so these headline
+        // figures agree with the sales/returns tabs rendered beneath them.
+        $salesOf = fn () => $this->scopeToWarehouses(
+            DB::table('sales')->where('deleted_at', '=', null)->where('client_id', $client->id),
+            'warehouse_id'
+        );
 
-        $data['total_amount'] = DB::table('sales')
-            ->where('deleted_at', '=', null)
-            ->where('statut', 'completed')
-            ->where('client_id', $id)
-            ->sum('GrandTotal');
+        $data['total_sales'] = $salesOf()->count();
 
-        $data['total_paid'] = DB::table('sales')
-            ->where('deleted_at', '=', null)
-            ->where('statut', 'completed')
-            ->where('client_id', $client->id)
-            ->sum('paid_amount');
+        $data['total_amount'] = $salesOf()->where('statut', 'completed')->sum('GrandTotal');
+
+        $data['total_paid'] = $salesOf()->where('statut', 'completed')->sum('paid_amount');
 
         $data['due'] = $data['total_amount'] - $data['total_paid'];
+        $data['opening_balance'] = (float) ($client->opening_balance ?? 0);
+        $data['total_due'] = $data['opening_balance'] + $data['due'];
 
         return response()->json(['report' => $data]);
     }
@@ -321,6 +334,7 @@ class ReportController extends BaseController
 
         $data['due'] = $data['total_amount'] - $data['total_paid'];
         $data['opening_balance'] = $provider->opening_balance ?? 0;
+        $data['total_due'] = (float) $data['opening_balance'] + $data['due'];
         $data['credit_limit'] = $provider->credit_limit ?? 0;
 
         return response()->json(['report' => $data]);
@@ -681,7 +695,7 @@ class ReportController extends BaseController
     // Start displaying items from this number;
     $offSet = ($pageStart * $perPage) - $perPage;
     $order = $request->SortField;
-    $dir = $request->SortType;
+    $dir = in_array(strtolower((string) $request->SortType), ['asc', 'desc'], true) ? strtolower($request->SortType) : 'desc';
     $helpers = new helpers;
 
     $user = Auth::user();
@@ -854,7 +868,7 @@ class ReportController extends BaseController
     // Start displaying items from this number;
     $offSet = ($pageStart * $perPage) - $perPage;
     $order = $request->SortField;
-    $dir = $request->SortType;
+    $dir = in_array(strtolower((string) $request->SortType), ['asc', 'desc'], true) ? strtolower($request->SortType) : 'desc';
     $helpers = new helpers;
 
     $user = Auth::user();
@@ -1289,7 +1303,7 @@ class ReportController extends BaseController
             $warehouses_id = UserWarehouse::where('user_id', $user_auth->id)->pluck('warehouse_id')->toArray();
             $warehouses = Warehouse::where('deleted_at', null)->whereIn('id', $warehouses_id)->get(['id', 'name']);
         }
-        $products = Product::where('deleted_at', null)->get(['id', 'name']);
+        $products = $this->scopeProductsToWarehouses(Product::where('deleted_at', null))->get(['id', 'name']);
 
         return response()->json([
             'totalRows' => $totalRows,
@@ -1374,6 +1388,9 @@ class ReportController extends BaseController
 
             $item['return_Due'] = $item['total_amount_return'] - $item['total_paid_return'];
 
+            $item['opening_balance'] = (float) ($provider->opening_balance ?? 0);
+            $item['total_due'] = $item['opening_balance'] + $item['due'];
+
             $item['id'] = $provider->id;
             $item['name'] = $provider->name;
             $item['phone'] = $provider->phone;
@@ -1394,11 +1411,15 @@ class ReportController extends BaseController
                          COALESCE(SUM(CASE WHEN statut = 'received' THEN GrandTotal ELSE 0 END),0) as grand,
                          COALESCE(SUM(CASE WHEN statut = 'received' THEN paid_amount ELSE 0 END),0) as paid")
             ->first();
+        $purchaseDue = round((float) (($purAgg->grand ?? 0) - ($purAgg->paid ?? 0)), 2);
+        $openingTotal = round((float) Provider::whereNull('deleted_at')->sum('opening_balance'), 2);
         $stats = [
             'suppliers' => (int) $totalRows,
             'purchases' => (int) ($purAgg->cnt ?? 0),
             'total' => round((float) ($purAgg->grand ?? 0), 2),
-            'due' => round((float) (($purAgg->grand ?? 0) - ($purAgg->paid ?? 0)), 2),
+            'due' => $purchaseDue,
+            'opening_balance' => $openingTotal,
+            'total_due' => round($purchaseDue + $openingTotal, 2),
         ];
 
         $chart = DB::table('purchases')
@@ -2303,25 +2324,29 @@ class ReportController extends BaseController
             ->when(! $is_all_warehouses, function ($q) use ($allowedWarehouseIds) {
                 $q->whereIn('warehouse_id', $allowedWarehouseIds);
             })
-            ->orWhere(function ($query) use ($request) {
-                return $query->whereHas('purchase', function ($q) use ($request) {
-                    $q->where('Ref', 'LIKE', "%{$request->search}%");
-                });
-            })
-            // ✅ apply again after the OR to keep restriction (prevents OR bypass)
-            ->when(! $is_all_warehouses, function ($q) use ($allowedWarehouseIds) {
-                $q->whereIn('warehouse_id', $allowedWarehouseIds);
-            })
             ->when($warehouse_id, function ($q) use ($warehouse_id) {
                 $q->where('warehouse_id', $warehouse_id);
             })
-            // Search With Multiple Param
+            // Search With Multiple Param.
+            //
+            // The purchase-reference term used to sit OUTSIDE this block as a
+            // top-level orWhere. Two bugs came from that: with an empty search
+            // box it matched LIKE '%%', i.e. every return that has a purchase,
+            // and being an OR at the top level it pulled those rows in past the
+            // record and warehouse restrictions above (a second copy of the
+            // warehouse whereIn had been added to paper over it). Nested inside
+            // the guarded group it behaves like the sale-return version.
             ->where(function ($query) use ($request) {
                 return $query->when($request->filled('search'), function ($query) use ($request) {
                     return $query->where('Ref', 'LIKE', "%{$request->search}%")
                         ->orWhere('statut', 'LIKE', "%{$request->search}%")
                         ->orWhere('GrandTotal', $request->search)
                         ->orWhere('payment_statut', 'like', "$request->search")
+                        ->orWhere(function ($query) use ($request) {
+                            return $query->whereHas('purchase', function ($q) use ($request) {
+                                $q->where('Ref', 'LIKE', "%{$request->search}%");
+                            });
+                        })
                         ->orWhere(function ($query) use ($request) {
                             return $query->whereHas('provider', function ($q) use ($request) {
                                 $q->where('name', 'LIKE', "%{$request->search}%");
@@ -2474,6 +2499,7 @@ class ReportController extends BaseController
         // ✅ Stock Count (restricted by user warehouses)
         $stock_count = product_warehouse::join('products', 'product_warehouse.product_id', '=', 'products.id')
             ->join('warehouses', 'product_warehouse.warehouse_id', '=', 'warehouses.id')
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
             ->whereNull('product_warehouse.deleted_at')
             ->when(! $is_all_warehouses, function ($q) use ($allowedWarehouseIds) {
                 $q->whereIn('product_warehouse.warehouse_id', $allowedWarehouseIds);
@@ -2556,6 +2582,8 @@ class ReportController extends BaseController
     {
 
         $products_alerts = product_warehouse::join('products', 'product_warehouse.product_id', '=', 'products.id')
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
+            ->tap(fn ($q) => $this->scopeStockRowsToOwnership($q))
             ->whereRaw('qte <= stock_alert')
             ->whereIn('product_warehouse.warehouse_id', $this->userWarehouseIds())
             ->count();
@@ -2596,7 +2624,7 @@ class ReportController extends BaseController
             ->whereBetween('date', [$start, $end])
             ->where($applyWarehouse)
             ->selectRaw('COALESCE(SUM(GrandTotal),0) AS sum, COUNT(*) AS nmbr,
-                COALESCE(SUM(TaxNet),0) AS tax, COALESCE(SUM(discount),0) AS discount, COALESCE(SUM(shipping),0) AS shipping')
+                COALESCE(SUM(TaxNet),0) AS tax, COALESCE(SUM('.Sale::discountAmountSql().'),0) AS discount, COALESCE(SUM(shipping),0) AS shipping')
             ->first();
 
         // Purchases (received)
@@ -3183,7 +3211,7 @@ class ReportController extends BaseController
             ->where($applyWarehouse);
 
         $totalSalesExclTax = (float) (clone $saleBase)
-            ->selectRaw('COALESCE(SUM(GrandTotal - COALESCE(TaxNet, 0) - COALESCE(discount, 0) - COALESCE(discount_from_points, 0)), 0) as total')
+            ->selectRaw('COALESCE(SUM(GrandTotal - COALESCE(TaxNet, 0) - '.Sale::discountAmountSql().' - COALESCE(discount_from_points, 0)), 0) as total')
             ->value('total');
 
         // Total sell shipping charge
@@ -3193,7 +3221,7 @@ class ReportController extends BaseController
 
         // Total Sell discount (includes discount_from_points for customer rewards)
         $totalSellDiscount = (float) (clone $saleBase)
-            ->selectRaw('COALESCE(SUM(COALESCE(discount, 0)), 0) as total')
+            ->selectRaw('COALESCE(SUM('.Sale::discountAmountSql().'), 0) as total')
             ->value('total');
 
         // Total customer reward (discount_from_points)
@@ -4301,6 +4329,8 @@ class ReportController extends BaseController
 
         $products_data = Product::with('unit', 'category', 'brand')
             ->where('deleted_at', '=', null)
+            // Products belong to a warehouse (Settings -> Features)
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q))
         // ->where('type', '!=', 'is_service')
         // Search With Multiple Param
             ->where(function ($query) use ($request) {
@@ -5720,6 +5750,8 @@ class ReportController extends BaseController
         }
 
         $products_data = Product::where('deleted_at', '=', null)->select('id', 'name', 'code', 'is_variant', 'unit_id', 'type')
+            // Products belong to a warehouse (Settings -> Features)
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q))
             ->where(function ($query) use ($request) {
                 return $query->when($request->filled('search'), function ($query) use ($request) {
                     return $query->where('name', 'LIKE', "%{$request->search}%")
@@ -6354,6 +6386,12 @@ class ReportController extends BaseController
             : null;
         $search = trim((string) $request->get('search', ''));
 
+        // How the product rows are grouped. Category is the original behaviour
+        // (a printed till receipt grouped by department); warehouse answers
+        // "what did each warehouse sell, and what did it come to" without
+        // running the report once per warehouse.
+        $group_by = $request->get('group_by') === 'warehouse' ? 'warehouse' : 'category';
+
         // Shared so the item rows and the header counters always describe the same sales.
         $applyFilters = function ($query) use (
             $from, $to, $view_records, $user, $is_all_warehouses,
@@ -6388,6 +6426,7 @@ class ReportController extends BaseController
             ->join('sales as s', 's.id', '=', 'sd.sale_id')
             ->join('products as p', 'p.id', '=', 'sd.product_id')
             ->leftJoin('categories as c', 'c.id', '=', 'p.category_id')
+            ->leftJoin('warehouses as w', 'w.id', '=', 's.warehouse_id')
             ->leftJoin('product_variants as pv', 'pv.id', '=', 'sd.product_variant_id')
             ->leftJoin('units as u', 'u.id', '=', 'p.unit_sale_id');
 
@@ -6397,50 +6436,66 @@ class ReportController extends BaseController
             $itemsQuery->where('p.category_id', $category_id);
         }
         if ($search !== '') {
-            $itemsQuery->where(function ($q) use ($search) {
+            $groupLabelColumn = $group_by === 'warehouse' ? 'w.name' : 'c.name';
+            $itemsQuery->where(function ($q) use ($search, $groupLabelColumn) {
                 $q->where('p.name', 'LIKE', "%{$search}%")
                     ->orWhere('p.code', 'LIKE', "%{$search}%")
-                    ->orWhere('c.name', 'LIKE', "%{$search}%");
+                    ->orWhere($groupLabelColumn, 'LIKE', "%{$search}%");
             });
         }
 
+        // The grouping dimension: which column pair identifies a group.
+        [$groupIdCol, $groupNameCol] = $group_by === 'warehouse'
+            ? ['w.id', 'w.name']
+            : ['c.id', 'c.name'];
+
         $items = $itemsQuery
             ->select(
-                'c.id as category_id',
-                'c.name as category_name',
+                DB::raw("{$groupIdCol} as group_id"),
+                DB::raw("{$groupNameCol} as group_name"),
                 'p.id as product_id',
                 'p.name as product_name',
                 'p.code as product_code',
                 'pv.name as variant_name',
                 DB::raw("COALESCE(u.ShortName, '') as unit"),
                 DB::raw('SUM(COALESCE(sd.quantity, 0)) as quantity'),
-                DB::raw('SUM(COALESCE(sd.total, 0)) as total')
+                DB::raw('SUM(COALESCE(sd.total, 0)) as total'),
+                // Unit price is a WEIGHTED AVERAGE of what was actually realised
+                // per unit, not the list price off the invoice line. Those differ
+                // whenever a line carries a discount or tax, and only this one
+                // makes quantity x price equal the row total. NULLIF guards the
+                // zero-quantity case (a fully returned or voided line).
+                DB::raw('SUM(COALESCE(sd.total, 0)) / NULLIF(SUM(COALESCE(sd.quantity, 0)), 0) as unit_price'),
+                // Flags a product that sold at more than one price in the period,
+                // so the average above is never mistaken for a fixed price.
+                DB::raw('COUNT(DISTINCT sd.price) as price_points')
             )
-            ->groupBy('c.id', 'c.name', 'p.id', 'p.name', 'p.code', 'pv.name', 'u.ShortName')
+            ->groupBy(DB::raw($groupIdCol), DB::raw($groupNameCol), 'p.id', 'p.name', 'p.code', 'pv.name', 'u.ShortName')
             ->get();
 
         // Sorting: default mirrors the printed receipt (category A→Z, then item A→Z)
-        $order = in_array($request->get('SortField'), ['product_name', 'quantity', 'total'], true)
+        $order = in_array($request->get('SortField'), ['product_name', 'quantity', 'unit_price', 'total'], true)
             ? $request->get('SortField')
             : 'product_name';
         $dir = strtolower((string) $request->input('SortType')) === 'desc' ? 'desc' : 'asc';
 
-        // Products with no category still have to appear on the printout.
-        // The frontend translates this label (category_id === null marks the group).
-        $uncategorized = 'Uncategorized';
+        // A product with no category (or a sale whose warehouse was deleted) still
+        // has to appear. The frontend translates this label; group_id === null
+        // marks the catch-all group.
+        $unassignedLabel = $group_by === 'warehouse' ? 'Unassigned' : 'Uncategorized';
 
-        $categories = [];
+        $groups = [];
         $grand_quantity = 0;
         $grand_total = 0;
         $items_count = 0;
 
         foreach ($items as $row) {
-            $key = $row->category_id === null ? 0 : (int) $row->category_id;
+            $key = $row->group_id === null ? 0 : (int) $row->group_id;
 
-            if (! isset($categories[$key])) {
-                $categories[$key] = [
-                    'category_id' => $row->category_id !== null ? (int) $row->category_id : null,
-                    'category_name' => $row->category_name ?: $uncategorized,
+            if (! isset($groups[$key])) {
+                $groups[$key] = [
+                    'group_id' => $row->group_id !== null ? (int) $row->group_id : null,
+                    'group_name' => $row->group_name ?: $unassignedLabel,
                     'items' => [],
                     'sub_total_quantity' => 0,
                     'sub_total' => 0,
@@ -6454,24 +6509,29 @@ class ReportController extends BaseController
             $quantity = round((float) $row->quantity, 2);
             $total = round((float) $row->total, 2);
 
-            $categories[$key]['items'][] = [
+            $groups[$key]['items'][] = [
                 'product_id' => (int) $row->product_id,
                 'product_name' => $product_name,
                 'product_code' => $row->product_code,
                 'unit' => $row->unit,
                 'quantity' => $quantity,
+                // NULL when the net quantity is zero (a line fully cancelled by a
+                // return): there is no meaningful price per unit, so say so rather
+                // than printing 0.00 as if the goods were given away.
+                'unit_price' => $row->unit_price === null ? null : round((float) $row->unit_price, 2),
+                'price_varies' => ((int) $row->price_points) > 1,
                 'total' => $total,
             ];
 
-            $categories[$key]['sub_total_quantity'] += $quantity;
-            $categories[$key]['sub_total'] += $total;
+            $groups[$key]['sub_total_quantity'] += $quantity;
+            $groups[$key]['sub_total'] += $total;
             $grand_quantity += $quantity;
             $grand_total += $total;
             $items_count++;
         }
 
-        foreach ($categories as $key => $group) {
-            usort($categories[$key]['items'], function ($a, $b) use ($order, $dir) {
+        foreach ($groups as $key => $group) {
+            usort($groups[$key]['items'], function ($a, $b) use ($order, $dir) {
                 if ($order === 'product_name') {
                     $cmp = strcasecmp((string) $a['product_name'], (string) $b['product_name']);
                 } else {
@@ -6481,13 +6541,13 @@ class ReportController extends BaseController
                 return $dir === 'desc' ? -$cmp : $cmp;
             });
 
-            $categories[$key]['sub_total_quantity'] = round($categories[$key]['sub_total_quantity'], 2);
-            $categories[$key]['sub_total'] = round($categories[$key]['sub_total'], 2);
+            $groups[$key]['sub_total_quantity'] = round($groups[$key]['sub_total_quantity'], 2);
+            $groups[$key]['sub_total'] = round($groups[$key]['sub_total'], 2);
         }
 
-        $categories = array_values($categories);
-        usort($categories, function ($a, $b) {
-            return strcasecmp((string) $a['category_name'], (string) $b['category_name']);
+        $groups = array_values($groups);
+        usort($groups, function ($a, $b) {
+            return strcasecmp((string) $a['group_name'], (string) $b['group_name']);
         });
 
         // ---- Header counters: the whole day, independent of the category/search filters ----
@@ -6545,7 +6605,7 @@ class ReportController extends BaseController
             : null;
 
         return response()->json([
-            'categories' => $categories,
+            'groups' => $groups,
             'totals' => [
                 'quantity' => round($grand_quantity, 2),
                 'total' => round($grand_total, 2),
@@ -6554,6 +6614,9 @@ class ReportController extends BaseController
             'meta' => [
                 'from' => $from,
                 'to' => $to,
+                // Tells the page whether a group heading is a category or a
+                // warehouse, so it can label the column correctly.
+                'group_by' => $group_by,
                 // null means "All" — the frontend translates it
                 'till' => $till,
                 'sales_person' => $sales_person,
@@ -6562,12 +6625,9 @@ class ReportController extends BaseController
                 'day_status' => $day_status,
                 'printed_by' => $user->username,
             ],
-            'company' => [
-                'name' => $settings->CompanyName ?? '',
-                'address' => $settings->CompanyAdress ?? '',
-                'phone' => $settings->CompanyPhone ?? '',
-                'email' => $settings->email ?? '',
-            ],
+            // Branch letterhead: filtered to one warehouse, the report header
+            // shows that branch; "All warehouses" keeps the company block.
+            'company' => \App\Services\InvoiceIssuerService::resolve($warehouse_id ?: null, $settings),
             'warehouses' => $warehouses,
             'users' => $users,
             'categories_list' => $categories_list,
@@ -6844,6 +6904,8 @@ class ReportController extends BaseController
         // base query + search
         $productsQuery = Product::with('unit')
             ->whereNull('deleted_at')
+            // Products belong to a warehouse (Settings -> Features)
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q))
             ->when($request->filled('search'), function ($q) use ($request) {
                 $s = $request->search;
                 $q->where(function ($qq) use ($s) {
@@ -9468,6 +9530,7 @@ public function sales_by_brand_report(Request $request)
             ->leftJoinSub($periodAgg, 'p', 'p.product_id', '=', 'products.id')
             ->leftJoinSub($lastAgg, 'l', 'l.product_id', '=', 'products.id')
             ->whereNull('products.deleted_at')
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
             ->where('products.type', '!=', 'ingredient') // exclude non-stock
             ->when($brandId, fn ($q) => $q->where('products.brand_id', $brandId))
             ->when($categoryId, fn ($q) => $q->where('products.category_id', $categoryId))

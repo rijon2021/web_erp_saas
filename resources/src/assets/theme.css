@@ -56,6 +56,21 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Arabic / RTL default. The Latin stack above falls back to a system Arabic
+   face that renders poorly, so RTL defaults to Cairo (loaded by
+   partials.tenant-font). A tenant-chosen font still wins: tenant-font sets
+   body with !important. Keep in sync with RTL_FONT_STACK in App.vue. */
+[dir="rtl"] body {
+  font-family: 'Cairo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, Arial, sans-serif;
+}
+/* Any tracking splits Arabic letters out of their cursive joins (الـع),
+   and the UI sets letter-spacing in ~200 places for Latin labels. */
+[dir="rtl"] *,
+[dir="rtl"] *::before,
+[dir="rtl"] *::after {
+  letter-spacing: normal !important;
+}
+
 /* a-layout paints the app background (colorBgLayout) in both themes. */
 
 /* Content fills the full width of the layout on every desktop size (no cap). */

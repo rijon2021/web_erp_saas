@@ -100,7 +100,60 @@ class Plan extends Model
         'hospital'           => ['label' => 'Hospital Management',    'icon' => 'bi-hospital',         'description' => 'Patients, appointments, consultations, admissions, lab & billing'],
         'school'             => ['label' => 'School Management',      'icon' => 'bi-mortarboard',      'description' => 'Students, enrolment, attendance, timetable, exams & fees'],
         'protocol'           => ['label' => 'Protocol & Requests',    'icon' => 'bi-inbox',            'description' => 'Internal messaging, complaints, memos & desk-to-desk request tracking'],
+        'remove_branding'    => ['label' => 'White-label (Remove Branding)', 'icon' => 'bi-stars',    'description' => 'Replace the platform footer and "developed by" credit with your own'],
     ];
+
+    /**
+     * AVAILABLE_LIMITS with labels resolved through the active locale.
+     *
+     * The constant above has to stay a plain literal (PHP constants cannot
+     * call __()), so every display path goes through this helper instead of
+     * reading the constant directly. Keys, icons and models are untouched —
+     * only 'label' is swapped for its translation, falling back to the
+     * English literal when a locale has no entry for that key.
+     */
+    public static function availableLimits(): array
+    {
+        $result = [];
+
+        foreach (self::AVAILABLE_LIMITS as $key => $meta) {
+            $labelKey = 'super.plans.limit_labels.' . $key;
+
+            if (__($labelKey) !== $labelKey) {
+                $meta['label'] = __($labelKey);
+            }
+
+            $result[$key] = $meta;
+        }
+
+        return $result;
+    }
+
+    /**
+     * AVAILABLE_FEATURES with labels and descriptions resolved through the
+     * active locale. See availableLimits() for why this helper exists.
+     */
+    public static function availableFeatures(): array
+    {
+        $result = [];
+
+        foreach (self::AVAILABLE_FEATURES as $key => $meta) {
+            $labelKey = 'super.plans.feature_labels.' . $key;
+            $descKey  = 'super.plans.feature_descriptions.' . $key;
+
+            if (__($labelKey) !== $labelKey) {
+                $meta['label'] = __($labelKey);
+            }
+
+            if (__($descKey) !== $descKey) {
+                $meta['description'] = __($descKey);
+            }
+
+            $result[$key] = $meta;
+        }
+
+        return $result;
+    }
 
     /**
      * Per-request cache of "does this table have a deleted_at column?",
@@ -257,13 +310,13 @@ class Plan extends Model
     {
         $result = [];
 
-        foreach (self::AVAILABLE_LIMITS as $key => $meta) {
+        foreach (self::availableLimits() as $key => $meta) {
             $value = $this->getLimit($key);
             $result[$key] = [
                 'label' => $meta['label'],
                 'icon' => $meta['icon'],
                 'value' => $value,
-                'display' => $value < 0 ? 'Unlimited' : number_format($value),
+                'display' => $value < 0 ? __('super.common.unlimited') : number_format($value),
             ];
         }
 
@@ -277,7 +330,7 @@ class Plan extends Model
     {
         $result = [];
 
-        foreach (self::AVAILABLE_FEATURES as $key => $meta) {
+        foreach (self::availableFeatures() as $key => $meta) {
             if ($this->hasFeature($key)) {
                 $result[$key] = $meta;
             }
@@ -309,7 +362,13 @@ class Plan extends Model
     public function getPriceForCycle(string $cycle = 'monthly'): float
     {
         if ($cycle === 'yearly') {
-            return (float) ($this->yearly_price ?? $this->price * 12);
+            $yearly = (float) ($this->yearly_price ?? 0);
+
+            // A paid plan with no yearly price is a misconfiguration, not a
+            // free year. Fall back to 12x monthly exactly as a null does —
+            // otherwise a crafted ?cycle=yearly buys a year for nothing.
+            // A genuinely free plan still prices at 0 because price is 0.
+            return $yearly > 0 ? $yearly : (float) $this->price * 12;
         }
 
         return (float) $this->price;

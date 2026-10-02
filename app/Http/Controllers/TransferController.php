@@ -1368,6 +1368,8 @@ class TransferController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($transfer_data);
+
         $batchesByDetail = app(BatchService::class)->batchesForTransferDetails($transfer_data['details']);
 
         $transfer['from_warehouse'] = $transfer_data['from_warehouse']->name;
@@ -1416,6 +1418,8 @@ class TransferController extends BaseController
         $settings = Setting::where('deleted_at', '=', null)->first();
         $Html = view('pdf.transfer_pdf', [
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($transfer_data->from_warehouse_id, $settings),
             'transfer' => $transfer,
             'details' => $details,
         ])->render();

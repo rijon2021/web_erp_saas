@@ -251,7 +251,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 confirmButtonColor: '#ef4444',
             });
         } else {
-            alert(message || 'Error');
+            alert(message || __s('error'));
         }
     }
 
@@ -315,7 +315,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(function(r) { return r.json().then(function(j){ j.__ok = r.ok; return j; }); })
         .then(function(res) {
             if (!res.__ok || !res.success) {
-                swalError((res && (res.error || res.message)) || 'Delete failed.');
+                swalError((res && (res.error || res.message)) || __s('delete_failed'));
                 btn.disabled = false;
             } else {
                 renderBackups(res.backups || []);
@@ -323,7 +323,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         })
         .catch(function(err) {
-            swalError(err && err.message ? err.message : 'Delete failed.');
+            swalError(err && err.message ? err.message : __s('delete_failed'));
             btn.disabled = false;
         });
     }

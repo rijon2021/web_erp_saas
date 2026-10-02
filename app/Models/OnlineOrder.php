@@ -33,7 +33,7 @@ class OnlineOrder extends Model
 
     protected $fillable = [
         'date', 'time', 'ref',
-        'client_id', 'warehouse_id',
+        'client_id', 'warehouse_id', 'sale_id',
         'total', 'subtotal', 'discount', 'coupon_code',
         'shipping_method_id', 'shipping_method_name',
         'delivery_method', 'pickup_branch_id',
@@ -64,6 +64,7 @@ class OnlineOrder extends Model
         'date' => 'date',
         'client_id' => 'integer',
         'warehouse_id' => 'integer',
+        'sale_id' => 'integer',
         'total' => 'decimal:2',
         'subtotal' => 'decimal:2',
         'discount' => 'decimal:2',

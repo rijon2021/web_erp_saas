@@ -59,7 +59,7 @@ class SmsSettingsController extends Controller
             }
             $parsed = json_decode($raw, true);
             if (! is_array($parsed)) {
-                return back()->withInput()->withErrors([$jsonField => 'Invalid JSON — expected an object like {"key": "value"}.']);
+                return back()->withInput()->withErrors([$jsonField => __('super.flash.invalid_json')]);
             }
             $validated[$jsonField] = $parsed;
         }
@@ -78,7 +78,7 @@ class SmsSettingsController extends Controller
         // subscription-reminder command keeps reading a consistent value.
         GeneralSetting::instance()->update(['sms_gateway' => $validated['sms_gateway']]);
 
-        return back()->with('success', 'SMS settings saved successfully.');
+        return back()->with('success', __('super.flash.sms_saved'));
     }
 
     public function sendTest(Request $request)
@@ -90,7 +90,7 @@ class SmsSettingsController extends Controller
         $setting = SmsSetting::instance();
 
         if (! $setting->sms_gateway) {
-            return back()->withErrors(['test_phone' => 'Select and save an SMS gateway first.']);
+            return back()->withErrors(['test_phone' => __('super.flash.sms_gateway_first')]);
         }
 
         try {
@@ -101,9 +101,9 @@ class SmsSettingsController extends Controller
                 $setting->credentials()
             );
 
-            return back()->with('success', "Test SMS sent to {$request->test_phone}.");
+            return back()->with('success', __('super.flash.test_sms_sent', ['suffix' => '', 'phone' => $request->test_phone]));
         } catch (\Throwable $e) {
-            return back()->withErrors(['test_phone' => 'Failed to send test SMS: ' . $e->getMessage()]);
+            return back()->withErrors(['test_phone' => __('super.flash.test_sms_failed', ['error' => $e->getMessage()])]);
         }
     }
 }

@@ -168,7 +168,9 @@ class SaleInvoiceMapper
         $issueTime = $source->time ? Carbon::parse((string) $source->time)->format('H:i:s') : '00:00:00';
 
         $supplier = [
-            'name' => $setting->CompanyName ?: 'Company',
+            // Legal seller name: the ZATCA Organization Name (same value as
+            // the CSR "O" field), falling back to the general Company Name.
+            'name' => $zatca->organization_name ?: ($setting->CompanyName ?: 'Company'),
             'vat' => (string) $setting->vat_number,
             'other_id' => $zatca->crn ?: null,
             'other_id_scheme' => 'CRN',
@@ -240,10 +242,14 @@ class SaleInvoiceMapper
                 'payable' => $payable,
                 'tax_total' => $taxTotal,
             ],
-            // QR metadata
-            'seller_name' => $setting->company_name_ar ?: ($setting->CompanyName ?: 'Company'),
+            // QR metadata. ZATCA cross-checks the QR against the XML: tag 1
+            // must equal the supplier cbc:RegistrationName
+            // (sellerName_QRCODE_INVALID) and tag 3 must equal
+            // IssueDate + "T" + IssueTime verbatim, so no "Z" suffix is added
+            // when the XML time carries none (KSA-25).
+            'seller_name' => $supplier['name'],
             'vat_number' => (string) $setting->vat_number,
-            'issue_datetime' => $issueDate.'T'.$issueTime.'Z',
+            'issue_datetime' => $issueDate.'T'.$issueTime,
             'total_with_vat' => $payable,
             'vat_amount' => $taxTotal,
         ];

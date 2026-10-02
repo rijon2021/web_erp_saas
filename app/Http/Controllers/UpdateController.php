@@ -277,10 +277,11 @@ class UpdateController extends Controller
                     // Shopify integration (multi-store)
                     104 => 'shopify_stores',
                     105 => 'shopify_sync',
-                    106 => 'shopify_logs',
+                    106 => 'shopify_logs', 
 
                     // Settings → Modules (business module toggles)
                     107 => 'business_modules',
+                    108 => 'accounting_reconciliation',
 
                 ];
 

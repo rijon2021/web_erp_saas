@@ -582,4 +582,5 @@ return [
     'NewPortalQuotationRequest' => 'New quotation request from the client portal',
     'ProofUploadFailed' => 'We could not attach your payment picture. Your order is confirmed — please upload the proof again from your order page.',
     'Confirm' => 'Confirm',
+    'BatchCostMismatch' => ':product: product cost :cost must equal the weighted average of its batch costs (:avg).',
 ];

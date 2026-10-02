@@ -35,13 +35,18 @@ use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Intervention\Image\ImageManagerStatic as Image;
 
 class ProductsController extends BaseController
 {
+    /** Stock-count exports live on the private `local` disk, never under public/. */
+    private const COUNT_STOCK_DIR = 'count_stock';
+
     // ------------ Get ALL Products --------------\\
 
     public function index(Request $request)
@@ -72,11 +77,28 @@ class ProductsController extends BaseController
             $warehouseId = null;
         }
 
-        $columns = [0 => 'name', 1 => 'category_id', 2 => 'brand_id', 3 => 'code', 4 => 'sub_category_id'];
-        $param = [0 => 'like', 1 => '=', 2 => '=', 3 => 'like', 4 => '='];
+        // provider_id makes "everything I buy from this supplier" a one-click
+        // filter, which is what turns a stored supplier into a reorder list.
+        $columns = [0 => 'name', 1 => 'category_id', 2 => 'brand_id', 3 => 'code', 4 => 'sub_category_id', 5 => 'provider_id'];
+        $param = [0 => 'like', 1 => '=', 2 => '=', 3 => 'like', 4 => '=', 5 => '='];
 
-        $productsQuery = Product::with('unit', 'category', 'subCategory', 'brand', 'categories')
+        $productsQuery = Product::with('unit', 'category', 'subCategory', 'brand', 'categories', 'provider:id,name', 'warehouse:id,name')
             ->whereNull('deleted_at');
+
+        // Settings -> Features: optionally show only products stocked in one of
+        // this user's warehouses. Previously the whole catalogue was returned
+        // and only the QUANTITY column was scoped, so a warehouse A user still
+        // browsed warehouse B's products. A product stocked nowhere yet stays
+        // visible, so a newly created one is never hidden from its author.
+        $this->scopeMasterDataToWarehouses($productsQuery, fn ($ids) => DB::table('product_warehouse')
+            ->whereNull('product_warehouse.deleted_at')
+            ->whereColumn('product_warehouse.product_id', 'products.id')
+            ->when($ids !== null, fn ($q) => $q->whereIn('product_warehouse.warehouse_id', $ids)));
+
+        // Settings -> Features: products belong to a warehouse. A restricted
+        // user sees only products whose home warehouse is theirs or that
+        // hold stock in one of theirs (see Product::scopeVisibleInWarehouses).
+        $this->scopeProductsToWarehouses($productsQuery);
          
 
 
@@ -116,15 +138,12 @@ class ProductsController extends BaseController
             }
         }
 
-        // Optional warehouse filter: only products that have stock rows in the given warehouse
+        // Optional warehouse filter. Every product has a stock row in every
+        // warehouse (they are created together), so "has a row there" matched
+        // the whole catalogue. A product is in a warehouse when it is its home
+        // or when it actually holds stock there.
         if ($warehouseId) {
-            $filtered->whereExists(function ($q) use ($warehouseId) {
-                $q->select(DB::raw(1))
-                    ->from('product_warehouse')
-                    ->whereColumn('product_warehouse.product_id', 'products.id')
-                    ->where('product_warehouse.warehouse_id', $warehouseId)
-                    ->whereNull('product_warehouse.deleted_at');
-            });
+            $filtered->visibleInWarehouses([$warehouseId]);
         }
 
         $totalRows = (clone $filtered)->count();
@@ -152,6 +171,12 @@ class ProductsController extends BaseController
                 ? $product->categories->pluck('name')->filter()->unique()->values()->implode("\n")
                 : ($item['category'] ?? '');
             $item['brand'] = $product->brand ? $product->brand->name : 'N/D';
+            // Default supplier — shown as a column and used to reorder.
+            $item['provider_id'] = $product->provider_id;
+            $item['provider_name'] = $product->provider ? $product->provider->name : null;
+            // Home warehouse — shown as a column while the ownership switch is on.
+            $item['warehouse_id'] = $product->warehouse_id;
+            $item['warehouse_name'] = $product->warehouse ? $product->warehouse->name : null;
 
             $isActive = (int) ($product->is_active ?? 1) === 1;
             $item['status'] = $isActive ? __('Active') : __('Inactif');
@@ -277,11 +302,23 @@ class ProductsController extends BaseController
         $subcategories = SubCategory::orderBy('name')->get(['id', 'name', 'category_id']);
         $brands = Brand::whereNull('deleted_at')->get(['id', 'name']);
 
+        // Supplier column + filter (Settings -> Features). Skipped entirely when
+        // the feature is off, so the list costs nothing extra.
+        $setting = Setting::whereNull('deleted_at')->first();
+        $product_supplier_enabled = (bool) ($setting->product_supplier_enabled ?? false);
+        $restrict_products_by_warehouse = (bool) ($setting->restrict_products_by_warehouse ?? false);
+        $providers = $product_supplier_enabled
+            ? \App\Models\Provider::whereNull('deleted_at')->orderBy('name')->get(['id', 'name'])
+            : collect();
+
         return response()->json([
             'warehouses' => $warehouses,
             'categories' => $categories,
             'subcategories' => $subcategories,
             'brands' => $brands,
+            'providers' => $providers,
+            'product_supplier_enabled' => $product_supplier_enabled,
+            'restrict_products_by_warehouse' => $restrict_products_by_warehouse,
             'products' => $data,
             'totalRows' => $totalRows,
         ]);
@@ -403,6 +440,19 @@ class ProductsController extends BaseController
                 'cost' => Rule::requiredIf($request->type == 'is_single' || $request->type == 'is_combo'),
                 'price' => Rule::requiredIf($request->type != 'is_variant'),
             ];
+
+            // Combo products must carry at least one component product
+            if ($request->type == 'is_combo') {
+                $productRules['materiels'] = [
+                    'required',
+                    function ($attribute, $value, $fail) {
+                        $decoded = is_string($value) ? json_decode($value, true) : $value;
+                        if (! is_array($decoded) || empty($decoded)) {
+                            $fail('Add at least one product to the combo.');
+                        }
+                    },
+                ];
+            }
 
             // if type is not is_variant, add validation for variants array
             if ($request->type == 'is_variant') {
@@ -545,7 +595,9 @@ class ProductsController extends BaseController
                 'code.required' => 'This field is required',
             ]);
 
-            \DB::transaction(function () use ($request) {
+            $createdProductId = null;
+
+            \DB::transaction(function () use ($request, &$createdProductId) {
 
                 // -- Create New Product
                 $Product = new Product;
@@ -561,6 +613,16 @@ class ProductsController extends BaseController
                 $Product->category_id = $request['category_id'];
                 $Product->sub_category_id = $request['sub_category_id'] ?? null;
                 $Product->brand_id = $request['brand_id'];
+                // Default supplier (Settings -> Features). 'null' arrives as a
+                // string from the multipart form when the select is cleared.
+                $Product->provider_id = ($request['provider_id'] ?? null) && $request['provider_id'] !== 'null'
+                    ? (int) $request['provider_id']
+                    : null;
+                // Home warehouse (Settings -> Features -> Restrict products by
+                // warehouse): the branch this product was created for.
+                $Product->warehouse_id = $this->productHomeWarehouseFor(
+                    $request->input('warehouse_id') === 'null' ? null : $request->input('warehouse_id')
+                );
                 $Product->note = $request['note'];
                 $Product->TaxNet = $request['TaxNet'] ? $request['TaxNet'] : 0;
                 $Product->tax_method = $request['tax_method'];
@@ -695,17 +757,24 @@ class ProductsController extends BaseController
 
                 $Product->image = $filename;
                 $Product->save();
+                $createdProductId = $Product->id;
 
                 $this->syncProductMultiCategories($request, $Product);
 
                 app(ProductGalleryService::class)->syncAfterCreate($request, $Product, $filename);
 
                 if ($request['type'] == 'is_combo') {
-                    $materiels = json_decode($request['materiels'], true);
+                    $materiels = json_decode($request['materiels'] ?? '[]', true);
+                    if (! is_array($materiels)) {
+                        $materiels = [];
+                    }
 
                     $syncData = [];
                     foreach ($materiels as $materiel) {
-                        $syncData[$materiel['product_id']] = ['quantity' => $materiel['quantity']];
+                        if (empty($materiel['product_id'])) {
+                            continue;
+                        }
+                        $syncData[$materiel['product_id']] = ['quantity' => max(1, (float) ($materiel['quantity'] ?? 1))];
                     }
 
                     // Sync the combined products
@@ -774,15 +843,31 @@ class ProductsController extends BaseController
                     $isSingle = $request->input('type') === 'is_single';
                     $isVariant = $request->input('type') === 'is_variant' || $request->input('is_variant') === 'true';
 
-                    // fetch variants if needed
+                    // fetch variants if needed — ordered by id so their position
+                    // matches the `variants` payload (bulk-inserted in that order),
+                    // which is how `variant_opening` addresses them.
                     $variants = $isVariant
                         ? ProductVariant::where('product_id', $Product->id)
                             ->whereNull('deleted_at')
+                            ->orderBy('id')
                             ->get()
                         : collect();
 
                     // decode the JSON blob you appended from the frontend
                     $payloadWs = json_decode($request->input('warehouses', '[]'), true);
+                    if (! is_array($payloadWs)) {
+                        $payloadWs = [];
+                    }
+
+                    // Variant opening stock: { warehouse_id: [qty by variant position] }
+                    $payloadVo = json_decode($request->input('variant_opening', '[]'), true);
+                    if (! is_array($payloadVo)) {
+                        $payloadVo = [];
+                    }
+
+                    // Opening quantities actually recorded, for the virtual
+                    // adjustments below: [warehouse_id => [variant_id|0 => qty]]
+                    $openingByWarehouse = [];
 
                     $insertRows = [];
 
@@ -795,16 +880,28 @@ class ProductsController extends BaseController
                         : 0;
 
                         if ($isVariant) {
-                            foreach ($variants as $variant) {
+                            $voRow = $payloadVo[$wid] ?? [];
+                            foreach ($variants->values() as $index => $variant) {
+                                $variantQty = is_array($voRow) && isset($voRow[$index]) && is_numeric($voRow[$index])
+                                    ? max(0.0, (float) $voRow[$index])
+                                    : 0.0;
+
                                 $insertRows[] = [
                                     'product_id' => $Product->id,
                                     'warehouse_id' => $wid,
                                     'product_variant_id' => $variant->id,
                                     'manage_stock' => $manage_stock,
-                                    'qte' => $qty,
+                                    'qte' => $variantQty,
                                 ];
+
+                                if ($variantQty > 0) {
+                                    $openingByWarehouse[$wid][$variant->id] = $variantQty;
+                                }
                             }
                         } else {
+                            if ($isSingle && $qty > 0) {
+                                $openingByWarehouse[$wid][0] = $qty;
+                            }
                             $insertRows[] = [
                                 'product_id' => $Product->id,
                                 'warehouse_id' => $wid,
@@ -847,15 +944,8 @@ class ProductsController extends BaseController
                      * This keeps existing stock logic intact while giving the Profit & Loss report
                      * a proper cost basis for products created with opening stock.
                      */
-                    if ($isSingle && $manage_stock && is_array($payloadWs) && ! empty($payloadWs)) {
-                        foreach ($warehouseIds as $wid) {
-                            $whData = $payloadWs[$wid] ?? null;
-                            $openingQty = $whData && isset($whData['qte']) ? (float) $whData['qte'] : 0.0;
-
-                            if ($openingQty <= 0) {
-                                continue;
-                            }
-
+                    if ($manage_stock && ! empty($openingByWarehouse)) {
+                        foreach ($openingByWarehouse as $wid => $lines) {
                             // Create a lightweight adjustment header per warehouse
                             $adjRef = app('App\Http\Controllers\AdjustmentController')->getNumberOrder();
 
@@ -864,26 +954,31 @@ class ProductsController extends BaseController
                                 'time' => now()->toTimeString(),
                                 'Ref' => $adjRef,
                                 'warehouse_id' => $wid,
-                                'items' => 1,
+                                'items' => count($lines),
                                 'notes' => 'Opening stock (auto)',
                                 'user_id' => Auth::id(),
                             ]);
 
-                            // Single detail row using type "add" so averageCostBulk values it as positive qty
-                            AdjustmentDetail::create([
-                                'adjustment_id' => $adjustment->id,
-                                'product_id' => $Product->id,
-                                'product_variant_id' => null,
-                                'quantity' => $openingQty,
-                                'type' => 'add',
-                            ]);
+                            // One detail row per product/variant using type "add" so
+                            // averageCostBulk values it as positive qty
+                            foreach ($lines as $variantId => $openingQty) {
+                                AdjustmentDetail::create([
+                                    'adjustment_id' => $adjustment->id,
+                                    'product_id' => $Product->id,
+                                    'product_variant_id' => $variantId ?: null,
+                                    'quantity' => $openingQty,
+                                    'type' => 'add',
+                                ]);
+                            }
                         }
                     }
                 }
 
             }, 10);
 
-            return response()->json(['success' => true]);
+            // The id lets the form finish what had to wait for it — pairing
+            // the new product with a Shopify listing picked before saving.
+            return response()->json(['success' => true, 'id' => $createdProductId]);
 
         } catch (ValidationException $e) {
             return response()->json([
@@ -934,6 +1029,19 @@ class ProductsController extends BaseController
                 'cost' => Rule::requiredIf($request->type == 'is_single' || $request->type == 'is_combo'),
                 'price' => Rule::requiredIf($request->type != 'is_variant'),
             ];
+
+            // Combo products must carry at least one component product
+            if ($request->type == 'is_combo') {
+                $productRules['materiels'] = [
+                    'required',
+                    function ($attribute, $value, $fail) {
+                        $decoded = is_string($value) ? json_decode($value, true) : $value;
+                        if (! is_array($decoded) || empty($decoded)) {
+                            $fail('Add at least one product to the combo.');
+                        }
+                    },
+                ];
+            }
 
             // if type is not is_variant, add validation for variants array
             if ($request->type == 'is_variant') {
@@ -1085,6 +1193,9 @@ class ProductsController extends BaseController
                     ->where('deleted_at', '=', null)
                     ->first();
 
+                // A restricted user may only edit products they can see.
+                $this->abortIfProductDenied($Product);
+
                 // -- Update Product
                 $Product->type = $request['type'];
                 $Product->name = $request['name'];
@@ -1099,6 +1210,20 @@ class ProductsController extends BaseController
                     ? $request['sub_category_id']
                     : null;
                 $Product->brand_id = $request['brand_id'] == 'null' ? null : $request['brand_id'];
+                $Product->provider_id = ($request['provider_id'] ?? null) && $request['provider_id'] !== 'null'
+                    ? (int) $request['provider_id']
+                    : null;
+                // Home warehouse: re-assignable within the caller's warehouses.
+                // Only a user who may see every warehouse can clear it (the
+                // select sends '' / 'null'); a restricted user keeps the value.
+                if ($request->has('warehouse_id')) {
+                    $requestedHome = $request->input('warehouse_id');
+                    if ($requestedHome !== null && $requestedHome !== '' && $requestedHome !== 'null') {
+                        $Product->warehouse_id = $this->productHomeWarehouseFor($requestedHome);
+                    } elseif ($this->warehouseScopeIds() === null) {
+                        $Product->warehouse_id = null;
+                    }
+                }
                 $Product->TaxNet = $request['TaxNet'];
                 $Product->tax_method = $request['tax_method'];
                 $Product->discount = $request['discount'];
@@ -1186,11 +1311,17 @@ class ProductsController extends BaseController
                 }
 
                 if ($request['type'] == 'is_combo') {
-                    $materiels = json_decode($request['materiels'], true);
+                    $materiels = json_decode($request['materiels'] ?? '[]', true);
+                    if (! is_array($materiels)) {
+                        $materiels = [];
+                    }
 
                     $syncData = [];
                     foreach ($materiels as $materiel) {
-                        $syncData[$materiel['product_id']] = ['quantity' => $materiel['quantity']];
+                        if (empty($materiel['product_id'])) {
+                            continue;
+                        }
+                        $syncData[$materiel['product_id']] = ['quantity' => max(1, (float) ($materiel['quantity'] ?? 1))];
                     }
 
                     // Sync the combined products
@@ -1578,6 +1709,7 @@ class ProductsController extends BaseController
         \DB::transaction(function () use ($id) {
 
             $Product = Product::findOrFail($id);
+            $this->abortIfProductDenied($Product);
 
             if (Schema::hasTable('category_product')) {
                 $Product->categories()->detach();
@@ -1623,6 +1755,7 @@ class ProductsController extends BaseController
             foreach ($selectedIds as $product_id) {
 
                 $Product = Product::findOrFail($product_id);
+                $this->abortIfProductDenied($Product);
                 $Product->deleted_at = Carbon::now();
 
                 if (Schema::hasTable('category_product')) {
@@ -1669,6 +1802,7 @@ class ProductsController extends BaseController
         $Product = Product::with(['category', 'categories', 'subCategory', 'subcategories', 'images'])
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
+        $this->abortIfProductDenied($Product);
         // get warehouses assigned to user
         $user_auth = auth()->user();
         if ($user_auth->is_all_warehouses) {
@@ -1835,6 +1969,12 @@ class ProductsController extends BaseController
         $allow_overselling = (bool) ($global_setting->allow_overselling ?? false);
 
         $product_warehouse_data = product_warehouse::with('warehouse', 'product', 'productVariant')
+            // Products belong to a warehouse (Settings -> Features): every
+            // product has a row in every warehouse, so the picker must also
+            // apply the ownership rule or a zero-stock product from another
+            // branch would still be offered here.
+            ->whereHas('product', fn ($p) => $this->scopeProductsToWarehouses($p))
+            ->withoutVariantParentRows()
             ->where(function ($query) use ($request, $id, $allow_overselling) {
                 return $query->where('warehouse_id', $id)
                     ->where('deleted_at', '=', null)
@@ -2051,6 +2191,7 @@ class ProductsController extends BaseController
             ->where('deleted_at', '=', null)
             ->where('is_active', 1)
             ->firstOrFail();
+        $this->abortIfProductDenied($Product_data);
 
         $data = [];
         $item['id'] = $Product_data['id'];
@@ -2090,8 +2231,10 @@ class ProductsController extends BaseController
             // product is_variant
         } elseif ($Product_data['type'] == 'is_variant') {
 
+            // No such variant (e.g. the parent itself was requested) is a 404,
+            // not a crash on the null lookups below.
             $product_variant_data = ProductVariant::where('product_id', $id)
-                ->where('id', $variant_id)->first();
+                ->where('id', $variant_id)->firstOrFail();
 
             $product_price = $product_variant_data['price'];
             $product_cost = $product_variant_data['cost'];
@@ -2359,29 +2502,40 @@ class ProductsController extends BaseController
 
         $product_warehouse_data = product_warehouse::with('warehouse', 'product', 'productVariant')
             ->join('products', 'product_warehouse.product_id', '=', 'products.id')
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
             ->where('manage_stock', true)
             ->whereRaw('qte <= stock_alert')
             ->whereIn('product_warehouse.warehouse_id', $allowedWarehouseIds)
             ->when($warehouseFilter, function ($query) use ($warehouseFilter) {
                 return $query->where('product_warehouse.warehouse_id', $warehouseFilter);
-            })->where('product_warehouse.deleted_at', null)->get();
+            })->where('product_warehouse.deleted_at', null)
+            // An empty row of another warehouse's product is not a low-stock alert here.
+            ->tap(fn ($q) => $this->scopeStockRowsToOwnership($q))
+            // products.id / products.warehouse_id would otherwise overwrite the
+            // product_warehouse columns and break the eager-loaded relations
+            ->select('product_warehouse.*')
+            ->get();
 
         $data = [];
 
         if ($product_warehouse_data->isNotEmpty()) {
 
             foreach ($product_warehouse_data as $product_warehouse) {
-                if ($product_warehouse->qte <= $product_warehouse['product']->stock_alert) {
+                $product = $product_warehouse['product'];
+                if ($product === null) {
+                    continue;
+                }
+                if ($product_warehouse->qte <= $product->stock_alert) {
                     if ($product_warehouse->product_variant_id !== null) {
-                        $item['code'] = $product_warehouse['productVariant']->code;
-                        $item['name'] = '['.$product_warehouse['productVariant']->name.']'.$product_warehouse['product']->name;
+                        $item['code'] = optional($product_warehouse['productVariant'])->code;
+                        $item['name'] = '['.optional($product_warehouse['productVariant'])->name.']'.$product->name;
                     } else {
-                        $item['code'] = $product_warehouse['product']->code;
-                        $item['name'] = $product_warehouse['product']->name;
+                        $item['code'] = $product->code;
+                        $item['name'] = $product->name;
                     }
                     $item['quantity'] = $product_warehouse->qte;
-                    $item['warehouse'] = $product_warehouse['warehouse']->name;
-                    $item['stock_alert'] = $product_warehouse['product']->stock_alert;
+                    $item['warehouse'] = optional($product_warehouse['warehouse'])->name;
+                    $item['stock_alert'] = $product->stock_alert;
                     $data[] = $item;
                 }
             }
@@ -2475,6 +2629,11 @@ class ProductsController extends BaseController
         $show_product_gtin = (bool) ($setting->show_product_gtin ?? false);
         $show_serial_tracking = (bool) ($setting->show_serial_tracking ?? false);
         $enable_multi_pack_selling = (bool) ($setting->enable_multi_pack_selling ?? false);
+        // Default-supplier field on the product form (Settings -> Features).
+        $product_supplier_enabled = (bool) ($setting->product_supplier_enabled ?? false);
+        $providers = $product_supplier_enabled
+            ? \App\Models\Provider::whereNull('deleted_at')->orderBy('name')->get(['id', 'name'])
+            : collect();
 
         // FBR Digital Invoicing (Pakistan): show the HS Code / FBR UoM fields
         // on the product form only when the tenant enabled the integration.
@@ -2484,6 +2643,8 @@ class ProductsController extends BaseController
             'categories' => $categories,
             'subcategories' => $subcategories,
             'brands' => $brands,
+            'providers' => $providers,
+            'product_supplier_enabled' => $product_supplier_enabled,
             'units' => $units,
             'warehouses' => $warehouses,
             'warehouse_locations' => $warehouse_locations,
@@ -2491,6 +2652,12 @@ class ProductsController extends BaseController
             'show_serial_tracking' => $show_serial_tracking,
             'enable_multi_pack_selling' => $enable_multi_pack_selling,
             'fbr_enabled' => $fbr_enabled,
+            // Home warehouse field (Settings -> Features -> Restrict products by
+            // warehouse). Required for a warehouse-restricted user; a user who
+            // may see every warehouse can leave the product unassigned.
+            'restrict_products_by_warehouse' => (bool) ($setting->restrict_products_by_warehouse ?? false),
+            'home_warehouse_required' => ! $user_auth->is_all_warehouses,
+            'default_warehouse_id' => count($allowedWarehouseIds) === 1 ? (int) $allowedWarehouseIds[0] : null,
         ]);
 
     }
@@ -2522,8 +2689,10 @@ class ProductsController extends BaseController
         $this->authorizeForUser($request->user('api'), 'update', Product::class);
 
         $Product = Product::where('deleted_at', '=', null)->findOrFail($id);
+        $this->abortIfProductDenied($Product);
 
         $item['id'] = $Product->id;
+        $item['warehouse_id'] = $Product->warehouse_id;
         $item['type'] = $Product->type;
         $item['code'] = $Product->code;
         $item['gtin'] = $Product->gtin ?? '';
@@ -2576,6 +2745,13 @@ class ProductsController extends BaseController
         } else {
             $item['brand_id'] = '';
         }
+
+        // Same guard as brand: a supplier deleted since the product was saved
+        // must not be pre-selected in a form whose dropdown no longer lists it.
+        $item['provider_id'] = ($Product->provider_id && \App\Models\Provider::where('id', $Product->provider_id)
+            ->whereNull('deleted_at')->exists())
+            ? $Product->provider_id
+            : '';
 
         if ($Product->unit_id) {
             if (Unit::where('id', $Product->unit_id)
@@ -2788,12 +2964,19 @@ class ProductsController extends BaseController
         $show_product_gtin = (bool) ($setting->show_product_gtin ?? false);
         $show_serial_tracking = (bool) ($setting->show_serial_tracking ?? false);
         $enable_multi_pack_selling = (bool) ($setting->enable_multi_pack_selling ?? false);
+        // Default-supplier field on the product form (Settings -> Features).
+        $product_supplier_enabled = (bool) ($setting->product_supplier_enabled ?? false);
+        $providers = $product_supplier_enabled
+            ? \App\Models\Provider::whereNull('deleted_at')->orderBy('name')->get(['id', 'name'])
+            : collect();
 
         return response()->json([
             'product' => $data,
             'categories' => $categories,
             'all_subcategories' => $all_subcategories,
             'brands' => $brands,
+            'providers' => $providers,
+            'product_supplier_enabled' => $product_supplier_enabled,
             'units' => $units,
             'units_sub' => $product_units,
             'materiels' => $materiels,
@@ -2804,6 +2987,10 @@ class ProductsController extends BaseController
             'show_serial_tracking' => $show_serial_tracking,
             'enable_multi_pack_selling' => $enable_multi_pack_selling,
             'fbr_enabled' => (bool) optional(\App\Models\FbrSetting::current())->enabled,
+            // Home warehouse field — see create().
+            'restrict_products_by_warehouse' => (bool) ($setting->restrict_products_by_warehouse ?? false),
+            'home_warehouse_required' => ! auth()->user()->is_all_warehouses,
+            'default_warehouse_id' => count($allowedWarehouseIds) === 1 ? (int) $allowedWarehouseIds[0] : null,
         ]);
 
     }
@@ -2955,6 +3142,8 @@ class ProductsController extends BaseController
 
                 foreach ($toCreate as $data) {
                     $product = Product::create([
+                        // Home warehouse: the importer's own (first) warehouse.
+                        'warehouse_id' => $this->productHomeWarehouseFor(null, false),
                         // base
                         'type' => 'is_single',
                         'is_variant' => 0,
@@ -3143,6 +3332,8 @@ class ProductsController extends BaseController
 
                 foreach ($toCreate as $data) {
                     $product = Product::create([
+                        // Home warehouse: the importer's own (first) warehouse.
+                        'warehouse_id' => $this->productHomeWarehouseFor(null, false),
                         'type' => 'is_service',
                         'is_variant' => 0,
                         'is_imei' => 0,
@@ -3434,6 +3625,8 @@ class ProductsController extends BaseController
 
                     // Parent product (variant type)
                     $product = Product::create([
+                        // Home warehouse: the importer's own (first) warehouse.
+                        'warehouse_id' => $this->productHomeWarehouseFor(null, false),
                         'type' => 'is_variant',
                         'is_variant' => 1,
                         'is_imei' => 0,
@@ -3757,11 +3950,17 @@ class ProductsController extends BaseController
             'date' => 'required',
             'warehouse_id' => 'required',
         ]);
+        $this->abortIfWarehouseDenied($request->warehouse_id);
 
         $products = product_warehouse::join('products', 'product_warehouse.product_id', '=', 'products.id')
             ->leftJoin('categories', 'products.category_id', '=', 'categories.id')
             ->where('product_warehouse.deleted_at', '=', null)
+            ->where('products.deleted_at', '=', null)
             ->where('product_warehouse.warehouse_id', '=', $request->warehouse_id)
+            // Only what this warehouse actually holds: its own products plus
+            // stock transferred in, never the empty rows of other branches.
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
+            ->tap(fn ($q) => $this->scopeStockRowsToOwnership($q))
             ->when($request->filled('category_id'), function ($query) use ($request) {
                 $query->where('products.category_id', $request->category_id);
             })
@@ -3793,17 +3992,16 @@ class ProductsController extends BaseController
         // Create an instance of StockExport with the warehouse name
         $stockExport = new StockExport($stock);
 
-        $excelFileName = 'stock_export_'.now()->format('YmdHis').'.xlsx';
-        $excelFolderPath = upload_public_path('count_stock').'/';
-        $excelFilePath = $excelFolderPath.$excelFileName;
+        // A stock count is a full inventory listing, so it is kept on the private
+        // `local` disk (tenant-suffixed by config/tenancy.php) and handed out by
+        // download_count_stock() behind auth, rather than written under public/
+        // where the timestamped name was guessable by anyone.
+        $excelFileName = 'stock_export_'.now()->format('YmdHis').'_'.Str::random(24).'.xlsx';
 
-        // Check if the directory exists, if not, create it
-        if (! File::exists($excelFolderPath)) {
-            File::makeDirectory($excelFolderPath, 0755, true, true);
-        }
-
-        // Use File::put to store the file directly in the desired public directory
-        File::put($excelFilePath, Excel::raw($stockExport, \Maatwebsite\Excel\Excel::XLSX));
+        Storage::disk('local')->put(
+            self::COUNT_STOCK_DIR.'/'.$excelFileName,
+            Excel::raw($stockExport, \Maatwebsite\Excel\Excel::XLSX)
+        );
 
         // Save the file name in the count_stock table
         CountStock::create([
@@ -3816,6 +4014,65 @@ class ProductsController extends BaseController
 
         return response()->json(['success' => true]);
 
+    }
+
+    // -------------- download_count_stock ------------------\\
+
+    /**
+     * Stream a stored stock count back to the user.
+     *
+     * The row is warehouse-gated the same way every other document is, so a
+     * user assigned to one branch cannot pull another branch's inventory.
+     * Counts generated before these files moved off the public path are still
+     * served from their old location so existing rows keep working.
+     */
+    public function download_count_stock(Request $request, $id)
+    {
+        $this->authorizeForUser($request->user('api'), 'count_stock', Product::class);
+
+        $count_stock = CountStock::findOrFail($id);
+        $this->abortIfDocumentWarehouseDenied($count_stock);
+
+        // basename() keeps a tampered row from walking out of the directory.
+        $fileName = basename((string) $count_stock->file_stock);
+        if ($fileName === '') {
+            abort(404);
+        }
+
+        $stored = self::COUNT_STOCK_DIR.'/'.$fileName;
+        if (Storage::disk('local')->exists($stored)) {
+            return Storage::disk('local')->download($stored, $fileName);
+        }
+
+        $legacy = upload_public_path('count_stock').'/'.$fileName;
+        if (is_file($legacy)) {
+            return response()->download($legacy, $fileName);
+        }
+
+        abort(404);
+    }
+
+    // -------------- search_products_basic ------------------\\
+
+    /** Typeahead for product pickers: id, name and code of matching active products. */
+    public function search_products_basic(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'view', Product::class);
+
+        $q = trim((string) $request->input('q', ''));
+        $exclude = (int) $request->input('exclude', 0);
+
+        $products = Product::whereNull('deleted_at')
+            ->where('is_active', 1)
+            ->when($exclude > 0, fn ($qq) => $qq->where('id', '!=', $exclude))
+            ->when($q !== '', fn ($qq) => $qq->where(function ($w) use ($q) {
+                $w->where('name', 'like', "%{$q}%")->orWhere('code', 'like', "%{$q}%");
+            }))
+            ->orderBy('name')
+            ->limit(25)
+            ->get(['id', 'name', 'code']);
+
+        return response()->json(['products' => $products]);
     }
 
     // -------------- get_products_materiels ------------------\\
@@ -4160,6 +4417,7 @@ class ProductsController extends BaseController
                     $q->whereNull('deleted_at');
                 }, 'images'])
                 ->findOrFail($id);
+            $this->abortIfProductDenied($original);
 
             $newCode = $this->generateUniqueCode();
 
@@ -4181,6 +4439,11 @@ class ProductsController extends BaseController
             $copy = $original->replicate();
             $copy->code = $newCode;
             $copy->image = $newImage;
+            // The copy stays in the original's home warehouse when the caller
+            // may access it; otherwise it goes to the caller's own warehouse.
+            $copy->warehouse_id = $this->canAccessWarehouse($original->warehouse_id)
+                ? $original->warehouse_id
+                : $this->productHomeWarehouseFor(null, false);
             $copy->created_at = now();
             $copy->updated_at = now();
             $copy->save();

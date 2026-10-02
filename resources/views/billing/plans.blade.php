@@ -9,7 +9,13 @@
         {{ __('billing.PlanSubtitle') }}
     </p>
 
-    {{-- Billing toggle --}}
+    {{-- Billing toggle. Only rendered when more than one cycle is sold; the
+         price blocks below render only the cycles that are. --}}
+    @php
+        $cycles = $billingCycles ?? ['monthly', 'yearly'];
+        $defaultCycle = $cycles[0];
+    @endphp
+    @if (count($cycles) > 1)
     <div class="d-inline-flex align-items-center gap-3 mt-4 p-1 billing-cycle-toggle">
         <button class="btn-cycle active" data-cycle="monthly" type="button">{{ __('billing.Monthly') }}</button>
         <button class="btn-cycle" data-cycle="yearly" type="button">
@@ -17,6 +23,7 @@
             <span class="billing-save-badge">{{ __('billing.Save') }}</span>
         </button>
     </div>
+    @endif
 </div>
 
 @if($subscription && $subscription->isActive())
@@ -44,12 +51,17 @@
                 <p class="text-muted mb-3 billing-plan-slug">{{ $plan->slug }}</p>
 
                 {{-- Monthly price --}}
+                @if (in_array('monthly', $cycles))
                 <div class="plan-price" data-cycle="monthly">
                     <span class="billing-plan-price">{{ $currencySymbol }}{{ number_format($plan->price, 2) }}</span>
                     <span class="text-muted billing-plan-period">/{{ __('billing.Month') }}</span>
                 </div>
-                {{-- Yearly price --}}
-                <div class="plan-price" data-cycle="yearly">
+                @endif
+                {{-- Yearly price. billing.css hides this block by default so the
+                     monthly one wins before the toggle is touched; on a
+                     yearly-only platform there is no toggle, so force it on. --}}
+                @if (in_array('yearly', $cycles))
+                <div class="plan-price" data-cycle="yearly" @if ($defaultCycle === 'yearly') style="display: block" @endif>
                     <span class="billing-plan-price">{{ $currencySymbol }}{{ number_format($plan->getPriceForCycle('yearly'), 2) }}</span>
                     <span class="text-muted billing-plan-period">/{{ __('billing.Year') }}</span>
                     @if($plan->getYearlySavingsPercent() > 0)
@@ -58,6 +70,7 @@
                     </span>
                     @endif
                 </div>
+                @endif
 
                 <hr class="billing-plan-divider">
 
@@ -88,7 +101,7 @@
 
                 {{-- All available features not in this plan --}}
                 @php
-                    $missingFeatures = array_diff_key(\App\Models\Central\Plan::AVAILABLE_FEATURES, $activeFeatures);
+                    $missingFeatures = array_diff_key(\App\Models\Central\Plan::availableFeatures(), $activeFeatures);
                 @endphp
                 @if(count($missingFeatures) > 0)
                 <div class="mb-4">
@@ -107,7 +120,7 @@
                             <i class="bi bi-check-lg"></i> {{ __('billing.CurrentPlan') }}
                         </span>
                     @else
-                        <a href="{{ route('billing.checkout', ['plan' => $plan->id, 'cycle' => 'monthly']) }}"
+                        <a href="{{ route('billing.checkout', ['plan' => $plan->id, 'cycle' => $defaultCycle]) }}"
                            class="btn-billing btn-billing-primary w-100 justify-content-center plan-select-btn"
                            data-plan="{{ $plan->id }}">
                             @if($subscription && $subscription->isActive() && $plan->price > $subscription->plan->price)

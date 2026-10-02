@@ -25,7 +25,9 @@ class RecruitController extends Controller
         if (!is_dir($destination)) {
             mkdir($destination, 0755, true);
         }
-        $filename = Str::random(20) . '.' . $file->getClientOriginalExtension();
+        // Extension from the sniffed MIME type, never from the client-supplied name.
+        $ext = strtolower($file->guessExtension() ?: $file->getClientOriginalExtension());
+        $filename = Str::random(20) . ($ext ? '.' . preg_replace('/[^a-z0-9]/', '', $ext) : '');
         $file->move($destination, $filename);
 
         return 'images/recruit/' . $dir . '/' . $filename;
@@ -320,6 +322,8 @@ class RecruitController extends Controller
             'first_name' => 'required|string|max:255',
             'last_name'  => 'required|string|max:255',
             'email'      => 'required|email|unique:recruit_candidates,email',
+            'resume'     => 'nullable|file|mimes:pdf,doc,docx|max:10240',
+            'photo'      => 'nullable|file|mimes:jpg,jpeg,png,webp|max:5120',
         ]);
 
         $data = $request->except(['resume', 'photo']);
@@ -344,6 +348,8 @@ class RecruitController extends Controller
             'first_name' => 'required|string|max:255',
             'last_name'  => 'required|string|max:255',
             'email'      => 'required|email|unique:recruit_candidates,email,' . $id,
+            'resume'     => 'nullable|file|mimes:pdf,doc,docx|max:10240',
+            'photo'      => 'nullable|file|mimes:jpg,jpeg,png,webp|max:5120',
         ]);
 
         $candidate = RecruitCandidate::findOrFail($id);

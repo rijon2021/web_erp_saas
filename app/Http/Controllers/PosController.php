@@ -78,6 +78,172 @@ class PosController extends BaseController
         return $value['imei_number'] ?? null;
     }
 
+    /**
+     * Authorise every card line with Stripe before the sale transaction opens.
+     *
+     * Charging inside the transaction meant a real card charge could outlive a
+     * rollback: the bank debited the customer and no sale existed in Stocky. The
+     * funds are now only held here (capture_method: manual) and taken once the
+     * sale has committed; if it fails, the hold is released instead. Keeping the
+     * round trip outside the transaction also stops Stripe's network latency
+     * holding database row locks open for seconds at a time.
+     *
+     * @return array<int, array{intent_id: string, charge_id: ?string, customer_stripe_id: string}>
+     *                                                          keyed by payment line index
+     */
+    private function authoriseCardPayments(Request $request, $changeLineIndex, $overpayment): array
+    {
+        $authorisations = [];
+
+        // Optional Stripe per-line metadata coming from modern payment modal / legacy POS
+        // NOTE: Saved-card usage has been disabled; we only accept per-transaction tokens.
+        $cardTokensByLine = $request->card_tokens_by_line ?? [];
+
+        foreach ($request->payments as $index => $payment) {
+            if (! isset($payment['amount']) || $payment['amount'] <= 0) {
+                continue;
+            }
+
+            if ($payment['payment_method_id'] != 1 && $payment['payment_method_id'] != '1') {
+                continue;
+            }
+
+            // Hold what will actually be recorded as paid, not what was tendered.
+            $amount = (float) $payment['amount'];
+            if ($changeLineIndex !== null && $index === $changeLineIndex) {
+                $amount -= (float) $overpayment;
+            }
+
+            $helpers = new helpers();
+            $currency = strtolower($helpers->Get_Currency_Code() ?? 'usd');
+
+            $client = Client::findOrFail($request->client_id);
+            \Stripe\Stripe::setApiKey(\App\Models\PaymentSetting::current()->stripe_secret);
+
+            $existing = PaymentWithCreditCard::where('customer_id', $request->client_id)->first();
+
+            try {
+
+                // 1️⃣ Ensure Stripe customer (no legacy card "source" – we rely on PaymentMethods / PaymentIntents)
+                if (! $existing) {
+                    $customer = \Stripe\Customer::create([
+                        'email' => $client->email,
+                        'name'  => $client->name,
+                    ]);
+
+                    $customerStripeId = $customer->id;
+                } else {
+                    $customerStripeId = $existing->customer_stripe_id;
+                }
+
+                // 2️⃣ Resolve Stripe Payment Method ID (pm_...)
+                // Prefer explicit PaymentMethod id sent from frontend (new POS flow)
+                $paymentMethodId = $payment['payment_method_id_stripe'] ?? null;
+
+                // If not provided, but we have a card token (legacy token-based flow),
+                // create a PaymentMethod from the token so we can still use PaymentIntents.
+                if (! $paymentMethodId) {
+                    $tokenLine = $cardTokensByLine[$index] ?? ($request->token ?? null);
+                    if ($tokenLine) {
+                        $paymentMethod = \Stripe\PaymentMethod::create([
+                            'type' => 'card',
+                            'card' => [
+                                'token' => $tokenLine,
+                            ],
+                        ]);
+                        $paymentMethodId = $paymentMethod->id;
+                    }
+                }
+
+                if (! $paymentMethodId) {
+                    throw new \Exception('Stripe payment method is missing');
+                }
+
+                // 3️⃣ Create & confirm PaymentIntent — authorisation only, the
+                //     capture happens after the sale has committed.
+                $intent = \Stripe\PaymentIntent::create([
+                    'amount' => (int) round($amount * 100),
+                    'currency' => $currency, // usd or mxn
+                    'customer' => $customerStripeId,
+                    'payment_method' => $paymentMethodId,
+                    'confirm' => true,
+                    'capture_method' => 'manual',
+                    'automatic_payment_methods' => [
+                        'enabled' => true,
+                        'allow_redirects' => 'never',
+                    ],
+                ]);
+
+                if ($intent->status !== 'requires_capture') {
+                    throw new \Exception('Payment failed');
+                }
+
+                $authorisations[$index] = [
+                    'intent_id' => $intent->id,
+                    'charge_id' => $intent->latest_charge,
+                    'customer_stripe_id' => $customerStripeId,
+                ];
+
+            } catch (\Stripe\Exception\CardException $e) {
+
+                // Release anything already held for earlier lines of this sale.
+                $this->releaseCardAuthorisations($authorisations);
+
+                // ✅ Correct: Stripe card error → bubble up
+                throw new \Exception($e->getError()->message);
+
+            } catch (\Throwable $e) {
+
+                $this->releaseCardAuthorisations($authorisations);
+
+                // ✅ Correct: Throwable has NO getError()
+                throw new \Exception($e->getMessage());
+            }
+        }
+
+        return $authorisations;
+    }
+
+    /**
+     * Take the held funds once the sale is safely committed.
+     *
+     * A capture that fails here leaves a recorded sale against an authorisation
+     * that was never taken, so it is logged loudly rather than swallowed: the
+     * hold lapses on Stripe's side and the merchant has to settle it by hand.
+     * Throwing instead would be worse — the sale already exists.
+     */
+    private function captureCardAuthorisations(array $authorisations): void
+    {
+        foreach ($authorisations as $auth) {
+            try {
+                \Stripe\PaymentIntent::retrieve($auth['intent_id'])->capture();
+            } catch (\Throwable $e) {
+                Log::error('[POS] Stripe capture failed after the sale committed', [
+                    'intent' => $auth['intent_id'],
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Release holds for a sale that was not written, so the customer is not left
+     * short of available funds for a sale that does not exist.
+     */
+    private function releaseCardAuthorisations(array $authorisations): void
+    {
+        foreach ($authorisations as $auth) {
+            try {
+                \Stripe\PaymentIntent::retrieve($auth['intent_id'])->cancel();
+            } catch (\Throwable $e) {
+                Log::error('[POS] Stripe authorisation could not be released', [
+                    'intent' => $auth['intent_id'],
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
     public function CreatePOS(Request $request)
     {
         $this->authorizeForUser($request->user('api'), 'Sales_pos', Sale::class);
@@ -88,6 +254,9 @@ class PosController extends BaseController
             'payments' => 'required|array|min:1',
             'payments.*.amount' => 'required|numeric',
             'payments.*.payment_method_id' => 'required',
+            // Optional per-tenant rule; 'nullable' unless the merchant turned on
+            // Settings > Features > Require payment account.
+            'payments.*.account_id' => $this->paymentAccountRule(),
         ]);
 
         // Optional idempotency key generated on the frontend (crypto.randomUUID).
@@ -125,13 +294,40 @@ class PosController extends BaseController
         // unless Settings > Features > Allow overselling is on.
         $this->assertSaleStockSufficient($request);
 
-        // Block overpayment if multiple methods used
+        // Overpayment is normal retail: the customer hands over a larger note and
+        // takes the difference back as change. It can only come out of a cash
+        // tender though — there is no change from a card — so on a split payment
+        // the excess has to be covered by one cash line. Whichever line absorbs
+        // it is recorded here and applied when the payments are written below.
         $totalPaid = collect($request->payments)->sum('amount');
-        if (count($request->payments) > 1 && $totalPaid > $request->GrandTotal) {
-            return response()->json([
-                'message' => 'Total Paid Exceeds Grand Total',
-                'change_return' => $totalPaid - $request->GrandTotal,
-            ], 422);
+        $overpayment = round($totalPaid - (float) $request->GrandTotal, 4);
+        $changeLineIndex = null;
+
+        if ($overpayment > 0) {
+            if (count($request->payments) === 1) {
+                // Single tender: unchanged behaviour, that one line absorbs it.
+                $changeLineIndex = array_key_first($request->payments);
+            } else {
+                $cashMethodIds = PaymentMethod::cashMethodIds();
+
+                foreach ($request->payments as $index => $payment) {
+                    $isCash = in_array((int) ($payment['payment_method_id'] ?? 0), $cashMethodIds, true);
+
+                    if ($isCash && (float) ($payment['amount'] ?? 0) >= $overpayment) {
+                        $changeLineIndex = $index;
+                        break;
+                    }
+                }
+            }
+
+            // Nothing can give the change back: a card-only overpayment, or a
+            // cash line too small to cover it.
+            if ($changeLineIndex === null) {
+                return response()->json([
+                    'message' => 'Total Paid Exceeds Grand Total',
+                    'change_return' => $overpayment,
+                ], 422);
+            }
         }
 
         // Re-evaluate promotions server-side so the client can't fabricate a discount.
@@ -150,8 +346,17 @@ class PosController extends BaseController
         $promotionCodeApplied = trim((string) $request->input('promotion_code', '')) ?: null;
         $appliedPromotions = $promotionResult['applied'] ?? [];
 
+        // Card lines are authorised with Stripe BEFORE the transaction opens, so a
+        // network round trip never holds database row locks, and a sale that fails
+        // to commit never leaves a captured charge behind on the customer's card.
         try {
-            $sale = \DB::transaction(function () use ($request, $totalPaid, $saleUuid, $saleAt, $promotionDiscount, $promotionCodeApplied, $appliedPromotions) {
+            $cardAuthorisations = $this->authoriseCardPayments($request, $changeLineIndex, $overpayment);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        try {
+            $sale = \DB::transaction(function () use ($request, $totalPaid, $saleUuid, $saleAt, $promotionDiscount, $promotionCodeApplied, $appliedPromotions, $overpayment, $changeLineIndex, $cardAuthorisations) {
                 $helpers = new helpers;
                 $user = Auth::user();
                 // New way: Check user's record_view field (user-level boolean)
@@ -346,10 +551,6 @@ class PosController extends BaseController
                     $this->authorizeForUser($request->user('api'), 'check_record', $sale);
                 }
 
-                // Optional Stripe per-line metadata coming from modern payment modal / legacy POS
-                // NOTE: Saved-card usage has been disabled; we only accept per-transaction tokens.
-                $cardTokensByLine = $request->card_tokens_by_line ?? [];
-
                 foreach ($request->payments as $index => $payment) {
                     if (isset($payment['amount']) && $payment['amount'] > 0) {
                         // Prefer per-line account selection; no global account fallback
@@ -359,90 +560,17 @@ class PosController extends BaseController
                         $paymentAmount = $originalAmount;
                         $changeReturn = 0;
 
-                        // Adjust if overpaid in single-payment mode
-                        if (count($request->payments) === 1 && $originalAmount > $request->GrandTotal) {
-                            $paymentAmount = $request->GrandTotal;
-                            $changeReturn = $originalAmount - $request->GrandTotal;
+                        // The tender chosen above gives the change back, so only
+                        // the part that stays in the drawer is recorded as paid.
+                        if ($changeLineIndex !== null && $index === $changeLineIndex) {
+                            $paymentAmount = $originalAmount - $overpayment;
+                            $changeReturn = $overpayment;
                         }
 
-                        if ($payment['payment_method_id'] == 1 || $payment['payment_method_id'] == '1') {
-
-                            $helpers  = new helpers();
-                            $currency = strtolower($helpers->Get_Currency_Code() ?? 'usd');
-
-                            $client = Client::findOrFail($request->client_id);
-                            \Stripe\Stripe::setApiKey(\App\Models\PaymentSetting::current()->stripe_secret);
-
-                            $existing = PaymentWithCreditCard::where('customer_id', $request->client_id)->first();
-
-                            try {
-
-                                // 1️⃣ Ensure Stripe customer (no legacy card "source" – we rely on PaymentMethods / PaymentIntents)
-                                if (! $existing) {
-                                    $customer = \Stripe\Customer::create([
-                                        'email' => $client->email,
-                                        'name'  => $client->name,
-                                    ]);
-
-                                    $customerStripeId = $customer->id;
-                                } else {
-                                    $customerStripeId = $existing->customer_stripe_id;
-                                }
-
-                                // 2️⃣ Resolve Stripe Payment Method ID (pm_...)
-                                // Prefer explicit PaymentMethod id sent from frontend (new POS flow)
-                                $paymentMethodId = $payment['payment_method_id_stripe'] ?? null;
-
-                                // If not provided, but we have a card token (legacy token-based flow),
-                                // create a PaymentMethod from the token so we can still use PaymentIntents.
-                                if (! $paymentMethodId) {
-                                    $tokenLine = $cardTokensByLine[$index] ?? ($request->token ?? null);
-                                    if ($tokenLine) {
-                                        $paymentMethod = \Stripe\PaymentMethod::create([
-                                            'type' => 'card',
-                                            'card' => [
-                                                'token' => $tokenLine,
-                                            ],
-                                        ]);
-                                        $paymentMethodId = $paymentMethod->id;
-                                    }
-                                }
-
-                                if (! $paymentMethodId) {
-                                    throw new \Exception('Stripe payment method is missing');
-                                }
-
-                                // 3️⃣ Create & confirm PaymentIntent
-                                $intent = \Stripe\PaymentIntent::create([
-                                    'amount' => (int) round($paymentAmount * 100),
-                                    'currency' => $currency, // usd or mxn
-                                    'customer' => $customerStripeId,
-                                    'payment_method' => $paymentMethodId,
-                                    'confirm' => true,
-                                    'automatic_payment_methods' => [
-                                        'enabled' => true,
-                                        'allow_redirects' => 'never',
-                                    ],
-                                ]);
-
-                                if ($intent->status !== 'succeeded') {
-                                    throw new \Exception('Payment failed');
-                                }
-
-                                // Save for DB usage
-                                $stripeChargeId = $intent->latest_charge;
-
-                            } catch (\Stripe\Exception\CardException $e) {
-
-                                // ✅ Correct: Stripe card error → bubble up
-                                throw new \Exception($e->getError()->message);
-
-                            } catch (\Throwable $e) {
-
-                                // ✅ Correct: Throwable has NO getError()
-                                throw new \Exception($e->getMessage());
-                            }
-                        }
+                        // Card lines were authorised with Stripe before this
+                        // transaction opened; here we only read the result.
+                        $customerStripeId = $cardAuthorisations[$index]['customer_stripe_id'] ?? null;
+                        $stripeChargeId = $cardAuthorisations[$index]['charge_id'] ?? null;
 
 
                         $paymentSale = PaymentSale::create([
@@ -468,12 +596,7 @@ class PosController extends BaseController
                             ]);
                         }
 
-                        if ($accountId) {
-                            $account = Account::find($accountId);
-                            if ($account) {
-                                $account->update(['balance' => $account->balance + $paymentAmount]);
-                            }
-                        }
+                        Account::adjustBalance($accountId, $paymentAmount);
                     }
                 }
 
@@ -532,7 +655,16 @@ class PosController extends BaseController
 
             }, 10);
 
+            // Committed: take the money that was only held until now.
+            $this->captureCardAuthorisations($cardAuthorisations);
+
         } catch (\Throwable $e) {
+            // Nothing was written, so let the holds go rather than leaving the
+            // customer short of funds for a sale that does not exist. This also
+            // covers the idempotent-duplicate path below: the request that won
+            // the race carries its own authorisation.
+            $this->releaseCardAuthorisations($cardAuthorisations);
+
             // If a concurrent request created the same sale with the same UUID, the unique
             // constraint on sale_uuid will trigger here. In that case, treat this as a
             // successful, idempotent result by returning the already‑created sale instead
@@ -1265,15 +1397,7 @@ class PosController extends BaseController
 
                             $PaymentSale->save();
 
-                            $account = Account::where('id', $request->payment['account_id'])->exists();
-
-                            if ($account) {
-                                // Account exists, perform the update
-                                $account = Account::find($request->payment['account_id']);
-                                $account->update([
-                                    'balance' => $account->balance + $request['amount'],
-                                ]);
-                            }
+                            Account::adjustBalance($request->payment['account_id'], $request['amount']);
 
                             $sale->update([
                                 'paid_amount' => $total_paid,
@@ -1300,15 +1424,7 @@ class PosController extends BaseController
                                 'user_id' => Auth::user()->id,
                             ]);
 
-                            $account = Account::where('id', $request->payment['account_id'])->exists();
-
-                            if ($account) {
-                                // Account exists, perform the update
-                                $account = Account::find($request->payment['account_id']);
-                                $account->update([
-                                    'balance' => $account->balance + $request['amount'],
-                                ]);
-                            }
+                            Account::adjustBalance($request->payment['account_id'], $request['amount']);
 
                             $sale->update([
                                 'paid_amount' => $total_paid,
@@ -1436,11 +1552,11 @@ class PosController extends BaseController
         // get warehouses assigned to user
         $user_auth = auth()->user();
         if ($user_auth->is_all_warehouses) {
-            $warehouses = Warehouse::where('deleted_at', '=', null)->get(['id', 'name']);
+            $warehouses = Warehouse::where('deleted_at', '=', null)->get(['id', 'name', 'address', 'mobile', 'email', 'zip', 'country', 'logo', 'invoice_footer']);
 
         } else {
             $warehouses_id = UserWarehouse::where('user_id', $user_auth->id)->pluck('warehouse_id')->toArray();
-            $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name']);
+            $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name', 'address', 'mobile', 'email', 'zip', 'country', 'logo', 'invoice_footer']);
         }
 
         if ($draft_sale_data->client_id) {
@@ -1527,9 +1643,9 @@ class PosController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
                 $data['no_unit'] = 0;
             }
 
@@ -1632,7 +1748,7 @@ class PosController extends BaseController
         $categories = Category::where('deleted_at', '=', null)->get(['id', 'name']);
         $brands = Brand::where('deleted_at', '=', null)->get();
         $stripe_key = \App\Models\PaymentSetting::current()->stripe_key;
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name', 'is_cash']);
 
         return response()->json([
             'stripe_key' => $stripe_key,
@@ -1692,7 +1808,11 @@ class PosController extends BaseController
 
         $product_warehouse_query = product_warehouse::where('warehouse_id', $request->warehouse_id)
             ->with('product', 'product.unitSale')
+            // Products belong to a warehouse (Settings -> Features): drop the
+            // zero-stock rows of products owned by another branch.
+            ->whereHas('product', fn ($p) => $this->scopeProductsToWarehouses($p))
             ->where('deleted_at', '=', null)
+            ->withoutVariantParentRows()
             ->where(function ($query) use ($request, $allow_overselling) {
                 return $query->whereHas('product', function ($q) {
                     $q->where('not_selling', '=', 0);
@@ -2068,7 +2188,7 @@ class PosController extends BaseController
         // get warehouses assigned to user
         $user_auth = auth()->user();
         if ($user_auth->is_all_warehouses) {
-            $warehouses = Warehouse::where('deleted_at', '=', null)->get(['id', 'name']);
+            $warehouses = Warehouse::where('deleted_at', '=', null)->get(['id', 'name', 'address', 'mobile', 'email', 'zip', 'country', 'logo', 'invoice_footer']);
 
             if ($settings->warehouse_id) {
                 if (Warehouse::where('id', $settings->warehouse_id)->where('deleted_at', '=', null)->first()) {
@@ -2082,7 +2202,7 @@ class PosController extends BaseController
 
         } else {
             $warehouses_id = UserWarehouse::where('user_id', $user_auth->id)->pluck('warehouse_id')->toArray();
-            $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name']);
+            $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name', 'address', 'mobile', 'email', 'zip', 'country', 'logo', 'invoice_footer']);
 
             if ($settings->warehouse_id) {
                 if (Warehouse::where('id', $settings->warehouse_id)->whereIn('id', $warehouses_id)->where('deleted_at', '=', null)->first()) {
@@ -2132,13 +2252,15 @@ class PosController extends BaseController
         }
 
         $products_per_page = $pos_setting ? $pos_setting->products_per_page : 12;
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name', 'is_cash']);
         $languages_available = Language::where('is_active', true)->get(['name', 'locale', 'flag']);
 
         return response()->json([
             // Company / receipt header info (used for POS receipt + offline printing fallback)
             'setting' => [
-                'logo' => $settings ? $settings->logo : null,
+                // Resolved to an existing file (or the default logo) so the
+                // cached offline receipt never prints a broken-image box.
+                'logo' => $settings ? receipt_logo_url($settings->logo) : null,
                 'CompanyName' => $settings ? $settings->CompanyName : null,
                 'CompanyAdress' => $settings ? $settings->CompanyAdress : null,
                 'email' => $settings ? $settings->email : null,
@@ -2152,6 +2274,9 @@ class PosController extends BaseController
                     : 'thermal',
                 // Offline sync toggle: when false, POS requires online and disables offline queueing
                 'offline_sync_enabled' => $settings ? (bool) ($settings->offline_sync_enabled ?? true) : true,
+                // Warehouse Letterhead: lets the POS rebuild the issuing branch's
+                // header for offline receipts (the warehouse rows below carry it).
+                'enable_warehouse_letterhead' => \App\Services\InvoiceIssuerService::enabled($settings),
             ],
             'stripe_key' => $stripe_key,
             'brands' => $brands,

@@ -106,12 +106,13 @@
                     <a-input v-model:value="setting.CompanyAdress" />
                   </a-form-item>
                 </a-col>
-                <a-col :xs="24" :md="12">
+                <!-- White-labeling is a plan feature (remove_branding). -->
+                <a-col v-if="auth.canRemoveBranding" :xs="24" :md="12">
                   <a-form-item :label="$t('footer')" :help="'Shown in the app footer bar. Leave empty for the default copyright line.'">
                     <a-input v-model:value="setting.footer" :placeholder="`© ${new Date().getFullYear()} Stocky. All rights reserved.`" />
                   </a-form-item>
                 </a-col>
-                <a-col :xs="24" :md="12">
+                <a-col v-if="auth.canRemoveBranding" :xs="24" :md="12">
                   <a-form-item :label="$t('developed_by')">
                     <a-input v-model:value="setting.developed_by" />
                   </a-form-item>
@@ -300,6 +301,13 @@
             </div>
             <div class="setting-row">
               <div>
+                <div class="setting-label">{{ $t('Enable_Warehouse_Letterhead') }}</div>
+                <div class="setting-help">{{ $t('Enable_Warehouse_Letterhead_Hint') }}</div>
+              </div>
+              <a-switch v-model:checked="setting.enable_warehouse_letterhead" />
+            </div>
+            <div class="setting-row">
+              <div>
                 <div class="setting-label">{{ $t('Enable_Multi_Currency') }}</div>
                 <div class="setting-help">{{ $t('Enable_Multi_Currency_Hint') }}</div>
               </div>
@@ -341,6 +349,34 @@
                 </div>
               </div>
               <a-switch v-model:checked="setting.allow_overselling" />
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">{{ $t('Restrict_Master_Data_By_Warehouse') }}</div>
+                <div class="setting-help">{{ $t('Restrict_Master_Data_By_Warehouse_Help') }}</div>
+              </div>
+              <a-switch v-model:checked="setting.restrict_master_data_by_warehouse" />
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">{{ $t('Restrict_Products_By_Warehouse') }}</div>
+                <div class="setting-help">{{ $t('Restrict_Products_By_Warehouse_Help') }}</div>
+              </div>
+              <a-switch v-model:checked="setting.restrict_products_by_warehouse" />
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">{{ $t('Customer_Performance') }}</div>
+                <div class="setting-help">{{ $t('Customer_Performance_Help') }}</div>
+              </div>
+              <a-switch v-model:checked="setting.customer_performance_enabled" />
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">{{ $t('Product_Supplier') }}</div>
+                <div class="setting-help">{{ $t('Product_Supplier_Help') }}</div>
+              </div>
+              <a-switch v-model:checked="setting.product_supplier_enabled" />
             </div>
           </template>
 
@@ -936,6 +972,7 @@ import { useAuthStore } from '../../stores/auth';
 import { useDatatableStore } from '../../stores/datatable';
 import http from '../../lib/http';
 import { uploadForm } from '../../lib/upload';
+import { buildFontOptions } from '../../lib/fontOptions';
 
 const { t, locale } = useI18n();
 const ui = useUiStore();
@@ -1056,17 +1093,14 @@ function asBool(v) {
   return v === 1 || v === '1' || v === true;
 }
 
-const fontFamilyOptions = [
-  { label: 'System default', value: '' },
-  { label: 'Inherit', value: 'inherit' },
-  { label: 'Arial', value: 'Arial, sans-serif' },
-  { label: 'Georgia', value: 'Georgia, serif' },
-  { label: 'Times New Roman', value: '"Times New Roman", Times, serif' },
-  { label: 'Verdana', value: 'Verdana, Geneva, sans-serif' },
-  { label: 'Tahoma', value: 'Tahoma, Geneva, sans-serif' },
-  { label: 'Segoe UI', value: '"Segoe UI", Tahoma, sans-serif' },
-  { label: 'System UI', value: 'system-ui, -apple-system, sans-serif' },
-];
+// Grouped Google + system font options, served as font_options by
+// get_Settings_data_api (see Setting::fontOptions). The Google family chosen
+// here is loaded by partials/tenant-font.blade.php across the dashboard.
+const fontOptionsPayload = ref(null);
+const fontFamilyOptions = computed(() => buildFontOptions(fontOptionsPayload.value, t, {
+  current: setting.value.dashboard_font_family,
+  defaultLabel: t('System_Default'),
+}));
 
 /* -------------------------------------------------------------- export */
 // Mirrors the defaults in lib/exporters.js exportPrefs(); stored as JSON in
@@ -1226,9 +1260,14 @@ async function save() {
   fd.append('show_serial_tracking', s.show_serial_tracking ? 1 : 0);
   fd.append('enable_multi_pack_selling', s.enable_multi_pack_selling ? 1 : 0);
   fd.append('enable_wholesale_pricing', s.enable_wholesale_pricing ? 1 : 0);
+  fd.append('enable_warehouse_letterhead', s.enable_warehouse_letterhead ? 1 : 0);
   fd.append('enable_multi_currency', s.enable_multi_currency ? 1 : 0);
   fd.append('enable_pos_salesperson_switch', s.enable_pos_salesperson_switch ? 1 : 0);
   fd.append('allow_overselling', s.allow_overselling ? 1 : 0);
+  fd.append('restrict_master_data_by_warehouse', s.restrict_master_data_by_warehouse ? 1 : 0);
+  fd.append('restrict_products_by_warehouse', s.restrict_products_by_warehouse ? 1 : 0);
+  fd.append('customer_performance_enabled', s.customer_performance_enabled ? 1 : 0);
+  fd.append('product_supplier_enabled', s.product_supplier_enabled ? 1 : 0);
   fd.append('vehicle_fitment_enabled', s.vehicle_fitment_enabled ? 1 : 0);
   fd.append('auto_journal_enabled', s.auto_journal_enabled ? 1 : 0);
   fd.append('sale_prefix', s.sale_prefix || '');
@@ -1379,6 +1418,7 @@ onMounted(() => {
       smsGateways.value = data.sms_gateway || [];
       zonesArray.value = data.zones_array || [];
       languages.value = data.languages || [];
+      fontOptionsPayload.value = data.font_options || null;
       syncSectionOrder();
       syncExportForm();
       const stm = Number(setting.value.session_timeout_minutes);

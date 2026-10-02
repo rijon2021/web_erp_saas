@@ -46,6 +46,9 @@
       </template>
     </DataTable>
 
+    <!-- Optional extra content under the table (e.g. a per-method summary) -->
+    <slot name="after" />
+
     <!-- Filters (date range, warehouse, …) supplied per report — opened from the
          Filter button, shown in a right drawer like the legacy reports. Controls
          are forced full-width in the drawer regardless of their inline widths. -->

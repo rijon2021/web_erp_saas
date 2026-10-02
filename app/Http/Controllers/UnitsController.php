@@ -92,15 +92,17 @@ class UnitsController extends BaseController
             $operator_value = $request->operator_value;
         }
 
-        Unit::create([
+        $unit = Unit::create([
             'name' => $request['name'],
             'ShortName' => $request['ShortName'],
-            'base_unit' => $request['base_unit'],
+            'base_unit' => $request['base_unit'] ?: null,
             'operator' => $operator,
             'operator_value' => $operator_value,
         ]);
 
-        return response()->json(['success' => true]);
+        // Returned so quick-create forms (e.g. the product form) can select
+        // the new unit without re-fetching and guessing it by name.
+        return response()->json(['success' => true, 'unit' => $unit]);
 
     }
 

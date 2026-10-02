@@ -49,6 +49,14 @@
             @change="crud.reload()"
           />
         </a-col>
+        <a-col v-if="supplierEnabled" :xs="12" :md="8" :xl="4">
+          <div class="filter-label">{{ $t('Supplier') }}</div>
+          <a-select
+            v-model:value="filters.provider_id" style="width: 100%" allow-clear show-search
+            option-filter-prop="label" :placeholder="$t('Choose_Supplier')" :options="providerOptions"
+            @change="crud.reload()"
+          />
+        </a-col>
         <a-col :xs="12" :md="8" :xl="5">
           <div class="filter-label">{{ $t('warehouse') }}</div>
           <a-select
@@ -260,7 +268,7 @@ const { money } = useFormat();
 const auth = useAuthStore();
 
 const filters = ref({
-  code: '', name: '', category_id: undefined, brand_id: undefined, warehouse_id: undefined,
+  code: '', name: '', category_id: undefined, brand_id: undefined, provider_id: undefined, warehouse_id: undefined,
 });
 
 const filterParams = () => ({
@@ -268,6 +276,7 @@ const filterParams = () => ({
   name: filters.value.name || '',
   category_id: filters.value.category_id || '',
   brand_id: filters.value.brand_id || '',
+  provider_id: filters.value.provider_id || '',
   warehouse_id: filters.value.warehouse_id || '',
 });
 
@@ -286,6 +295,12 @@ const brandOptions = computed(() =>
 const warehouseOptions = computed(() =>
   (crud.payload.value?.warehouses || []).map(w => ({ value: w.id, label: w.name }))
 );
+const supplierEnabled = computed(() => crud.payload.value?.product_supplier_enabled === true);
+// Settings → Features → Restrict products by warehouse: show which branch owns each product.
+const ownershipEnabled = computed(() => crud.payload.value?.restrict_products_by_warehouse === true);
+const providerOptions = computed(() =>
+  (crud.payload.value?.providers || []).map(p => ({ value: p.id, label: p.name }))
+);
 
 const columns = computed(() => [
   { title: t('image'), key: 'image', width: 70, exportable: false },
@@ -301,6 +316,12 @@ const columns = computed(() => [
   { title: t('Wholesale_Price'), dataIndex: 'wholesale_price', key: 'wholesale_price', align: 'right', sorter: true, defaultHidden: true },
   { title: t('Min_Selling_Price'), dataIndex: 'min_price', key: 'min_price', align: 'right', sorter: true, defaultHidden: true },
   { title: t('Brand'), dataIndex: 'brand', key: 'brand' },
+  ...(supplierEnabled.value
+    ? [{ title: t('Supplier'), dataIndex: 'provider_name', key: 'provider_name' }]
+    : []),
+  ...(ownershipEnabled.value
+    ? [{ title: t('Home_Warehouse'), dataIndex: 'warehouse_name', key: 'warehouse_name' }]
+    : []),
   { title: t('Categorie'), dataIndex: 'category', key: 'category' },
   { title: t('Quantity'), dataIndex: 'quantity', key: 'quantity', align: 'right', sorter: true },
   { title: t('Action'), key: 'actions', width: 160, align: 'center' },
@@ -376,6 +397,8 @@ const exportColumns = computed(() => [
   { title: t('Wholesale_Price'), dataIndex: 'wholesale_price' },
   { title: t('Min_Selling_Price'), dataIndex: 'min_price' },
   { title: t('Brand'), dataIndex: 'brand' },
+  ...(supplierEnabled.value ? [{ title: t('Supplier'), dataIndex: 'provider_name' }] : []),
+  ...(ownershipEnabled.value ? [{ title: t('Home_Warehouse'), dataIndex: 'warehouse_name' }] : []),
   { title: t('Categorie'), dataIndex: 'category' },
   { title: t('Quantity'), dataIndex: 'quantity' },
 ]);

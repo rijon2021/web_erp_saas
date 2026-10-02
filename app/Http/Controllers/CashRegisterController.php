@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\CashRegister;
+use App\Models\PaymentMethod;
 use App\Models\Role;
 use App\Models\Sale;
 use App\Models\User;
@@ -11,6 +12,7 @@ use App\Models\Warehouse;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class CashRegisterController extends BaseController
 {
@@ -112,6 +114,10 @@ class CashRegisterController extends BaseController
         $from = $register->opened_at;
         $to = $now;
 
+        // Turnover rung up on this register — reported to the cashier as context,
+        // but deliberately NOT what the drawer is reconciled against: a sale can
+        // be paid by card, by transfer, or left on credit, and none of those put
+        // notes in the till.
         $totalSales = Sale::whereNull('deleted_at')
             ->where('is_pos', 1)
             ->where('user_id', $register->user_id)
@@ -121,7 +127,38 @@ class CashRegisterController extends BaseController
 
         $register->total_sales = $totalSales;
 
-        $expectedCash = ($register->opening_balance ?? 0) + ($register->cash_in ?? 0) - ($register->cash_out ?? 0) + ($register->total_sales ?? 0);
+        // What the drawer should physically hold: cash taken in, less cash paid
+        // back out as refunds, over the session window. `montant` is already net
+        // of any change handed back, so it is the amount that stayed in the till.
+        $cashMethodIds = PaymentMethod::cashMethodIds();
+
+        $cashReceived = 0.0;
+        $cashRefunded = 0.0;
+
+        if (! empty($cashMethodIds)) {
+            $cashReceived = (float) DB::table('payment_sales as p')
+                ->join('sales as s', 's.id', '=', 'p.sale_id')
+                ->whereNull('p.deleted_at')
+                ->whereNull('s.deleted_at')
+                ->where('p.user_id', $register->user_id)
+                ->where('s.warehouse_id', $register->warehouse_id)
+                ->whereIn('p.payment_method_id', $cashMethodIds)
+                ->whereBetween('p.created_at', [$from, $to])
+                ->sum('p.montant');
+
+            $cashRefunded = (float) DB::table('payment_sale_returns as p')
+                ->join('sale_returns as r', 'r.id', '=', 'p.sale_return_id')
+                ->whereNull('p.deleted_at')
+                ->whereNull('r.deleted_at')
+                ->where('p.user_id', $register->user_id)
+                ->where('r.warehouse_id', $register->warehouse_id)
+                ->whereIn('p.payment_method_id', $cashMethodIds)
+                ->whereBetween('p.created_at', [$from, $to])
+                ->sum('p.montant');
+        }
+
+        $expectedCash = ($register->opening_balance ?? 0) + ($register->cash_in ?? 0)
+            - ($register->cash_out ?? 0) + $cashReceived - $cashRefunded;
         $counted = (float) $data['counted_cash'];
         $difference = $counted - $expectedCash;
 
@@ -142,6 +179,12 @@ class CashRegisterController extends BaseController
                 'expected_cash' => $expectedCash,
                 'counted_cash' => $counted,
                 'difference' => $difference,
+                // Broken out so the cashier can see why the drawer is expected to
+                // hold less than the day's turnover.
+                'cash_received' => $cashReceived,
+                'cash_refunded' => $cashRefunded,
+                'total_sales' => (float) $totalSales,
+                'cash_methods_configured' => ! empty($cashMethodIds),
             ],
         ]);
     }

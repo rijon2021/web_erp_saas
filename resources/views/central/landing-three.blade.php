@@ -411,7 +411,13 @@
         @if(!empty($pricing['is_active']))
         @php
             $l3Plans = $pricing['plans'] ?? collect();
-            $pricingHasYearly = $l3Plans->isNotEmpty() && $l3Plans->contains(fn ($p) => ($p->yearly_price ?? 0) > 0);
+            $l3ShowMonthly = $pricing['show_monthly'] ?? true;
+            $l3ShowYearly  = $pricing['show_yearly'] ?? true;
+            // The monthly/yearly tabs need both cycles on sale AND a plan that
+            // actually carries a yearly price.
+            $pricingHasYearly = $l3ShowYearly && $l3Plans->isNotEmpty()
+                && $l3Plans->contains(fn ($p) => ($p->yearly_price ?? 0) > 0);
+            $l3ShowTabs = $l3ShowMonthly && $pricingHasYearly;
         @endphp
         <section id="pricing" class="py-24 px-6 bg-white relative scroll-mt-24" aria-labelledby="l3-pricing-title">
             <div class="max-w-7xl mx-auto">
@@ -423,7 +429,7 @@
                         <h2 class="text-3xl md:text-4xl font-semibold tracking-tight text-slate-900 mb-4" id="l3-pricing-title">{{ __('landing.pricing') }}</h2>
                         <p class="text-slate-600 mb-8">{{ __('landing.how_it_works_subtitle') }}</p>
                     @endif
-                    @if($pricingHasYearly)
+                    @if($l3ShowTabs)
                     <div class="inline-flex items-center p-1 bg-slate-100 rounded-full border border-slate-200/60" role="group" aria-label="{{ __('landing.billing_cycle') }}">
                         <button type="button" class="l3-price-tab px-6 py-2 rounded-full text-sm font-medium bg-white shadow-sm text-slate-900" data-cycle="monthly">{{ __('landing.monthly') }}</button>
                         <button type="button" class="l3-price-tab px-6 py-2 rounded-full text-sm font-medium text-slate-500 hover:text-slate-900 transition" data-cycle="yearly">{{ __('landing.yearly') }}</button>
@@ -452,17 +458,25 @@
                                 {{ __('landing.for_growing_teams') }}
                             @endif
                         </p>
+                        {{-- A free plan has no yearly block to fall back on, so its
+                             "Free" label lives here and must survive monthly being off. --}}
+                        @php $l3Free = $plan->price == 0 && $plan->yearly_price == 0; @endphp
+                        @if($l3ShowMonthly || $l3Free)
                         <div class="mb-8 l3-plan-price" data-monthly>
-                            @if($plan->price == 0 && $plan->yearly_price == 0)
+                            @if($l3Free)
                                 <span class="text-4xl font-semibold tracking-tight {{ $featured ? 'text-white' : 'text-slate-900' }}">{{ __('landing.free') }}</span>
                             @else
                                 <span class="text-4xl font-semibold tracking-tight {{ $featured ? 'text-white' : 'text-slate-900' }}">{{ $currencySymbol }}<span class="l3-amt-monthly">{{ $plan->price == floor($plan->price) ? number_format($plan->price, 0) : number_format($plan->price, 2) }}</span></span>
                                 <span class="{{ $featured ? 'text-slate-400' : 'text-slate-500' }} text-sm">/ {{ __('landing.mo') }}</span>
                             @endif
                         </div>
-                        @if($plan->yearly_price > 0)
-                        <div class="mb-8 l3-plan-price hidden" data-yearly>
-                            <span class="text-4xl font-semibold tracking-tight {{ $featured ? 'text-white' : 'text-slate-900' }}">{{ $currencySymbol }}<span class="l3-amt-yearly">{{ $plan->yearly_price == floor($plan->yearly_price) ? number_format($plan->yearly_price, 0) : number_format($plan->yearly_price, 2) }}</span></span>
+                        @endif
+                        {{-- Yearly block is normally hidden until the tab is clicked;
+                             with monthly off there are no tabs, so show it outright. --}}
+                        @php $l3Yr = $plan->getPriceForCycle('yearly'); @endphp
+                        @if($l3ShowYearly && $l3Yr > 0)
+                        <div class="mb-8 l3-plan-price{{ $l3ShowMonthly ? ' hidden' : '' }}" data-yearly>
+                            <span class="text-4xl font-semibold tracking-tight {{ $featured ? 'text-white' : 'text-slate-900' }}">{{ $currencySymbol }}<span class="l3-amt-yearly">{{ $l3Yr == floor($l3Yr) ? number_format($l3Yr, 0) : number_format($l3Yr, 2) }}</span></span>
                             <span class="{{ $featured ? 'text-slate-400' : 'text-slate-500' }} text-sm">/ {{ __('landing.yr') }}</span>
                             @if($plan->getYearlySavingsPercent() > 0)
                                 <p class="text-xs text-indigo-400 mt-1">{{ __('landing.save') }} {{ $plan->getYearlySavingsPercent() }}%</p>
@@ -474,7 +488,7 @@
                         </a>
                         <ul class="flex flex-col gap-3 text-sm {{ $featured ? 'text-slate-300' : 'text-slate-600' }}">
                             @foreach($limits as $key => $value)
-                                @php $meta = \App\Models\Central\Plan::AVAILABLE_LIMITS[$key] ?? null; @endphp
+                                @php $meta = \App\Models\Central\Plan::availableLimits()[$key] ?? null; @endphp
                                 @if($meta)
                                     <li class="flex items-start gap-3">
                                         <iconify-icon icon="solar:check-circle-linear" class="text-lg {{ $featured ? 'text-indigo-400' : 'text-indigo-500' }} shrink-0"></iconify-icon>
@@ -483,7 +497,7 @@
                                 @endif
                             @endforeach
                             @foreach($planFeatures as $fKey)
-                                @php $fMeta = \App\Models\Central\Plan::AVAILABLE_FEATURES[$fKey] ?? null; @endphp
+                                @php $fMeta = \App\Models\Central\Plan::availableFeatures()[$fKey] ?? null; @endphp
                                 @if($fMeta)
                                     <li class="flex items-start gap-3">
                                         <iconify-icon icon="solar:check-circle-linear" class="text-lg {{ $featured ? 'text-indigo-400' : 'text-indigo-500' }} shrink-0"></iconify-icon>

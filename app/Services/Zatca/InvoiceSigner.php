@@ -25,6 +25,12 @@ class InvoiceSigner
     /**
      * Exact byte template hashed for the xades:SignedProperties reference.
      * Whitespace is significant — do not reformat.
+     *
+     * This is the *serialized* form ZATCA's validator rebuilds from the
+     * invoice: namespace declarations (xmlns:xades on the root, xmlns:ds on
+     * every ds:* child) are materialized inline, the opening tag starts at
+     * column 0 and the children keep their 36-space document indentation.
+     * It is only hashed — never embedded (see SIGNED_PROPERTIES_EMBED).
      */
     protected const SIGNED_PROPERTIES_TEMPLATE =
         '<xades:SignedProperties xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" Id="xadesSignedProperties">'."\n".
@@ -39,6 +45,33 @@ class InvoiceSigner
         '                                                <xades:IssuerSerial>'."\n".
         '                                                    <ds:X509IssuerName xmlns:ds="http://www.w3.org/2000/09/xmldsig#">SET_CERTIFICATE_ISSUER</ds:X509IssuerName>'."\n".
         '                                                    <ds:X509SerialNumber xmlns:ds="http://www.w3.org/2000/09/xmldsig#">SET_CERTIFICATE_SERIAL_NUMBER</ds:X509SerialNumber>'."\n".
+        '                                                </xades:IssuerSerial>'."\n".
+        '                                            </xades:Cert>'."\n".
+        '                                        </xades:SigningCertificate>'."\n".
+        '                                    </xades:SignedSignatureProperties>'."\n".
+        '                                </xades:SignedProperties>';
+
+    /**
+     * The xades:SignedProperties fragment as embedded in the signed invoice:
+     * same layout as the hashed template but WITHOUT the inline namespace
+     * declarations (xades/ds are inherited from the enclosing
+     * QualifyingProperties / ds:Signature), indented to sit under
+     * xades:QualifyingProperties. Embedding the hashed shape verbatim makes
+     * the gateway reject the document with "signed-properties-hashing".
+     */
+    protected const SIGNED_PROPERTIES_EMBED =
+        '                                <xades:SignedProperties Id="xadesSignedProperties">'."\n".
+        '                                    <xades:SignedSignatureProperties>'."\n".
+        '                                        <xades:SigningTime>SET_SIGN_TIMESTAMP</xades:SigningTime>'."\n".
+        '                                        <xades:SigningCertificate>'."\n".
+        '                                            <xades:Cert>'."\n".
+        '                                                <xades:CertDigest>'."\n".
+        '                                                    <ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>'."\n".
+        '                                                    <ds:DigestValue>SET_CERTIFICATE_HASH</ds:DigestValue>'."\n".
+        '                                                </xades:CertDigest>'."\n".
+        '                                                <xades:IssuerSerial>'."\n".
+        '                                                    <ds:X509IssuerName>SET_CERTIFICATE_ISSUER</ds:X509IssuerName>'."\n".
+        '                                                    <ds:X509SerialNumber>SET_CERTIFICATE_SERIAL_NUMBER</ds:X509SerialNumber>'."\n".
         '                                                </xades:IssuerSerial>'."\n".
         '                                            </xades:Cert>'."\n".
         '                                        </xades:SigningCertificate>'."\n".
@@ -87,18 +120,19 @@ class InvoiceSigner
         }
         $signature = base64_encode($signatureDer);
 
-        $signingTime = gmdate('Y-m-d\TH:i:s');
-        $signedProperties = str_replace(
-            ['SET_SIGN_TIMESTAMP', 'SET_CERTIFICATE_HASH', 'SET_CERTIFICATE_ISSUER', 'SET_CERTIFICATE_SERIAL_NUMBER'],
-            [
-                $signingTime,
-                $certificate->hash(),
-                $this->escape($certificate->issuerName()),
-                $certificate->serialNumber(),
-            ],
-            self::SIGNED_PROPERTIES_TEMPLATE
-        );
-        $signedPropertiesHash = base64_encode(hash('sha256', $signedProperties));
+        $placeholders = ['SET_SIGN_TIMESTAMP', 'SET_CERTIFICATE_HASH', 'SET_CERTIFICATE_ISSUER', 'SET_CERTIFICATE_SERIAL_NUMBER'];
+        $values = [
+            gmdate('Y-m-d\TH:i:s'),
+            $certificate->hash(),
+            $this->escape($certificate->issuerName()),
+            $certificate->serialNumber(),
+        ];
+
+        // Hashed over the namespace-materialized form; embedded without the
+        // inline declarations. Same values, same whitespace inside.
+        $signedPropertiesForHash = str_replace($placeholders, $values, self::SIGNED_PROPERTIES_TEMPLATE);
+        $signedPropertiesEmbed = str_replace($placeholders, $values, self::SIGNED_PROPERTIES_EMBED);
+        $signedPropertiesHash = base64_encode(hash('sha256', $signedPropertiesForHash));
 
         $qr = $this->buildQr($meta, $invoiceHash, $signature, $certificate);
 
@@ -108,7 +142,7 @@ class InvoiceSigner
             $signedPropertiesHash,
             $signature,
             $certificate->base64(),
-            $signedProperties,
+            $signedPropertiesEmbed,
             $qr
         );
 
@@ -195,9 +229,10 @@ class InvoiceSigner
     }
 
     /**
-     * The ext:UBLExtensions signature envelope. The embedded
-     * xades:SignedProperties bytes are exactly the hashed template so any
-     * extraction-based digest verification reproduces the same digest.
+     * The ext:UBLExtensions signature envelope. $signedProperties is the
+     * embed variant (SIGNED_PROPERTIES_EMBED): once the validator
+     * re-serializes that element with its namespaces materialized it yields
+     * exactly the hashed template bytes.
      */
     protected function ublExtensions(
         string $invoiceHash,

@@ -30,6 +30,21 @@ class EventServiceProvider extends ServiceProvider
         \App\Events\SaleReturned::class => [
             \App\Listeners\AccountingV2\GenerateSaleReturnJournal::class,
         ],
+        \App\Events\SaleReturnUpdated::class => [
+            \App\Listeners\AccountingV2\GenerateSaleReturnAdjustment::class,
+        ],
+        \App\Events\SaleReturnDeleted::class => [
+            \App\Listeners\AccountingV2\GenerateSaleReturnReversal::class,
+        ],
+        \App\Events\PurchaseReturnCreated::class => [
+            \App\Listeners\AccountingV2\GeneratePurchaseReturnJournal::class,
+        ],
+        \App\Events\PurchaseReturnUpdated::class => [
+            \App\Listeners\AccountingV2\GeneratePurchaseReturnAdjustment::class,
+        ],
+        \App\Events\PurchaseReturnDeleted::class => [
+            \App\Listeners\AccountingV2\GeneratePurchaseReturnReversal::class,
+        ],
         \App\Events\SaleUpdated::class => [
             \App\Listeners\AccountingV2\GenerateSaleAdjustment::class,
         ],
@@ -138,6 +153,24 @@ class EventServiceProvider extends ServiceProvider
         \App\Models\Quotation::created(function ($quotation) {
             try {
                 event(new \App\Events\QuotationCreated($quotation));
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        });
+
+        // A confirmed online order becomes a Sale; payments recorded on that
+        // Sale afterwards (cash on delivery, offline transfer) must show on the
+        // order too, or Online Orders keeps saying "pending".
+        \App\Models\Sale::updated(function ($sale) {
+            try {
+                if (! $sale->wasChanged('payment_statut')) {
+                    return;
+                }
+                $status = $sale->payment_statut === 'paid' ? 'paid'
+                    : ($sale->payment_statut === 'partial' ? 'partial' : 'pending');
+                \App\Models\OnlineOrder::where('sale_id', $sale->id)
+                    ->where('payment_status', '!=', 'refunded')
+                    ->update(['payment_status' => $status]);
             } catch (\Throwable $e) {
                 report($e);
             }

@@ -972,10 +972,25 @@ class ServiceJobController extends BaseController
         $last = DB::table('service_jobs')->latest('id')->first();
 
         if ($last && $last->Ref) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = isset($nwMsg[1]) ? ($nwMsg[1] + 1) : 1112;
-            $code = 'SJ_'.$inMsg;
+            $item = (string) ($last->Ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $code = 'SJ_'.($nwMsg[1] + 1);
+            } else {
+                $code = 'SJ_1112';
+            }
         } else {
             $code = 'SJ_1111';
         }
@@ -1112,9 +1127,15 @@ class ServiceJobController extends BaseController
             ->whereNull('deleted_at')
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($job);
+
+        $jobSetting = Setting::whereNull('deleted_at')->first();
+
         return $this->renderPdf('pdf.service_job_pdf', [
             'symbol' => $helpers->Get_Currency_Code(),
-            'setting' => Setting::whereNull('deleted_at')->first(),
+            'setting' => $jobSetting,
+            // Branch letterhead: the warehouse the job was booked against.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($job->warehouse_id, $jobSetting),
             'job' => $this->buildPdfJobData($job),
         ], 'Service_Job_'.$job->id.'.pdf');
     }
@@ -1130,9 +1151,15 @@ class ServiceJobController extends BaseController
             ->whereNull('deleted_at')
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($job);
+
+        $jobSetting = Setting::whereNull('deleted_at')->first();
+
         return $this->renderPdf('pdf.service_quote_pdf', [
             'symbol' => $helpers->Get_Currency_Code(),
-            'setting' => Setting::whereNull('deleted_at')->first(),
+            'setting' => $jobSetting,
+            // Branch letterhead: the warehouse the job was booked against.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($job->warehouse_id, $jobSetting),
             'job' => $this->buildPdfJobData($job),
         ], 'Service_Quote_'.$job->id.'.pdf');
     }

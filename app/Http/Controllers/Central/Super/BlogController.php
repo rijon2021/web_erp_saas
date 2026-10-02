@@ -53,7 +53,7 @@ class BlogController extends Controller
 
         BlogCategory::create($data);
 
-        return redirect()->route('super.blog.index')->with('success', "Category \"{$data['name']}\" created.");
+        return redirect()->route('super.blog.index')->with('success', __('super.flash.blog_cat_created', ['name' => $data['name']]));
     }
 
     public function editCategory(BlogCategory $blogCategory): View
@@ -72,7 +72,7 @@ class BlogController extends Controller
 
         $blogCategory->update($data);
 
-        return redirect()->route('super.blog.index')->with('success', "Category \"{$blogCategory->name}\" updated.");
+        return redirect()->route('super.blog.index')->with('success', __('super.flash.blog_cat_updated', ['name' => $blogCategory->name]));
     }
 
     public function destroyCategory(BlogCategory $blogCategory): RedirectResponse
@@ -80,7 +80,7 @@ class BlogController extends Controller
         $name = $blogCategory->name;
         $blogCategory->delete(); // posts keep existing, category_id set null
 
-        return redirect()->route('super.blog.index')->with('success', "Category \"{$name}\" deleted.");
+        return redirect()->route('super.blog.index')->with('success', __('super.flash.blog_cat_deleted', ['name' => $name]));
     }
 
     // ── Posts ──
@@ -113,7 +113,7 @@ class BlogController extends Controller
 
         $post = BlogPost::create($data);
 
-        return redirect()->route('super.blog.index')->with('success', "Post \"{$post->title}\" created.");
+        return redirect()->route('super.blog.index')->with('success', __('super.flash.blog_post_created', ['name' => $post->title]));
     }
 
     public function editPost(BlogPost $post): View
@@ -142,7 +142,7 @@ class BlogController extends Controller
 
         $post->update($data);
 
-        return redirect()->route('super.blog.index')->with('success', "Post \"{$post->title}\" updated.");
+        return redirect()->route('super.blog.index')->with('success', __('super.flash.blog_post_updated', ['name' => $post->title]));
     }
 
     public function destroyPost(BlogPost $post): RedirectResponse
@@ -151,7 +151,7 @@ class BlogController extends Controller
         $this->deleteImage($post->cover_image);
         $post->delete();
 
-        return redirect()->route('super.blog.index')->with('success', "Post \"{$title}\" deleted.");
+        return redirect()->route('super.blog.index')->with('success', __('super.flash.blog_post_deleted', ['name' => $title]));
     }
 
     private function validatePost(Request $request, ?BlogPost $post = null): array

@@ -318,7 +318,7 @@ import { bvToast } from "./bv";
 import { posCompatComponents } from "./components";
 import Util from "./util";
 import { getPriceDecimals } from "./priceFormat";
-import { receiptFontHeadTags, whenPrintFontsReady } from "../lib/receiptFont";
+import { receiptFontHeadTags, receiptPageHeadTag, whenPrintReady } from "../lib/receiptFont";
 export default {
   components: { ...posCompatComponents },
   name: 'ModernPaymentModal',
@@ -403,7 +403,10 @@ export default {
     clientId: {
       immediate: true,
       handler() { this.fetchWalletBalance(); }
-    }
+    },
+    // Methods usually arrive after the first clientId tick; re-check once a
+    // "Wallet" method is known so the balance hint can show.
+    paymentMethods() { this.fetchWalletBalance(); }
   },
   computed: {
     // Monetary precision (2 or 3) driven by the "Enable 3 Decimal Pricing" setting.
@@ -520,6 +523,10 @@ export default {
     async fetchWalletBalance() {
       this.walletBalance = null;
       if (!this.clientId) return;
+      // `pos/wallet-balance/{client}` only exists where the customer-wallet
+      // module is installed. Tenants without a "Wallet" payment method have
+      // nothing to show, so skip the request instead of 404ing on every open.
+      if (!(this.paymentMethods || []).some(m => this.isWalletMethod(m))) return;
       try {
         const r = await axios.get('pos/wallet-balance/' + this.clientId);
         this.walletBalance = Number(r.data.balance || 0);
@@ -818,7 +825,7 @@ export default {
       if (!a) { return; }
       // Custom receipt font (Settings → System → POS Receipt); this popup
       // writes the receipt innerHTML directly into <body>, hence body scope.
-      a.document.write('<html><head><link rel="stylesheet" href="/css/pos_print.css">' + receiptFontHeadTags(posSettings, 'body') + '</head><body>');
+      a.document.write('<html><head><link rel="stylesheet" href="/css/pos_print.css">' + receiptPageHeadTag(posSettings) + receiptFontHeadTags(posSettings, 'body') + '</head><body>');
       a.document.write(divContents);
       a.document.write('</body></html>');
       a.document.close();
@@ -828,8 +835,9 @@ export default {
       };
       try { window.addEventListener('focus', reloadParent); } catch(e) {}
       try { a.onafterprint = reloadParent; } catch(e) {}
-      // Wait for the custom receipt webfont (if any) before snapshotting.
-      whenPrintFontsReady(a, () => {
+      // Wait for the receipt webfont, the print stylesheet AND the logo /
+      // QR images before snapshotting (see lib/receiptFont whenPrintReady).
+      whenPrintReady(a, () => {
         try { a.focus(); } catch(e) {}
         try { a.print(); } catch(e) { reloadParent(); }
       });

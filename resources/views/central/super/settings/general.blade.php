@@ -92,7 +92,7 @@
                         name="app_name"
                         class="form-control @error('app_name') is-invalid @enderror"
                         value="{{ old('app_name', $setting->app_name) }}"
-                        placeholder="e.g. Stocky"
+                        placeholder="{{ __('super.general_settings.ph_app_name') }}"
                         required
                     >
                     @error('app_name')
@@ -109,7 +109,7 @@
                                 name="currency_code"
                                 class="form-control text-upper-currency @error('currency_code') is-invalid @enderror"
                                 value="{{ old('currency_code', $setting->currency_code ?? 'USD') }}"
-                                placeholder="e.g. USD, NGN, EUR"
+                                placeholder="{{ __('super.general_settings.ph_currency_code') }}"
                                 maxlength="3"
                                 required
                             >
@@ -127,7 +127,7 @@
                                 name="currency_symbol"
                                 class="form-control max-w-120 @error('currency_symbol') is-invalid @enderror"
                                 value="{{ old('currency_symbol', $setting->currency_symbol ?? '$') }}"
-                                placeholder="e.g. $, €, ₦, £"
+                                placeholder="{{ __('super.general_settings.ph_currency_symbol') }}"
                                 maxlength="5"
                                 required
                             >
@@ -319,7 +319,7 @@
                         class="form-control @error('landing_redirect_url') is-invalid @enderror"
                         value="{{ old('landing_redirect_url', $setting->landing_redirect_url) }}"
                         maxlength="500"
-                        placeholder="https://www.your-company.com"
+                        placeholder="{{ __('super.general_settings.ph_company_url') }}"
                     >
                     @error('landing_redirect_url')
                         <div class="invalid-feedback">{{ $message }}</div>
@@ -431,7 +431,7 @@
                                 name="company_name"
                                 class="form-control @error('company_name') is-invalid @enderror"
                                 value="{{ old('company_name', $setting->company_name) }}"
-                                placeholder="e.g. Acme Inc."
+                                placeholder="{{ __('super.general_settings.ph_company_name') }}"
                             >
                             @error('company_name')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -446,7 +446,7 @@
                                 name="phone"
                                 class="form-control @error('phone') is-invalid @enderror"
                                 value="{{ old('phone', $setting->phone) }}"
-                                placeholder="e.g. +1 (555) 123-4567"
+                                placeholder="{{ __('super.general_settings.ph_phone') }}"
                             >
                             @error('phone')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -464,7 +464,7 @@
                                 name="email"
                                 class="form-control @error('email') is-invalid @enderror"
                                 value="{{ old('email', $setting->email) }}"
-                                placeholder="e.g. info@company.com"
+                                placeholder="{{ __('super.general_settings.ph_email') }}"
                             >
                             @error('email')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -479,7 +479,7 @@
                                 name="website"
                                 class="form-control @error('website') is-invalid @enderror"
                                 value="{{ old('website', $setting->website) }}"
-                                placeholder="e.g. https://company.com"
+                                placeholder="{{ __('super.general_settings.ph_website') }}"
                             >
                             @error('website')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -495,7 +495,7 @@
                         name="address"
                         class="form-control @error('address') is-invalid @enderror"
                         value="{{ old('address', $setting->address) }}"
-                        placeholder="e.g. 123 Main Street, New York, NY 10001"
+                        placeholder="{{ __('super.general_settings.ph_address') }}"
                     >
                     @error('address')
                         <div class="invalid-feedback">{{ $message }}</div>
@@ -526,7 +526,7 @@
                         name="tenant_app_name"
                         class="form-control @error('tenant_app_name') is-invalid @enderror"
                         value="{{ old('tenant_app_name', $setting->tenant_app_name) }}"
-                        placeholder="e.g. Acme Inventory"
+                        placeholder="{{ __('super.general_settings.ph_tenant_app_name') }}"
                         maxlength="255"
                     >
                     <p class="form-hint mt-1">{{ __('super.general_settings.tenant_app_name_hint') }}</p>
@@ -607,7 +607,7 @@
                                 name="tenant_company_name"
                                 class="form-control @error('tenant_company_name') is-invalid @enderror"
                                 value="{{ old('tenant_company_name', $setting->tenant_company_name) }}"
-                                placeholder="e.g. Acme Inc."
+                                placeholder="{{ __('super.general_settings.ph_company_name') }}"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_company_name_hint') }}</p>
                             @error('tenant_company_name')
@@ -623,7 +623,7 @@
                                 name="tenant_email"
                                 class="form-control @error('tenant_email') is-invalid @enderror"
                                 value="{{ old('tenant_email', $setting->tenant_email) }}"
-                                placeholder="e.g. admin@company.com"
+                                placeholder="{{ __('super.general_settings.ph_admin_email') }}"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_email_hint') }}</p>
                             @error('tenant_email')
@@ -642,7 +642,7 @@
                                 name="tenant_phone"
                                 class="form-control @error('tenant_phone') is-invalid @enderror"
                                 value="{{ old('tenant_phone', $setting->tenant_phone) }}"
-                                placeholder="e.g. +1 (555) 123-4567"
+                                placeholder="{{ __('super.general_settings.ph_phone') }}"
                             >
                             @error('tenant_phone')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -657,7 +657,7 @@
                                 name="tenant_address"
                                 class="form-control @error('tenant_address') is-invalid @enderror"
                                 value="{{ old('tenant_address', $setting->tenant_address) }}"
-                                placeholder="e.g. 123 Main Street, New York"
+                                placeholder="{{ __('super.general_settings.ph_address_short') }}"
                             >
                             @error('tenant_address')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -678,7 +678,7 @@
                                 name="tenant_currency_code"
                                 class="form-control text-upper-currency @error('tenant_currency_code') is-invalid @enderror"
                                 value="{{ old('tenant_currency_code', $setting->tenant_currency_code) }}"
-                                placeholder="e.g. USD"
+                                placeholder="{{ __('super.general_settings.ph_currency_code_1') }}"
                                 maxlength="3"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_currency_code_hint') }}</p>
@@ -695,7 +695,7 @@
                                 name="tenant_currency_symbol"
                                 class="form-control @error('tenant_currency_symbol') is-invalid @enderror"
                                 value="{{ old('tenant_currency_symbol', $setting->tenant_currency_symbol) }}"
-                                placeholder="e.g. $, €, ₦"
+                                placeholder="{{ __('super.general_settings.ph_currency_sym_1') }}"
                                 maxlength="5"
                             >
                             @error('tenant_currency_symbol')
@@ -740,7 +740,7 @@
                                 name="tenant_footer_text"
                                 class="form-control @error('tenant_footer_text') is-invalid @enderror"
                                 value="{{ old('tenant_footer_text', $setting->tenant_footer_text) }}"
-                                placeholder="e.g. Stocky - Ultimate Inventory With POS"
+                                placeholder="{{ __('super.general_settings.ph_meta_title') }}"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_footer_text_hint') }}</p>
                             @error('tenant_footer_text')
@@ -756,7 +756,7 @@
                                 name="tenant_page_title_suffix"
                                 class="form-control @error('tenant_page_title_suffix') is-invalid @enderror"
                                 value="{{ old('tenant_page_title_suffix', $setting->tenant_page_title_suffix) }}"
-                                placeholder="e.g. Ultimate Inventory With POS"
+                                placeholder="{{ __('super.general_settings.ph_meta_desc') }}"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_page_title_suffix_hint') }}</p>
                             @error('tenant_page_title_suffix')
@@ -772,7 +772,7 @@
                                 name="tenant_developed_by"
                                 class="form-control @error('tenant_developed_by') is-invalid @enderror"
                                 value="{{ old('tenant_developed_by', $setting->tenant_developed_by) }}"
-                                placeholder="e.g. Acme Inc."
+                                placeholder="{{ __('super.general_settings.ph_company_name') }}"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_developed_by_hint') }}</p>
                             @error('tenant_developed_by')
@@ -801,7 +801,7 @@
                         name="reserved_subdomains"
                         rows="5"
                         class="form-control @error('reserved_subdomains') is-invalid @enderror"
-                        placeholder="admin&#10;server&#10;webmail&#10;mail"
+                        placeholder="{{ __('super.general_settings.ph_reserved_subs') }}"
                         maxlength="5000"
                     >{{ $reservedValue }}</textarea>
                     <p class="form-hint mt-1">
@@ -989,13 +989,34 @@
                      data-desc="{{ __('super.general_settings.tab_payments_desc') }}">
                 @php $bank = $setting->getBankDetails(); @endphp
 
+                {{-- Billing cycles offered to customers --}}
+                <div class="form-group mb-4">
+                    <label class="form-label">
+                        <i class="bi bi-calendar-range me-1"></i>{{ __('super.general_settings.billing_cycles') }}
+                    </label>
+                    <p class="form-hint mb-2">{{ __('super.general_settings.billing_cycles_hint') }}</p>
+                    @php $activeCycles = old('billing_cycles', \App\Models\Central\GeneralSetting::enabledBillingCycles()); @endphp
+                    <div class="d-flex flex-wrap gap-3">
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="billing_cycles[]" value="monthly" class="form-check-input"
+                                   {{ in_array('monthly', $activeCycles) ? 'checked' : '' }}>
+                            <span><i class="bi bi-calendar-month me-1"></i>{{ __('super.general_settings.billing_cycle_monthly') }}</span>
+                        </label>
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="billing_cycles[]" value="yearly" class="form-check-input"
+                                   {{ in_array('yearly', $activeCycles) ? 'checked' : '' }}>
+                            <span><i class="bi bi-calendar3 me-1"></i>{{ __('super.general_settings.billing_cycle_yearly') }}</span>
+                        </label>
+                    </div>
+                </div>
+
                 <div class="row g-3 mb-4">
                     <div class="col-md-6">
                         <div class="form-group">
                             <label class="form-label">{{ __('super.general_settings.bank_name') }}</label>
                             <input type="text" name="bank_details[bank_name]" class="form-control"
                                    value="{{ old('bank_details.bank_name', $bank['bank_name'] ?? '') }}"
-                                   placeholder="e.g. Chase Bank, Barclays">
+                                   placeholder="{{ __('super.general_settings.ph_bank_name') }}">
                         </div>
                     </div>
                     <div class="col-md-6">
@@ -1003,7 +1024,7 @@
                             <label class="form-label">{{ __('super.general_settings.account_holder') }}</label>
                             <input type="text" name="bank_details[account_holder]" class="form-control"
                                    value="{{ old('bank_details.account_holder', $bank['account_holder'] ?? '') }}"
-                                   placeholder="e.g. Acme Inc.">
+                                   placeholder="{{ __('super.general_settings.ph_company_name') }}">
                         </div>
                     </div>
                 </div>
@@ -1014,7 +1035,7 @@
                             <label class="form-label">{{ __('super.general_settings.account_number') }}</label>
                             <input type="text" name="bank_details[account_number]" class="form-control"
                                    value="{{ old('bank_details.account_number', $bank['account_number'] ?? '') }}"
-                                   placeholder="e.g. 1234567890">
+                                   placeholder="{{ __('super.general_settings.ph_account_number') }}">
                         </div>
                     </div>
                     <div class="col-md-6">
@@ -1022,7 +1043,7 @@
                             <label class="form-label">{{ __('super.general_settings.iban') }}</label>
                             <input type="text" name="bank_details[iban]" class="form-control"
                                    value="{{ old('bank_details.iban', $bank['iban'] ?? '') }}"
-                                   placeholder="e.g. GB29 NWBK 6016 1331 9268 19">
+                                   placeholder="{{ __('super.general_settings.ph_iban') }}">
                         </div>
                     </div>
                 </div>
@@ -1033,7 +1054,7 @@
                             <label class="form-label">{{ __('super.general_settings.swift_code') }}</label>
                             <input type="text" name="bank_details[swift]" class="form-control"
                                    value="{{ old('bank_details.swift', $bank['swift'] ?? '') }}"
-                                   placeholder="e.g. NWBKGB2L">
+                                   placeholder="{{ __('super.general_settings.ph_swift') }}">
                         </div>
                     </div>
                     <div class="col-md-6">
@@ -1041,7 +1062,7 @@
                             <label class="form-label">{{ __('super.general_settings.branch') }}</label>
                             <input type="text" name="bank_details[branch]" class="form-control"
                                    value="{{ old('bank_details.branch', $bank['branch'] ?? '') }}"
-                                   placeholder="e.g. Main Branch, New York">
+                                   placeholder="{{ __('super.general_settings.ph_branch') }}">
                         </div>
                     </div>
                 </div>
@@ -1049,7 +1070,7 @@
                 <div class="form-group">
                     <label class="form-label">{{ __('super.general_settings.payment_instructions') }}</label>
                     <textarea name="bank_details[instructions]" class="form-control" rows="3"
-                              placeholder="e.g. Please include your company name as the payment reference. Payments are verified within 24-48 hours.">{{ old('bank_details.instructions', $bank['instructions'] ?? '') }}</textarea>
+                              placeholder="{{ __('super.general_settings.ph_bank_instructions') }}">{{ old('bank_details.instructions', $bank['instructions'] ?? '') }}</textarea>
                     <p class="form-hint mt-1">{{ __('super.general_settings.payment_instructions_hint') }}</p>
                 </div>
             </section>
@@ -1157,16 +1178,16 @@
 
                 <div class="form-group mb-4">
                     <label class="form-label d-flex align-items-center gap-2 mb-2">
-                        <i class="bi bi-terminal text-muted"></i>Environment (.env)
+                        <i class="bi bi-terminal text-muted"></i>{{ __('super.general_settings.env_section') }}
                     </label>
                     <p class="form-hint mb-3">
-                        These values are written to the <code>.env</code> file. Incorrect values can take the site offline &mdash; change with care.
+                        {!! __('super.general_settings.env_warning', ['file' => '<code>.env</code>']) !!}
                     </p>
 
                     <div class="row g-3">
                         <div class="col-md-6">
                             <div class="form-group">
-                                <label class="form-label">Select Environment</label>
+                                <label class="form-label">{{ __('super.general_settings.env_select') }}</label>
                                 <select
                                     name="app_env"
                                     class="form-control form-select @error('app_env') is-invalid @enderror"
@@ -1176,7 +1197,7 @@
                                     <option value="staging"    {{ $currentEnv === 'staging' ? 'selected' : '' }}>staging</option>
                                     <option value="production" {{ $currentEnv === 'production' ? 'selected' : '' }}>production</option>
                                 </select>
-                                <p class="form-hint mt-1">Use <strong>production</strong> on live sites.</p>
+                                <p class="form-hint mt-1">{!! __('super.general_settings.env_hint', ['mode' => '<strong>' . __('super.general_settings.env_production') . '</strong>']) !!}</p>
                                 @error('app_env')
                                     <div class="invalid-feedback">{{ $message }}</div>
                                 @enderror
@@ -1185,16 +1206,16 @@
 
                         <div class="col-md-6">
                             <div class="form-group">
-                                <label class="form-label">App Debug Mode</label>
+                                <label class="form-label">{{ __('super.general_settings.debug_mode') }}</label>
                                 <select
                                     name="app_debug"
                                     class="form-control form-select @error('app_debug') is-invalid @enderror"
                                 >
                                     @php $currentDebug = old('app_debug', $env['APP_DEBUG'] ?? 'false'); @endphp
-                                    <option value="false" {{ $currentDebug === 'false' ? 'selected' : '' }}>Off (false)</option>
-                                    <option value="true"  {{ $currentDebug === 'true'  ? 'selected' : '' }}>On (true)</option>
+                                    <option value="false" {{ $currentDebug === 'false' ? 'selected' : '' }}>{{ __('super.general_settings.debug_off') }}</option>
+                                    <option value="true"  {{ $currentDebug === 'true'  ? 'selected' : '' }}>{{ __('super.general_settings.debug_on') }}</option>
                                 </select>
-                                <p class="form-hint mt-1">Keep <strong>Off</strong> on production to avoid leaking stack traces.</p>
+                                <p class="form-hint mt-1">{!! __('super.general_settings.debug_hint', ['mode' => '<strong>' . __('super.general_settings.debug_off_word') . '</strong>']) !!}</p>
                                 @error('app_debug')
                                     <div class="invalid-feedback">{{ $message }}</div>
                                 @enderror
@@ -1203,15 +1224,15 @@
 
                         <div class="col-12">
                             <div class="form-group">
-                                <label class="form-label">Application URL</label>
+                                <label class="form-label">{{ __('super.general_settings.app_url') }}</label>
                                 <input
                                     type="url"
                                     name="app_url"
                                     class="form-control @error('app_url') is-invalid @enderror"
                                     value="{{ old('app_url', $env['APP_URL'] ?? '') }}"
-                                    placeholder="https://example.com"
+                                    placeholder="{{ __('super.general_settings.ph_example_url') }}"
                                 >
-                                <p class="form-hint mt-1">The canonical URL of your app (no trailing slash). Used for links in emails, OAuth, and tenant URLs.</p>
+                                <p class="form-hint mt-1">{{ __('super.general_settings.app_url_hint') }}</p>
                                 @error('app_url')
                                     <div class="invalid-feedback">{{ $message }}</div>
                                 @enderror

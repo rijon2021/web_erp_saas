@@ -26,6 +26,7 @@ class SettingsController extends Controller
         $this->authorizeForUser($request->user('api'), 'update', Setting::class);
 
         $setting = Setting::findOrFail($id);
+        $canRemoveBranding = Setting::canRemoveBranding();
         $currentAvatar = $setting->logo;
         // Only process logo if a file was actually uploaded
         if ($request->hasFile('logo') && $request->file('logo')->isValid()) {
@@ -175,8 +176,10 @@ class SettingsController extends Controller
             'company_name_ar' => $request['company_name_ar'] ?? $setting->company_name_ar,
             'vat_number' => $request['vat_number'] ?? $setting->vat_number,
             'zatca_enabled' => ($request['zatca_enabled'] == '1' || $request['zatca_enabled'] == 'true' || $request['zatca_enabled'] === 1 || $request['zatca_enabled'] === true) ? 1 : 0,
-            'footer' => $request['footer'],
-            'developed_by' => $request['developed_by'],
+            // Without the remove_branding plan feature the stored platform
+            // branding is kept whatever the request sends.
+            'footer' => $canRemoveBranding ? $request['footer'] : $setting->footer,
+            'developed_by' => $canRemoveBranding ? $request['developed_by'] : $setting->developed_by,
             'is_invoice_footer' => $is_invoice_footer,
             'invoice_format' => $invoice_format,
             'invoice_logo_width' => $invoice_logo_width,
@@ -242,6 +245,31 @@ class SettingsController extends Controller
             'allow_overselling' => $request->has('allow_overselling')
                 ? (($request['allow_overselling'] == '1' || $request['allow_overselling'] == 'true' || $request['allow_overselling'] === 1 || $request['allow_overselling'] === true) ? 1 : 0)
                 : (int) ($setting->allow_overselling ?? 0),
+            // Warehouse Letterhead: invoices/receipts print the issuing
+            // warehouse instead of the company block (default off)
+            'enable_warehouse_letterhead' => $request->has('enable_warehouse_letterhead')
+                ? (($request['enable_warehouse_letterhead'] == '1' || $request['enable_warehouse_letterhead'] == 'true' || $request['enable_warehouse_letterhead'] === 1 || $request['enable_warehouse_letterhead'] === true) ? 1 : 0)
+                : (int) ($setting->enable_warehouse_letterhead ?? 0),
+            // Warehouse-scoped master data: when on, a user assigned to specific
+            // warehouses also sees only the products/customers/suppliers/brands
+            // connected to them. Documents are always restricted regardless.
+            'restrict_master_data_by_warehouse' => $request->has('restrict_master_data_by_warehouse')
+                ? (($request['restrict_master_data_by_warehouse'] == '1' || $request['restrict_master_data_by_warehouse'] == 'true' || $request['restrict_master_data_by_warehouse'] === 1 || $request['restrict_master_data_by_warehouse'] === true) ? 1 : 0)
+                : (int) ($setting->restrict_master_data_by_warehouse ?? 0),
+            // Warehouse-owned products: when on, a user assigned to specific
+            // warehouses sees only products whose home warehouse is theirs or
+            // that hold stock in one of theirs (default off)
+            'restrict_products_by_warehouse' => $request->has('restrict_products_by_warehouse')
+                ? (($request['restrict_products_by_warehouse'] == '1' || $request['restrict_products_by_warehouse'] == 'true' || $request['restrict_products_by_warehouse'] === 1 || $request['restrict_products_by_warehouse'] === true) ? 1 : 0)
+                : (int) ($setting->restrict_products_by_warehouse ?? 0),
+            // Customer performance score + rating on the customer page (default on)
+            'customer_performance_enabled' => $request->has('customer_performance_enabled')
+                ? (($request['customer_performance_enabled'] == '1' || $request['customer_performance_enabled'] == 'true' || $request['customer_performance_enabled'] === 1 || $request['customer_performance_enabled'] === true) ? 1 : 0)
+                : (int) ($setting->customer_performance_enabled ?? 1),
+            // Default supplier field on the product form (default off)
+            'product_supplier_enabled' => $request->has('product_supplier_enabled')
+                ? (($request['product_supplier_enabled'] == '1' || $request['product_supplier_enabled'] == 'true' || $request['product_supplier_enabled'] === 1 || $request['product_supplier_enabled'] === true) ? 1 : 0)
+                : (int) ($setting->product_supplier_enabled ?? 0),
             // Kitchen display toggle (when true, POS can route orders to the Kitchen Display page)
             'enable_kitchen_display' => $request->has('enable_kitchen_display')
                 ? (($request['enable_kitchen_display'] == '1' || $request['enable_kitchen_display'] == 'true' || $request['enable_kitchen_display'] === 1 || $request['enable_kitchen_display'] === true) ? 1 : 0)
@@ -409,6 +437,11 @@ class SettingsController extends Controller
 
         return response()->json([
             'pos_settings' => $PosSetting,
+            // Global invoice layout lives on the settings row; the POS Settings
+            // page reads it from here so the select reflects the stored value.
+            'invoice_format' => $settings && in_array($settings->invoice_format, ['thermal', 'a4'], true)
+                ? $settings->invoice_format
+                : 'thermal',
         ], 200);
 
     }
@@ -763,6 +796,12 @@ class SettingsController extends Controller
             $item['enable_multi_currency'] = (bool) ($settings->enable_multi_currency ?? false);
             // Allow Overselling global switch (default false)
             $item['allow_overselling'] = (bool) ($settings->allow_overselling ?? false);
+            // Warehouse-owned products switch — returned here so the System
+            // Settings form does not load it undefined and turn it off on save.
+            $item['restrict_products_by_warehouse'] = (bool) ($settings->restrict_products_by_warehouse ?? false);
+            // Warehouse Letterhead master switch — must be returned here or the
+            // System Settings form loads it undefined and every save turns it off.
+            $item['enable_warehouse_letterhead'] = (bool) ($settings->enable_warehouse_letterhead ?? false);
             // Kitchen display toggle (default false)
             $item['enable_kitchen_display'] = (bool) ($settings->enable_kitchen_display ?? false);
             // Accounting automatic journal generation toggle (default false = manual)
@@ -854,6 +893,7 @@ class SettingsController extends Controller
                 'payment_methods' => $payment_methods,
                 'zones_array' => $zones_array,
                 'languages' => $languages,
+                'font_options' => Setting::fontOptions(),
             ], 200);
         } else {
             return response()->json(['statut' => 'error'], 500);
@@ -997,6 +1037,12 @@ class SettingsController extends Controller
             $item['enable_multi_currency'] = (bool) ($settings->enable_multi_currency ?? false);
             // Allow Overselling global switch (default false)
             $item['allow_overselling'] = (bool) ($settings->allow_overselling ?? false);
+            // Warehouse-owned products switch — returned here so the System
+            // Settings form does not load it undefined and turn it off on save.
+            $item['restrict_products_by_warehouse'] = (bool) ($settings->restrict_products_by_warehouse ?? false);
+            // Warehouse Letterhead master switch — must be returned here or the
+            // System Settings form loads it undefined and every save turns it off.
+            $item['enable_warehouse_letterhead'] = (bool) ($settings->enable_warehouse_letterhead ?? false);
             // Kitchen display toggle (default false)
             $item['enable_kitchen_display'] = (bool) ($settings->enable_kitchen_display ?? false);
             // Accounting automatic journal generation toggle (default false = manual)
@@ -1084,6 +1130,7 @@ class SettingsController extends Controller
                 'sms_gateway' => $sms_gateway,
                 'zones_array' => $zones_array,
                 'languages' => $languages,
+                'font_options' => Setting::fontOptions(),
             ], 200);
         } else {
             return response()->json(['statut' => 'error'], 500);
@@ -1196,9 +1243,12 @@ class SettingsController extends Controller
         }
 
         // Update settings
+        // Without the remove_branding plan feature the stored platform
+        // branding is kept whatever the request sends.
+        $canRemoveBranding = Setting::canRemoveBranding();
         $setting->update([
-            'footer' => $request->input('footer'),
-            'developed_by' => $request->input('developed_by'),
+            'footer' => $canRemoveBranding ? $request->input('footer') : $setting->footer,
+            'developed_by' => $canRemoveBranding ? $request->input('developed_by') : $setting->developed_by,
             'app_name' => $request->input('app_name'),
             'page_title_suffix' => $request->input('page_title_suffix'),
             'customize_button_visible' => filter_var($request->input('customize_button_visible'), FILTER_VALIDATE_BOOLEAN),
@@ -1483,7 +1533,13 @@ class SettingsController extends Controller
             'enable_multi_pack_selling' => (bool) ($settings->enable_multi_pack_selling ?? false),
             'enable_multi_currency' => (bool) ($settings->enable_multi_currency ?? false),
             'accounting_auto_generate_journals' => (bool) ($settings->accounting_auto_generate_journals ?? false),
+            'require_payment_account' => (bool) ($settings->require_payment_account ?? false),
             'allow_overselling' => (bool) ($settings->allow_overselling ?? false),
+            'restrict_master_data_by_warehouse' => (bool) ($settings->restrict_master_data_by_warehouse ?? false),
+            'restrict_products_by_warehouse' => (bool) ($settings->restrict_products_by_warehouse ?? false),
+            'customer_performance_enabled' => (bool) ($settings->customer_performance_enabled ?? true),
+            'product_supplier_enabled' => (bool) ($settings->product_supplier_enabled ?? false),
+            'enable_warehouse_letterhead' => (bool) ($settings->enable_warehouse_letterhead ?? false),
         ]], 200);
     }
 
@@ -1498,7 +1554,9 @@ class SettingsController extends Controller
         $boolFields = [
             'enable_3_decimal_pricing', 'enable_kitchen_display', 'show_product_gtin', 'show_serial_tracking',
             'enable_multi_pack_selling', 'enable_multi_currency', 'accounting_auto_generate_journals',
-            'allow_overselling',
+            'require_payment_account',
+            'allow_overselling', 'restrict_master_data_by_warehouse', 'restrict_products_by_warehouse', 'customer_performance_enabled',
+            'product_supplier_enabled', 'enable_warehouse_letterhead',
         ];
 
         // Only fields present in the payload are written — anything omitted

@@ -625,4 +625,18 @@ return [
     'XpayBackToCheckout' => 'Choose another payment method',
     'XpayLoadingForm' => 'Loading secure card form…',
     'XpaySdkUnavailable' => 'The XPay payment form could not be loaded. Please refresh the page or choose another payment method.',
+
+    // ISO 4217 currency validation (settings forms + checkout guard)
+    'InvalidCurrencyCode' => '":code" is not a valid ISO 4217 currency code.',
+    'InvalidCurrencyCodeSuggest' => '":code" is not a valid ISO 4217 currency code. Did you mean ":suggestion"?',
+    'CheckoutInvalidPlatformCurrency' => 'Payment cannot be started: the platform currency ":code" is not a valid ISO 4217 code. Please contact the site administrator.',
+
+    // Admin Actions hover descriptions (tenant detail page)
+    'AdminActionsHint' => 'Hover over a button to see exactly what it does before running it.',
+    'RerunMigrationsHint' => 'Applies only the migrations not yet run on this tenant database (new tables or columns) and adds the Passport tables if they are missing. Existing data is untouched. Use it after a project update.',
+    'ReseedHint' => 'Runs the tenant seeders again (settings, roles and permissions, translations) and restores the default images. Nothing is dropped or truncated. Use it to repair missing defaults after an update.',
+    'ReprovisionHint' => 'Full re-install, run in the background: drops every table, re-runs migrations, re-seeds, re-creates the owner login from the stored credentials and re-installs Passport. All tenant data is lost, but the workspace comes back ready to use.',
+    'ResetDatabaseHint' => 'Drops every table in the tenant database and re-runs the migrations, leaving an empty schema. No seeding and no owner user are created, so nobody can log in until you Re-seed or Re-provision. All tenant data is lost.',
+    'ActionKeepsData' => 'Safe: keeps existing data',
+    'ActionDeletesData' => 'Destructive: deletes all tenant data',
 ];

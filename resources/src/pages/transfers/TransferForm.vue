@@ -64,6 +64,8 @@
           size="middle"
           :row-key="(r, i) => r.detail_id"
           :scroll="{ x: 'max-content' }"
+          :expanded-row-keys="expandedKeys"
+          :expand-icon="() => null"
         >
           <template #bodyCell="{ column, record, index }">
             <template v-if="column.key === 'product'">
@@ -89,6 +91,14 @@
                 <template #icon><DeleteOutlined /></template>
               </a-button>
             </template>
+          </template>
+          <!-- Source batches for batch-tracked lines, picked from what the FROM
+               warehouse holds. Keyed by warehouse so it refetches on change. -->
+          <template #expandedRowRender="{ record }">
+            <BatchAllocator
+              :key="record.detail_id + '-' + (transfer.from_warehouse || 0)"
+              :line="record" :warehouse-id="transfer.from_warehouse" endpoint="batches_for_transfer"
+            />
           </template>
           <template #emptyText>
             <a-empty :description="$t('NodataAvailable')" style="padding: 24px 0" />
@@ -173,7 +183,8 @@
  *   totals = computeSimpleTotals over recomputeCostLine
  * - validation = legacy: qty ALWAYS clamped at stock (LowStock + reset, no
  *   overselling switch); submit = AddProductToList → WarehouseIdentical →
- *   AddQuantity → batch gate (Select_Batch_Required_For, no picker in v1)
+ *   AddQuantity → batch picks (BatchAllocator ← batches_for_transfer,
+ *   validated by lib/batchValidation like the sale form)
  * - payload NESTED under `transfer` key: POST/PUT transfers
  *   {transfer: {...header incl items}, details, GrandTotal}
  */
@@ -185,6 +196,8 @@ import { DeleteOutlined } from '@ant-design/icons-vue';
 import dayjs from 'dayjs';
 import PageHeader from '../../components/PageHeader.vue';
 import ProductScanModal from '../../components/ProductScanModal.vue';
+import BatchAllocator from '../../components/BatchAllocator.vue';
+import { hasBatchSelectErrors, firstBatchSelectError } from '../../lib/batchValidation';
 import { useFormat } from '../../composables/useFormat';
 import { recomputeCostLine, computeSimpleTotals } from '../../lib/lineCalc';
 import { resolveScan } from '../../lib/scanMatch';
@@ -262,6 +275,33 @@ const lineColumns = computed(() => [
   { title: t('SubTotal'), key: 'subtotal', align: 'right' },
   { title: t('Action'), key: 'actions', width: 70, align: 'center' },
 ]);
+
+/** Batch-tracked lines stay expanded so their picker is always in view. */
+const expandedKeys = computed(() => lines.value.filter(l => l.is_batch_tracked).map(l => l.detail_id));
+
+/**
+ * Saved allocations come back with qty_available 0, since the edit endpoint
+ * does not know current stock. Refetch availability so the picker can
+ * validate. A transfer that already moved stock gets its own quantity counted
+ * back in, because that stock has already left the source batch.
+ */
+async function hydrateBatchAvailability() {
+  const moved = ['completed', 'sent'].includes(transfer.value.statut);
+  await Promise.all(lines.value
+    .filter(l => l.is_batch_tracked && (l.batches || []).length)
+    .map(async (l) => {
+      try {
+        const data = await http.get(
+          `batches_for_transfer/${l.product_id}/${transfer.value.from_warehouse}/${l.product_variant_id || 0}`
+        );
+        const available = Array.isArray(data?.batches) ? data.batches : [];
+        l.batches.forEach((b) => {
+          const found = available.find(a => a.id === b.product_batch_id);
+          b.qty_available = (found ? Number(found.qty_available) || 0 : 0) + (moved ? Number(b.qty) || 0 : 0);
+        });
+      } catch (e) { /* leave the saved rows as they are */ }
+    }));
+}
 
 async function loadProducts() {
   if (!transfer.value.from_warehouse) return;
@@ -388,9 +428,8 @@ function validateForm() {
     message.warning(t('AddQuantity'));
     return false;
   }
-  const missingBatch = lines.value.find(l => l.is_batch_tracked && !(l.batches || []).length);
-  if (missingBatch) {
-    message.warning(`${t('Select_Batch_Required_For')} ${missingBatch.name}`);
+  if (hasBatchSelectErrors(lines.value)) {
+    message.warning(firstBatchSelectError(lines.value, t));
     return false;
   }
   return true;
@@ -488,6 +527,7 @@ onMounted(async () => {
         recomputeCostLine(line);
         return line;
       });
+      await hydrateBatchAvailability();
       await loadProducts();
     } else {
       const data = await http.get('transfers/create');

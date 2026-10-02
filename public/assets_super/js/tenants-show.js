@@ -74,7 +74,7 @@ function pollProvisioningStatus() {
         if (stepEl) {
             var mins = Math.floor(seconds / 60);
             var secs = seconds % 60;
-            stepEl.textContent = 'Elapsed: ' + (mins > 0 ? mins + 'm ' : '') + secs + 's';
+            stepEl.textContent = __s('elapsed') + ' ' + (mins > 0 ? mins + 'm ' : '') + secs + 's';
         }
 
         if (seconds >= POLL_MAX_SECONDS) {
@@ -149,7 +149,7 @@ function testTenantConnection() {
     })
     .catch(function(err) {
         btn.disabled = false;
-        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>Request failed: ' + err.message + '</div>';
+        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>' + __s('request_failed_prefix') + ' ' + err.message + '</div>';
     });
 }
 
@@ -178,7 +178,7 @@ function createTenantEffectiveDb() {
         }
     })
     .catch(function(err) {
-        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>Request failed: ' + err.message + '</div>';
+        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>' + __s('request_failed_prefix') + ' ' + err.message + '</div>';
     });
 }
 
@@ -224,7 +224,7 @@ function testFormConnection() {
     .catch(function(err) {
         editDbVerified = false;
         if (btnSave) btnSave.classList.add('approve-locked');
-        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>Request failed: ' + err.message + '</div>';
+        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>' + __s('request_failed_prefix') + ' ' + err.message + '</div>';
     });
 }
 
@@ -529,7 +529,7 @@ document.addEventListener('DOMContentLoaded', function() {
             .catch(function(err) {
                 approveDbVerified = false;
                 if (btnApprove) btnApprove.classList.add('approve-locked');
-                resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>Request failed: ' + err.message + '</div>';
+                resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>' + __s('request_failed_prefix') + ' ' + err.message + '</div>';
             });
         });
 
@@ -562,7 +562,7 @@ document.addEventListener('DOMContentLoaded', function() {
             db_port: form.querySelector('[name=db_port]').value.trim(),
         };
 
-        resultDiv.innerHTML = '<div class="ajax-result-info"><i class="bi bi-hourglass-split me-1"></i>Creating database...</div>';
+        resultDiv.innerHTML = '<div class="ajax-result-info"><i class="bi bi-hourglass-split me-1"></i>' + __s('creating_database') + '</div>';
 
         fetch(createDatabasePreUrl, {
             method: 'POST',
@@ -589,7 +589,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .catch(function(err) {
             approveDbVerified = false;
             if (btnApprove) btnApprove.classList.add('approve-locked');
-            resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>Request failed: ' + err.message + '</div>';
+            resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>' + __s('request_failed_prefix') + ' ' + err.message + '</div>';
         });
     });
 
@@ -634,7 +634,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     Swal.fire({
                         icon: 'warning',
                         title: trans.customDomainFailedTitle || 'Verification failed',
-                        text: (res.data && res.data.message) || 'DNS check failed.',
+                        text: (res.data && res.data.message) || __s('dns_check_failed'),
                         confirmButtonColor: '#f59e0b',
                     });
                 }

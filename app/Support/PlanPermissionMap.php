@@ -25,7 +25,7 @@ class PlanPermissionMap
         'pos' => ['Pos_view', 'pos_settings', 'kitchen_display_view', 'kitchen_display_manage', 'customer_display_screen_setup', 'cash_register_report'],
         'online_orders' => ['Store_settings_view', 'Orders_view', 'Collections_view', 'Banners_view', 'Subscribers_view', 'Messages_view'],
         'hrm' => ['view_employee', 'add_employee', 'edit_employee', 'delete_employee', 'company', 'department', 'designation', 'office_shift', 'attendance', 'leave', 'holiday', 'payroll', 'report_attendance_summary'],
-        'accounting' => ['accounting_dashboard', 'chart_of_accounts', 'journal_entries', 'trial_balance', 'accounting_profit_loss', 'balance_sheet', 'accounting_tax_report'],
+        'accounting' => ['accounting_dashboard', 'chart_of_accounts', 'journal_entries', 'trial_balance', 'accounting_profit_loss', 'balance_sheet', 'accounting_tax_report', 'accounting_reconciliation'],
         'woocommerce' => ['woocommerce_settings'],
         'shopify' => ['shopify_settings', 'shopify_stores', 'shopify_sync', 'shopify_logs'],
         'transfers' => ['transfer_view', 'transfer_add', 'transfer_edit', 'transfer_delete', 'Stock_Transfer_Report'],

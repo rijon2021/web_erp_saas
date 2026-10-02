@@ -155,6 +155,10 @@ class PaymentPurchaseReturnsController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'create', PaymentPurchaseReturns::class);
 
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $this->paymentAccountRule()]);
+
         if ($request['montant'] > 0) {
             \DB::transaction(function () use ($request) {
                 $user = Auth::user();
@@ -196,15 +200,7 @@ class PaymentPurchaseReturnsController extends BaseController
                     'user_id' => Auth::user()->id,
                 ]);
 
-                $account = Account::where('id', $request['account_id'])->exists();
-
-                if ($account) {
-                    // Account exists, perform the update
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance + $request['montant'],
-                    ]);
-                }
+                Account::adjustBalance($request['account_id'], $request['montant']);
 
                 $PurchaseReturn->update([
                     'paid_amount' => $total_paid,
@@ -230,6 +226,10 @@ class PaymentPurchaseReturnsController extends BaseController
     public function update(Request $request, $id)
     {
         $this->authorizeForUser($request->user('api'), 'update', PaymentPurchaseReturns::class);
+
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $this->paymentAccountRule()]);
 
         \DB::transaction(function () use ($id, $request) {
             $user = Auth::user();
@@ -262,15 +262,7 @@ class PaymentPurchaseReturnsController extends BaseController
             }
 
             // delete old balance
-            $account = Account::where('id', $payment->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance - $payment->montant,
-                ]);
-            }
+            Account::adjustBalance($payment->account_id, -$payment->montant);
 
             $payment->update([
                 'date' => $request['date'],
@@ -283,15 +275,7 @@ class PaymentPurchaseReturnsController extends BaseController
 
             // update new account
 
-            $new_account = Account::where('id', $request['account_id'])->exists();
-
-            if ($new_account) {
-                // Account exists, perform the update
-                $new_account = Account::find($request['account_id']);
-                $new_account->update([
-                    'balance' => $new_account->balance + $request['montant'],
-                ]);
-            }
+            Account::adjustBalance($request['account_id'], $request['montant']);
 
             $PurchaseReturn->update([
                 'paid_amount' => $new_total_paid,
@@ -342,15 +326,7 @@ class PaymentPurchaseReturnsController extends BaseController
                 'deleted_at' => Carbon::now(),
             ]);
 
-            $account = Account::where('id', $payment->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance - $payment->montant,
-                ]);
-            }
+            Account::adjustBalance($payment->account_id, -$payment->montant);
 
             $PurchaseReturn->update([
                 'paid_amount' => $total_paid,
@@ -389,10 +365,26 @@ class PaymentPurchaseReturnsController extends BaseController
         $last = DB::table('payment_purchase_returns')->latest('id')->first();
 
         if ($last) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = $nwMsg[1] + 1;
-            $code = $nwMsg[0].'_'.$inMsg;
+            $item = (string) ($last->Ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[0], $nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $inMsg = $nwMsg[1] + 1;
+                $code = $nwMsg[0].$sep.$inMsg;
+            } else {
+                $code = 'INV/RT_1111';
+            }
 
         } else {
             $code = 'INV/RT_1111';
@@ -406,6 +398,8 @@ class PaymentPurchaseReturnsController extends BaseController
     public function payment_return(Request $request, $id)
     {
         $payment = PaymentPurchaseReturns::with('PurchaseReturn', 'PurchaseReturn.provider')->findOrFail($id);
+
+        $this->abortIfDocumentWarehouseDenied($payment);
 
         $payment_data['return_Ref'] = $payment['PurchaseReturn']->Ref;
         $payment_data['supplier_name'] = $payment['PurchaseReturn']['provider']?->name ?? '---';
@@ -424,6 +418,8 @@ class PaymentPurchaseReturnsController extends BaseController
         $Html = view('pdf.Payment_Purchase_Return', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve(optional($payment->PurchaseReturn)->warehouse_id, $settings),
             'payment' => $payment_data,
         ])->render();
 

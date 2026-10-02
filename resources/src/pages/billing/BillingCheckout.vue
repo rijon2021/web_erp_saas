@@ -18,16 +18,18 @@
 
     <a-row v-else :gutter="16">
       <a-col :xs="24" :lg="14">
-        <a-card size="small" :title="tf('Billing_Cycle', 'Billing Cycle')" style="margin-bottom: 16px">
+        <!-- Only shown when there is a real choice; the order summary below
+             still states which cycle is being bought. -->
+        <a-card v-if="cycles.length > 1" size="small" :title="tf('Billing_Cycle', 'Billing Cycle')" style="margin-bottom: 16px">
           <a-radio-group v-model:value="selectedCycle" style="width: 100%">
             <a-row :gutter="12">
-              <a-col :span="12">
+              <a-col v-if="cycles.includes('monthly')" :span="12">
                 <a-radio-button value="monthly" class="cycle-btn">
                   <div><strong>{{ tf('Monthly', 'Monthly') }}</strong><div class="muted">{{ tf('Billed_monthly', 'Billed every month') }}</div></div>
                   <strong>{{ currencySymbol }}{{ plan.price.toFixed(2) }}</strong>
                 </a-radio-button>
               </a-col>
-              <a-col :span="12">
+              <a-col v-if="cycles.includes('yearly')" :span="12">
                 <a-radio-button value="yearly" class="cycle-btn">
                   <div>
                     <strong>{{ tf('Yearly', 'Yearly') }} <a-tag v-if="plan.savings_percent > 0" color="success">-{{ plan.savings_percent }}%</a-tag></strong>
@@ -132,6 +134,9 @@ const processing = ref(false);
 const plan = ref({ name: '', price: 0, yearly_price: 0, savings_percent: 0, limits: {}, features: {} });
 const gateways = ref([]);
 const selectedCycle = ref(route.query.cycle === 'yearly' ? 'yearly' : 'monthly');
+// Cycles the super admin currently sells. Defaults to both so the page still
+// renders if an older backend omits the key.
+const cycles = ref(['monthly', 'yearly']);
 const selectedGateway = ref('');
 const proofFile = ref(null);
 const isUpgrade = ref(null);
@@ -193,6 +198,10 @@ onMounted(async () => {
     currencyCode.value = data.currency_code || 'USD';
     currencySymbol.value = data.currency_symbol || '$';
     bankDetails.value = data.bank_details || {};
+    if (Array.isArray(data.billing_cycles) && data.billing_cycles.length) cycles.value = data.billing_cycles;
+    // A ?cycle= that is no longer sold must not reach the POST, which would
+    // fail validation after the customer had already picked a gateway.
+    if (!cycles.value.includes(selectedCycle.value)) selectedCycle.value = cycles.value[0];
     if (gateways.value.length) selectedGateway.value = gateways.value[0].key;
   } catch (e) {
     message.error(e?.data?.message || 'Failed to load checkout data.');

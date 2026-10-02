@@ -26,6 +26,7 @@ use Illuminate\Support\Facades\Auth;
 class DashboardController extends Controller
 {
     use CalculatesCogsAndAverageCost;
+    use \App\Traits\ScopesWarehouseAccess;
     // ----------------- dashboard_data -----------------------\\
 
     public function dashboard_data(Request $request)
@@ -364,22 +365,33 @@ class DashboardController extends Controller
                     return $query->whereIn('product_warehouse.warehouse_id', $array_warehouses_id);
                 }
             })
+            // Products belong to a warehouse: hide other branches' products and
+            // their empty rows here, which otherwise fill the list.
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
+            ->tap(fn ($q) => $this->scopeStockRowsToOwnership($q))
+            // products.id / products.warehouse_id would otherwise overwrite the
+            // product_warehouse columns and break the eager-loaded relations
+            ->select('product_warehouse.*')
             ->take('5')->get();
 
         $stock_alert = [];
         if ($product_warehouse_data->isNotEmpty()) {
 
             foreach ($product_warehouse_data as $product_warehouse) {
-                if ($product_warehouse->qte <= $product_warehouse['product']->stock_alert) {
+                $product = $product_warehouse['product'];
+                if ($product === null) {
+                    continue;
+                }
+                if ($product_warehouse->qte <= $product->stock_alert) {
                     if ($product_warehouse->product_variant_id !== null) {
-                        $item['code'] = $product_warehouse['productVariant']->name.'-'.$product_warehouse['product']->code;
+                        $item['code'] = optional($product_warehouse['productVariant'])->name.'-'.$product->code;
                     } else {
-                        $item['code'] = $product_warehouse['product']->code;
+                        $item['code'] = $product->code;
                     }
                     $item['quantity'] = $product_warehouse->qte;
-                    $item['name'] = $product_warehouse['product']->name;
-                    $item['warehouse'] = $product_warehouse['warehouse']->name;
-                    $item['stock_alert'] = $product_warehouse['product']->stock_alert;
+                    $item['name'] = $product->name;
+                    $item['warehouse'] = optional($product_warehouse['warehouse'])->name;
+                    $item['stock_alert'] = $product->stock_alert;
                     $stock_alert[] = $item;
                 }
             }

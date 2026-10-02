@@ -5,10 +5,40 @@ namespace App\Http\Controllers;
 use App\Traits\ScopesWarehouseAccess;
 use Config;
 use DB;
+use Illuminate\Support\Facades\Schema;
 
 class BaseController extends Controller
 {
     use ScopesWarehouseAccess;
+
+    /**
+     * Validation rule for a payment's cash/bank account.
+     *
+     * The accounts module is optional, so this is 'nullable' by default and a
+     * payment recorded without an account is still complete — it just belongs to
+     * no account. A merchant who does run tills can switch on
+     * Settings > Features > "Require payment account" to stop unattributed
+     * payments being saved, and this returns 'required' for them.
+     */
+    protected function paymentAccountRule(): string
+    {
+        try {
+            if (Schema::hasColumn('settings', 'require_payment_account')) {
+                $required = (bool) \App\Models\Setting::query()
+                    ->whereNull('deleted_at')
+                    ->value('require_payment_account');
+
+                if ($required) {
+                    return 'required|exists:accounts,id';
+                }
+            }
+        } catch (\Throwable $e) {
+            // Settings unavailable (boot, migrations): fall back to optional,
+            // which is the behaviour every install had before this setting.
+        }
+
+        return 'nullable|exists:accounts,id';
+    }
 
     public function sendResponse($result, $msg)
     {

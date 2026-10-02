@@ -175,6 +175,7 @@ import {
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import http from '../../lib/http';
+import { uploadUrl } from '../../lib/uploadUrl';
 
 const { t } = useI18n();
 const route = useRoute();

@@ -117,13 +117,17 @@
         <form method="POST" action="{{ route('billing.process', $plan->id) }}" id="checkoutForm" enctype="multipart/form-data">
             @csrf
 
-            {{-- Billing cycle selector --}}
+            {{-- Billing cycle selector. With one cycle on offer there is nothing
+                 to pick, so the card is replaced by a hidden field. --}}
+            @php $cycles = $billingCycles ?? ['monthly', 'yearly']; @endphp
+            @if (count($cycles) > 1)
             <div class="billing-card mb-4">
                 <div class="billing-card-header">
                     <i class="bi bi-calendar3 me-2 text-muted"></i>{{ __('billing.BillingCycle') }}
                 </div>
                 <div class="billing-card-body">
                     <div class="d-flex gap-3">
+                        @if (in_array('monthly', $cycles))
                         <label class="cycle-option flex-fill {{ $cycle === 'monthly' ? 'selected' : '' }}">
                             <input type="radio" name="billing_cycle" value="monthly" {{ $cycle === 'monthly' ? 'checked' : '' }} class="d-none cycle-radio">
                             <div class="cycle-card">
@@ -134,6 +138,8 @@
                                 <span class="fw-bold billing-cycle-price">{{ $currencySymbol }}{{ number_format($plan->price, 2) }}</span>
                             </div>
                         </label>
+                        @endif
+                        @if (in_array('yearly', $cycles))
                         <label class="cycle-option flex-fill {{ $cycle === 'yearly' ? 'selected' : '' }}">
                             <input type="radio" name="billing_cycle" value="yearly" {{ $cycle === 'yearly' ? 'checked' : '' }} class="d-none cycle-radio">
                             <div class="cycle-card">
@@ -149,9 +155,13 @@
                                 <span class="fw-bold billing-cycle-price">{{ $currencySymbol }}{{ number_format($plan->getPriceForCycle('yearly'), 2) }}</span>
                             </div>
                         </label>
+                        @endif
                     </div>
                 </div>
             </div>
+            @else
+            <input type="hidden" name="billing_cycle" value="{{ $cycles[0] }}">
+            @endif
 
             {{-- Payment gateway selector --}}
             <div class="billing-card mb-4">

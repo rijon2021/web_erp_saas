@@ -89,6 +89,16 @@ class SalesReturnController extends BaseController
             $SaleReturn->whereIn('warehouse_id', $warehouse_ids);
         }
 
+        // Date range. `date` above is an exact match kept for backwards
+        // compatibility; from/to are the range filter the rest of the app uses,
+        // and either bound may be given on its own (open-ended).
+        if ($request->filled('from')) {
+            $SaleReturn->whereDate('date', '>=', Carbon::parse($request->from)->toDateString());
+        }
+        if ($request->filled('to')) {
+            $SaleReturn->whereDate('date', '<=', Carbon::parse($request->to)->toDateString());
+        }
+
         // Multiple Filter
         $Filtred = $helpers->filter($SaleReturn, $columns, $param, $request)
         // Search With Multiple Param
@@ -117,6 +127,19 @@ class SalesReturnController extends BaseController
             });
 
         $totalRows = $Filtred->count();
+
+        // Totals over the WHOLE filtered set, not just the page on screen —
+        // the list previously reported per-row figures only, so there was no
+        // way to see what a warehouse or a period actually came to.
+        $sumGrandTotal = (float) (clone $Filtred)->sum('GrandTotal');
+        $sumPaid = (float) (clone $Filtred)->sum('paid_amount');
+        $summary = [
+            'count' => $totalRows,
+            'total' => round($sumGrandTotal, 2),
+            'paid' => round($sumPaid, 2),
+            'due' => round($sumGrandTotal - $sumPaid, 2),
+        ];
+
         if ($perPage == '-1') {
             $perPage = $totalRows;
         }
@@ -167,6 +190,7 @@ class SalesReturnController extends BaseController
 
         return response()->json([
             'totalRows' => $totalRows,
+            'summary' => $summary,
             'sale_Return' => $data,
             'customers' => $customers,
             'warehouses' => $warehouses,
@@ -394,9 +418,9 @@ class SalesReturnController extends BaseController
 
                     if ($product_unit_sale_id['unitSale']) {
                         $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                    } else {
+                        $unit = null;
                     }
-                    $unit = null;
-
                 }
 
                 // Multi-Pack Selling: reverse using the pack multiplier snapshot
@@ -642,9 +666,9 @@ class SalesReturnController extends BaseController
 
                     if ($product_unit_sale_id['unitSale']) {
                         $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                    } else {
+                        $unit = null;
                     }
-                    $unit = null;
-
                 }
 
                 // Multi-Pack Selling: reverse using the pack multiplier snapshot.
@@ -694,13 +718,7 @@ class SalesReturnController extends BaseController
 
             foreach ($payments as $payment) {
 
-                $account = Account::find($payment->account_id);
-
-                if ($account) {
-                    $account->update([
-                        'balance' => $account->balance + $payment->montant,
-                    ]);
-                }
+                Account::adjustBalance($payment->account_id, $payment->montant);
 
             }
 
@@ -789,9 +807,9 @@ class SalesReturnController extends BaseController
 
                         if ($product_unit_sale_id['unitSale']) {
                             $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                        } else {
+                            $unit = null;
                         }
-                        $unit = null;
-
                     }
 
                     // Multi-Pack Selling: reverse using the pack multiplier snapshot.
@@ -841,13 +859,7 @@ class SalesReturnController extends BaseController
 
                 foreach ($payments as $payment) {
 
-                    $account = Account::find($payment->account_id);
-
-                    if ($account) {
-                        $account->update([
-                            'balance' => $account->balance + $payment->montant,
-                        ]);
-                    }
+                    Account::adjustBalance($payment->account_id, $payment->montant);
 
                 }
                 PaymentSaleReturns::where('sale_return_id', $SaleReturn_id)->update([
@@ -956,6 +968,7 @@ class SalesReturnController extends BaseController
             $this->authorizeForUser($request->user('api'), 'check_record', $Sale_Return);
         }
 
+        $return_details['id'] = $Sale_Return->id;
         $return_details['Ref'] = $Sale_Return->Ref;
         // Multi-Currency: amounts in this payload are converted into the
         // document currency — the page must render them with THIS symbol.
@@ -1005,9 +1018,9 @@ class SalesReturnController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -1061,6 +1074,8 @@ class SalesReturnController extends BaseController
             'details' => $details,
             'sale_Return' => $return_details,
             'company' => $company,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Sale_Return->warehouse_id, $company),
         ]);
     }
 
@@ -1196,9 +1211,9 @@ class SalesReturnController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
                 $data['no_unit'] = 0;
             }
 
@@ -1287,6 +1302,8 @@ class SalesReturnController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->abortIfDocumentWarehouseDenied($Sale_Return);
+
         $docCurrency = helpers::Get_Document_Currency($Sale_Return);
 
         $batchesByDetail = app(BatchService::class)->batchesForSaleReturnDetails($Sale_Return['details']);
@@ -1329,9 +1346,9 @@ class SalesReturnController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -1383,6 +1400,8 @@ class SalesReturnController extends BaseController
         $Html = view('pdf.Sales_Return_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Sale_Return->warehouse_id, $settings),
             'return_sale' => $return_details,
             'details' => $details,
         ])->render();
@@ -1473,9 +1492,9 @@ class SalesReturnController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
                 $data['no_unit'] = 0;
             }
 

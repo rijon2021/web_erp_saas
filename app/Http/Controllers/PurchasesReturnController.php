@@ -89,6 +89,16 @@ class PurchasesReturnController extends BaseController
             $PurchaseReturn->whereIn('warehouse_id', $warehouse_ids);
         }
 
+        // Date range. `date` in $columns above is an exact match kept for
+        // backwards compatibility; from/to are the range filter the rest of the
+        // app uses, and either bound may be given on its own (open-ended).
+        if ($request->filled('from')) {
+            $PurchaseReturn->whereDate('date', '>=', Carbon::parse($request->from)->toDateString());
+        }
+        if ($request->filled('to')) {
+            $PurchaseReturn->whereDate('date', '<=', Carbon::parse($request->to)->toDateString());
+        }
+
         // Multiple Filter
         $Filtred = $helpers->filter($PurchaseReturn, $columns, $param, $request)
         // Search With Multiple Param
@@ -117,6 +127,19 @@ class PurchasesReturnController extends BaseController
             });
 
         $totalRows = $Filtred->count();
+
+        // Totals over the WHOLE filtered set, not just the page on screen —
+        // the list previously reported per-row figures only, so there was no
+        // way to see what a warehouse or a period actually came to.
+        $sumGrandTotal = (float) (clone $Filtred)->sum('GrandTotal');
+        $sumPaid = (float) (clone $Filtred)->sum('paid_amount');
+        $summary = [
+            'count' => $totalRows,
+            'total' => round($sumGrandTotal, 2),
+            'paid' => round($sumPaid, 2),
+            'due' => round($sumGrandTotal - $sumPaid, 2),
+        ];
+
         if ($perPage == '-1') {
             $perPage = $totalRows;
         }
@@ -166,6 +189,7 @@ class PurchasesReturnController extends BaseController
 
         return response()->json([
             'totalRows' => $totalRows,
+            'summary' => $summary,
             'purchase_returns' => $data,
             'suppliers' => $suppliers,
             'warehouses' => $warehouses,
@@ -644,13 +668,7 @@ class PurchasesReturnController extends BaseController
 
             foreach ($payments as $payment) {
 
-                $account = Account::find($payment->account_id);
-
-                if ($account) {
-                    $account->update([
-                        'balance' => $account->balance - $payment->montant,
-                    ]);
-                }
+                Account::adjustBalance($payment->account_id, -$payment->montant);
 
             }
 
@@ -783,13 +801,7 @@ class PurchasesReturnController extends BaseController
 
                 $Payment_purchase_return_data = PaymentPurchaseReturns::where('purchase_return_id', $PurchaseReturn_id)->get();
                 foreach ($Payment_purchase_return_data as $Payment_return) {
-                    $account = Account::find($Payment_return->account_id);
-
-                    if ($account) {
-                        $account->update([
-                            'balance' => $account->balance - $Payment_return->montant,
-                        ]);
-                    }
+                    Account::adjustBalance($Payment_return->account_id, -$Payment_return->montant);
 
                     $Payment_return->delete();
                 }
@@ -1233,6 +1245,7 @@ class PurchasesReturnController extends BaseController
 
         $return_details['purchase_ref'] = $Purchase_Return['purchase'] ? $Purchase_Return['purchase']->Ref : '---';
         $return_details['purchase_id'] = $Purchase_Return['purchase'] ? $Purchase_Return['purchase']->id : null;
+        $return_details['id'] = $Purchase_Return->id;
         $return_details['Ref'] = $Purchase_Return->Ref;
         // Multi-Currency: amounts in this payload are converted into the
         // document currency — the page must render them with THIS symbol.
@@ -1330,6 +1343,8 @@ class PurchasesReturnController extends BaseController
             'details' => $details,
             'purchase_return' => $return_details,
             'company' => $company,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Purchase_Return->warehouse_id, $company),
         ]);
 
     }
@@ -1344,6 +1359,8 @@ class PurchasesReturnController extends BaseController
         $PurchaseReturn = PurchaseReturn::with('purchase', 'details.product.unitPurchase')
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
+
+        $this->abortIfDocumentWarehouseDenied($PurchaseReturn);
 
         // Document currency: stored amounts are base currency, display = stored * rate.
         $docCurrency = helpers::Get_Document_Currency($PurchaseReturn);
@@ -1441,6 +1458,8 @@ class PurchasesReturnController extends BaseController
         $Html = view('pdf.Purchase_Return_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($PurchaseReturn->warehouse_id, $settings),
             'return_purchase' => $return_details,
             'details' => $details,
         ])->render();

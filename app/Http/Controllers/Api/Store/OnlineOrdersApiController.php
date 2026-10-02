@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Store;
 
 use App\Http\Controllers\Controller;
 use App\Models\OnlineOrder;
+use App\Models\PaymentSale;
 use App\Models\Product;
 use App\Models\product_warehouse;
 use App\Models\Sale;
@@ -387,13 +388,14 @@ class OnlineOrdersApiController extends Controller
                     'exchange_rate' => $order->exchange_rate,
                 ]);
 
-                // If the online order was already paid, create a payment_sales record
+                // If the online order was already paid, create a payment_sales record.
+                // Through the model so the accounting payment journal is posted too.
                 if ($alreadyPaid) {
                     $paymentMethodId = $this->resolvePaymentMethodId($order->payment_method ?? 'cod');
 
                     $paymentRef = $this->generatePaymentRef();
 
-                    DB::table('payment_sales')->insert([
+                    PaymentSale::create([
                         'user_id'           => optional(Auth::user())->id ?? 0,
                         'date'              => $sale->date,
                         'Ref'               => $paymentRef,
@@ -403,8 +405,6 @@ class OnlineOrdersApiController extends Controller
                         'change'            => 0,
                         'payment_method_id' => $paymentMethodId,
                         'notes'             => 'Auto-created from online order ' . ($order->ref ?? '#' . $order->id),
-                        'created_at'        => now(),
-                        'updated_at'        => now(),
                     ]);
                 }
 
@@ -457,8 +457,10 @@ class OnlineOrdersApiController extends Controller
                     }
                 }
 
-                // Flip online order status
+                // Flip online order status; keep the Sale link so payments
+                // recorded on it later can mark this order paid.
                 $order->status = 'confirmed';
+                $order->sale_id = $sale->id;
                 $order->save();
 
                 return $sale;

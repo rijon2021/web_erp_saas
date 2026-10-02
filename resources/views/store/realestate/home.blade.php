@@ -94,7 +94,8 @@
     <div class="re-cat-grid">
       @foreach($categories as $c)
         <a class="re-cat" href="{{ route('store.realestate.listings', ['category' => $c->slug]) }}">
-          @if(!empty($c->cover_image))<img src="{{ $reImg($c->cover_image) }}" alt="{{ $c->name }}" loading="lazy">@endif
+          @php $catImg = $c->image ?? $c->cover_image ?? null; @endphp
+          @if(!empty($catImg))<img src="{{ $reImg($catImg) }}" alt="{{ $c->name }}" loading="lazy">@endif
           <span class="ic"><x-store.icon :name="$catIcons[$c->slug] ?? 'home'" /></span>
           <div class="nm">{{ $c->name }}</div>
           <div class="ct">{{ $c->properties_count }} {{ __('messages.Listings') }}</div>

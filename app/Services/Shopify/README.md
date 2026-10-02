@@ -73,6 +73,16 @@ is not here. `SyncService::shopifyOptions()` falls back to Shopify's single
 matches on — and picks the richer service up automatically if that module is
 ever ported.
 
+**Linking an existing listing.** Same as Stocky: before creating a product the
+push looks for a listing already carrying one of its SKUs (GraphQL
+`productVariants`, exact-match checked) and adopts it; the product form's
+Shopify card and the Mappings page pair a product by hand
+(`ShopifyProductLinkController`, routes `shopify/product-links*`, inside the
+`tenant.feature:shopify` group). The only SaaS delta is on the product form:
+the card is mounted only when the plan has `shopify` and the user has
+`shopify_stores`, because its first request would otherwise open the upgrade
+prompt on every product edit.
+
 ## The predecessor
 
 There was an earlier one-shop-per-tenant integration (`ShopifyMapping`, a
