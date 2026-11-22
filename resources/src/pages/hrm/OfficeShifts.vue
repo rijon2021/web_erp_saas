@@ -97,8 +97,12 @@ const { t } = useI18n();
 const crud = useCrudTable('office_shift', { rowsKey: 'office_shifts' });
 
 const DAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const DAY_LABEL_KEYS = {
+  monday: 'Sc_Monday', tuesday: 'Sc_Tuesday', wednesday: 'Sc_Wednesday', thursday: 'Sc_Thursday',
+  friday: 'Sc_Friday', saturday: 'Sc_Saturday', sunday: 'Sc_Sunday',
+};
 const DAYS = computed(() =>
-  DAY_KEYS.map(key => ({ key, label: key.charAt(0).toUpperCase() + key.slice(1) }))
+  DAY_KEYS.map(key => ({ key, label: t(DAY_LABEL_KEYS[key]) }))
 );
 
 const columns = computed(() => [

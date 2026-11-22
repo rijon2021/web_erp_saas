@@ -54,18 +54,22 @@
           size="middle"
           :row-key="(r, i) => r.detail_id"
           :scroll="{ x: 'max-content' }"
+          :expanded-row-keys="expandedKeys"
+          :expand-icon="() => null"
         >
           <template #bodyCell="{ column, record, index }">
             <template v-if="column.key === 'product'">
               <div style="font-weight: 500">{{ record.name }}</div>
               <div class="muted">{{ record.code }}</div>
-              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">Batch</a-tag>
+              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">{{ $t('Batch') }}</a-tag>
+              <a-tag v-if="hasSerialPanel(record)" color="processing" style="margin-top: 2px">{{ $t('Serial_Numbers') }}</a-tag>
             </template>
             <template v-else-if="column.key === 'current'">{{ record.current }} {{ record.unit }}</template>
             <template v-else-if="column.key === 'type'">
               <a-select
                 v-model:value="record.type"
                 style="width: 140px"
+                @change="() => resetSerials(record)"
                 :options="[
                   { value: 'add', label: $t('Addition') },
                   { value: 'sub', label: $t('Subtraction') },
@@ -85,6 +89,40 @@
                 <template #icon><DeleteOutlined /></template>
               </a-button>
             </template>
+          </template>
+          <!-- Batch picker for batch-tracked lines. Keyed by warehouse AND type:
+               a subtraction lists only batches holding stock, an addition may
+               restock an emptied batch, so the availability call differs. -->
+          <template #expandedRowRender="{ record }">
+            <template v-if="record.is_batch_tracked">
+              <div class="muted" style="margin-bottom: 6px">
+                {{ record.type === 'add' ? $t('Adjustment_Add_Batch_Hint') : $t('Adjustment_Sub_Batch_Hint') }}
+              </div>
+              <BatchAllocator
+                :key="record.detail_id + '-' + (adjustment.warehouse_id || 0) + '-' + record.type"
+                :line="record" :warehouse-id="adjustment.warehouse_id" endpoint="batches_for_adjustment"
+                :query="record.type === 'add' ? { include_empty: 1 } : null"
+                :unlimited="record.type === 'add'"
+              />
+            </template>
+            <!-- Serial / IMEI: an addition enters new units, a subtraction
+                 writes picked units off; on a combo (kit) an addition
+                 assembles picked component units into kits and a subtraction
+                 takes them back out. -->
+            <div v-if="hasSerialPanel(record)" :style="{ marginTop: record.is_batch_tracked ? '12px' : 0 }">
+              <div class="muted" style="margin-bottom: 6px">{{ $t(serialHintKey(record)) }}</div>
+              <template v-if="record.is_imei">
+                <SerialEntry v-if="record.type === 'add'" :key="record.detail_id + '-add'" :line="record" />
+                <SerialPicker v-else :key="record.detail_id + '-sub'" :line="record" :warehouse-id="adjustment.warehouse_id" />
+              </template>
+              <ComboSerialPicker
+                v-else
+                :key="record.detail_id + '-' + record.type"
+                :line="record"
+                :warehouse-id="adjustment.warehouse_id"
+                :kit-units="record.type === 'add' ? 'exclude' : 'only'"
+              />
+            </div>
           </template>
           <template #emptyText>
             <a-empty :description="$t('NodataAvailable')" style="padding: 24px 0" />
@@ -118,9 +156,12 @@
  * - lines are qty + type (add|sub) only, no pricing
  * - validation = legacy: NaN qty resets to `current`; type 'sub' caps qty at
  *   `current` (LowStock + reset); submit = AddProductToList + AddQuantity +
- *   Select_Batch_Required_For on batch-tracked lines (no picker in v1)
+ *   batch picks (BatchAllocator ← batches_for_adjustment, lib/batchValidation
+ *   select rules). 'sub' lines may leave batches unselected (backend deducts
+ *   FEFO); 'add' lines must name the batch and are not capped by its stock.
  * - POST adjustments / PUT adjustments/{id} {warehouse_id, date, notes,
- *   details}; non-batch lines OMIT the batches key entirely (legacy deletes it)
+ *   details}; batch lines send batches as [{product_batch_id, qty}] (rows
+ *   with a batch and qty > 0 only); non-batch lines OMIT the key entirely
  */
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -130,7 +171,13 @@ import { DeleteOutlined } from '@ant-design/icons-vue';
 import dayjs from 'dayjs';
 import PageHeader from '../../components/PageHeader.vue';
 import ProductScanModal from '../../components/ProductScanModal.vue';
+import BatchAllocator from '../../components/BatchAllocator.vue';
+import SerialEntry from '../../components/SerialEntry.vue';
+import SerialPicker from '../../components/SerialPicker.vue';
+import ComboSerialPicker from '../../components/ComboSerialPicker.vue';
 import { resolveScan } from '../../lib/scanMatch';
+import { hasBatchSelectErrors, firstBatchSelectError } from '../../lib/batchValidation';
+import { hasComboSerials, comboSerialMismatch } from '../../lib/comboSerials';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -170,6 +217,73 @@ function filterProduct(input, option) {
   return `${option.label} ${p?.product_code ?? ''}`
     .toLowerCase()
     .includes(String(input).toLowerCase());
+}
+
+// Serial pickers on lines: only once the adjustment_detail_serials migration
+// has run (create/edit report it), else the backend would ignore them.
+const serialAdjustments = ref(false);
+const hasSerialPanel = l => serialAdjustments.value && (!!l.is_imei || hasComboSerials(l));
+const serialHintKey = l => (l.is_imei
+  ? (l.type === 'add' ? 'Adjustment_Add_Serial_Hint' : 'Adjustment_Sub_Serial_Hint')
+  : (l.type === 'add' ? 'Adjustment_Kit_Serial_Hint' : 'Adjustment_Unkit_Serial_Hint'));
+
+// Switching add/sub changes what the serials mean (new units vs picked ones).
+function resetSerials(line) {
+  line.serial_numbers = [];
+  line.serial_groups = {};
+  line.imei_number = '';
+}
+
+/**
+ * Tracked products and kit assembly need one serial per unit; disassembly may
+ * be left empty (kits assembled before serials were recorded hold none), but
+ * not half-filled.
+ */
+function serialLineError(l) {
+  if (!hasSerialPanel(l)) return false;
+  const count = (l.serial_numbers || []).length;
+  // Saved before serials were recorded on adjustments: may stay empty.
+  if (!count && l.serials_optional) return false;
+  if (l.is_imei) return count !== Math.round(Number(l.quantity) || 0);
+  if (l.type === 'sub' && !count) return false;
+  return comboSerialMismatch(l);
+}
+
+/** Batch-tracked and serialized lines stay expanded so their picker is always in view. */
+const expandedKeys = computed(() => lines.value
+  .filter(l => l.is_batch_tracked || hasSerialPanel(l))
+  .map(l => l.detail_id));
+
+// Per-type batch rules (see the contract note at the top of this file).
+const batchRules = {
+  optional: l => l.type !== 'add',
+  unlimited: l => l.type === 'add',
+};
+
+/**
+ * Saved allocations come back without qty_available, since the edit endpoint
+ * does not know current stock. Refetch availability so the picker can
+ * validate. Stock a subtraction already took is counted back in, because it
+ * has already left the batch; include_empty so an added-to batch that has
+ * since been emptied still resolves.
+ */
+async function hydrateBatchAvailability() {
+  await Promise.all(lines.value
+    .filter(l => l.is_batch_tracked && (l.batches || []).length)
+    .map(async (l) => {
+      try {
+        const data = await http.get(
+          `batches_for_adjustment/${l.product_id}/${adjustment.value.warehouse_id}/${l.product_variant_id || 0}`,
+          { include_empty: 1 }
+        );
+        const available = Array.isArray(data?.batches) ? data.batches : [];
+        l.batches.forEach((b) => {
+          const found = available.find(a => a.id === b.product_batch_id);
+          const held = found ? Number(found.qty_available) || 0 : 0;
+          b.qty_available = held + (b.direction === 'out' ? Number(b.qty) || 0 : 0);
+        });
+      } catch (e) { /* leave the saved rows as they are */ }
+    }));
 }
 
 const lineColumns = computed(() => [
@@ -239,6 +353,11 @@ async function onProductPicked(idx) {
       unit: d.unit,
       is_batch_tracked: !!d.is_batch_tracked,
       batches: [],
+      is_imei: !!d.is_imei,
+      serial_components: d.serial_components || [],
+      serial_numbers: [],
+      serial_groups: {},
+      imei_number: '',
     });
   } catch (e) {
     message.error(t('InvalidData'));
@@ -276,9 +395,13 @@ function validateForm() {
     message.warning(t('AddQuantity'));
     return false;
   }
-  const missingBatch = lines.value.find(l => l.is_batch_tracked && !(l.batches || []).length);
-  if (missingBatch) {
-    message.warning(`${t('Select_Batch_Required_For')} ${missingBatch.name}`);
+  if (hasBatchSelectErrors(lines.value, batchRules)) {
+    message.warning(firstBatchSelectError(lines.value, t, batchRules));
+    return false;
+  }
+  const badSerials = lines.value.find(serialLineError);
+  if (badSerials) {
+    message.warning(`${t('Serials_Count_Mismatch')} — ${badSerials.name}`);
     return false;
   }
   return true;
@@ -301,10 +424,17 @@ function detailsPayload() {
       unit: l.unit,
       is_batch_tracked: !!l.is_batch_tracked,
     };
-    // Legacy omits the key entirely for non-batch lines.
-    if (l.is_batch_tracked && Array.isArray(l.batches) && l.batches.length) {
-      out.batches = l.batches;
+    // Legacy omits the key entirely for non-batch lines. Rows left without a
+    // batch are dropped: on a 'sub' line that means "deduct FEFO".
+    if (l.is_batch_tracked && Array.isArray(l.batches)) {
+      const picked = l.batches
+        .filter(b => b && b.product_batch_id && Number(b.qty) > 0)
+        .map(b => ({ product_batch_id: Number(b.product_batch_id), qty: Number(b.qty) || 0 }));
+      if (picked.length) out.batches = picked;
     }
+    // Serialized lines always send the key (even empty): it tells an edit to
+    // re-sync the serials this adjustment moved.
+    if (hasSerialPanel(l)) out.serial_numbers = l.serial_numbers || [];
     return out;
   });
 }
@@ -341,6 +471,7 @@ onMounted(async () => {
     if (isEdit.value) {
       const data = await http.get(`adjustments/${id.value}/edit`);
       warehouses.value = data.warehouses || [];
+      serialAdjustments.value = data.serial_adjustments === true;
       const a = data.adjustment || {};
       adjustment.value = {
         date: a.date,
@@ -352,11 +483,17 @@ onMounted(async () => {
         detail_id: nextDetailId++,
         is_batch_tracked: !!d.is_batch_tracked,
         batches: Array.isArray(d.batches) ? d.batches : [],
+        serial_numbers: Array.isArray(d.serial_numbers) ? d.serial_numbers : [],
+        serial_groups: d.serial_groups || {},
+        imei_number: Array.isArray(d.serial_numbers) ? d.serial_numbers.join(',') : '',
+        serials_optional: !(Array.isArray(d.serial_numbers) && d.serial_numbers.length),
       }));
       await loadProducts();
+      await hydrateBatchAvailability();
     } else {
       const data = await http.get('adjustments/create');
       warehouses.value = data.warehouses || [];
+      serialAdjustments.value = data.serial_adjustments === true;
     }
   } catch (e) {
     message.error(t('InvalidData'));

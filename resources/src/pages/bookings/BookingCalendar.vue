@@ -36,6 +36,8 @@
         </a-descriptions-item>
       </a-descriptions>
     </a-modal>
+
+    <BookingQuickView v-model:open="quickOpen" :booking-id="quickId" @changed="calendar && calendar.refetchEvents()" />
   </div>
 </template>
 
@@ -53,8 +55,14 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
 import http from '../../lib/http';
+import BookingQuickView from './BookingQuickView.vue';
+import { STATUSES as BOOKING_STATUSES, statusLabel as bookingStatusLabel } from './bookingStatus';
 
 const { t } = useI18n();
+const quickOpen = ref(false);
+const quickId = ref(null);
+// From the list payload: the quick view needs the workflow migration (else the old read-only modal).
+const workflowReady = ref(false);
 
 const isLoading = ref(true);
 const calendarEl = ref();
@@ -71,12 +79,12 @@ const STATUS_COLORS = {
   completed: { bg: '#bbf7d0', border: '#22c55e', text: '#15803d' },
 };
 
+// Booking Management statuses (arrived, declined, no-show…) share one palette and set of labels.
+for (const s of BOOKING_STATUSES) {
+  STATUS_COLORS[s.value] = { bg: s.bg, border: s.border, text: s.text };
+}
 function statusLabel(status) {
-  if (status === 'pending') return t('Pending');
-  if (status === 'confirmed') return t('Confirmed');
-  if (status === 'cancelled') return t('Cancelled');
-  if (status === 'completed') return t('complete');
-  return status;
+  return bookingStatusLabel(status);
 }
 function tagStyle(status) {
   const c = STATUS_COLORS[status] || STATUS_COLORS.pending;
@@ -111,6 +119,7 @@ async function fetchEvents(startStr, endStr, success, failure) {
     const data = await http.get('bookings', {
       from: startStr, to: endStr, limit: -1, SortField: 'booking_date', SortType: 'asc',
     });
+    workflowReady.value = data.workflow_ready === true;
     const events = (data.bookings || []).map(b => {
       if (!b.booking_date) return null;
       const date = b.booking_date;
@@ -121,14 +130,17 @@ async function fetchEvents(startStr, endStr, success, failure) {
       if (endTime) {
         end = `${date}T${endTime}:00`;
       } else {
+        // Stay in local wall-clock time: toISOString() is UTC, which FullCalendar
+        // then read as local, so the default 1h block drifted by the UTC offset.
         const d = new Date(start);
         d.setHours(d.getHours() + 1);
-        end = d.toISOString().slice(0, 19);
+        const pad = n => String(n).padStart(2, '0');
+        end = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
       }
       const colors = STATUS_COLORS[b.status] || STATUS_COLORS.pending;
       return {
         id: String(b.id),
-        title: b.customer_name || `Booking #${b.id}`,
+        title: b.customer_name || t('Bk_Booking_N', { id: b.id }),
         start,
         end,
         allDay: false,
@@ -149,7 +161,13 @@ function handleEventClick(info) {
   const data = info?.event?.extendedProps?.booking || null;
   if (!data) return;
   selectedBooking.value = data;
-  detailOpen.value = true;
+  // With the workflow in place the quick view (details + actions) replaces the read-only modal.
+  if (workflowReady.value) {
+    quickId.value = data.id;
+    quickOpen.value = true;
+  } else {
+    detailOpen.value = true;
+  }
 }
 
 async function initCalendar() {
@@ -158,7 +176,7 @@ async function initCalendar() {
     await nextTick();
     const el = calendarEl.value;
     if (!el || !window.FullCalendar?.Calendar) {
-      message.error('Failed to load calendar. Please refresh the page.');
+      message.error(t('Bk_Calendar_Load_Failed'));
       return;
     }
     const { Calendar } = window.FullCalendar;
@@ -173,6 +191,8 @@ async function initCalendar() {
         right: isMobile ? 'dayGridMonth' : 'dayGridMonth,timeGridWeek,timeGridDay',
       },
       firstDay: 1,
+      buttonText: { today: t('Today'), month: t('Month'), week: t('Bk_Week'), day: t('Day') },
+      allDayText: t('Bk_All_Day'),
       selectable: false,
       navLinks: true,
       eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
@@ -193,7 +213,7 @@ async function initCalendar() {
     window.addEventListener('resize', resizeHandler);
     calendar.render();
   } catch (e) {
-    message.error('Failed to load calendar. Please refresh the page.');
+    message.error(t('Bk_Calendar_Load_Failed'));
   } finally {
     isLoading.value = false;
   }

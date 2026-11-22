@@ -113,7 +113,12 @@ class WebhookController extends Controller
             return;
         }
 
-        if (in_array($registration->status, [PendingRegistration::STATUS_COMPLETED, PendingRegistration::STATUS_PROVISIONING], true)) {
+        // tenant_id is set once a workspace was created from this registration:
+        // in shared-hosting / hold mode the status stays "paid", so a replayed
+        // or duplicate webhook would otherwise create a second tenant (and
+        // send a second receipt).
+        if (in_array($registration->status, [PendingRegistration::STATUS_COMPLETED, PendingRegistration::STATUS_PROVISIONING], true)
+            || $registration->tenant_id) {
             Log::info("Webhook: Registration {$registration->id} already processed.");
             return;
         }
@@ -154,6 +159,14 @@ class WebhookController extends Controller
 
     public function provisionFromRegistration(PendingRegistration $registration, string $gateway, bool $skipProvisioning = false): void
     {
+        // Every caller (webhook, return-page verification, admin approval of a
+        // bank proof) lands here: a registration that already produced a
+        // tenant must never produce a second one (or a second receipt).
+        if ($registration->fresh()?->tenant_id) {
+            Log::info("provisionFromRegistration: registration {$registration->id} already has a tenant — skipped.");
+            return;
+        }
+
         $plan      = Plan::findOrFail($registration->plan_id);
         $now       = now();
         $subdomain = $registration->subdomain;
@@ -179,6 +192,15 @@ class WebhookController extends Controller
 
         if (! empty($meta['owner_phone'])) {
             $tenantAttrs['owner_phone'] = $meta['owner_phone'];
+        }
+
+        // Billed in (and its shop starts in) the currency chosen at signup.
+        // Stored only when it is a real multi-currency choice (differs from the
+        // main currency): everyone else simply follows the platform currency,
+        // also if that is changed later.
+        $signupCurrency = strtoupper((string) ($meta['billing_currency'] ?? ''));
+        if ($signupCurrency !== '' && $signupCurrency !== strtoupper((string) GeneralSetting::currencyCode())) {
+            $tenantAttrs['billing_currency'] = $signupCurrency;
         }
 
         $tenant = Tenant::create($tenantAttrs);
@@ -227,6 +249,14 @@ class WebhookController extends Controller
             'status'    => $holdAsPending ? PendingRegistration::STATUS_PAID : PendingRegistration::STATUS_PROVISIONING,
             'tenant_id' => $tenant->id,
         ]);
+
+        // Receipt for the signup payment (online gateway, or a bank proof the
+        // admin just approved) — created paid directly, so the lifecycle
+        // service that normally emails it is not involved. Sent after step 5
+        // so a duplicate webhook already sees this registration as processed.
+        EmailNotificationService::paymentSuccess($tenant, [
+            '{{amount}}' => EmailNotificationService::money($registration->amount),
+        ], $subscription);
 
         // 6. Shared hosting or explicit hold: send emails, await admin approval — NO auto-provisioning
         if ($holdAsPending) {
@@ -287,6 +317,14 @@ class WebhookController extends Controller
             return;
         }
 
+        // Only an open payment can fail. A late/replayed "failed" event for a
+        // paid, refunded or superseded payment must not touch it, its
+        // subscription, or email the tenant.
+        if ($payment->status !== TenantBillingPayment::STATUS_PENDING) {
+            Log::info("Webhook: failure event ignored for payment {$payment->id} (status {$payment->status}).");
+            return;
+        }
+
         $payment->markFailed();
 
         $subscription = $payment->subscription;
@@ -297,7 +335,7 @@ class WebhookController extends Controller
         Log::info("Webhook: Payment {$payment->id} marked as failed for tenant {$payment->tenant_id}.");
 
         $tenant = $payment->tenant;
-        if ($tenant) {
+        if ($tenant && ! $payment->payment_link_id) {
             EmailNotificationService::paymentFailed($tenant, [
                 '{{amount}}' => GeneralSetting::currencySymbol() . number_format((float) $payment->amount, 2),
             ], $subscription);
@@ -333,6 +371,9 @@ class WebhookController extends Controller
                 'ends_at'      => now(),
                 'cancelled_at' => now(),
             ]);
+
+            // Its time may already have been carried to a newer subscription.
+            TenantSubscription::revokeCarriedTime($subscription);
         }
 
         Log::info("Webhook: Payment {$payment->id} refunded (refund ID: {$refundId}). Subscription deactivated for tenant {$payment->tenant_id}.");

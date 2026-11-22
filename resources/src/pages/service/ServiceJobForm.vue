@@ -28,14 +28,14 @@
             <a-tag :color="statusColor(jobMeta.status)">{{ statusLabel(jobMeta.status) }}</a-tag>
           </a-col>
           <a-col :xs="12" :md="4">
-            <a-statistic :title="$t('Total')" :value="formatNumber(totals.total_amount)" :prefix="currencySymbol" :value-style="{ fontSize: '16px' }" />
+            <a-statistic :title="$t('Total')" :value="formatNumber(totals.total_amount)" :prefix="symbolPrefix" :suffix="symbolSuffix" :value-style="{ fontSize: '16px' }" />
           </a-col>
           <a-col :xs="12" :md="4">
-            <a-statistic :title="$t('Paid')" :value="formatNumber(totals.paid_amount)" :prefix="currencySymbol" :value-style="{ fontSize: '16px', color: '#3f8600' }" />
+            <a-statistic :title="$t('Paid')" :value="formatNumber(totals.paid_amount)" :prefix="symbolPrefix" :suffix="symbolSuffix" :value-style="{ fontSize: '16px', color: '#3f8600' }" />
           </a-col>
           <a-col :xs="12" :md="4">
             <a-statistic
-              :title="$t('Balance_Due')" :value="formatNumber(totals.balance_due)" :prefix="currencySymbol"
+              :title="$t('Balance_Due')" :value="formatNumber(totals.balance_due)" :prefix="symbolPrefix" :suffix="symbolSuffix"
               :value-style="{ fontSize: '16px', color: totals.balance_due > 0 ? '#cf1322' : '#3f8600' }"
             />
           </a-col>
@@ -203,7 +203,7 @@
                 <a-col v-if="isEdit && jobMeta && jobMeta.parent_job_id" :xs="24" :md="6">
                   <a-form-item :label="$t('Warranty_Claim_For')">
                     <a-tag color="success">
-                      <SafetyCertificateOutlined /> Job #{{ jobMeta.parent_job_id }}
+                      <SafetyCertificateOutlined /> {{ $t('Sv_Job_N', { n: jobMeta.parent_job_id }) }}
                     </a-tag>
                   </a-form-item>
                 </a-col>
@@ -219,11 +219,11 @@
                   @click="goTo(`/app/quotations/detail/${jobMeta.quotation_id}`)"
                 >
                   <template #icon><CheckOutlined /></template>
-                  Linked to {{ jobMeta.quotation_ref || ('Quotation #' + jobMeta.quotation_id) }}
+                  {{ $t('Sv_Linked_To', { ref: jobMeta.quotation_ref || $t('Sv_Quotation_N', { n: jobMeta.quotation_id }) }) }}
                 </a-button>
                 <a-button v-else :loading="creatingQuotation" @click="sendToQuotations">
                   <template #icon><SendOutlined /></template>
-                  Send to Quotations
+                  {{ $t('Sv_Send_To_Quotations') }}
                 </a-button>
               </a-space>
 
@@ -276,7 +276,7 @@
                       :disabled="!selectedWarehouseId"
                       show-search option-filter-prop="label"
                       :options="warehouseProducts.map(p => ({
-                        label: `${p.name} (${p.code} · stock: ${p.qte_sale})`,
+                        label: `${p.name} (${p.code} · ${$t('Sv_Stock_Lc')}: ${p.qte_sale})`,
                         value: p.product_variant_id ? `${p.id}:${p.product_variant_id}` : String(p.id),
                       }))"
                       @select="onPickProduct"
@@ -334,7 +334,7 @@
                     <a-input-number v-model:value="record.tax_rate" :min="0" :step="0.01" size="small" style="width: 100%" @change="recomputeRow(record)" />
                   </template>
                   <template v-else-if="column.key === 'total'">
-                    <strong>{{ currencySymbol }}{{ formatNumber(record.total) }}</strong>
+                    <strong>{{ withSymbol(currencySymbol, formatNumber(record.total)) }}</strong>
                   </template>
                   <template v-else-if="column.key === 'action'">
                     <a-button size="small" danger @click="removeItem(index)">
@@ -344,9 +344,9 @@
                 </template>
                 <template #footer>
                   <div class="items-totals">
-                    <div><span>{{ $t('Items_Subtotal') }}</span><strong>{{ currencySymbol }}{{ formatNumber(itemsSubtotal) }}</strong></div>
-                    <div v-if="form.diagnostic_fee > 0"><span>{{ $t('Diagnostic_Fee') }}</span><span>{{ currencySymbol }}{{ formatNumber(form.diagnostic_fee) }}</span></div>
-                    <div><span>{{ $t('Grand_Total') }}</span><strong style="color: #1677ff">{{ currencySymbol }}{{ formatNumber(grandTotal) }}</strong></div>
+                    <div><span>{{ $t('Items_Subtotal') }}</span><strong>{{ withSymbol(currencySymbol, formatNumber(itemsSubtotal)) }}</strong></div>
+                    <div v-if="form.diagnostic_fee > 0"><span>{{ $t('Diagnostic_Fee') }}</span><span>{{ withSymbol(currencySymbol, formatNumber(form.diagnostic_fee)) }}</span></div>
+                    <div><span>{{ $t('Grand_Total') }}</span><strong style="color: #1677ff">{{ withSymbol(currencySymbol, formatNumber(grandTotal)) }}</strong></div>
                   </div>
                 </template>
               </a-table>
@@ -390,7 +390,7 @@
                 <div v-for="ph in photos" :key="ph.id" class="photo-tile">
                   <img :src="ph.url" :alt="ph.original_name" @click="previewPhoto = ph" />
                   <div class="photo-meta">
-                    <a-tag color="cyan">{{ ph.stage }}</a-tag>
+                    <a-tag color="cyan">{{ optionLabel(photoStageOptions, ph.stage) }}</a-tag>
                     <a-button type="text" size="small" danger @click="deletePhoto(ph)">
                       <template #icon><DeleteOutlined /></template>
                     </a-button>
@@ -409,19 +409,19 @@
               <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
                 <a-col :xs="24" :md="8">
                   <a-card size="small">
-                    <a-statistic :title="$t('Total')" :value="formatNumber(totals.total_amount)" :prefix="currencySymbol" />
+                    <a-statistic :title="$t('Total')" :value="formatNumber(totals.total_amount)" :prefix="symbolPrefix" :suffix="symbolSuffix" />
                   </a-card>
                 </a-col>
                 <a-col :xs="24" :md="8">
                   <a-card size="small">
-                    <a-statistic :title="$t('Paid')" :value="formatNumber(totals.paid_amount)" :prefix="currencySymbol" :value-style="{ color: '#3f8600' }" />
+                    <a-statistic :title="$t('Paid')" :value="formatNumber(totals.paid_amount)" :prefix="symbolPrefix" :suffix="symbolSuffix" :value-style="{ color: '#3f8600' }" />
                     <a-progress :percent="paidPercent" size="small" :show-info="true" />
                   </a-card>
                 </a-col>
                 <a-col :xs="24" :md="8">
                   <a-card size="small">
                     <a-statistic
-                      :title="$t('Balance_Due')" :value="formatNumber(totals.balance_due)" :prefix="currencySymbol"
+                      :title="$t('Balance_Due')" :value="formatNumber(totals.balance_due)" :prefix="symbolPrefix" :suffix="symbolSuffix"
                       :value-style="{ color: totals.balance_due > 0 ? '#cf1322' : '#3f8600' }"
                     />
                   </a-card>
@@ -443,14 +443,14 @@
                 >
                   <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'payment_kind'">
-                      <a-tag :color="kindColor(record.payment_kind)">{{ record.payment_kind || 'payment' }}</a-tag>
+                      <a-tag :color="kindColor(record.payment_kind)">{{ optionLabel(paymentKindOptions, record.payment_kind || 'payment') }}</a-tag>
                     </template>
                     <template v-else-if="column.key === 'payment_method'">
                       {{ record.payment_method || '—' }}
                     </template>
                     <template v-else-if="column.key === 'montant'">
                       <span :style="{ color: record.payment_kind === 'refund' ? '#cf1322' : undefined, fontWeight: 600 }">
-                        {{ record.payment_kind === 'refund' ? '-' : '' }}{{ currencySymbol }}{{ formatNumber(record.montant) }}
+                        {{ record.payment_kind === 'refund' ? '-' : '' }}{{ withSymbol(currencySymbol, formatNumber(record.montant)) }}
                       </span>
                     </template>
                     <template v-else-if="column.key === 'notes'">
@@ -554,6 +554,8 @@
  * tax%/100), rounded to 2 decimals.
  */
 import { ref, computed, watch, onMounted } from 'vue';
+import { useFormat } from '../../composables/useFormat';
+import { isCurrencyAfter } from '../../lib/priceFormat';
 import { goTo } from '../../lib/nav';
 import { useRoute, useRouter } from 'vue-router';
 import { message, Modal } from 'ant-design-vue';
@@ -579,6 +581,10 @@ const SubmitProcessing = ref(false);
 const creatingQuotation = ref(false);
 const activeTab = ref('intake');
 const currencySymbol = computed(() => auth.currency);
+// System Settings → Currency Position: symbol before or after the amount.
+const { withSymbol, currencyPosition } = useFormat();
+const symbolPrefix = computed(() => (isCurrencyAfter(currencyPosition.value) ? undefined : currencySymbol.value));
+const symbolSuffix = computed(() => (isCurrencyAfter(currencyPosition.value) ? currencySymbol.value : undefined));
 const formRef = ref();
 
 const form = ref({
@@ -644,31 +650,47 @@ const paymentForm = ref({
 
 const approveBy = ref('');
 
-const statusOptions = [
-  { value: 'pending', label: 'Pending' },
-  { value: 'intake', label: 'Intake' },
-  { value: 'diagnostic', label: 'Diagnostic' },
-  { value: 'quoted', label: 'Quoted' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'ready', label: 'Ready for Pickup' },
-  { value: 'delivered', label: 'Delivered' },
-  { value: 'declined', label: 'Declined' },
-  { value: 'cancelled', label: 'Cancelled' },
-  { value: 'completed', label: 'Completed' },
-];
-const accessoryOptions = ['Charger', 'Cable', 'Case', 'SIM card', 'Memory card', 'Headphones', 'Box'];
-const photoStageOptions = [
-  { value: 'intake', label: 'Intake' },
-  { value: 'before', label: 'Before repair' },
-  { value: 'after', label: 'After repair' },
-  { value: 'delivery', label: 'Delivery' },
-];
-const paymentKindOptions = [
-  { value: 'deposit', label: 'Deposit' },
-  { value: 'payment', label: 'Payment' },
-  { value: 'refund', label: 'Refund' },
-];
+const statusOptions = computed(() => [
+  { value: 'pending', label: t('Pending') },
+  { value: 'intake', label: t('Intake') },
+  { value: 'diagnostic', label: t('Diagnostic') },
+  { value: 'quoted', label: t('Quoted') },
+  { value: 'approved', label: t('Approved') },
+  { value: 'in_progress', label: t('In_Progress') },
+  { value: 'ready', label: t('Ready_For_Pickup') },
+  { value: 'delivered', label: t('Delivered') },
+  { value: 'declined', label: t('Declined') },
+  { value: 'cancelled', label: t('Cancelled') },
+  { value: 'completed', label: t('Completed') },
+]);
+// The stored value stays the English word (existing jobs hold these strings);
+// only the checkbox label is translated.
+const ACCESSORY_KEYS = {
+  Charger: 'Sv_Acc_Charger',
+  Cable: 'Sv_Acc_Cable',
+  Case: 'Sv_Acc_Case',
+  'SIM card': 'Sv_Acc_Sim_Card',
+  'Memory card': 'Sv_Acc_Memory_Card',
+  Headphones: 'Sv_Acc_Headphones',
+  Box: 'Sv_Acc_Box',
+};
+const accessoryOptions = computed(() =>
+  Object.entries(ACCESSORY_KEYS).map(([value, key]) => ({ value, label: t(key) })));
+const photoStageOptions = computed(() => [
+  { value: 'intake', label: t('Intake') },
+  { value: 'before', label: t('before') },
+  { value: 'after', label: t('after') },
+  { value: 'delivery', label: t('delivery') },
+]);
+const paymentKindOptions = computed(() => [
+  { value: 'deposit', label: t('deposit') },
+  { value: 'payment', label: t('Payment') },
+  { value: 'refund', label: t('Refund') },
+]);
+/** Display label for a stored option value, falling back to the raw value. */
+function optionLabel(options, value) {
+  return (options.find(o => o.value === value) || {}).label || value;
+}
 
 const rules = computed(() => ({
   client_id: [{ required: true, message: t('Field_is_required') }],
@@ -725,7 +747,7 @@ function statusColor(s) {
   };
   return map[s] || 'default';
 }
-function statusLabel(s) { return s ? s.replace('_', ' ') : ''; }
+function statusLabel(s) { return s ? optionLabel(statusOptions.value, s) || s.replace('_', ' ') : ''; }
 function paymentColor(s) {
   if (s === 'paid') return 'success';
   if (s === 'partial') return 'warning';
@@ -1032,10 +1054,10 @@ async function sendToQuotations() {
     const data = await http.post(`service_jobs/${jobId.value}/create_quotation`);
     jobMeta.value = { ...(jobMeta.value || {}), quotation_id: data.quotation_id, quotation_ref: data.Ref };
     message.success(data.duplicate
-      ? `Already linked to quotation ${data.Ref}.`
-      : `Quotation ${data.Ref} created.`);
+      ? t('Sv_Already_Linked_Quotation', { ref: data.Ref })
+      : t('Sv_Quotation_Created', { ref: data.Ref }));
   } catch (e) {
-    message.error(e?.data?.message || 'Could not create quotation.');
+    message.error(e?.data?.message || t('Sv_Could_Not_Create_Quotation'));
   } finally {
     creatingQuotation.value = false;
   }

@@ -32,6 +32,8 @@ class MarketingSetting extends Model
      */
     public static function current()
     {
-        return static::first() ?: static::create([]);
+        // refresh(): a new row must carry the column defaults (email on,
+        // batch size 100…), not the nulls create([]) leaves on the model.
+        return static::first() ?: static::create([])->refresh();
     }
 }

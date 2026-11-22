@@ -41,7 +41,7 @@ class ToysStoreController extends ElectronicsStoreController
         if ($sections['categories']) {
             $counts = Product::query()
                 ->where('is_active', 1)
-                ->where('hide_from_online_store', 0)
+                ->where('hide_from_online_store', 0)->forStorefrontWarehouses()
                 ->select('category_id', DB::raw('COUNT(*) AS c'))
                 ->groupBy('category_id')
                 ->pluck('c', 'category_id');

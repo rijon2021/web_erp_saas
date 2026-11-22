@@ -203,11 +203,11 @@
   .el-trust { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0; margin-top: 18px; background: var(--el-card); border: 1px solid var(--el-line); border-radius: 16px; overflow: hidden; }
   @media (min-width: 768px) { .el-trust { grid-template-columns: repeat(3, 1fr); } }
   @media (min-width: 1024px) { .el-trust { grid-template-columns: repeat(var(--el-trust-cols, 5), 1fr); } }
-  .el-trust-item { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-inline-end: 1px solid var(--el-line); border-bottom: 1px solid var(--el-line); }
+  .el-trust-item { display: flex; align-items: center; gap: 12px; padding: 16px 18px; min-width: 0; margin-inline-end: -1px; margin-bottom: -1px; border-inline-end: 1px solid var(--el-line); border-bottom: 1px solid var(--el-line); }
   .el-trust-icon { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: var(--el-accent-soft); color: var(--el-accent); flex-shrink: 0; }
   .el-trust-icon svg { width: 20px; height: 20px; }
-  .el-trust-item strong { display: block; font-size: 13px; font-weight: 700; color: var(--el-ink); }
-  .el-trust-item span { display: block; font-size: 12px; color: var(--el-muted); margin-top: 1px; }
+  .el-trust-item > div > strong { display: block; font-size: 13px; font-weight: 700; color: var(--el-ink); }
+  .el-trust-item > div > span { display: block; font-size: 12px; color: var(--el-muted); margin-top: 1px; }
 
   /* ---------- Category tiles ---------- */
   .el-cats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
@@ -271,7 +271,7 @@
   .el-cart-btn.is-pre { border-color: rgba(217,119,6,.4); background: rgba(217,119,6,.1); color: #d97706; }
   .el-cart-btn.is-pre:hover:not(:disabled) { background: #d97706; color: #fff; }
   .el-card .js-add-status { font-size: 11px; color: #16a34a; min-height: 14px; }
-  .el-card-quote { margin-top: 4px; }
+  .el-card-quote { margin-top: 4px; width: 100%; height: auto; min-height: 36px; padding: 6px 12px; font-size: 12.5px; line-height: 1.25; white-space: normal; text-align: center; }
   .el-card-stock { font-size: 11px; color: var(--el-muted); display: inline-flex; align-items: center; gap: 5px; }
 
   /* ---------- Promo banners ---------- */

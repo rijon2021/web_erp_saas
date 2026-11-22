@@ -29,7 +29,7 @@
       @if($statusKey === 'rented')<span class="re-badge re-badge-rented">{{ __('messages.Rented') }}</span>@endif
     </div>
     <div class="re-card-price">
-      {{ $currency }}{{ number_format((float) $property->price) }}@if($property->purpose === 'rent')<span> /{{ __('messages.Month') }}</span>@endif
+      {{ store_with_currency($currency, number_format((float) $property->price)) }}@if($property->purpose === 'rent')<span> /{{ __('messages.Month') }}</span>@endif
     </div>
   </a>
   <div class="re-card-body">

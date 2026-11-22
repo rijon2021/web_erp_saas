@@ -3,20 +3,20 @@
     <PageHeader :title="$t('Due_Assets')" :breadcrumb="[$t('Assets_List'), $t('Due_Assets')]">
       <template #extra>
         <a-button :loading="runCheckLoading" @click="runValidationDueNow">
-          {{ $t('Run_check_now') || 'Run check now' }}
+          {{ $t('Run_check_now') }}
         </a-button>
       </template>
     </PageHeader>
 
     <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
       <a-col :xs="8">
-        <a-card size="small"><a-statistic :title="$t('Total_Due') || 'Total due'" :value="assets.length" /></a-card>
+        <a-card size="small"><a-statistic :title="$t('Total_Due')" :value="assets.length" /></a-card>
       </a-col>
       <a-col :xs="8">
-        <a-card size="small"><a-statistic :title="$t('Overdue') || 'Overdue'" :value="overdueCount" :value-style="{ color: '#ff4d4f' }" /></a-card>
+        <a-card size="small"><a-statistic :title="$t('Overdue')" :value="overdueCount" :value-style="{ color: '#ff4d4f' }" /></a-card>
       </a-col>
       <a-col :xs="8">
-        <a-card size="small"><a-statistic :title="$t('Due_soon') || 'Due soon'" :value="dueSoonCount" :value-style="{ color: '#faad14' }" /></a-card>
+        <a-card size="small"><a-statistic :title="$t('Due_soon')" :value="dueSoonCount" :value-style="{ color: '#faad14' }" /></a-card>
       </a-col>
     </a-row>
 
@@ -27,9 +27,12 @@
         :locale="{ emptyText: $t('NodataAvailable') }"
       >
         <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'next_validation'">
+          <template v-if="column.key === 'status'">
+            {{ labelOf(ASSET_STATUSES, record.status) }}
+          </template>
+          <template v-else-if="column.key === 'next_validation'">
             <a-tag v-if="record.next_validation" :color="isOverdue(record) ? 'error' : 'warning'">
-              {{ isOverdue(record) ? ($t('Overdue') || 'Overdue') : ($t('Due_soon') || 'Due soon') }}
+              {{ isOverdue(record) ? $t('Overdue') : $t('Due_soon') }}
             </a-tag>
             {{ record.next_validation || '—' }}
           </template>
@@ -43,16 +46,16 @@
     </a-card>
 
     <!-- Scheduler setup -->
-    <a-card size="small" :title="$t('Cron_Schedule_Config') || 'Cron / Schedule configuration'">
+    <a-card size="small" :title="$t('Cron_Schedule_Config')">
       <p style="color: rgba(var(--ink-rgb), 0.45)">
-        {{ $t('Asset_validation_cron_description') || 'To send automatic notifications when assets are due for validation, the Laravel scheduler must run every minute. Add this line to your server crontab:' }}
+        {{ $t('Asset_validation_cron_description') }}
       </p>
       <a-input-group compact style="display: flex; max-width: 720px">
         <a-input :value="scheduleInfo.cron_line" readonly style="flex: 1; font-family: monospace" @focus="e => e.target.select()" />
-        <a-button @click="copyCronLine"><CopyOutlined /> {{ $t('Copy') || 'Copy' }}</a-button>
+        <a-button @click="copyCronLine"><CopyOutlined /> {{ $t('Copy') }}</a-button>
       </a-input-group>
       <p style="font-size: 12px; color: rgba(var(--ink-rgb), 0.45); margin-top: 12px">
-        {{ $t('Asset_validation_schedule_detail') || 'The command "assets:check-validation-due" runs daily. It finds assets whose next validation is within 5 working days (or overdue) and sends email and in-app notifications to users with Assets permission.' }}
+        {{ $t('Asset_validation_schedule_detail') }}
       </p>
     </a-card>
   </div>
@@ -71,6 +74,7 @@ import { useI18n } from 'vue-i18n';
 import { EditOutlined, CopyOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import http from '../../lib/http';
+import { ASSET_STATUSES, labelOf } from './assetOptions';
 
 const { t } = useI18n();
 
@@ -108,7 +112,7 @@ async function copyCronLine() {
   if (!line) return;
   try {
     await navigator.clipboard.writeText(line);
-    message.success(t('Copied') || 'Copied to clipboard');
+    message.success(t('Copied_to_clipboard'));
   } catch (e) {
     const el = document.createElement('textarea');
     el.value = line;
@@ -116,7 +120,7 @@ async function copyCronLine() {
     el.select();
     document.execCommand('copy');
     document.body.removeChild(el);
-    message.success(t('Copied') || 'Copied to clipboard');
+    message.success(t('Copied_to_clipboard'));
   }
 }
 
@@ -124,9 +128,9 @@ async function runValidationDueNow() {
   runCheckLoading.value = true;
   try {
     const data = await http.post('assets/run-validation-due');
-    message.success(data.message || 'Check completed.');
+    message.success(data.message || t('Asset_Check_Completed', 'Check completed.'));
   } catch (e) {
-    message.error(e?.data?.message || e.message || 'Request failed');
+    message.error(e?.data?.message || e.message || t('InvalidData', 'Something went wrong'));
   } finally {
     runCheckLoading.value = false;
   }

@@ -310,7 +310,7 @@ class HospitalVisitController extends Controller
             'doctor_name' => $v->doctor ? $v->doctor->name : null,
             'department_id' => $v->department_id,
             'department_name' => $v->department ? $v->department->name : null,
-            'visit_date' => optional($v->visit_date)->toIso8601String(),
+            'visit_date' => optional($v->visit_date)->toDateTimeLocalString(),
             'type' => $v->type,
             'status' => $v->status,
             'diagnosis' => $v->diagnosis,

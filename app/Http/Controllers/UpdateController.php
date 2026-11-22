@@ -3,8 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Http\Middleware\EnsureNotUpdating;
-use App\Models\Permission;
-use App\Models\Role;
+use App\Services\Updater\PlatformUpgradeTasks;
+use App\Services\Updater\UpdateState;
+use App\Services\Updater\UpdateTargets;
 use App\Tenant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,11 +16,7 @@ use Illuminate\Support\Facades\Log;
 class UpdateController extends Controller
 {
     /** Statuses excluded from the migration target list. */
-    private const SKIP_STATUSES = [
-        Tenant::STATUS_PENDING,
-        Tenant::STATUS_PROVISIONING,
-        Tenant::STATUS_FAILED,
-    ];
+    private const SKIP_STATUSES = UpdateTargets::SKIP_STATUSES;
 
     /** GET /update — Render the progress UI with inventory of update targets. */
     public function show()
@@ -37,6 +34,14 @@ class UpdateController extends Controller
     public function start(Request $request): JsonResponse
     {
         $this->assertSuperAdmin();
+        // The upload-based System Update owns the platform until its run is
+        // finished — also while it is stalled or awaiting a rollback.
+        if ((new UpdateState)->hasUnfinishedRun()) {
+            return response()->json([
+                'ok'    => false,
+                'error' => __('super.system_update.flash.unfinished_run'),
+            ], 409);
+        }
         $this->engageMaintenance();
 
         return response()->json([
@@ -52,25 +57,8 @@ class UpdateController extends Controller
         $this->raiseLimits();
 
         try {
-            Artisan::call('config:clear');
-            Artisan::call('migrate', [
-                '--database' => 'central',
-                '--force'    => true,
-            ]);
-            $output = trim(Artisan::output());
+            $output = (new PlatformUpgradeTasks)->central();
             Log::info('Platform update: central migrated.', ['output' => $output]);
-
-            Artisan::call('db:seed', [
-                '--class' => 'Database\\Seeders\\Central\\CentralLanguagesSeeder',
-                '--force' => true,
-            ]);
-            Log::info('Platform update: central languages seeded.');
-
-            Artisan::call('db:seed', [
-                '--class' => 'Database\\Seeders\\Central\\PlanLimitsSyncSeeder',
-                '--force' => true,
-            ]);
-            Log::info('Platform update: plan limits synced.');
 
             return response()->json([
                 'ok'     => true,
@@ -111,198 +99,7 @@ class UpdateController extends Controller
 
         try {
             $tenant->run(function () use (&$output) {
-                Artisan::call('migrate', [
-                    '--path'     => [database_path('migrations/tenant')],
-                    '--realpath' => true,
-                    '--force'    => true,
-                ]);
-                $output = trim(Artisan::output());
-
-                $permissions = [
-                    1  => 'webhooks_view',
-                    2  => 'webhooks_add',
-                    3  => 'webhooks_edit',
-                    4  => 'webhooks_delete',
-                    5  => 'sales_3d_dashboard',
-                    6  => 'batch_view',
-                    7  => 'batch_manage',
-                    8  => 'batch_writeoff',
-                    9  => 'batch_force_override',
-                    10 => 'expiry_report',
-                    11 => 'Batch_Register_Report',
-
-                    // Recruit module
-                    12 => 'recruit_job',
-                    13 => 'recruit_category',
-                    14 => 'recruit_candidate',
-                    15 => 'recruit_application',
-                    16 => 'recruit_interview',
-
-                    // Meeting module
-                    17 => 'meeting',
-                    18 => 'meeting_attendance',
-                    19 => 'meeting_report',
-
-                    // Marketing module
-                    20 => 'marketing_dashboard',
-                    21 => 'marketing_campaigns',
-                    22 => 'marketing_segments',
-                    23 => 'marketing_templates',
-                    24 => 'marketing_reports',
-                    25 => 'marketing_settings',
-
-                    // Real Estate module
-                    26 => 'realestate_properties',
-                    27 => 'realestate_categories',
-                    28 => 'realestate_inquiries',
-
-                    // Serial / IMEI tracking module
-                    29 => 'serial_numbers',
-                    30 => 'serial_numbers_report',
-
-                    // Kitchen display module
-                    31 => 'kitchen_display_view',
-                    32 => 'kitchen_display_manage',
-                    33 => 'support',
-
-                    // ZATCA e-invoicing (Fatoora)
-                    34 => 'zatca_settings',
-
-                    // Promotions & discounts module
-                    35 => 'promotion',
-                    36 => 'whatsapp_settings',
-                    37 => 'whatsapp_templates',
-                    38 => 'whatsapp_logs',
-
-                    // Shopify integration module
-                    39 => 'shopify_settings',
-
-                    // Products sold summary (per item day report)
-                    40 => 'products_sold_summary',
-
-                    // FBR Digital Invoicing (Pakistan)
-                    41 => 'fbr_settings',
-
-                    // Multi-Currency: change the currency of a document
-                    42 => 'multi_currency',
-
-                    // Document Archive module
-                    43 => 'documents_view',
-                    44 => 'documents_add',
-                    45 => 'documents_edit',
-                    46 => 'documents_delete',
-
-                    // Advanced Manufacturing MRP
-                    47 => 'mrp_boms',
-                    48 => 'mrp_production',
-                    49 => 'mrp_quality',
-                    50 => 'mrp_planning',
-                    51 => 'mrp_reports',
-
-                    // Projects Management additions
-                    52 => 'project_milestones',
-                    53 => 'project_timesheets',
-                    54 => 'project_reports',
-
-                    // Bookings: trays
-                    55 => 'trays',
-
-                    // Vehicle & Fleet Management
-                    56 => 'fleet_vehicles_view',
-                    57 => 'fleet_vehicles_add',
-                    58 => 'fleet_vehicles_edit',
-                    59 => 'fleet_vehicles_delete',
-                    60 => 'fleet_maintenance',
-                    61 => 'fleet_fuel',
-                    62 => 'fleet_assignments',
-                    63 => 'fleet_reports',
-                    64 => 'hms_dashboard',
-                    65 => 'hms_patients_view',
-                    66 => 'hms_patients_add',
-                    67 => 'hms_patients_edit',
-                    68 => 'hms_patients_delete',
-                    69 => 'hms_doctors',
-                    70 => 'hms_departments',
-                    71 => 'hms_appointments',
-                    72 => 'hms_visits',
-                    73 => 'hms_admissions',
-                    74 => 'hms_wards',
-                    75 => 'hms_lab',
-                    76 => 'hms_billing',
-                    77 => 'hms_reports',
-                    78 => 'school_dashboard',
-                    79 => 'school_students_view',
-                    80 => 'school_students_add',
-                    81 => 'school_students_edit',
-                    82 => 'school_students_delete',
-                    83 => 'school_teachers',
-                    84 => 'school_academics',
-                    85 => 'school_enrollment',
-                    86 => 'school_attendance',
-                    87 => 'school_exams',
-                    88 => 'school_timetable',
-                    89 => 'school_fees',
-                    90 => 'school_reports',
-
-                    // Zapier integration
-                    91 => 'zapier_settings',
-
-                    // Chat notification channels
-                    92 => 'slack_settings',
-                    93 => 'telegram_settings',
-
-                    // Salla integration
-                    94 => 'salla_settings',
-
-                    // Xero integration
-                    95 => 'xero_settings',
-
-                    // PrestaShop integration
-                    96 => 'prestashop_settings',
-
-                    // Google Sheets integration
-                    97 => 'google_sheets_settings',
-
-                    // Mailchimp integration
-                    98 => 'mailchimp_settings',
-
-                    // Jumia integration
-                    99 => 'jumia_settings',
-                    // Protocol & Requests
-                    100 => 'protocol_view',
-                    101 => 'protocol_add',
-                    102 => 'protocol_act',
-                    103 => 'protocol_manage',
-
-                    // Shopify integration (multi-store)
-                    104 => 'shopify_stores',
-                    105 => 'shopify_sync',
-                    106 => 'shopify_logs',
-
-                    // Settings → Modules (business module toggles)
-                    107 => 'business_modules',
-
-                ];
-
-                foreach ($permissions as $permission_slug) {
-                    Permission::firstOrCreate(['name' => $permission_slug]);
-                }
-
-                $ownerRole = Role::find(1);
-                if ($ownerRole) {
-                    $ownerRole->permissions()->sync(
-                        Permission::pluck('id')->toArray()
-                    );
-                }
-
-                $this->seedTranslationsChunked();
-
-                Artisan::call('db:seed', [
-                    '--class' => 'Database\\Seeders\\StoreSettingSeeder',
-                    '--force' => true,
-                ]);
-
-                $this->clearTenantCache();
+                $output = (new PlatformUpgradeTasks)->tenant();
             });
 
             Log::info("Platform update: tenant {$tenantId} migrated.");
@@ -337,6 +134,9 @@ class UpdateController extends Controller
             // tenant-side caches on every driver — not just the file driver
             // handled by clearTenantCache() during runTenant().
             Artisan::call('cache:clear');
+            // Supervisor queue workers still hold the old code in memory;
+            // the restart signal lives in the cache, so after cache:clear.
+            Artisan::call('queue:restart');
         } catch (\Throwable $e) {
             Log::warning('Platform update: cache clear failed.', ['error' => $e->getMessage()]);
         }
@@ -429,68 +229,4 @@ class UpdateController extends Controller
         @ini_set('memory_limit', '1G');
     }
 
-    /** Seed translations one language file at a time to keep memory low. */
-    private function seedTranslationsChunked(): void
-    {
-        \DB::disableQueryLog();
-
-        $dir = database_path('seeders/translations');
-        if (! is_dir($dir)) {
-            return;
-        }
-
-        $files = \Illuminate\Support\Facades\File::files($dir);
-
-        foreach ($files as $file) {
-            $locale       = pathinfo($file, PATHINFO_FILENAME);
-            $translations = require $file;
-            $isDefault    = $locale === 'en' ? 1 : 0;
-            $now          = now();
-
-            $batch = [];
-            foreach ($translations as $key => $value) {
-                $batch[] = [
-                    'locale'     => $locale,
-                    'key'        => $key,
-                    'value'      => $value,
-                    'is_default' => $isDefault,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ];
-
-                if (count($batch) >= 500) {
-                    \DB::table('translations')->upsert($batch, ['locale', 'key'], ['value', 'is_default', 'updated_at']);
-                    $batch = [];
-                }
-            }
-
-            if (! empty($batch)) {
-                \DB::table('translations')->upsert($batch, ['locale', 'key'], ['value', 'is_default', 'updated_at']);
-            }
-
-            unset($translations, $batch);
-        }
-    }
-
-    /** Clear only the current tenant's file cache and compiled views. */
-    private function clearTenantCache(): void
-    {
-        $cachePath = storage_path('framework/cache/data');
-        if (is_dir($cachePath)) {
-            $files = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($cachePath, \FilesystemIterator::SKIP_DOTS),
-                \RecursiveIteratorIterator::CHILD_FIRST
-            );
-            foreach ($files as $file) {
-                $file->isDir() ? @rmdir($file->getRealPath()) : @unlink($file->getRealPath());
-            }
-        }
-
-        $viewsPath = storage_path('framework/views');
-        if (is_dir($viewsPath)) {
-            foreach (glob($viewsPath . '/*.php') as $view) {
-                @unlink($view);
-            }
-        }
-    }
 }

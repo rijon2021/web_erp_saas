@@ -4,7 +4,7 @@
     show-search
     :filter-option="false"
     :options="options"
-    :placeholder="placeholder"
+    :placeholder="placeholder || $t('Hm_Search_Patient_By_Name_MRN_Phone')"
     :loading="loading"
     :allow-clear="allowClear"
     :disabled="disabled"
@@ -16,7 +16,7 @@
     <template #notFoundContent>
       <div class="pp-empty">
         <a-spin v-if="loading" size="small" />
-        <span v-else>{{ term ? 'No patient matches that.' : 'Type a name, MRN or phone number.' }}</span>
+        <span v-else>{{ term ? $t('Hm_No_Patient_Matches') : $t('Hm_Type_To_Search_Patient') }}</span>
       </div>
     </template>
   </a-select>
@@ -42,7 +42,7 @@ const props = defineProps({
   modelValue: { type: [Number, String], default: undefined },
   // { id, name, mrn } for the already-selected patient, when editing.
   initialOption: { type: Object, default: null },
-  placeholder: { type: String, default: 'Search patient by name, MRN or phone' },
+  placeholder: { type: String, default: '' },
   allowClear: { type: Boolean, default: true },
   disabled: { type: Boolean, default: false },
 });

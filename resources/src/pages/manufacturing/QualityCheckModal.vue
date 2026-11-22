@@ -1,51 +1,51 @@
 <template>
   <a-modal
-    :open="open" title="Record an inspection" :width="720"
+    :open="open" :title="$t('Mrp_Record_An_Inspection')" :width="720"
     :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
     @ok="submit" @cancel="close"
   >
     <a-alert
       type="info" show-icon banner style="margin-bottom: 14px"
-      message="The outcome is worked out from the numbers, not chosen — any reject means this is not a clean pass."
+      :message="$t('Mrp_Qc_Outcome_Derived_Note')"
     />
 
     <a-form layout="vertical">
       <a-row :gutter="16">
         <a-col v-if="!productionOrderId" :span="24">
-          <a-form-item label="Production order *">
+          <a-form-item :label="$t('Mrp_Production_Order') + ' *'">
             <a-select
               v-model:value="form.production_order_id" show-search option-filter-prop="label"
-              :options="orderOptions" placeholder="Select an order"
+              :options="orderOptions" :placeholder="$t('Mrp_Select_An_Order')"
             />
           </a-form-item>
         </a-col>
         <a-col :xs="24" :md="8">
-          <a-form-item label="Stage *">
+          <a-form-item :label="$t('Mrp_Stage') + ' *'">
             <a-select v-model:value="form.type" :options="QC_TYPES" />
           </a-form-item>
         </a-col>
         <a-col :xs="12" :md="8">
-          <a-form-item label="Units inspected *">
+          <a-form-item :label="$t('Mrp_Units_Inspected') + ' *'">
             <a-input-number v-model:value="form.qty_inspected" :min="0" style="width: 100%" />
           </a-form-item>
         </a-col>
         <a-col :xs="12" :md="8">
-          <a-form-item label="Units rejected">
+          <a-form-item :label="$t('Mrp_Units_Rejected')">
             <a-input-number v-model:value="form.qty_rejected" :min="0" :max="form.qty_inspected || 0" style="width: 100%" />
           </a-form-item>
         </a-col>
       </a-row>
 
       <div class="outcome">
-        <span class="outcome-label">Outcome</span>
+        <span class="outcome-label">{{ $t('Mrp_Outcome') }}</span>
         <a-tag :color="optionOf(QC_STATUSES, derivedStatus).color">{{ labelOf(QC_STATUSES, derivedStatus) }}</a-tag>
-        <span v-if="passRate !== null" class="outcome-rate">{{ passRate }}% pass</span>
+        <span v-if="passRate !== null" class="outcome-rate">{{ passRate }}% {{ $t('Mrp_Pass_Lc') }}</span>
         <span v-if="derivedStatus === 'failed' && form.type === 'final'" class="outcome-warn">
-          A failed final check stops the batch being received into stock.
+          {{ $t('Mrp_Failed_Final_Note') }}
         </span>
       </div>
 
-      <a-divider orientation="left" style="margin: 14px 0 12px">Measurements</a-divider>
+      <a-divider orientation="left" style="margin: 14px 0 12px">{{ $t('Mrp_Measurements') }}</a-divider>
 
       <a-table
         size="small" :columns="lineColumns" :data-source="form.lines"
@@ -53,13 +53,13 @@
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'parameter'">
-            <a-input v-model:value="record.parameter" placeholder="e.g. Height" size="small" />
+            <a-input v-model:value="record.parameter" :placeholder="$t('Mrp_Eg_Height')" size="small" />
           </template>
           <template v-else-if="column.key === 'expected'">
-            <a-input v-model:value="record.expected" placeholder="e.g. 75cm" size="small" />
+            <a-input v-model:value="record.expected" :placeholder="$t('Mrp_Eg_75cm')" size="small" />
           </template>
           <template v-else-if="column.key === 'actual'">
-            <a-input v-model:value="record.actual" placeholder="measured" size="small" />
+            <a-input v-model:value="record.actual" :placeholder="$t('Mrp_Measured')" size="small" />
           </template>
           <template v-else-if="column.key === 'result'">
             <a-select v-model:value="record.result" size="small" style="width: 100%" :options="resultOptions" />
@@ -74,7 +74,7 @@
 
       <a-button size="small" type="dashed" block style="margin-top: 8px" @click="addLine">
         <template #icon><PlusOutlined /></template>
-        Add a measurement
+        {{ $t('Mrp_Add_Measurement') }}
       </a-button>
 
       <a-form-item :label="$t('Note')" style="margin: 14px 0 0">
@@ -97,6 +97,9 @@ import { message } from 'ant-design-vue';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import { QC_TYPES, QC_STATUSES, labelOf, optionOf } from './mrpOptions';
 import http from '../../lib/http';
+import { useI18n } from 'vue-i18n';
+
+const { t } = useI18n();
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -113,8 +116,8 @@ const orderOptions = computed(() => orders.value.map(o => ({
 })));
 
 const resultOptions = [
-  { value: 'pass', label: 'Pass' },
-  { value: 'fail', label: 'Fail' },
+  { value: 'pass', label: t('Mrp_Pass') },
+  { value: 'fail', label: t('Mrp_Fail') },
 ];
 
 let lineKey = 0;
@@ -146,10 +149,10 @@ const derivedStatus = computed(() => {
 });
 
 const lineColumns = [
-  { title: 'Parameter', key: 'parameter', dataIndex: 'parameter' },
-  { title: 'Expected', key: 'expected', dataIndex: 'expected', width: 150 },
-  { title: 'Actual', key: 'actual', dataIndex: 'actual', width: 150 },
-  { title: 'Result', key: 'result', dataIndex: 'result', width: 110 },
+  { title: t('Mrp_Parameter'), key: 'parameter', dataIndex: 'parameter' },
+  { title: t('Mrp_Expected'), key: 'expected', dataIndex: 'expected', width: 150 },
+  { title: t('Mrp_Actual'), key: 'actual', dataIndex: 'actual', width: 150 },
+  { title: t('Mrp_Result'), key: 'result', dataIndex: 'result', width: 110 },
   { title: '', key: 'actions', width: 50 },
 ];
 
@@ -186,15 +189,15 @@ async function loadOrders() {
 
 async function submit() {
   if (!form.production_order_id) {
-    message.error('Pick the production order this inspection belongs to');
+    message.error(t('Mrp_Pick_Order_For_Inspection'));
     return;
   }
   if (!form.qty_inspected || Number(form.qty_inspected) <= 0) {
-    message.error('Enter how many units were inspected');
+    message.error(t('Mrp_Enter_Units_Inspected'));
     return;
   }
   if (Number(form.qty_rejected) > Number(form.qty_inspected)) {
-    message.error('More units were rejected than were inspected');
+    message.error(t('Mrp_More_Rejected_Than_Inspected'));
     return;
   }
 
@@ -208,10 +211,10 @@ async function submit() {
       notes: form.notes,
       lines: form.lines.filter(l => l.parameter),
     });
-    message.success(`Inspection recorded — ${labelOf(QC_STATUSES, res?.status || 'pending')}`);
+    message.success(`${t('Mrp_Inspection_Recorded')} — ${labelOf(QC_STATUSES, res?.status || 'pending')}`);
     emit('saved');
   } catch (e) {
-    message.error(e?.data?.message || 'Could not record that inspection');
+    message.error(e?.data?.message || t('Mrp_Could_Not_Record_Inspection'));
   } finally {
     saving.value = false;
   }

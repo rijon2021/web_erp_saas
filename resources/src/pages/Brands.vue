@@ -13,7 +13,7 @@
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'image'">
           <a-image
-            :src="uploadUrl('brands', record.image || 'no_image.png')"
+            :src="uploadUrl('brands', record.image || 'no-image.png')"
             :width="44"
             :height="44"
             :preview="!!record.image"
@@ -71,7 +71,7 @@
           >
             <a-button>
               <template #icon><UploadOutlined /></template>
-              {{ $t('BrandImage') }} (max {{ MAX_IMAGE_MB }} MB)
+              {{ $t('BrandImage') }} ({{ $t('Max_N_MB', { n: MAX_IMAGE_MB }) }})
             </a-button>
           </a-upload>
         </a-form-item>

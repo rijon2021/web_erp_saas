@@ -2,15 +2,15 @@
   <div>
     <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
       <a-col :xs="12" :md="8">
-        <a-card size="small"><a-spin :spinning="statsLoading"><a-statistic :title="'In stock'" :value="metrics.in_stock" :value-style="{ color: '#52c41a' }" /></a-spin></a-card>
+        <a-card size="small"><a-spin :spinning="statsLoading"><a-statistic :title="$t('In_Stock')" :value="metrics.in_stock" :value-style="{ color: '#52c41a' }" /></a-spin></a-card>
       </a-col>
       <a-col :xs="12" :md="8">
-        <a-card size="small"><a-spin :spinning="statsLoading"><a-statistic :title="'Out of stock'" :value="metrics.out_stock" :value-style="{ color: '#ff4d4f' }" /></a-spin></a-card>
+        <a-card size="small"><a-spin :spinning="statsLoading"><a-statistic :title="$t('Out_of_Stock')" :value="metrics.out_stock" :value-style="{ color: '#ff4d4f' }" /></a-spin></a-card>
       </a-col>
       <a-col :xs="24" :md="8">
         <a-card size="small">
           <a-spin :spinning="statsLoading">
-            <a-statistic :title="'Last sync'" :value="metrics.last_sync ? formatLogDate(metrics.last_sync) : '—'" :value-style="{ fontSize: '16px' }" />
+            <a-statistic :title="$t('Last_Sync')" :value="metrics.last_sync ? formatLogDate(metrics.last_sync) : '—'" :value-style="{ fontSize: '16px' }" />
           </a-spin>
         </a-card>
       </a-col>
@@ -33,7 +33,7 @@
       <a-popconfirm :title="$t('AreYouSure')" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="resetSync">
         <a-button danger :loading="resetting">{{ $t('Reset') }}</a-button>
       </a-popconfirm>
-      <a-button @click="$emit('view-logs')">Logs</a-button>
+      <a-button @click="$emit('view-logs')">{{ $t('Logs') }}</a-button>
     </a-space>
   </div>
 </template>

@@ -8,7 +8,17 @@
  * icons and the menu needs 102.
  */
 import {
-    AlarmClock, AppWindow, Archive, ArrowLeft, ArrowRightLeft, Atom, Award, Banknote, Barcode, Bed, Bell, BellRing, Book, Bookmark, BriefcaseBusiness, Bug, Building, Calculator, Calendar, CalendarCheck, CalendarDays, Camera, ChartBar, ChartColumn, ChartPie, Check, CheckCheck, ChefHat, ChevronLeft, ChevronRight, CircleArrowUp, ClipboardList, Clock, Cloud, Columns3, Copy, CreditCard, Database, DatabaseBackup, DatabaseZap, DollarSign, Download, FileArchive, FilePlus, FileText, Files, Flag, FlaskConical, Folder, Fuel, GraduationCap, Heart, HeartPulse, History, Hourglass, IdCard, Key, Layers, LayoutDashboard, LayoutGrid, Library, LibraryBig, LifeBuoy, Lightbulb, List, Lock, Mail, MapPin, Megaphone, MessageCircle, MessageSquare, MonitorUp, Package, PackageOpen, Pencil, Percent, Plug, Plus, QrCode, Send, Slack, Table, Quote, Receipt, ReceiptText, ScanBarcode, Settings, Shield, ShieldCheck, ShoppingBag, ShoppingBasket, ShoppingCart, SquareCheck, Stethoscope, Store, Tag, Ticket, Timer, TrendingUp, Trophy, Truck, User, UserMinus, Users, Wallet, Warehouse, Wrench, Zap,
+    AlarmClock, AppWindow, Archive, ArrowLeft, ArrowRightLeft, Atom, Award, Banknote, Barcode, Bed, Bell, BellRing, Book, Bookmark, BriefcaseBusiness, Bug, Building, Calculator, Calendar, CalendarCheck, CalendarDays, Camera, ChartBar, ChartColumn, ChartPie, Check, CheckCheck, ChefHat, ChevronLeft, ChevronRight, CircleArrowUp, ClipboardList, Clock, Cloud, Columns3, Copy, CreditCard, Database, DatabaseBackup, DatabaseZap, DollarSign, Download, FileArchive, FilePlus, FileText, Files, Flag, FlaskConical, Folder, Fuel, GraduationCap, Heart, HeartPulse, History, Hourglass, IdCard, Key, Layers, LayoutDashboard, LayoutGrid, Library, LibraryBig, LifeBuoy, Lightbulb, List, Lock, Mail, MapPin, Megaphone, MessageCircle, MessageSquare, MonitorUp, Package, PackageOpen, Pencil, Percent, Plug, Plus, QrCode, Send, Slack, Table, Quote, Receipt, ReceiptText, ScanBarcode, Settings, Shield, ShieldCheck, ShoppingBag, Sparkles, ShoppingBasket, ShoppingCart, SquareCheck, Stethoscope, Store, Tag, Ticket, Timer, TrendingUp, Trophy, Truck, User, UserMinus, Users, Wallet, Warehouse, Wrench, Zap,
+    // Rental Management + CRM
+    KeyRound, Handshake, CalendarRange, CalendarClock, FilePen, UserPlus, SquareKanban, ListChecks, MessagesSquare, FileInput, ChartNoAxesCombined, Target,
+    // Client Portal section
+    Globe, UserCog, Inbox, UserX, Languages,
+    // Online Store: Car Dealership theme
+    Car,
+    // Restaurant Management
+    Utensils,
+    // Printful (print-on-demand)
+    Printer,
 } from 'lucide-vue-next';
 
 /** legacy kebab name -> lucide component */
@@ -37,6 +47,9 @@ export const MENU_ICONS = {
     'calendar': Calendar,
     'calendar-check': CalendarCheck,
     'calendar-days': CalendarDays,
+    'car': Car,
+    'utensils': Utensils,
+    'printer': Printer,
     'camera': Camera,
     'check': Check,
     'check-check': CheckCheck,
@@ -77,6 +90,7 @@ export const MENU_ICONS = {
     'library-big': LibraryBig,
     'life-buoy': LifeBuoy,
     'lightbulb': Lightbulb,
+    'sparkles': Sparkles,
     'list': List,
     'lock': Lock,
     'mail': Mail,
@@ -121,4 +135,23 @@ export const MENU_ICONS = {
     'warehouse': Warehouse,
     'wrench': Wrench,
     'zap': Zap,
+    // Rental Management + CRM
+    'key-round': KeyRound,
+    'handshake': Handshake,
+    'calendar-range': CalendarRange,
+    'calendar-clock': CalendarClock,
+    'file-pen': FilePen,
+    'user-plus': UserPlus,
+    'square-kanban': SquareKanban,
+    'list-checks': ListChecks,
+    'messages-square': MessagesSquare,
+    'file-input': FileInput,
+    'chart-no-axes-combined': ChartNoAxesCombined,
+    'target': Target,
+    // Client Portal section
+    'globe': Globe,
+    'user-cog': UserCog,
+    'inbox': Inbox,
+    'user-x': UserX,
+    'languages': Languages,
 };

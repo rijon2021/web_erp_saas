@@ -21,7 +21,7 @@
     <DataTable :crud="crud" :columns="columns">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'type'">
-          {{ record.type }} ({{ record.value }}{{ record.type === 'percentage' ? '%' : '' }})
+          {{ record.type === 'percentage' ? $t('Percentage') : record.type === 'fixed' ? $t('Fixed') : record.type }} ({{ record.value }}{{ record.type === 'percentage' ? '%' : '' }})
         </template>
         <template v-else-if="column.key === 'source'">
           {{ record.source === 'sale_total' ? $t('Sale_Total') : $t('Paid_Amount') }}
@@ -103,6 +103,8 @@
             </a-form-item>
           </a-col>
         </a-row>
+        <a-alert v-if="selectedProgram" type="info" show-icon style="margin-bottom: 16px"
+          :message="selectedProgram.rule_mode === 'highest_priority' ? $t('Comm_Priority_Help_Highest') : $t('Comm_Priority_Help_All')" />
         <a-form-item :label="$t('Applies_To')">
           <a-select v-model:value="form.applies_to">
             <a-select-option value="all_agents">{{ $t('All_Agents') }}</a-select-option>
@@ -179,6 +181,8 @@ const emptyForm = () => ({
   is_active: true,
 });
 const form = ref(emptyForm());
+// How the chosen program combines its rules decides what Priority means.
+const selectedProgram = computed(() => programsList.value.find(p => p.id === form.value.commission_program_id) || null);
 
 const rules = computed(() => ({
   commission_program_id: [{ required: true, message: t('Field_is_required') }],
@@ -250,7 +254,7 @@ onMounted(async () => {
   try {
     const data = await http.get('commission_programs', { limit: '-1' });
     const d = data.data || data;
-    programsList.value = (d.programs || []).map(p => ({ id: p.id, name: p.name }));
+    programsList.value = (d.programs || []).map(p => ({ id: p.id, name: p.name, rule_mode: p.rule_mode }));
   } catch (e) { /* filter stays empty */ }
   try {
     const data = await http.get('sales_agents_list_for_select');

@@ -59,7 +59,7 @@
                 <template #icon><EyeOutlined style="color: #1677ff" /></template>
               </a-button>
             </a-tooltip>
-            <a-tooltip v-if="campaignSendable(record.status)" :title="$t('Send_Now')">
+            <a-tooltip v-if="campaignSendable(record.status, record.is_stuck)" :title="$t('Send_Now')">
               <a-button type="text" size="small" @click="sendCampaign(record)">
                 <template #icon><SendOutlined style="color: #13c2c2" /></template>
               </a-button>
@@ -85,7 +85,7 @@
 /**
  * GET marketing/campaigns → {campaigns, totalRows}; extra filters type +
  * status. Send = POST marketing/campaigns/{id}/send after confirmation; only
- * draft/scheduled/failed can send, and sent/sending campaigns can't be edited
+ * draft/scheduled/failed (or a stuck sending one) can send, and sent/sending campaigns can't be edited
  * (mirrors legacy canEdit/canSend).
  */
 import { ref, computed, createVNode } from 'vue';

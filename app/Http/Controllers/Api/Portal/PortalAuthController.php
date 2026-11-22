@@ -3,8 +3,13 @@
 namespace App\Http\Controllers\Api\Portal;
 
 use App\Http\Controllers\Controller;
+use App\Http\Middleware\SetLocale;
+use App\Http\Middleware\SetPortalLocale;
 use App\Models\Client;
 use App\Models\PortalClient;
+use App\Support\PortalSettings;
+use App\Support\Security\CustomerTwoFactor;
+use App\Support\Security\TwoFactor;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -23,19 +28,38 @@ class PortalAuthController extends Controller
             'password' => ['required', 'string'],
         ]);
 
+        // Switched off on Client Portal → Portal Settings.
+        if (! PortalSettings::enabled()) {
+            return response()->json(['message' => __('portal.portal_unavailable')], 503);
+        }
+
         $portalClient = PortalClient::where('email', $cred['email'])->first();
 
         if (!$portalClient || !Hash::check($cred['password'], $portalClient->password)) {
-            return response()->json(['message' => 'Invalid credentials'], 401);
+            return response()->json(['message' => __('portal.invalid_credentials')], 401);
         }
 
         if ((int) $portalClient->status !== 1) {
-            return response()->json(['message' => 'Portal access is disabled for your account'], 403);
+            return response()->json(['message' => __('portal.portal_disabled_account')], 403);
+        }
+
+        // Two-step verification: park the account until the code is checked
+        // (PortalTwoFactorController::verify signs it in).
+        if (CustomerTwoFactor::startChallenge($request, 'portal', $portalClient, $request->boolean('remember'))) {
+            return response()->json([
+                'two_factor' => true,
+                'method' => TwoFactor::method($portalClient),
+                'email' => CustomerTwoFactor::maskEmail((string) $portalClient->email),
+                'trust_days' => TwoFactor::CUSTOMER_TRUST_DAYS,
+                'email_failed' => (bool) $request->session()->get('portal_two_factor_login.email_failed', false),
+            ]);
         }
 
         if (Auth::guard('portal')->attempt($cred, $request->boolean('remember'))) {
             // Do not regenerate session here: the app and portal share the same session cookie.
             // Regenerating would replace the session id and log out the main app (auth:web) user.
+
+            $this->rememberSessionLocale($portalClient);
 
             return response()->json([
                 'success' => true,
@@ -43,7 +67,7 @@ class PortalAuthController extends Controller
             ]);
         }
 
-        return response()->json(['message' => 'Invalid credentials'], 401);
+        return response()->json(['message' => __('portal.invalid_credentials')], 401);
     }
 
     /**
@@ -74,11 +98,13 @@ class PortalAuthController extends Controller
             Auth::guard('portal')->logout();
             // Only clear portal auth, do not invalidate entire session
 
-            return response()->json(['message' => 'Portal access is disabled'], 403);
+            return response()->json(['message' => __('portal.portal_disabled')], 403);
         }
 
         return response()->json([
             'portal_client' => $this->portalClientResponse($portalClient),
+            // Which modules / actions the sidebar and pages may offer.
+            'portal_settings' => PortalSettings::forClient(),
         ]);
     }
 
@@ -90,13 +116,13 @@ class PortalAuthController extends Controller
         $token = $request->query('token');
 
         if (!$token) {
-            return response()->json(['valid' => false, 'message' => 'Invalid or expired link'], 400);
+            return response()->json(['valid' => false, 'message' => __('portal.invite_link_invalid')], 400);
         }
 
         $portalClient = PortalClient::where('invitation_token', $token)->first();
 
-        if (!$portalClient || !$portalClient->invitation_sent_at || $portalClient->invitation_sent_at->addHours(48)->isPast()) {
-            return response()->json(['valid' => false, 'message' => 'Invalid or expired invitation link'], 400);
+        if (!$portalClient || !$portalClient->invitation_sent_at || $portalClient->invitation_sent_at->addHours(PortalSettings::invitationExpiryHours())->isPast()) {
+            return response()->json(['valid' => false, 'message' => __('portal.invite_link_expired')], 400);
         }
 
         return response()->json([
@@ -117,8 +143,8 @@ class PortalAuthController extends Controller
 
         $portalClient = PortalClient::where('invitation_token', $data['token'])->first();
 
-        if (!$portalClient || !$portalClient->invitation_sent_at || $portalClient->invitation_sent_at->addHours(48)->isPast()) {
-            return response()->json(['message' => 'Invalid or expired invitation link'], 400);
+        if (!$portalClient || !$portalClient->invitation_sent_at || $portalClient->invitation_sent_at->addHours(PortalSettings::invitationExpiryHours())->isPast()) {
+            return response()->json(['message' => __('portal.invite_link_expired')], 400);
         }
 
         $portalClient->update([
@@ -131,10 +157,27 @@ class PortalAuthController extends Controller
         Auth::guard('portal')->login($portalClient);
         // Do not regenerate session so the main app (auth:web) user is not logged out.
 
+        $this->rememberSessionLocale($portalClient);
+
         return response()->json([
             'success' => true,
             'portal_client' => $this->portalClientResponse($portalClient),
         ]);
+    }
+
+    /**
+     * A language picked on the login / set-password page (session) becomes the
+     * client's saved preference — it is what they were looking at when they
+     * signed in. With no explicit choice this session, the saved preference
+     * (or cookie / app default) keeps applying via SetPortalLocale.
+     */
+    private function rememberSessionLocale(PortalClient $portalClient): void
+    {
+        $chosen = session(SetPortalLocale::SESSION_KEY);
+
+        if ($chosen && isset(\App\Services\PortalLanguageInstaller::activeLocales()[$chosen]) && $portalClient->preferred_locale !== $chosen) {
+            $portalClient->forceFill(['preferred_locale' => $chosen])->save();
+        }
     }
 
     private function portalClientResponse(PortalClient $portalClient): array
@@ -145,6 +188,7 @@ class PortalAuthController extends Controller
             'id' => $portalClient->id,
             'email' => $portalClient->email,
             'client_id' => $portalClient->client_id,
+            'locale' => $portalClient->preferred_locale ?: app()->getLocale(),
             'client' => [
                 'id' => $portalClient->client->id,
                 'name' => $portalClient->client->name,

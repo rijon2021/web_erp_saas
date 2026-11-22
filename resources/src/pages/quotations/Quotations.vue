@@ -125,7 +125,7 @@
                   <FilePdfOutlined /> {{ $t('DownloadPdf') }}
                 </a-menu-item>
                 <a-menu-item key="whatsapp">
-                  <WhatsAppOutlined /> WhatsApp Notification
+                  <WhatsAppOutlined /> {{ $t('WhatsApp_Notification') }}
                 </a-menu-item>
                 <a-menu-item key="email">
                   <MailOutlined /> {{ $t('email_notification') }}

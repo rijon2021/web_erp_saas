@@ -1,8 +1,8 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="isEdit ? 'Edit bill of materials' : 'New bill of materials'"
-      :breadcrumb="['Manufacturing', 'Bills of Materials', isEdit ? form.code : 'New']"
+      :title="isEdit ? $t('Mrp_Edit_Bom') : $t('Mrp_New_Bill_Of_Materials')"
+      :breadcrumb="[$t('Manufacturing'), $t('Mrp_Bills_Of_Materials'), isEdit ? form.code : $t('New')]"
     >
       <template #actions>
         <a-button @click="$router.push('/mrp/boms')">{{ $t('Cancel') }}</a-button>
@@ -22,21 +22,21 @@
             <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
               <a-row :gutter="16">
                 <a-col :xs="24" :md="8">
-                  <a-form-item label="Code *" name="code">
-                    <a-input v-model:value="form.code" placeholder="e.g. BOM-TABLE" allow-clear />
+                  <a-form-item :label="$t('Mrp_Code') + ' *'" name="code">
+                    <a-input v-model:value="form.code" :placeholder="$t('Mrp_Eg_Bom_Code')" allow-clear />
                   </a-form-item>
                 </a-col>
                 <a-col :xs="24" :md="16">
-                  <a-form-item label="Name *" name="name">
-                    <a-input v-model:value="form.name" placeholder="e.g. Oak table — standard build" allow-clear />
+                  <a-form-item :label="$t('Name') + ' *'" name="name">
+                    <a-input v-model:value="form.name" :placeholder="$t('Mrp_Eg_Bom_Name')" allow-clear />
                   </a-form-item>
                 </a-col>
                 <a-col :xs="24" :md="12">
-                  <a-form-item label="Product built *" name="product_id">
+                  <a-form-item :label="$t('Mrp_Product_Built') + ' *'" name="product_id">
                     <a-select
                       v-model:value="form.product_id" show-search :filter-option="false"
                       :options="productOptions" :not-found-content="searching ? undefined : null"
-                      placeholder="Search a product" @search="searchProducts"
+                      :placeholder="$t('Mrp_Search_A_Product')" @search="searchProducts"
                     >
                       <template v-if="searching" #notFoundContent><a-spin size="small" /></template>
                     </a-select>
@@ -44,14 +44,14 @@
                 </a-col>
                 <a-col :xs="12" :md="6">
                   <a-form-item
-                    label="Output per run *" name="output_qty"
-                    extra="Component quantities below are per this figure"
+                    :label="$t('Mrp_Output_Per_Run') + ' *'" name="output_qty"
+                    :extra="$t('Mrp_Output_Per_Run_Hint')"
                   >
                     <a-input-number v-model:value="form.output_qty" :min="0.0001" style="width: 100%" />
                   </a-form-item>
                 </a-col>
                 <a-col :xs="12" :md="6">
-                  <a-form-item label="Version" name="version">
+                  <a-form-item :label="$t('Version')" name="version">
                     <a-input-number v-model:value="form.version" :min="1" style="width: 100%" />
                   </a-form-item>
                 </a-col>
@@ -59,20 +59,20 @@
                   <a-form-item :label="$t('Warehouse')" name="warehouse_id">
                     <a-select
                       v-model:value="form.warehouse_id" show-search option-filter-prop="label"
-                      :options="warehouseOptions" allow-clear placeholder="Default build location"
+                      :options="warehouseOptions" allow-clear :placeholder="$t('Mrp_Default_Build_Location')"
                     />
                   </a-form-item>
                 </a-col>
                 <a-col :xs="12" :md="8">
                   <a-form-item
-                    label="Output scrap %" name="scrap_pct"
-                    extra="Expected loss — raises what must be started"
+                    :label="$t('Mrp_Output_Scrap_Pct')" name="scrap_pct"
+                    :extra="$t('Mrp_Output_Scrap_Hint')"
                   >
                     <a-input-number v-model:value="form.scrap_pct" :min="0" :max="99" style="width: 100%" />
                   </a-form-item>
                 </a-col>
                 <a-col :xs="12" :md="8">
-                  <a-form-item label="Fixed overhead per run" name="overhead_cost">
+                  <a-form-item :label="$t('Mrp_Fixed_Overhead_Per_Run')" name="overhead_cost">
                     <a-input-number v-model:value="form.overhead_cost" :min="0" style="width: 100%" />
                   </a-form-item>
                 </a-col>
@@ -84,9 +84,9 @@
                 <a-col :xs="24" :md="12">
                   <a-form-item label=" " :colon="false">
                     <a-checkbox v-model:checked="form.is_default">
-                      Default recipe for this product
+                      {{ $t('Mrp_Default_Recipe') }}
                     </a-checkbox>
-                    <div class="hint">Used when an order does not name a BOM. Only one per product.</div>
+                    <div class="hint">{{ $t('Mrp_Default_Recipe_Hint') }}</div>
                   </a-form-item>
                 </a-col>
                 <a-col :span="24">
@@ -99,35 +99,44 @@
           </a-card>
 
           <!-- components -->
-          <a-card size="small" title="Components" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Mrp_Components_Heading')" style="margin-bottom: 16px">
             <template #extra>
               <a-button size="small" type="primary" @click="addLine">
                 <template #icon><PlusOutlined /></template>
-                Add component
+                {{ $t('Mrp_Add_Component') }}
               </a-button>
             </template>
 
-            <a-empty v-if="!form.lines.length" :image="simpleImage" description="No components yet" />
+            <a-empty v-if="!form.lines.length" :image="simpleImage" :description="$t('Mrp_No_Components_Yet')" />
             <a-table
               v-else size="small" :columns="lineColumns" :data-source="form.lines"
-              row-key="key" :pagination="false" :scroll="{ x: 760 }"
+              row-key="key" :pagination="false" :scroll="{ x: 880 }"
             >
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'product_id'">
                   <a-select
                     v-model:value="record.product_id" show-search :filter-option="false" size="small"
-                    style="width: 100%" :options="productOptions" placeholder="Search a product"
+                    style="width: 100%" :options="productOptions" :placeholder="$t('Mrp_Search_A_Product')"
                     @search="searchProducts" @change="() => onComponentChange(record)"
                   />
                 </template>
                 <template v-else-if="column.key === 'qty'">
                   <a-input-number v-model:value="record.qty" :min="0" size="small" style="width: 100%" />
                 </template>
+                <template v-else-if="column.key === 'unit_id'">
+                  <a-select
+                    v-if="unitOptionsFor(record).length > 1"
+                    v-model:value="record.unit_id" size="small" style="width: 100%"
+                    :options="unitOptionsFor(record)" :placeholder="$t('Unit')"
+                  />
+                  <span v-else class="muted">{{ baseUnitLabel(record) || '—' }}</span>
+                </template>
                 <template v-else-if="column.key === 'scrap_pct'">
                   <a-input-number v-model:value="record.scrap_pct" :min="0" :max="99" size="small" style="width: 100%" />
                 </template>
                 <template v-else-if="column.key === 'effective'">
                   {{ number(effectiveQty(record), 4) }}
+                  <span v-if="baseUnitLabel(record)" class="muted">{{ baseUnitLabel(record) }}</span>
                 </template>
                 <template v-else-if="column.key === 'cost'">
                   {{ money(lineCost(record)) }}
@@ -145,17 +154,17 @@
           </a-card>
 
           <!-- routing -->
-          <a-card size="small" title="Routing">
+          <a-card size="small" :title="$t('Mrp_Routing')">
             <template #extra>
               <a-button size="small" type="primary" @click="addOperation">
                 <template #icon><PlusOutlined /></template>
-                Add operation
+                {{ $t('Mrp_Add_Operation') }}
               </a-button>
             </template>
 
             <a-empty
               v-if="!form.operations.length" :image="simpleImage"
-              description="No routing — the BOM will cost materials only"
+              :description="$t('Mrp_No_Routing_Hint')"
             />
             <a-table
               v-else size="small" :columns="operationColumns" :data-source="form.operations"
@@ -166,12 +175,12 @@
                   <a-input-number v-model:value="record.sequence" :min="1" size="small" style="width: 100%" />
                 </template>
                 <template v-else-if="column.key === 'name'">
-                  <a-input v-model:value="record.name" size="small" placeholder="e.g. Cut to size" />
+                  <a-input v-model:value="record.name" size="small" :placeholder="$t('Mrp_Eg_Cut_To_Size')" />
                 </template>
                 <template v-else-if="column.key === 'work_center_id'">
                   <a-select
                     v-model:value="record.work_center_id" size="small" style="width: 100%"
-                    :options="workCenterOptions" allow-clear placeholder="Work centre"
+                    :options="workCenterOptions" allow-clear :placeholder="$t('Mrp_Work_Centre')"
                   />
                 </template>
                 <template v-else-if="column.key === 'setup_minutes'">
@@ -198,28 +207,28 @@
 
         <!-- live costing -->
         <a-col :xs="24" :xl="8">
-          <a-card size="small" title="Cost per run" class="sticky">
+          <a-card size="small" :title="$t('Mrp_Cost_Per_Run')" class="sticky">
             <ul class="costing">
-              <li><span>Material</span><span>{{ money(costing.material) }}</span></li>
-              <li><span>Labour</span><span>{{ money(costing.labour) }}</span></li>
-              <li><span>Overhead</span><span>{{ money(costing.overhead) }}</span></li>
-              <li class="total"><span>Total</span><span>{{ money(costing.total) }}</span></li>
+              <li><span>{{ $t('Mrp_Material') }}</span><span>{{ money(costing.material) }}</span></li>
+              <li><span>{{ $t('Labour') }}</span><span>{{ money(costing.labour) }}</span></li>
+              <li><span>{{ $t('Mrp_Overhead') }}</span><span>{{ money(costing.overhead) }}</span></li>
+              <li class="total"><span>{{ $t('Mrp_Total') }}</span><span>{{ money(costing.total) }}</span></li>
               <li class="unit">
-                <span>Per finished unit</span>
+                <span>{{ $t('Mrp_Per_Finished_Unit') }}</span>
                 <span>{{ money(costing.perUnit) }}</span>
               </li>
             </ul>
 
             <a-alert
               v-if="form.scrap_pct > 0" type="info" show-icon banner style="margin-top: 12px"
-              :message="`With ${form.scrap_pct}% output scrap you must start ${number(grossOutput, 3)} to finish ${number(form.output_qty || 0, 3)}.`"
+              :message="$t('Mrp_Scrap_Start_Note', { scrap: form.scrap_pct, gross: number(grossOutput, 3), net: number(form.output_qty || 0, 3) })"
             />
 
             <a-divider style="margin: 14px 0 10px" />
             <div class="tally">
-              <span>{{ form.lines.length }} component{{ form.lines.length === 1 ? '' : 's' }}</span>
-              <span>{{ form.operations.length }} operation{{ form.operations.length === 1 ? '' : 's' }}</span>
-              <span>{{ number(totalMinutes, 0) }} min per run</span>
+              <span>{{ form.lines.length }} {{ $t('Mrp_Components') }}</span>
+              <span>{{ form.operations.length }} {{ $t('Mrp_Operations') }}</span>
+              <span>{{ number(totalMinutes, 0) }} {{ $t('Mrp_Min_Per_Run') }}</span>
             </div>
           </a-card>
         </a-col>
@@ -237,6 +246,10 @@
  * scrap fields are labelled separately because they mean different things:
  * output scrap raises what you must START, component scrap raises what you must
  * DRAW.
+ *
+ * A component can be stated in any unit that belongs to it (its base unit or
+ * one of that unit's sub-units). "To draw" and the costing always convert back
+ * to the base unit, which is what stock is counted in.
  */
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -272,6 +285,7 @@ const products = ref([]);
 const searching = ref(false);
 const warehouses = ref([]);
 const workCenters = ref([]);
+const units = ref([]);
 
 const productOptions = computed(() => products.value.map(p => ({ value: p.id, label: p.label })));
 const warehouseOptions = computed(() => warehouses.value.map(w => ({ value: w.id, label: w.name })));
@@ -286,7 +300,9 @@ const rules = computed(() => ({
 
 function addLine() {
   rowKey += 1;
-  form.lines.push({ key: rowKey, product_id: undefined, qty: 1, scrap_pct: 0, is_optional: false, unit_cost: 0 });
+  form.lines.push({
+    key: rowKey, product_id: undefined, qty: 1, unit_id: undefined, scrap_pct: 0, is_optional: false, unit_cost: 0,
+  });
 }
 
 function removeLine(record) {
@@ -298,12 +314,43 @@ function removeLine(record) {
 function onComponentChange(record) {
   const product = products.value.find(p => p.id === record.product_id);
   record.unit_cost = product ? product.cost : 0;
+  // A unit belongs to a product; switching product resets it to that product's base.
+  if (!unitsFor(record.product_id).some(u => u.id === record.unit_id)) {
+    record.unit_id = product ? product.unit_id : undefined;
+  }
 }
 
+/** The units a component may be stated in: its base unit plus that unit's sub-units. */
+function unitsFor(productId) {
+  const product = products.value.find(p => p.id === productId);
+  if (!product || !product.unit_id) return [];
+  return units.value.filter(u => u.id === product.unit_id || u.base_unit === product.unit_id);
+}
+
+function unitOptionsFor(record) {
+  return unitsFor(record.product_id).map(u => ({ value: u.id, label: u.ShortName || u.name }));
+}
+
+function baseUnitLabel(record) {
+  const product = products.value.find(p => p.id === record.product_id);
+  const base = product ? units.value.find(u => u.id === product.unit_id) : null;
+  return base ? (base.ShortName || base.name) : '';
+}
+
+/** Multiplier from the row's unit to the component's base unit — the rule purchases use. */
+function unitFactor(record) {
+  const unit = units.value.find(u => u.id === record.unit_id);
+  if (!unit || !unit.base_unit) return 1;
+  const value = Number(unit.operator_value) || 0;
+  if (value <= 0) return 1;
+  return unit.operator === '/' ? 1 / value : value;
+}
+
+/** Quantity to draw per run, scrap included, in the component's base unit. */
 function effectiveQty(record) {
   const qty = Number(record.qty) || 0;
   const scrap = Number(record.scrap_pct) || 0;
-  return qty * (1 + scrap / 100);
+  return qty * (1 + scrap / 100) * unitFactor(record);
 }
 
 function lineCost(record) {
@@ -397,15 +444,15 @@ async function submit() {
   try {
     await formRef.value.validate();
   } catch (e) {
-    message.error('Fill in the highlighted fields');
+    message.error(t('Mrp_Fill_Highlighted_Fields'));
     return;
   }
   if (!form.lines.length) {
-    message.error('A bill of materials needs at least one component');
+    message.error(t('Mrp_Bom_Needs_Component'));
     return;
   }
   if (form.lines.some(l => !l.product_id)) {
-    message.error('Every component row needs a product');
+    message.error(t('Mrp_Every_Row_Needs_Product'));
     return;
   }
 
@@ -414,7 +461,7 @@ async function submit() {
     const payload = {
       ...form,
       lines: form.lines.map(l => ({
-        product_id: l.product_id, qty: l.qty, scrap_pct: l.scrap_pct,
+        product_id: l.product_id, qty: l.qty, unit_id: l.unit_id || null, scrap_pct: l.scrap_pct,
         is_optional: l.is_optional, notes: l.notes,
       })),
       operations: form.operations.filter(o => o.name).map(o => ({
@@ -430,7 +477,7 @@ async function submit() {
     message.success(t('Created_in_successfully', 'Saved successfully'));
     router.push('/mrp/boms');
   } catch (e) {
-    message.error(firstError(e) || 'Could not save that bill of materials');
+    message.error(firstError(e) || t('Mrp_Could_Not_Save_Bom'));
   } finally {
     saving.value = false;
   }
@@ -446,23 +493,24 @@ function firstError(e) {
 }
 
 const lineColumns = [
-  { title: 'Component', key: 'product_id', dataIndex: 'product_id', width: 260 },
-  { title: 'Qty per run', key: 'qty', dataIndex: 'qty', width: 120 },
-  { title: 'Scrap %', key: 'scrap_pct', dataIndex: 'scrap_pct', width: 100 },
-  { title: 'To draw', key: 'effective', width: 110, align: 'right' },
-  { title: 'Cost', key: 'cost', width: 110, align: 'right' },
-  { title: 'Optional', key: 'is_optional', dataIndex: 'is_optional', width: 90, align: 'center' },
+  { title: t('Mrp_Component'), key: 'product_id', dataIndex: 'product_id', width: 260 },
+  { title: t('Mrp_Qty_Per_Run'), key: 'qty', dataIndex: 'qty', width: 120 },
+  { title: t('Unit'), key: 'unit_id', dataIndex: 'unit_id', width: 110 },
+  { title: t('Mrp_Scrap_Pct'), key: 'scrap_pct', dataIndex: 'scrap_pct', width: 100 },
+  { title: t('Mrp_To_Draw'), key: 'effective', width: 110, align: 'right' },
+  { title: t('Mrp_Cost'), key: 'cost', width: 110, align: 'right' },
+  { title: t('Mrp_Optional'), key: 'is_optional', dataIndex: 'is_optional', width: 90, align: 'center' },
   { title: '', key: 'actions', width: 50 },
 ];
 
 const operationColumns = [
   { title: '#', key: 'sequence', dataIndex: 'sequence', width: 70 },
-  { title: 'Operation', key: 'name', dataIndex: 'name' },
-  { title: 'Work centre', key: 'work_center_id', dataIndex: 'work_center_id', width: 200 },
-  { title: 'Setup (min)', key: 'setup_minutes', dataIndex: 'setup_minutes', width: 110 },
-  { title: 'Per unit (min)', key: 'run_minutes_per_unit', dataIndex: 'run_minutes_per_unit', width: 130 },
-  { title: 'Per run', key: 'total_minutes', width: 90, align: 'right' },
-  { title: 'QC', key: 'requires_qc', dataIndex: 'requires_qc', width: 60, align: 'center' },
+  { title: t('Mrp_Operation'), key: 'name', dataIndex: 'name' },
+  { title: t('Mrp_Work_Centre'), key: 'work_center_id', dataIndex: 'work_center_id', width: 200 },
+  { title: t('Mrp_Setup_Min'), key: 'setup_minutes', dataIndex: 'setup_minutes', width: 110 },
+  { title: t('Mrp_Per_Unit_Min'), key: 'run_minutes_per_unit', dataIndex: 'run_minutes_per_unit', width: 130 },
+  { title: t('Mrp_Per_Run_Title'), key: 'total_minutes', width: 90, align: 'right' },
+  { title: t('Mrp_Qc'), key: 'requires_qc', dataIndex: 'requires_qc', width: 60, align: 'center' },
   { title: '', key: 'actions', width: 50 },
 ];
 
@@ -472,6 +520,7 @@ async function bootstrap() {
     const meta = await http.get('mrp/meta');
     warehouses.value = meta?.warehouses || [];
     workCenters.value = meta?.work_centers || [];
+    units.value = meta?.units || [];
 
     await searchProductsNow('');
 
@@ -488,7 +537,8 @@ async function bootstrap() {
       form.lines = (res.lines || []).map((l) => {
         rowKey += 1;
         return {
-          key: rowKey, product_id: l.product_id, qty: l.qty, scrap_pct: l.scrap_pct,
+          key: rowKey, product_id: l.product_id, qty: l.qty,
+          unit_id: l.unit_id || l.product_unit_id || undefined, scrap_pct: l.scrap_pct,
           is_optional: l.is_optional, notes: l.notes, unit_cost: l.unit_cost,
         };
       });
@@ -511,7 +561,10 @@ async function bootstrap() {
           ...products.value,
           ...(res.lines || [])
             .filter(l => missing.includes(l.product_id))
-            .map(l => ({ id: l.product_id, label: `${l.product_code} — ${l.product_name}`, cost: l.unit_cost })),
+            .map(l => ({
+              id: l.product_id, label: `${l.product_code} — ${l.product_name}`,
+              cost: l.unit_cost, unit_id: l.product_unit_id,
+            })),
         ];
         if (missing.includes(res.bom.product_id)) {
           products.value.push({
@@ -525,7 +578,7 @@ async function bootstrap() {
       addLine();
     }
   } catch (e) {
-    message.error('Could not load that bill of materials');
+    message.error(t('Mrp_Could_Not_Load_Bom'));
     router.push('/mrp/boms');
   } finally {
     loadingRecord.value = false;
@@ -552,6 +605,10 @@ onMounted(bootstrap);
   font-size: 11.5px;
   opacity: 0.55;
   margin-top: 2px;
+}
+.muted {
+  font-size: 12px;
+  opacity: 0.6;
 }
 .sticky {
   position: sticky;

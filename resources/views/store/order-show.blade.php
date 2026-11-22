@@ -6,12 +6,25 @@
 
   $s = $s ?? StoreSetting::first();
 
+  // Guest checkout: the same page, reached through the order's secret link
+  // (GuestOrderController) instead of the signed-in account.
+  $guestToken = $guestToken ?? null;
+  $orderId = $id ?? request()->route('id');
+
   // Amounts on this page belong to ONE stored order — use its snapshotted currency.
   $orderCurrency = \App\Services\StoreCurrencyService::forDocument(
-      \App\Models\OnlineOrder::where('client_id', (int) optional(auth('store')->user())->client_id)
-          ->find($id ?? request()->route('id'))
+      $guestToken
+          ? \App\Models\OnlineOrder::where('guest_token', $guestToken)->first()
+          : \App\Models\OnlineOrder::where('client_id', (int) optional(auth('store')->user())->client_id)->find($orderId)
   );
   $currency = $orderCurrency['symbol'];
+
+  $backUrl = $guestToken ? route('store.shop') : route('account.orders');
+  $backLabel = $guestToken ? __('messages.ContinueShopping') : __('messages.BackToOrders');
+  $orderBase = $guestToken
+      ? route('store.guest.order', ['token' => $guestToken])
+      : store_base_url('my/orders/'.$orderId);
+  $orderDataUrl = $guestToken ? $orderBase.'/data' : $orderBase;
 @endphp
 
 <section class="border-b border-line-subtle"
@@ -19,8 +32,8 @@
   <div class="container py-6">
     <div class="flex items-center justify-between flex-wrap gap-2">
       <div>
-        <a href="{{ route('account.orders') }}" class="inline-flex items-center gap-2 text-sm text-fg-secondary hover:text-accent-500">
-          <x-store.icon name="arrow-left" class="w-4 h-4" />{{ __('messages.BackToOrders') }}
+        <a href="{{ $backUrl }}" class="inline-flex items-center gap-2 text-sm text-fg-secondary hover:text-accent-500">
+          <x-store.icon name="arrow-left" class="w-4 h-4" />{{ $backLabel }}
         </a>
         <h1 class="section-title mt-2">{{ __('messages.OrderDetails') }}</h1>
       </div>
@@ -33,8 +46,15 @@
   </div>
 </section>
 
-<div class="container py-8" id="order-app" data-order-id="{{ $id ?? request()->route('id') }}">
+<div class="container py-8" id="order-app" data-order-id="{{ $orderId }}">
   <div class="max-w-5xl mx-auto">
+
+    @if($guestToken)
+    <div class="rounded-xl border border-line-subtle p-3 mb-4 text-sm text-fg-secondary flex items-start gap-2">
+      <x-store.icon name="info" class="w-4 h-4 text-accent-500 mt-0.5 shrink-0" />
+      <span>{{ __('messages.GuestOrderLinkHint') }}</span>
+    </div>
+    @endif
 
     {{-- Header card --}}
     <div class="card mb-4">
@@ -94,23 +114,23 @@
             <ul class="list-none p-0 m-0 space-y-2">
               <li class="flex justify-between text-sm text-fg-muted">
                 <span>{{ __('messages.Subtotal') }}</span>
-                <strong class="text-fg-primary" id="o-subtotal">{{ $currency }}0.00</strong>
+                <strong class="text-fg-primary" id="o-subtotal">{{ store_with_currency($currency, '0.00') }}</strong>
               </li>
               <li class="flex justify-between text-sm text-fg-muted" id="o-tax-row" style="display:none">
                 <span>{{ __('messages.Tax') }}</span>
-                <strong class="text-fg-primary" id="o-tax">{{ $currency }}0.00</strong>
+                <strong class="text-fg-primary" id="o-tax">{{ store_with_currency($currency, '0.00') }}</strong>
               </li>
               <li class="flex justify-between text-sm text-fg-muted">
                 <span>{{ __('messages.Shipping') }} <span id="o-shipping-method" class="text-xs"></span></span>
-                <strong class="text-fg-primary" id="o-shipping">{{ $currency }}0.00</strong>
+                <strong class="text-fg-primary" id="o-shipping">{{ store_with_currency($currency, '0.00') }}</strong>
               </li>
               <li class="flex justify-between text-sm text-fg-muted">
                 <span>{{ __('messages.Discount') }}</span>
-                <strong class="text-fg-primary" id="o-discount">-{{ $currency }}0.00</strong>
+                <strong class="text-fg-primary" id="o-discount">-{{ store_with_currency($currency, '0.00') }}</strong>
               </li>
               <li class="flex justify-between text-lg font-bold border-t border-line-subtle pt-3 mt-2">
                 <span>{{ __('messages.Total') }}</span>
-                <strong class="text-accent-500" id="o-total">{{ $currency }}0.00</strong>
+                <strong class="text-accent-500" id="o-total">{{ store_with_currency($currency, '0.00') }}</strong>
               </li>
             </ul>
           </div>
@@ -226,7 +246,7 @@
     <div id="o-empty" class="empty-state py-12 hidden">
       <div class="empty-icon"><x-store.icon name="receipt" class="w-10 h-10" /></div>
       <h3>{{ __('messages.OrderNotFound') }}</h3>
-      <a href="{{ route('account.orders') }}" class="btn btn-outline mt-4">{{ __('messages.BackToOrders') }}</a>
+      <a href="{{ $backUrl }}" class="btn btn-outline mt-4">{{ $backLabel }}</a>
     </div>
 
   </div>
@@ -259,7 +279,7 @@
   const ORDER_BASE = @json(store_base_url('account/orders'));
   const MY_ORDERS_BASE = @json(store_base_url('my/orders'));
 
-  function money(n){ return cur + (Number(n||0) * RATE).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function money(n){ return storeWithCurrency(cur, storeFmtNumber(Number(n||0) * RATE)); }
   function badgeClass(status){
     status = String(status||'').toLowerCase();
     return status === 'pending'   ? 'chip chip-warning'
@@ -272,7 +292,8 @@
   function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
   // ---- Payment / proof of payment ----------------------------------------
-  const PROOF_URL = `${MY_ORDERS_BASE}/${id}/payment-proofs`;
+  const PROOF_URL = @json($orderBase.'/payment-proofs');
+  const IS_GUEST  = @json((bool) $guestToken);
 
   const METHOD_LABELS = {
     credit_card:    @json(__('messages.CreditCard')),
@@ -281,6 +302,7 @@
     gcash:          @json(__('messages.GCash')),
     bank_transfer:  @json(__('messages.BankTransfer')),
     cash_on_pickup: @json(__('messages.CashOnPickup')),
+    wallet:         @json(__('messages.PayWithWallet')),
     bkash:          'bKash',
     sslcommerz:     'SSLCommerz',
     paypal:         'PayPal',
@@ -429,7 +451,7 @@
   async function load(){
     if (!id) return showEmpty();
     try{
-      const res = await fetch(`${MY_ORDERS_BASE}/${id}`, { headers:{'Accept':'application/json'} });
+      const res = await fetch(@json($orderDataUrl), { headers:{'Accept':'application/json'} });
       if (!res.ok) throw new Error('not ok');
       const o = await res.json();
 
@@ -636,8 +658,11 @@
   });
 
   load();
-  loadReturns();
-  loadReviews();
+  // Returns and reviews belong to a store account; guests only see the order.
+  if (!IS_GUEST) {
+    loadReturns();
+    loadReviews();
+  }
 })();
 </script>
 @endsection

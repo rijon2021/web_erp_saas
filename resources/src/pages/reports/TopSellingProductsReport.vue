@@ -5,6 +5,8 @@
         <a-space wrap>
           <!-- Multi-Currency: view amounts converted (display-only) -->
           <ViewCurrencySelect />
+          <!-- Product data: hidden for roles with disable_product_export -->
+          <template v-if="auth.canExportProducts">
           <a-button :loading="exporting === 'pdf'" @click="exportList('pdf')">
             <template #icon><FilePdfOutlined /></template>
             {{ $t('PDF') }}
@@ -17,6 +19,7 @@
             <template #icon><PrinterOutlined /></template>
             {{ $t('print') }}
           </a-button>
+          </template>
         </a-space>
       </template>
     </PageHeader>
@@ -131,6 +134,7 @@ import { exportExcel, exportPdf, printRows } from '../../lib/exporters';
 import http from '../../lib/http';
 import DateRangePicker from '../../components/DateRangePicker.vue';
 import ViewCurrencySelect from '../../components/ViewCurrencySelect.vue';
+import { useAuthStore } from '../../stores/auth';
 
 const { t } = useI18n();
 const tf = (key, fallback) => {
@@ -138,6 +142,7 @@ const tf = (key, fallback) => {
   return out === key ? fallback : out;
 };
 const { money } = useFormat();
+const auth = useAuthStore();
 
 const range = ref([dayjs().subtract(29, 'day'), dayjs()]);
 const metric = ref('amount');
@@ -146,10 +151,10 @@ const metric = ref('amount');
 const topPreset = ref(10);
 const topCustom = ref(200);
 const topOptions = computed(() => [
-  { value: 10, label: 'Top 10' },
-  { value: 20, label: 'Top 20' },
-  { value: 50, label: 'Top 50' },
-  { value: 100, label: 'Top 100' },
+  { value: 10, label: t('Top_N', { n: 10 }) },
+  { value: 20, label: t('Top_N', { n: 20 }) },
+  { value: 50, label: t('Top_N', { n: 50 }) },
+  { value: 100, label: t('Top_N', { n: 100 }) },
   { value: 0, label: t('All') },
   { value: 'custom', label: tf('Custom_Number', 'Custom number…') },
 ]);
@@ -234,6 +239,7 @@ async function allRows() {
 }
 
 async function exportList(kind) {
+  if (!auth.canExportProducts) return;
   exporting.value = kind;
   try {
     const rows = await allRows();
@@ -245,6 +251,7 @@ async function exportList(kind) {
 }
 
 async function doPrint() {
+  if (!auth.canExportProducts) return;
   // Open the window synchronously so the popup isn't blocked.
   const win = window.open('', '_blank');
   const rows = await allRows();

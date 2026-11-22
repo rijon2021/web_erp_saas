@@ -8,7 +8,7 @@
     </PageHeader>
 
     <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
-      <a-col v-for="card in cards" :key="card.label" :xs="24" :sm="12" :lg="6">
+      <a-col v-for="card in cards" :key="card.label" :xs="24" :sm="12" :lg="8">
         <a-card size="small">
           <a-statistic :title="card.label" :value="card.value" />
         </a-card>
@@ -120,13 +120,16 @@ const route = useRoute();
 const id = route.params.id;
 
 const tab = ref('sales');
-const client = ref({ total_sales: 0, total_amount: 0, total_paid: 0, due: 0 });
+const client = ref({ total_sales: 0, total_amount: 0, total_paid: 0, due: 0, opening_balance: 0, total_due: 0 });
 
 const cards = computed(() => [
   { label: t('Sales'), value: client.value.total_sales ?? 0 },
   { label: t('TotalAmount'), value: money(client.value.total_amount) },
   { label: t('TotalPaid'), value: money(client.value.total_paid) },
   { label: t('Due'), value: money(client.value.due) },
+  { label: t('Opening_Balance'), value: money(client.value.opening_balance) },
+  // Opening balance + unpaid sales.
+  { label: t('Total_Due'), value: money(client.value.total_due) },
 ]);
 
 const titleFor = key => `${t('Reports')} / ${t('CustomersReport')} / ${t(key)}`;

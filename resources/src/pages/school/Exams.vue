@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <PageHeader title="Exams" subtitle="Schedules, mark sheets and report cards." :breadcrumb="['School', 'Exams']">
+    <PageHeader :title="$t('Sc_Exams')" :subtitle="$t('Sc_Exams_Subtitle')" :breadcrumb="[$t('Sc_School'), $t('Sc_Exams')]">
       <template #actions>
         <a-button type="primary" @click="openExam(null)">
           <template #icon><PlusOutlined /></template>
-          New exam
+          {{ $t('Sc_New_Exam') }}
         </a-button>
       </template>
     </PageHeader>
@@ -12,20 +12,20 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search exam…"
+          v-model:value="crud.search.value" :placeholder="$t('Sc_Search_Exam')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.academic_year_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All years" :options="yearOptions" @change="crud.reload"
+          option-filter-prop="label" :placeholder="$t('Sc_All_Years')" :options="yearOptions" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.term" class="tb-item-sm" allow-clear
-          placeholder="Term" :options="EXAM_TERMS" @change="crud.reload"
+          :placeholder="$t('Sc_Term')" :options="EXAM_TERMS" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item-sm" allow-clear
-          placeholder="Status" :options="EXAM_STATUSES" @change="crud.reload"
+          :placeholder="$t('Status')" :options="EXAM_STATUSES" @change="crud.reload"
         />
       </div>
     </a-card>
@@ -43,7 +43,7 @@
           <span v-if="record.start_date">
             {{ date(record.start_date) }}{{ record.end_date ? ' → ' + date(record.end_date) : '' }}
           </span>
-          <span v-else class="muted">Not scheduled</span>
+          <span v-else class="muted">{{ $t('Sc_Not_Scheduled') }}</span>
         </template>
         <template v-else-if="column.key === 'status'">
           <a-tag :color="optionOf(EXAM_STATUSES, record.status).color">
@@ -52,12 +52,12 @@
         </template>
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
-            <a-tooltip title="Papers & marks">
+            <a-tooltip :title="$t('Sc_Papers_And_Marks')">
               <a-button type="text" size="small" @click="openPapers(record)">
                 <template #icon><FileTextOutlined /></template>
               </a-button>
             </a-tooltip>
-            <a-tooltip title="Report card">
+            <a-tooltip :title="$t('Sc_Report_Card')">
               <a-button type="text" size="small" @click="openReportCard(record)">
                 <template #icon><TrophyOutlined /></template>
               </a-button>
@@ -79,39 +79,39 @@
 
     <!-- Exam form -->
     <a-modal
-      :open="examOpen" :title="editingExam ? 'Edit exam' : 'New exam'" :width="560"
+      :open="examOpen" :title="editingExam ? $t('Sc_Edit_Exam') : $t('Sc_New_Exam')" :width="560"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submitExam" @cancel="examOpen = false"
     >
       <a-form ref="examRef" :model="examForm" :rules="examRules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="14">
-            <a-form-item label="Name *" name="name">
-              <a-input v-model:value="examForm.name" placeholder="e.g. Mid-term 2026" allow-clear />
+            <a-form-item :label="$t('Name') + ' *'" name="name">
+              <a-input v-model:value="examForm.name" :placeholder="$t('Sc_Exam_Name_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="10">
-            <a-form-item label="Term *" name="term">
+            <a-form-item :label="$t('Sc_Term') + ' *'" name="term">
               <a-select v-model:value="examForm.term" :options="EXAM_TERMS" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Academic year *" name="academic_year_id">
+            <a-form-item :label="$t('Sc_Academic_Year') + ' *'" name="academic_year_id">
               <a-select v-model:value="examForm.academic_year_id" :options="yearOptions" show-search option-filter-prop="label" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Status *" name="status">
+            <a-form-item :label="$t('Status') + ' *'" name="status">
               <a-select v-model:value="examForm.status" :options="EXAM_STATUSES" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="12">
-            <a-form-item label="Starts">
+            <a-form-item :label="$t('Sc_Starts')">
               <a-date-picker v-model:value="examForm.start_date" style="width: 100%" value-format="YYYY-MM-DD" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="12">
-            <a-form-item label="Ends">
+            <a-form-item :label="$t('Sc_Ends')">
               <a-date-picker v-model:value="examForm.end_date" style="width: 100%" value-format="YYYY-MM-DD" />
             </a-form-item>
           </a-col>
@@ -125,15 +125,15 @@
     </a-modal>
 
     <!-- Papers drawer -->
-    <a-drawer :open="papersOpen" :width="880" :title="`${currentExam?.name || ''} — papers`" @close="papersOpen = false">
+    <a-drawer :open="papersOpen" :width="880" :title="$t('Sc_Exam_Papers_Title', { name: currentExam?.name || '' })" @close="papersOpen = false">
       <template #extra>
         <a-space>
           <a-select
             v-model:value="paperClass" style="width: 170px" allow-clear show-search
-            option-filter-prop="label" placeholder="All classes" :options="classOptions" @change="loadPapers"
+            option-filter-prop="label" :placeholder="$t('Sc_All_Classes')" :options="classOptions" @change="loadPapers"
           />
-          <a-button :disabled="!paperClass" @click="generateOpen = true">Generate all</a-button>
-          <a-button type="primary" @click="openPaper(null)">Add paper</a-button>
+          <a-button :disabled="!paperClass" @click="generateOpen = true">{{ $t('Sc_Generate_All') }}</a-button>
+          <a-button type="primary" @click="openPaper(null)">{{ $t('Sc_Add_Paper') }}</a-button>
         </a-space>
       </template>
 
@@ -146,20 +146,20 @@
             <span v-if="record.exam_date">{{ date(record.exam_date) }}{{ record.start_time ? ' ' + record.start_time : '' }}</span>
             <span v-else class="muted">—</span>
           </template>
-          <template v-else-if="column.key === 'marks'">{{ record.max_marks }} (pass {{ record.pass_marks }})</template>
+          <template v-else-if="column.key === 'marks'">{{ $t('Sc_Marks_With_Pass', { max: record.max_marks, pass: record.pass_marks }) }}</template>
           <template v-else-if="column.key === 'entered'">
             <a-tag :color="record.results_entered ? 'success' : 'default'">
-              {{ record.results_entered }} entered
+              {{ $t('Sc_N_Entered', { n: record.results_entered }) }}
             </a-tag>
           </template>
           <template v-else-if="column.key === 'actions'">
             <a-space :size="0">
-              <a-tooltip title="Enter marks">
+              <a-tooltip :title="$t('Sc_Enter_Marks')">
                 <a-button type="text" size="small" @click="openSheet(record)">
                   <template #icon><EditOutlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip title="Edit paper">
+              <a-tooltip :title="$t('Sc_Edit_Paper')">
                 <a-button type="text" size="small" @click="openPaper(record)">
                   <template #icon><SettingOutlined /></template>
                 </a-button>
@@ -173,21 +173,21 @@
           </template>
         </template>
         <template #emptyText>
-          <a-empty :image="simpleEmptyImage" description="No papers scheduled" />
+          <a-empty :image="simpleEmptyImage" :description="$t('Sc_No_Papers_Scheduled')" />
         </template>
       </a-table>
     </a-drawer>
 
     <!-- Paper form -->
     <a-modal
-      :open="paperOpen" :title="editingPaper ? 'Edit paper' : 'Add paper'" :width="560"
+      :open="paperOpen" :title="editingPaper ? $t('Sc_Edit_Paper') : $t('Sc_Add_Paper')" :width="560"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submitPaper" @cancel="paperOpen = false"
     >
       <a-form ref="paperRef" :model="paperForm" :rules="paperRules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Class *" name="class_id">
+            <a-form-item :label="$t('Sc_Class') + ' *'" name="class_id">
               <a-select
                 v-model:value="paperForm.class_id" show-search option-filter-prop="label"
                 :options="classOptions" @change="paperForm.subject_id = undefined"
@@ -195,7 +195,7 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Subject *" name="subject_id">
+            <a-form-item :label="$t('Sc_Subject') + ' *'" name="subject_id">
               <a-select
                 v-model:value="paperForm.subject_id" show-search option-filter-prop="label"
                 :options="paperSubjectOptions"
@@ -203,32 +203,32 @@
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Date">
+            <a-form-item :label="$t('Date')">
               <a-date-picker v-model:value="paperForm.exam_date" style="width: 100%" value-format="YYYY-MM-DD" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Starts">
+            <a-form-item :label="$t('Sc_Starts')">
               <a-time-picker v-model:value="paperForm.start_time" format="HH:mm" value-format="HH:mm" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Minutes">
+            <a-form-item :label="$t('Sc_Minutes')">
               <a-input-number v-model:value="paperForm.duration_minutes" :min="5" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Max marks *" name="max_marks">
+            <a-form-item :label="$t('Sc_Max_Marks') + ' *'" name="max_marks">
               <a-input-number v-model:value="paperForm.max_marks" :min="1" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Pass marks *" name="pass_marks">
+            <a-form-item :label="$t('Sc_Pass_Marks') + ' *'" name="pass_marks">
               <a-input-number v-model:value="paperForm.pass_marks" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Room" style="margin-bottom: 0">
+            <a-form-item :label="$t('Sc_Room')" style="margin-bottom: 0">
               <a-input v-model:value="paperForm.room" allow-clear />
             </a-form-item>
           </a-col>
@@ -238,22 +238,22 @@
 
     <!-- Generate papers -->
     <a-modal
-      :open="generateOpen" title="Generate papers" :width="440"
-      :confirm-loading="saving" ok-text="Generate" :cancel-text="$t('Cancel')"
+      :open="generateOpen" :title="$t('Sc_Generate_Papers')" :width="440"
+      :confirm-loading="saving" :ok-text="$t('Sc_Generate')" :cancel-text="$t('Cancel')"
       @ok="submitGenerate" @cancel="generateOpen = false"
     >
       <p class="hint">
-        Schedules every active subject of the selected class. Subjects already scheduled are skipped.
+        {{ $t('Sc_Generate_Papers_Hint') }}
       </p>
       <a-form layout="vertical">
         <a-row :gutter="16">
           <a-col :span="12">
-            <a-form-item label="Max marks">
+            <a-form-item :label="$t('Sc_Max_Marks')">
               <a-input-number v-model:value="generateForm.max_marks" :min="1" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :span="12">
-            <a-form-item label="Pass marks" extra="Blank = each subject's own pass %">
+            <a-form-item :label="$t('Sc_Pass_Marks')" :extra="$t('Sc_Blank_Uses_Subject_Pass')">
               <a-input-number v-model:value="generateForm.pass_marks" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
@@ -269,7 +269,7 @@
 
       <a-alert
         v-if="sheet.paper" type="info" show-icon
-        :message="`Out of ${sheet.paper.max_marks}, pass mark ${sheet.paper.pass_marks}. Grades are derived on save.`"
+        :message="$t('Sc_Mark_Sheet_Hint', { max: sheet.paper.max_marks, pass: sheet.paper.pass_marks })"
         style="margin-bottom: 12px"
       />
 
@@ -277,42 +277,42 @@
         <div class="mark-id">
           <div class="mark-name">{{ row.name }}</div>
           <div class="mark-sub">
-            {{ row.roll_number ? `Roll ${row.roll_number} · ` : '' }}{{ row.admission_number }}
+            {{ row.roll_number ? `${$t('Sc_Roll_N', { n: row.roll_number })} · ` : '' }}{{ row.admission_number }}
           </div>
         </div>
         <a-input-number
           v-model:value="row.marks" :min="0" :max="sheet.paper?.max_marks"
-          :disabled="row.is_absent" placeholder="Marks" class="mark-input"
+          :disabled="row.is_absent" :placeholder="$t('Sc_Marks')" class="mark-input"
         />
-        <a-checkbox v-model:checked="row.is_absent" class="mark-abs">Absent</a-checkbox>
+        <a-checkbox v-model:checked="row.is_absent" class="mark-abs">{{ $t('Sc_Absent') }}</a-checkbox>
         <a-tag v-if="row.grade" :color="gradeColor(row.grade)" class="mark-grade">{{ row.grade }}</a-tag>
-        <a-input v-model:value="row.remarks" size="small" placeholder="Remarks" class="mark-remarks" allow-clear />
+        <a-input v-model:value="row.remarks" size="small" :placeholder="$t('Sc_Remarks')" class="mark-remarks" allow-clear />
       </div>
-      <a-empty v-if="!sheetRows.length" description="No students enrolled in that class" />
+      <a-empty v-if="!sheetRows.length" :description="$t('Sc_No_Students_In_Class')" />
     </a-drawer>
 
     <!-- Report card -->
-    <a-drawer :open="cardOpen" :width="960" :title="`${currentExam?.name || ''} — report card`" @close="cardOpen = false">
+    <a-drawer :open="cardOpen" :width="960" :title="$t('Sc_Exam_Report_Card_Title', { name: currentExam?.name || '' })" @close="cardOpen = false">
       <template #extra>
         <a-space>
           <a-select
             v-model:value="cardClass" style="width: 180px" show-search option-filter-prop="label"
-            placeholder="Class" :options="classOptions" @change="loadReportCard"
+            :placeholder="$t('Sc_Class')" :options="classOptions" @change="loadReportCard"
           />
         </a-space>
       </template>
 
       <div v-if="card.rows" class="card-summary">
         <div class="sum">
-          <span class="sum-label">Class average</span>
+          <span class="sum-label">{{ $t('Sc_Class_Average') }}</span>
           <span class="sum-value">{{ card.class_average !== null ? card.class_average + '%' : '—' }}</span>
         </div>
         <div class="sum">
-          <span class="sum-label">Pass rate</span>
+          <span class="sum-label">{{ $t('Sc_Pass_Rate') }}</span>
           <span class="sum-value">{{ card.pass_rate !== null ? card.pass_rate + '%' : '—' }}</span>
         </div>
         <div class="sum">
-          <span class="sum-label">Students</span>
+          <span class="sum-label">{{ $t('Sc_Students') }}</span>
           <span class="sum-value">{{ card.rows.length }}</span>
         </div>
       </div>
@@ -337,7 +337,7 @@
             <a-tag :color="gradeColor(record.grade)">{{ record.grade || '—' }}</a-tag>
           </template>
           <template v-else-if="column.key === 'result'">
-            <a-tag :color="record.result === 'Pass' ? 'success' : 'error'">{{ record.result }}</a-tag>
+            <a-tag :color="record.result === 'Pass' ? 'success' : 'error'">{{ record.result === 'Pass' ? $t('Sc_Pass') : $t('Sc_Fail') }}</a-tag>
           </template>
           <template v-else-if="column.key.startsWith('subj_')">
             <span v-if="subjectMark(record, column.subjectIndex) !== null">
@@ -347,7 +347,7 @@
           </template>
         </template>
         <template #emptyText>
-          <a-empty :image="simpleEmptyImage" description="Pick a class to build its report card" />
+          <a-empty :image="simpleEmptyImage" :description="$t('Sc_Pick_A_Class_Report_Card')" />
         </template>
       </a-table>
     </a-drawer>
@@ -375,8 +375,9 @@ import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { EXAM_TERMS, EXAM_STATUSES, labelOf, optionOf, gradeColor } from './schoolOptions';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const { date } = useFormat();
 const simpleEmptyImage = Empty.PRESENTED_IMAGE_SIMPLE;
 
@@ -394,7 +395,7 @@ const crud = useCrudTable('school/exams', {
 
 const meta = ref({});
 const yearOptions = computed(() => (meta.value.academic_years || []).map(y => ({
-  value: y.id, label: y.is_current ? `${y.name} (current)` : y.name,
+  value: y.id, label: y.is_current ? t('Sc_Year_Name_Current', { name: y.name }) : y.name,
 })));
 const classOptions = computed(() => (meta.value.classes || []).map(c => ({ value: c.id, label: c.name })));
 const paperSubjectOptions = computed(() => (meta.value.subjects || [])
@@ -402,11 +403,11 @@ const paperSubjectOptions = computed(() => (meta.value.subjects || [])
   .map(s => ({ value: s.id, label: s.name })));
 
 const columns = computed(() => [
-  { title: 'Exam', key: 'name', dataIndex: 'name', sorter: true },
-  { title: 'Term', key: 'term', dataIndex: 'term', sorter: true, width: 120 },
-  { title: 'Dates', key: 'dates', width: 240 },
-  { title: 'Papers', dataIndex: 'papers', key: 'papers', width: 100 },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 140 },
+  { title: t('Sc_Exam'), key: 'name', dataIndex: 'name', sorter: true },
+  { title: t('Sc_Term'), key: 'term', dataIndex: 'term', sorter: true, width: 120 },
+  { title: t('Sc_Dates'), key: 'dates', width: 240 },
+  { title: t('Sc_Papers'), dataIndex: 'papers', key: 'papers', width: 100 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 140 },
   { title: '', key: 'actions', width: 150 },
 ]);
 
@@ -469,12 +470,12 @@ const papers = ref([]);
 const paperClass = ref(undefined);
 
 const paperColumns = [
-  { title: 'Class', dataIndex: 'class_name', key: 'class_name', width: 140 },
-  { title: 'Subject', dataIndex: 'subject_name', key: 'subject_name' },
-  { title: 'When', key: 'exam_date', dataIndex: 'exam_date', width: 170 },
-  { title: 'Marks', key: 'marks', width: 160 },
-  { title: 'Room', dataIndex: 'room', key: 'room', width: 100 },
-  { title: 'Results', key: 'entered', width: 130 },
+  { title: t('Sc_Class'), dataIndex: 'class_name', key: 'class_name', width: 140 },
+  { title: t('Sc_Subject'), dataIndex: 'subject_name', key: 'subject_name' },
+  { title: t('Sc_When'), key: 'exam_date', dataIndex: 'exam_date', width: 170 },
+  { title: t('Sc_Marks'), key: 'marks', width: 160 },
+  { title: t('Sc_Room'), dataIndex: 'room', key: 'room', width: 100 },
+  { title: t('Sc_Results'), key: 'entered', width: 130 },
   { title: '', key: 'actions', width: 120 },
 ];
 
@@ -548,11 +549,11 @@ async function submitPaper() {
 
 function removePaper(record) {
   Modal.confirm({
-    title: `Delete ${record.subject_name}?`,
+    title: t('Sc_Delete_Name_Confirm', { name: record.subject_name }),
     icon: createVNode(ExclamationCircleOutlined),
     content: record.results_entered
-      ? `${record.results_entered} mark(s) are recorded on this paper and will be deleted with it.`
-      : 'This paper has no marks recorded.',
+      ? t('Sc_Paper_Marks_Will_Be_Deleted', { n: record.results_entered })
+      : t('Sc_Paper_Has_No_Marks'),
     okText: t('Delete_confirmButtonText', 'Yes, delete it!'),
     okType: 'danger',
     cancelText: t('Delete_cancelButtonText', 'Cancel'),
@@ -580,7 +581,7 @@ async function submitGenerate() {
       max_marks: generateForm.max_marks,
       pass_marks: generateForm.pass_marks,
     });
-    message.success(`${data.count} paper(s) scheduled.`);
+    message.success(t('Sc_N_Papers_Scheduled', { n: data.count }));
     generateOpen.value = false;
     loadPapers();
     crud.fetchRows();
@@ -601,7 +602,7 @@ const currentPaper = ref(null);
 
 const sheetTitle = computed(() => {
   const p = sheet.value.paper;
-  return p ? `${p.subject_name} — ${p.class_name}` : 'Mark sheet';
+  return p ? `${p.subject_name} — ${p.class_name}` : t('Sc_Mark_Sheet');
 });
 
 async function openSheet(paper) {
@@ -630,7 +631,7 @@ async function saveSheet() {
         })),
       }
     );
-    message.success(`${data.saved} mark(s) saved.`);
+    message.success(t('Sc_N_Marks_Saved', { n: data.saved }));
     sheetOpen.value = false;
     loadPapers();
   } catch (e) {
@@ -650,7 +651,7 @@ const card = ref({});
 const cardColumns = computed(() => {
   const base = [
     { title: '#', key: 'position', dataIndex: 'position', width: 70 },
-    { title: 'Student', key: 'student', dataIndex: 'name' },
+    { title: t('Sc_Student'), key: 'student', dataIndex: 'name' },
   ];
   const subjects = (card.value.papers || []).map((p, i) => ({
     title: p.subject_name,
@@ -661,10 +662,10 @@ const cardColumns = computed(() => {
   return [
     ...base,
     ...subjects,
-    { title: 'Total', key: 'obtained', dataIndex: 'obtained', width: 130 },
+    { title: t('Total'), key: 'obtained', dataIndex: 'obtained', width: 130 },
     { title: '%', key: 'percentage', dataIndex: 'percentage', width: 90 },
-    { title: 'Grade', key: 'grade', dataIndex: 'grade', width: 90 },
-    { title: 'Result', key: 'result', dataIndex: 'result', width: 100 },
+    { title: t('Sc_Grade'), key: 'grade', dataIndex: 'grade', width: 90 },
+    { title: t('Sc_Result'), key: 'result', dataIndex: 'result', width: 100 },
   ];
 });
 

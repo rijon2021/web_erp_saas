@@ -3,7 +3,16 @@
     <PageHeader
       :title="isEdit ? $t('EditPurchase') : $t('AddPurchase')"
       :breadcrumb="[$t('Purchases'), isEdit ? $t('EditPurchase') : $t('AddPurchase')]"
-    />
+    >
+      <template v-if="aiScanAvailable" #actions>
+        <a-tooltip :title="!purchase.warehouse_id ? $t('Choose_Warehouse') : ''">
+          <a-button :disabled="!purchase.warehouse_id" @click="scanOpen = true">
+            <template #icon><ScanOutlined /></template>
+            {{ tf('Ai_Scan_Invoice', 'Scan supplier invoice') }}
+          </a-button>
+        </a-tooltip>
+      </template>
+    </PageHeader>
 
     <div v-if="loadingRecord" style="display: flex; justify-content: center; padding: 96px 0">
       <a-spin size="large" />
@@ -88,9 +97,16 @@
             <template v-if="column.key === 'product'">
               <div style="font-weight: 500">{{ record.name }}</div>
               <div class="muted">{{ record.code }}</div>
-              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">Batch</a-tag>
+              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">{{ $t('Batch') }}</a-tag>
             </template>
             <template v-else-if="column.key === 'net_cost'">{{ docMoney(record.Net_cost) }}</template>
+            <template v-else-if="column.key === 'price'">
+              <!-- Base-currency selling price: the typed figure, else the
+                   product's current one. "New" marks a line that will
+                   reprice the product when the purchase is saved. -->
+              {{ moneyBase(record.price ?? record.current_price ?? 0) }}
+              <a-tag v-if="priceWillChange(record)" color="processing" style="margin-left: 4px">{{ $t('New') }}</a-tag>
+            </template>
             <template v-else-if="column.key === 'stock'">
               {{ record.stock ?? '—' }} {{ record.unitPurchase }}
             </template>
@@ -194,6 +210,11 @@
                   </div>
                 </a-form-item>
               </a-col>
+              <a-col :xs="24" :md="12">
+                <a-form-item :label="$t('Order_Reference')" :extra="$t('Order_Reference_Help')">
+                  <a-input v-model:value="purchase.order_reference" :maxlength="100" allow-clear />
+                </a-form-item>
+              </a-col>
               <a-col :span="24">
                 <a-form-item :label="$t('Note')">
                   <a-textarea v-model:value="purchase.notes" :rows="2" :placeholder="$t('Afewwords')" />
@@ -256,8 +277,23 @@
       <a-form v-else-if="editingLine" layout="vertical">
         <a-row :gutter="12">
           <a-col :span="12">
-            <a-form-item :label="$t('ProductCost')">
-              <a-input-number v-model:value="lineDraft.Unit_cost" style="width: 100%" :min="0" />
+            <a-form-item :label="$t('ProductCost')" :extra="batchCostLocked ? $t('Cost_From_Batches') : undefined">
+              <!-- Batch-tracked lines are costed at the weighted average of
+                   their batch rows (see syncLineCostFromBatches), so the
+                   field only shows that figure once a priced batch exists. -->
+              <a-input-number v-model:value="lineDraft.Unit_cost" style="width: 100%" :min="0" :disabled="batchCostLocked" />
+            </a-form-item>
+          </a-col>
+          <a-col v-if="sellingPriceEnabled" :span="12">
+            <!-- Settings > Features > Edit Selling Price on Purchase. Typed in
+                 the BASE currency (it is the product's price, not a document
+                 amount); blank keeps the product's current price. -->
+            <a-form-item :label="$t('Selling_Price')" :extra="sellingPriceHint">
+              <a-input-number
+                v-model:value="lineDraft.price"
+                style="width: 100%" :min="0"
+                :placeholder="$t('Keep_Current_Price')"
+              />
             </a-form-item>
           </a-col>
           <a-col :span="12">
@@ -265,8 +301,8 @@
               <a-select
                 v-model:value="lineDraft.tax_method"
                 :options="[
-                  { value: '1', label: 'Exclusive' },
-                  { value: '2', label: 'Inclusive' },
+                  { value: '1', label: $t('Tax_Exclusive') },
+                  { value: '2', label: $t('Tax_Inclusive') },
                 ]"
               />
             </a-form-item>
@@ -333,6 +369,14 @@
     </a-modal>
 
     <QuickAddParty v-model:open="quickAddSupplierOpen" type="supplier" @created="onSupplierCreated" />
+
+    <AiInvoiceScanModal
+      v-if="aiScanAvailable"
+      v-model:open="scanOpen"
+      :suppliers="suppliers"
+      :products="products"
+      @apply="applyScan"
+    />
   </div>
 </template>
 
@@ -352,11 +396,11 @@
  * - POST purchases / PUT purchases/{id}; no payment section (payments are
  *   added from the list like legacy)
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
-import { EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons-vue';
+import { EditOutlined, DeleteOutlined, PlusOutlined, ScanOutlined } from '@ant-design/icons-vue';
 import dayjs from 'dayjs';
 import PageHeader from '../../components/PageHeader.vue';
 import ProductScanModal from '../../components/ProductScanModal.vue';
@@ -366,8 +410,13 @@ import QuickAddParty from '../../components/QuickAddParty.vue';
 import { useFormat } from '../../composables/useFormat';
 import { useDocCurrency } from '../../composables/useDocCurrency';
 import { recomputeCostLine, computeSimpleTotals } from '../../lib/lineCalc';
-import { hasBatchEntryErrors, batchTotalQty } from '../../lib/batchValidation';
+import { hasBatchEntryErrors, batchTotalQty, batchWeightedAvgCost, syncLineCostFromBatches } from '../../lib/batchValidation';
 import http from '../../lib/http';
+import { lineSerialUnits, loadUnitFactors, unitFactor } from '../../lib/serialUnits';
+import AiInvoiceScanModal from '../../components/ai/AiInvoiceScanModal.vue';
+import { useAiStatus } from '../../composables/useAiStatus';
+import { useAuthStore } from '../../stores/auth';
+import { t as tf } from '../../i18n';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -412,6 +461,7 @@ const purchase = ref({
   warehouse_id: undefined,
   statut: 'received',
   notes: '',
+  order_reference: '',
   tax_rate: 0,
   discount: 0,
   shipping: 0,
@@ -434,6 +484,8 @@ const shippingInput = computed({
 // replaced wholesale on save (PurchasesController::syncExtras).
 const extraChargesEnabled = ref(false);
 const customFieldsEnabled = ref(false);
+// Settings > Features: selling price column + modal field on purchase lines.
+const sellingPriceEnabled = ref(false);
 const extraCharges = ref([]);   // [{ name, amount (base) }]
 const customFields = ref([]);   // [{ name, value }]
 const newCharge = ref({ name: '', amount: null });
@@ -458,6 +510,7 @@ function removeCustomField(i) { customFields.value.splice(i, 1); }
 function loadExtras(data, p) {
   extraChargesEnabled.value = data?.purchase_extra_charges_enabled === true;
   customFieldsEnabled.value = data?.purchase_custom_fields_enabled === true;
+  sellingPriceEnabled.value = data?.purchase_update_selling_price === true;
   extraCharges.value = (p?.extra_charges || []).map(c => ({ name: c.name, amount: Number(c.amount) || 0 }));
   customFields.value = (p?.custom_fields || []).map(f => ({ name: f.name, value: f.value ?? '' }));
 }
@@ -512,6 +565,7 @@ function addBatchRow(line) {
 const lineColumns = computed(() => [
   { title: t('ProductName'), key: 'product' },
   { title: t('Net_Unit_Cost'), key: 'net_cost', align: 'right' },
+  ...(sellingPriceEnabled.value ? [{ title: t('Selling_Price'), key: 'price', align: 'right' }] : []),
   { title: t('Stock'), key: 'stock', align: 'right' },
   { title: t('Quantity'), key: 'quantity', align: 'center' },
   { title: t('Discount'), key: 'discount', align: 'right' },
@@ -574,6 +628,10 @@ async function onProductPicked(idx) {
       stock: d.qte ?? p.qte,
       quantity: 1,
       Unit_cost: d.Unit_cost,
+      // Selling price: null = unchanged; base_price is the product's own price
+      // (fix_price may be a store price, which this field does not edit).
+      price: null,
+      current_price: d.base_price ?? d.fix_price ?? null,
       Net_cost: d.Net_cost,
       discount: d.discount,
       discount_Method: d.discount_method,
@@ -604,6 +662,68 @@ function setQty(line, value) {
   recomputeCostLine(line);
 }
 
+// ---------------- AI invoice scanner (new purchases only) ----------------
+const auth = useAuthStore();
+const { status: aiStatus, load: loadAiStatus } = useAiStatus();
+const aiScanAvailable = computed(() => !isEdit.value && !!aiStatus.value?.ready && auth.can('Purchases_add'));
+const scanOpen = ref(false);
+// The scanned file waits here until the purchase exists, then is attached.
+const scanFile = ref(null);
+
+/** Fill the form from a reviewed scan (amounts are as printed = document currency). */
+async function applyScan(scan) {
+  if (scan.supplier_id) purchase.value.supplier_id = scan.supplier_id;
+  if (scan.date) purchase.value.date = scan.date;
+  if (mcEnabled.value && scan.currency_id) docCurrencyId.value = scan.currency_id;
+  // The supplier's invoice number is the purchase's order reference; only a second one goes to the notes.
+  if (scan.invoice_number && !purchase.value.order_reference) {
+    purchase.value.order_reference = String(scan.invoice_number).slice(0, 100);
+  } else if (scan.invoice_number && purchase.value.order_reference !== scan.invoice_number && !String(purchase.value.notes || '').includes(scan.invoice_number)) {
+    const tag = `${tf('Ai_Scan_Invoice_No', 'Invoice no.')}: ${scan.invoice_number}`;
+    purchase.value.notes = purchase.value.notes ? `${purchase.value.notes}\n${tag}` : tag;
+  }
+  if (scan.shipping) shippingInput.value = scan.shipping;
+  if (scan.discount) discountInput.value = scan.discount;
+
+  for (const l of scan.lines) {
+    await addScannedLine(l);
+  }
+  scanFile.value = scan.file || null;
+  message.success(tf('Ai_Scan_Filled', 'Purchase filled from the invoice — review the lines and save.'));
+}
+
+/** Same path as picking a product by hand, then the invoice quantity and cost. */
+async function addScannedLine({ index, quantity, unit_cost: unitCost }) {
+  const p = products.value[index];
+  if (!p) return;
+  const variantId = p.product_variant_id ?? 0;
+  const find = () => lines.value.find(
+    l => l.product_id === p.id && (l.product_variant_id ?? 0) === (variantId || 0)
+  );
+  let line = find();
+  if (line) {
+    setQty(line, Number(line.quantity) + quantity);
+    return;
+  }
+  await onProductPicked(index);
+  line = find();
+  if (!line) return;
+  line.Unit_cost = toBaseAmt(unitCost);
+  setQty(line, quantity);
+}
+
+async function attachScannedInvoice(purchaseId) {
+  try {
+    const fd = new FormData();
+    fd.append('documents[]', scanFile.value);
+    await http.postForm(`purchases/${purchaseId}/documents`, fd);
+  } catch (e) {
+    message.warning(tf('Ai_Scan_Attach_Failed', 'The purchase was saved, but the invoice file could not be attached.'));
+  }
+}
+
+loadAiStatus();
+
 // ---------------- line edit modal ----------------
 
 const lineEditOpen = ref(false);
@@ -614,15 +734,19 @@ const units = ref([]);
 
 async function openLineEdit(line) {
   editingLine.value = line;
+  // A stored line may predate the batch-average rule: show the figure it will
+  // be saved with, not the stale one, whenever its batches carry costs.
+  const batchAvg = line.is_batch_tracked ? batchWeightedAvgCost(line) : null;
   lineDraft.value = {
     // The modal is typed in the document currency (fixed amounts only —
     // percentages pass through); applyLineEdit converts back to base.
-    Unit_cost: toDocAmt(line.Unit_cost),
+    Unit_cost: toDocAmt(batchAvg !== null ? batchAvg : line.Unit_cost),
     tax_method: String(line.tax_method || '1'),
     tax_percent: line.tax_percent,
     discount_Method: String(line.discount_Method || '2'),
     discount: String(line.discount_Method || '2') === '2' ? toDocAmt(line.discount) : line.discount,
     purchase_unit_id: line.purchase_unit_id,
+    price: line.price ?? null,
   };
   units.value = [];
   lineEditLoading.value = true;
@@ -637,6 +761,58 @@ async function openLineEdit(line) {
   }
 }
 
+// Batch-tracked lines take their cost from the batch rows: the weighted
+// average by quantity, so 50 @ 170 + 50 @ 160 costs the line at 165, not at
+// whatever was typed in Product Cost. The field is locked while that holds,
+// and the draft follows every batch qty/cost edit so the modal shows the
+// figure the line will be saved with.
+const batchCostLocked = computed(() =>
+  !!editingLine.value?.is_batch_tracked && batchWeightedAvgCost(editingLine.value) !== null
+);
+watch(
+  () => editingLine.value?.batches,
+  () => {
+    if (!lineEditOpen.value || !batchCostLocked.value) return;
+    lineDraft.value.Unit_cost = toDocAmt(batchWeightedAvgCost(editingLine.value));
+  },
+  { deep: true }
+);
+// Batch rows are edited on the line itself (not the draft), so a Cancel still
+// leaves new costs behind: resync the line when the modal closes either way.
+watch(lineEditOpen, open => {
+  if (open || !editingLine.value) return;
+  if (syncLineCostFromBatches(editingLine.value)) recomputeCostLine(editingLine.value);
+});
+
+
+// ---- Selling price on the line (Settings > Features > Edit Selling Price on
+// Purchase). null = keep the product's current price; a figure replaces it on
+// save (PurchasesController::applySellingPrices). Always the BASE currency,
+// because it is the product's price, not an amount of this document.
+function normalizePrice(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+function priceWillChange(line) {
+  const p = normalizePrice(line?.price);
+  return p !== null && Math.abs(p - (Number(line?.current_price) || 0)) > 0.00001;
+}
+// Current price, plus the gross margin at the drafted cost per BASE unit (a
+// purchase unit may be a pack: its cost is divided by the unit factor).
+const sellingPriceHint = computed(() => {
+  const line = editingLine.value;
+  if (!line) return '';
+  const parts = [`${t('Current_Selling_Price')}: ${moneyBase(line.current_price ?? 0)}`];
+  const price = normalizePrice(lineDraft.value.price);
+  const cost = toBaseAmt(Number(lineDraft.value.Unit_cost) || 0) / unitFactor(lineDraft.value.purchase_unit_id);
+  if (price !== null && price > 0 && cost > 0) {
+    parts.push(`${t('Margin')}: ${(((price - cost) / price) * 100).toFixed(1)}%`);
+  }
+  if (mcEnabled.value && !dcIsBase.value) parts.push(t('Selling_Price_In_Base_Currency'));
+  return parts.join(' · ');
+});
+
 function applyLineEdit() {
   const line = editingLine.value;
   Object.assign(line, {
@@ -648,10 +824,14 @@ function applyLineEdit() {
       ? toBaseAmt(lineDraft.value.discount)
       : (Number(lineDraft.value.discount) || 0),
     purchase_unit_id: lineDraft.value.purchase_unit_id,
+    price: normalizePrice(lineDraft.value.price),
     // imei_number is NOT copied from the draft — SerialEntry writes it (and
     // serial_numbers) straight onto the line, so a stale draft copy here would
     // wipe serials entered in this same modal.
   });
+  // Base-currency average written straight onto the line, bypassing the
+  // doc-currency round trip the draft went through.
+  syncLineCostFromBatches(line);
   recomputeCostLine(line);
   lineEditOpen.value = false;
 }
@@ -683,10 +863,12 @@ function validateForm() {
   return true;
 }
 
+// One serial per base unit: quantity × the purchase unit's factor.
+loadUnitFactors();
 function serialCountMismatch(line) {
   if (!line?.is_imei) return false;
   const count = Array.isArray(line.serial_numbers) ? line.serial_numbers.length : 0;
-  return count !== Math.round(Number(line.quantity) || 0);
+  return count !== lineSerialUnits(line);
 }
 
 function detailsPayload() {
@@ -702,6 +884,7 @@ function detailsPayload() {
     quantity: l.quantity,
     purchase_unit_id: l.purchase_unit_id,
     Unit_cost: l.Unit_cost,
+    price: sellingPriceEnabled.value ? (l.price ?? null) : null,
     Net_cost: l.Net_cost,
     discount: l.discount,
     discount_Method: String(l.discount_Method || '2'),
@@ -719,6 +902,11 @@ function detailsPayload() {
 
 async function submit() {
   if (!validateForm()) return;
+  // Last word on batch-tracked line costs before totals are read: the
+  // backend rejects a line whose cost disagrees with its batch average.
+  lines.value.forEach(l => {
+    if (syncLineCostFromBatches(l)) recomputeCostLine(l);
+  });
   submitting.value = true;
   const body = {
     date: purchase.value.date,
@@ -726,6 +914,7 @@ async function submit() {
     warehouse_id: purchase.value.warehouse_id,
     statut: purchase.value.statut,
     notes: purchase.value.notes,
+    order_reference: purchase.value.order_reference || null,
     tax_rate: Number(purchase.value.tax_rate) || 0,
     TaxNet: totals.value.TaxNet,
     discount: Number(purchase.value.discount) || 0,
@@ -744,7 +933,8 @@ async function submit() {
       await http.put(`purchases/${id.value}`, body);
       message.success(t('Successfully_Updated'));
     } else {
-      await http.post('purchases', body);
+      const created = await http.post('purchases', body);
+      if (scanFile.value && created?.id) await attachScannedInvoice(created.id);
       message.success(t('Successfully_Created'));
     }
     router.push('/purchases');
@@ -774,6 +964,7 @@ onMounted(async () => {
         warehouse_id: p.warehouse_id,
         statut: p.statut,
         notes: p.notes || '',
+        order_reference: p.order_reference || '',
         tax_rate: Number(p.tax_rate) || 0,
         discount: Number(p.discount) || 0,
         shipping: Number(p.shipping) || 0,
@@ -786,6 +977,8 @@ onMounted(async () => {
           detail_id: nextDetailId++,
           discount_Method: String(d.discount_Method ?? d.discount_method ?? '2'),
           tax_method: String(d.tax_method ?? '1'),
+          price: normalizePrice(d.price),
+          current_price: d.current_price ?? null,
           is_batch_tracked: !!d.is_batch_tracked,
           batches: Array.isArray(d.batches) ? d.batches : [],
           // Serials may come back as a list or only as the comma-joined string.
@@ -793,6 +986,9 @@ onMounted(async () => {
             ? d.serial_numbers
             : String(d.imei_number || '').split(',').map(s => s.trim()).filter(Boolean),
         };
+        // Stored purchases from before the batch-average rule: re-cost the
+        // line from its batches so the table shows what a save will store.
+        syncLineCostFromBatches(line);
         recomputeCostLine(line);
         return line;
       });

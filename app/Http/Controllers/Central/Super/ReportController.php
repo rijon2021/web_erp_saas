@@ -21,24 +21,16 @@ class ReportController extends Controller
         $totalTenants       = Tenant::count();
         $activeTenants      = Tenant::where('status', Tenant::STATUS_ACTIVE)->count();
         $activeSubscriptions = TenantSubscription::whereIn('status', ['active', 'trial'])->count();
-        $totalRevenue       = TenantBillingPayment::on('central')->where('status', 'paid')->sum('amount');
+        // In the main currency (base_amount) — multi-currency payments add up correctly.
+        $totalRevenue       = TenantBillingPayment::on('central')->where('status', 'paid')->sum(\Illuminate\Support\Facades\DB::raw(TenantBillingPayment::revenueSql()));
 
-        // MRR (Monthly Recurring Revenue) — active monthly subscriptions
-        $mrr = TenantSubscription::where('status', TenantSubscription::STATUS_ACTIVE)
-            ->where('billing_cycle', 'monthly')
-            ->sum('amount');
-        $mrrYearly = TenantSubscription::where('status', TenantSubscription::STATUS_ACTIVE)
-            ->where('billing_cycle', 'yearly')
-            ->sum(DB::raw('amount / 12'));
-        $mrr += $mrrYearly;
-
-        // Churn rate — cancelled in last 30 days / total active at start
-        $cancelledLast30 = TenantSubscription::where('status', TenantSubscription::STATUS_CANCELLED)
-            ->where('cancelled_at', '>=', $now->copy()->subDays(30))
-            ->count();
-        $churnRate = $activeSubscriptions > 0
-            ? round(($cancelledLast30 / ($activeSubscriptions + $cancelledLast30)) * 100, 1)
-            : 0;
+        // MRR and churn — shared with the dashboard (SubscriptionMetrics). Churn
+        // counts cancellations by cancelled_at (the cron later relabels them
+        // "expired") plus paid periods that lapsed without renewal.
+        $metrics = app(\App\Services\Billing\SubscriptionMetrics::class);
+        TenantSubscription::expireLapsed();
+        $mrr = $metrics->mrr();
+        $churnRate = $metrics->churn(30)['rate'];
 
         // ── Tenant status breakdown ──────────────────────────
         $tenantStatuses = Tenant::query()
@@ -86,7 +78,7 @@ class ReportController extends Controller
             ->where('paid_at', '>=', $now->copy()->subMonths(11)->startOfMonth())
             ->select(
                 DB::raw("DATE_FORMAT(paid_at, '%Y-%m') as month"),
-                DB::raw('SUM(amount) as revenue')
+                DB::raw('SUM(' . TenantBillingPayment::revenueSql() . ') as revenue')
             )
             ->groupBy('month')
             ->orderBy('month')

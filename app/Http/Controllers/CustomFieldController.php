@@ -6,9 +6,12 @@ use App\Models\CustomField;
 use App\Models\CustomFieldValue;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class CustomFieldController extends BaseController
 {
+    private $hasSortOrder = null;
+
     /**
      * Get all custom fields for a specific entity type
      * GET /custom-fields?entity_type=client|provider
@@ -23,6 +26,10 @@ class CustomFieldController extends BaseController
             $query->where('entity_type', $entityType);
         }
         
+        if ($this->hasSortOrder()) {
+            $query->orderBy('sort_order', 'asc');
+        }
+
         $customFields = $query->orderBy('id', 'asc')
             ->get();
         
@@ -44,10 +51,19 @@ class CustomFieldController extends BaseController
             'is_required' => 'boolean',
             'is_active' => 'boolean',
             'default_value' => 'nullable|string', // For select: JSON array string
+            'sort_order' => 'nullable|integer|min:0',
+            'options' => 'nullable|array',
+            'options.*' => 'nullable|string|max:255',
         ]);
 
+        // Select options may arrive as options[] (Vue 3 settings page); they are
+        // stored in default_value, where the customer/supplier forms read them.
+        if ($validated['field_type'] === 'select' && $request->has('options')) {
+            $validated['default_value'] = $this->normalizeOptions($request->input('options'));
+        }
+
         // If field_type is select, validate default_value as JSON array
-        if ($validated['field_type'] === 'select' && !empty($validated['default_value'])) {
+        if ($validated['field_type'] === 'select' && is_string($validated['default_value'] ?? null) && $validated['default_value'] !== '') {
             $options = json_decode($validated['default_value'], true);
             if (!is_array($options)) {
                 return response()->json([
@@ -57,14 +73,19 @@ class CustomFieldController extends BaseController
             }
         }
 
-        $customField = CustomField::create([
+        $attributes = [
             'name' => $validated['name'],
             'field_type' => $validated['field_type'],
             'entity_type' => $validated['entity_type'],
             'is_required' => $request->input('is_required', false),
             'is_active' => $request->input('is_active', true),
             'default_value' => $validated['default_value'] ?? null,
-        ]);
+        ];
+        if ($this->hasSortOrder()) {
+            $attributes['sort_order'] = (int) ($validated['sort_order'] ?? 0);
+        }
+
+        $customField = CustomField::create($attributes);
 
         return response()->json([
             'success' => true,
@@ -100,10 +121,24 @@ class CustomFieldController extends BaseController
             'is_required' => 'boolean',
             'is_active' => 'boolean',
             'default_value' => 'nullable|string',
+            'sort_order' => 'nullable|integer|min:0',
+            'options' => 'nullable|array',
+            'options.*' => 'nullable|string|max:255',
         ]);
 
+        $fieldType = $validated['field_type'] ?? $customField->field_type;
+        unset($validated['options']);
+        if (!$this->hasSortOrder()) {
+            unset($validated['sort_order']);
+        } elseif (array_key_exists('sort_order', $validated)) {
+            $validated['sort_order'] = (int) ($validated['sort_order'] ?? 0);
+        }
+        if ($fieldType === 'select' && $request->has('options')) {
+            $validated['default_value'] = $this->normalizeOptions($request->input('options'));
+        }
+
         // If field_type is select, validate default_value as JSON array
-        if (isset($validated['field_type']) && $validated['field_type'] === 'select' && !empty($validated['default_value'])) {
+        if ($fieldType === 'select' && is_string($validated['default_value'] ?? null) && $validated['default_value'] !== '') {
             $options = json_decode($validated['default_value'], true);
             if (!is_array($options)) {
                 return response()->json([
@@ -235,5 +270,30 @@ class CustomFieldController extends BaseController
         }
 
         return response()->json(['success' => true]);
+    }
+
+    /**
+     * custom_fields.sort_order arrives with tenant migration 2026_10_05_000002;
+     * until it runs, sorting falls back to id and the value is not written.
+     */
+    private function hasSortOrder()
+    {
+        return $this->hasSortOrder ??= Schema::hasColumn('custom_fields', 'sort_order');
+    }
+
+    /**
+     * Trim, de-duplicate and drop blank select options; null when none remain.
+     */
+    private function normalizeOptions($options)
+    {
+        $clean = [];
+        foreach ((array) $options as $option) {
+            $option = trim((string) $option);
+            if ($option !== '' && !in_array($option, $clean, true)) {
+                $clean[] = $option;
+            }
+        }
+
+        return $clean ?: null;
     }
 }

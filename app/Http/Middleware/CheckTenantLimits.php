@@ -58,6 +58,10 @@ class CheckTenantLimits
                 'limit'    => $limitKey,
                 'current'  => $current,
                 'max'      => $max,
+                // A limit pack for sale: the SPA modal offers "Buy add-on".
+                'addon'    => in_array(\App\Models\Central\Addon::LIMIT_PREFIX . $limitKey, \App\Models\Central\Addon::saleKeysForPlan($this->limits->getBasePlan()), true)
+                    ? \App\Models\Central\Addon::LIMIT_PREFIX . $limitKey
+                    : null,
             ], 403);
         }
 

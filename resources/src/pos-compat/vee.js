@@ -18,10 +18,13 @@
  *   the POS wraps
  */
 import { h, defineComponent, ref, reactive, computed, provide, inject, onMounted, onBeforeUnmount } from 'vue';
+import { i18n } from '../i18n';
 
+// Getters: legacy localize() switched these per locale, so read them at
+// validation time in the active language.
 const MESSAGES = {
-    required: 'This field is required',
-    regex: 'This field must be a valid',
+    get required() { return i18n.global.t('Pos_Field_Required'); },
+    get regex() { return i18n.global.t('Pos_Field_Must_Be_Valid'); },
 };
 
 const OBSERVER_KEY = Symbol('pos-vee-observer');

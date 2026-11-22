@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\CombinedProduct;
 use App\Models\Damage;
 use App\Models\DamageDetail;
 use App\Models\Product;
@@ -13,6 +12,7 @@ use App\Models\Setting;
 use App\Models\UserWarehouse;
 use App\Models\Warehouse;
 use App\Services\BatchService;
+use App\Services\SerialNumberService;
 use App\utils\helpers;
 use ArPHP\I18N\Arabic;
 use Carbon\Carbon;
@@ -110,6 +110,9 @@ class DamageController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'create', Damage::class);
 
+        // Virtual combo stock: combos have no stock of their own to move.
+        app(\App\Services\ComboStockService::class)->assertNoVirtualCombos((array) $request->input('details', []));
+
         $productionRules = [
             'warehouse_id' => 'required',
             'details' => 'required',
@@ -145,7 +148,7 @@ class DamageController extends BaseController
                         ->where('warehouse_id', $order->warehouse_id)
                         ->where('product_id', $value['product_id'])
                         ->where('product_variant_id', $value['product_variant_id'])
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($product_warehouse) {
                         $product_warehouse->qte -= $value['quantity'];
@@ -163,7 +166,7 @@ class DamageController extends BaseController
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $order->warehouse_id)
                             ->where('product_id', $value['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte -= $value['quantity'];
@@ -173,29 +176,12 @@ class DamageController extends BaseController
                             $product_warehouse->save();
                         }
                     } elseif ($product_detail && $product_detail->type == 'is_combo') {
-                        $combined_products = CombinedProduct::where('product_id', $value['product_id'])->with('product')->get();
-
-                        foreach ($combined_products as $combined_product) {
-                            $qty_combined = $combined_product->quantity * $value['quantity'];
-
-                            $product_warehouse = product_warehouse::where('deleted_at', '=', null)
-                                ->where('warehouse_id', $order->warehouse_id)
-                                ->where('product_id', $combined_product->combined_product_id)
-                                ->first();
-
-                            if ($product_warehouse) {
-                                $product_warehouse->qte -= $qty_combined;
-                                if ($product_warehouse->qte < 0) {
-                                    $product_warehouse->qte = 0;
-                                }
-                                $product_warehouse->save();
-                            }
-                        }
-
+                        // An assembled kit: its components left stock when the kit was
+                        // assembled, so only the kit's own row moves (as on a kit sale).
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $order->warehouse_id)
                             ->where('product_id', $value['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte -= $value['quantity'];
@@ -218,6 +204,12 @@ class DamageController extends BaseController
                     $persistedDetails
                 );
             }
+
+            // Serial / IMEI: the damaged units leave stock.
+            app(SerialNumberService::class)->applyForDamage($order, array_values($data), array_values($persistedDetails));
+
+            // Accounting: write the damaged stock's cost off Inventory.
+            \App\Services\AccountingV2\StockJournal::damage($order, created: true);
         }, 10);
 
         return response()->json(['success' => true]);
@@ -232,6 +224,9 @@ class DamageController extends BaseController
     public function update(Request $request, $id)
     {
         $this->authorizeForUser($request->user('api'), 'update', Damage::class);
+
+        // Virtual combo stock: combos have no stock of their own to move.
+        app(\App\Services\ComboStockService::class)->assertNoVirtualCombos((array) $request->input('details', []));
         $user = Auth::user();
         // New way: Check user's record_view field (user-level boolean)
         // Backward compatibility: If record_view is null, fall back to role permission check
@@ -267,6 +262,27 @@ class DamageController extends BaseController
                 $batchService->reverseForDamageDetails($old_details);
             }
 
+            // Serial / IMEI: only re-sync when the client sends serials (any line
+            // carries the key), so a form that doesn't collect them can't wipe
+            // the ones already recorded.
+            $serialService = app(SerialNumberService::class);
+            $serialsSent = collect($new_details)
+                ->contains(fn ($row) => is_array($row) && array_key_exists('serial_numbers', $row));
+            if ($serialsSent) {
+                $serialService->reverseForDamage($current_damage);
+            } else {
+                if ((int) $request['warehouse_id'] !== (int) $current_damage->warehouse_id
+                    && $serialService->damageHasSerials($current_damage)) {
+                    throw \Illuminate\Validation\ValidationException::withMessages([
+                        'serial_numbers' => ['This damage took serial-numbered units: pick them again to change its warehouse.'],
+                    ]);
+                }
+                // Lines removed from the document always give their units back.
+                $keptIds = collect($new_details)->pluck('id')->filter()->map(fn ($v) => (int) $v)->all();
+                $serialService->reverseForDamage($current_damage, $old_details
+                    ->pluck('id')->map(fn ($v) => (int) $v)->reject(fn ($v) => in_array($v, $keptIds, true))->values()->all());
+            }
+
             $old_ids = [];
             foreach ($old_details as $key => $value) {
                 $old_ids[] = $value->id;
@@ -277,7 +293,7 @@ class DamageController extends BaseController
                         ->where('warehouse_id', $current_damage->warehouse_id)
                         ->where('product_id', $value['product_id'])
                         ->where('product_variant_id', $value['product_variant_id'])
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($product_warehouse) {
                         $product_warehouse->qte += $value['quantity'];
@@ -292,32 +308,19 @@ class DamageController extends BaseController
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $current_damage->warehouse_id)
                             ->where('product_id', $value['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte += $value['quantity'];
                             $product_warehouse->save();
                         }
                     } elseif ($product_detail && $product_detail->type == 'is_combo') {
-                        $combined_products = CombinedProduct::where('product_id', $value['product_id'])->with('product')->get();
-                        foreach ($combined_products as $combined_product) {
-                            $qty_combined = $combined_product->quantity * $value['quantity'];
-
-                            $product_warehouse = product_warehouse::where('deleted_at', '=', null)
-                                ->where('warehouse_id', $current_damage->warehouse_id)
-                                ->where('product_id', $combined_product->combined_product_id)
-                                ->first();
-
-                            if ($product_warehouse) {
-                                $product_warehouse->qte += $qty_combined;
-                                $product_warehouse->save();
-                            }
-                        }
-
+                        // An assembled kit: its components left stock when the kit was
+                        // assembled, so only the kit's own row moves (as on a kit sale).
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $current_damage->warehouse_id)
                             ->where('product_id', $value['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte += $value['quantity'];
@@ -340,7 +343,7 @@ class DamageController extends BaseController
                         ->where('warehouse_id', $request->warehouse_id)
                         ->where('product_id', $product_detail['product_id'])
                         ->where('product_variant_id', $product_detail['product_variant_id'])
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($product_warehouse) {
                         $product_warehouse->qte -= $product_detail['quantity'];
@@ -358,7 +361,7 @@ class DamageController extends BaseController
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $request->warehouse_id)
                             ->where('product_id', $product_detail['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte -= $product_detail['quantity'];
@@ -368,27 +371,12 @@ class DamageController extends BaseController
                             $product_warehouse->save();
                         }
                     } elseif ($prod && $prod->type == 'is_combo') {
-                        $combined_products = CombinedProduct::where('product_id', $product_detail['product_id'])->with('product')->get();
-                        foreach ($combined_products as $combined_product) {
-                            $qty_combined = $combined_product->quantity * $product_detail['quantity'];
-                            $product_warehouse = product_warehouse::where('deleted_at', '=', null)
-                                ->where('warehouse_id', $request->warehouse_id)
-                                ->where('product_id', $combined_product->combined_product_id)
-                                ->first();
-
-                            if ($product_warehouse) {
-                                $product_warehouse->qte -= $qty_combined;
-                                if ($product_warehouse->qte < 0) {
-                                    $product_warehouse->qte = 0;
-                                }
-                                $product_warehouse->save();
-                            }
-                        }
-
+                        // An assembled kit: its components left stock when the kit was
+                        // assembled, so only the kit's own row moves (as on a kit sale).
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $request->warehouse_id)
                             ->where('product_id', $product_detail['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte -= $product_detail['quantity'];
@@ -433,12 +421,27 @@ class DamageController extends BaseController
                 );
             }
 
+            if ($serialsSent) {
+                $alignedInput = [];
+                $alignedPersisted = [];
+                foreach ($new_details as $key => $product_detail) {
+                    if (isset($newPersistedDetails[$key])) {
+                        $alignedInput[] = $product_detail;
+                        $alignedPersisted[] = $newPersistedDetails[$key];
+                    }
+                }
+                $current_damage->warehouse_id = (int) $request['warehouse_id'];
+                $serialService->applyForDamage($current_damage, $alignedInput, $alignedPersisted);
+            }
+
             $current_damage->update([
                 'warehouse_id' => $request['warehouse_id'],
                 'notes' => $request['notes'],
                 'date' => $request['date'],
                 'items' => $length,
             ]);
+
+            \App\Services\AccountingV2\StockJournal::damage($current_damage);
         }, 10);
 
         return response()->json(['success' => true]);
@@ -472,6 +475,9 @@ class DamageController extends BaseController
                 $batchService->reverseForDamageDetails($old_details);
             }
 
+            // Serial / IMEI: the damaged units go back where they were.
+            app(SerialNumberService::class)->reverseForDamage($current_damage);
+
             foreach ($old_details as $key => $value) {
                 // Reverse subtraction (add back)
                 if ($value['product_variant_id'] !== null) {
@@ -479,7 +485,7 @@ class DamageController extends BaseController
                         ->where('warehouse_id', $current_damage->warehouse_id)
                         ->where('product_id', $value['product_id'])
                         ->where('product_variant_id', $value['product_variant_id'])
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($product_warehouse) {
                         $product_warehouse->qte += $value['quantity'];
@@ -494,32 +500,19 @@ class DamageController extends BaseController
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $current_damage->warehouse_id)
                             ->where('product_id', $value['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte += $value['quantity'];
                             $product_warehouse->save();
                         }
                     } elseif ($product_detail && $product_detail->type == 'is_combo') {
-                        $combined_products = CombinedProduct::where('product_id', $value['product_id'])->with('product')->get();
-                        foreach ($combined_products as $combined_product) {
-                            $qty_combined = $combined_product->quantity * $value['quantity'];
-
-                            $product_warehouse = product_warehouse::where('deleted_at', '=', null)
-                                ->where('warehouse_id', $current_damage->warehouse_id)
-                                ->where('product_id', $combined_product->combined_product_id)
-                                ->first();
-
-                            if ($product_warehouse) {
-                                $product_warehouse->qte += $qty_combined;
-                                $product_warehouse->save();
-                            }
-                        }
-
+                        // An assembled kit: its components left stock when the kit was
+                        // assembled, so only the kit's own row moves (as on a kit sale).
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $current_damage->warehouse_id)
                             ->where('product_id', $value['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte += $value['quantity'];
@@ -533,6 +526,8 @@ class DamageController extends BaseController
             $current_damage->update([
                 'deleted_at' => Carbon::now(),
             ]);
+
+            \App\Services\AccountingV2\StockJournal::damage($current_damage);
         }, 10);
 
         return response()->json(['success' => true], 200);
@@ -551,7 +546,11 @@ class DamageController extends BaseController
             $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name']);
         }
 
-        return response()->json(['warehouses' => $warehouses]);
+        return response()->json([
+            'warehouses' => $warehouses,
+            // Serial pickers on damage lines (needs the damage_detail_serials migration).
+            'serial_damages' => app(SerialNumberService::class)->damagesSupported(),
+        ]);
     }
 
     // -------------Show Form Edit Damage-----------\\
@@ -591,6 +590,16 @@ class DamageController extends BaseController
         $damage['date'] = $Damage_data->date;
 
         $batchesByDetail = app(BatchService::class)->batchesForDamageDetails($Damage_data['details']);
+
+        // Serial / IMEI: what each line tracks and the units it took, so the
+        // form can reopen its pickers.
+        $serialService = app(SerialNumberService::class);
+        $serialComponentsByCombo = $serialService->comboSerialComponents(
+            collect($Damage_data['details'])->pluck('product_id')->all()
+        );
+        $serialGroupsByDetail = $serialService->serialGroupsByDamageDetail(
+            collect($Damage_data['details'])->pluck('id')->all()
+        );
 
         $detail_id = 0;
         foreach ($Damage_data['details'] as $detail) {
@@ -639,6 +648,13 @@ class DamageController extends BaseController
 
             $data['is_batch_tracked'] = (bool) ($detail['product']['is_batch_tracked'] ?? false);
             $data['batches'] = $batchesByDetail[(int) $detail->id] ?? [];
+            $groups = $serialGroupsByDetail[(int) $detail->id] ?? [];
+            $data['is_imei'] = (bool) $detail['product']['is_imei'];
+            $data['serial_components'] = $serialComponentsByCombo[(int) $detail->product_id] ?? [];
+            $data['serial_groups'] = (object) ($data['serial_components'] ? $groups : []);
+            $data['serial_numbers'] = $data['serial_components']
+                ? array_merge([], ...array_values($groups))
+                : ($groups[(int) $detail->product_id] ?? []);
 
             $details[] = $data;
         }
@@ -655,6 +671,7 @@ class DamageController extends BaseController
             'details' => $details,
             'damage' => $damage,
             'warehouses' => $warehouses,
+            'serial_damages' => $serialService->damagesSupported(),
         ]);
     }
 
@@ -685,6 +702,9 @@ class DamageController extends BaseController
         $DamageArr['warehouse'] = $Damage_data['warehouse']->name;
 
         $batchesByDetail = app(BatchService::class)->batchesForDamageDetails($Damage_data['details']);
+        $serialGroupsByDetail = app(SerialNumberService::class)->serialGroupsByDamageDetail(
+            collect($Damage_data['details'])->pluck('id')->all()
+        );
 
         foreach ($Damage_data['details'] as $detail) {
             if ($detail->product_variant_id) {
@@ -707,6 +727,8 @@ class DamageController extends BaseController
 
             $data['is_batch_tracked'] = (bool) ($detail['product']['is_batch_tracked'] ?? false);
             $data['batches'] = $batchesByDetail[(int) $detail->id] ?? [];
+            // Serial / IMEI units this line took (a combo's: its components').
+            $data['serial_numbers'] = array_merge([], ...array_values($serialGroupsByDetail[(int) $detail->id] ?? []));
 
             $details[] = $data;
         }
@@ -725,6 +747,8 @@ class DamageController extends BaseController
         $damage_data = Damage::with('details.product.unit')
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
+
+        $this->authorizeDocumentView($request, $damage_data);
 
         $adjustment['warehouse_name'] = $damage_data['warehouse']->name;
         $adjustment['Ref'] = $damage_data->Ref;
@@ -755,6 +779,8 @@ class DamageController extends BaseController
         $settings = Setting::where('deleted_at', '=', null)->first();
         $Html = view('pdf.adjustment_pdf', [
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($damage_data->warehouse_id, $settings),
             'adjustment' => $adjustment,
             'details' => $details,
         ])->render();
@@ -811,10 +837,25 @@ class DamageController extends BaseController
         $last = DB::table('damages')->latest('id')->first();
 
         if ($last) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = isset($nwMsg[1]) ? ($nwMsg[1] + 1) : 1112;
-            $code = 'DM_'.$inMsg;
+            $item = (string) ($last->Ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $code = 'DM_'.($nwMsg[1] + 1);
+            } else {
+                $code = 'DM_1112';
+            }
         } else {
             $code = 'DM_1111';
         }

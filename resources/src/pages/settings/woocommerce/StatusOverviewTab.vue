@@ -44,7 +44,7 @@
       </a-col>
     </a-row>
 
-    <a-card size="small" :title="'Recent activity'">
+    <a-card size="small" :title="$t('Woo_Recent_Activity')">
       <a-table
         :columns="columns" :data-source="lastFiveLogs" :loading="loading"
         size="small" :pagination="false" :row-key="(_r, i) => i"

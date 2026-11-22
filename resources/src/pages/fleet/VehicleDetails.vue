@@ -1,9 +1,9 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="vehicle ? vehicle.name : 'Vehicle'"
+      :title="vehicle ? vehicle.name : $t('Fl_Vehicle')"
       :subtitle="vehicle ? [vehicle.make, vehicle.model, vehicle.year].filter(Boolean).join(' · ') : ''"
-      :breadcrumb="['Fleet Management', 'Vehicles', vehicle ? vehicle.plate_number : '']"
+      :breadcrumb="[$t('Fl_Fleet_Management'), $t('Fl_Vehicles'), vehicle ? vehicle.plate_number : '']"
     >
       <template #actions>
         <a-button @click="$router.push('/fleet/vehicles')">
@@ -39,18 +39,18 @@
               </div>
 
               <a-descriptions :column="1" size="small" class="hero-desc">
-                <a-descriptions-item label="Type">
+                <a-descriptions-item :label="$t('Type')">
                   <span class="desc-type">
                     <component :is="typeIcon(vehicle.type)" :size="15" :stroke-width="1.7" />
                     {{ labelOf(VEHICLE_TYPES, vehicle.type) }}
                   </span>
                 </a-descriptions-item>
-                <a-descriptions-item label="Fuel">{{ labelOf(FUEL_TYPES, vehicle.fuel_type) }}</a-descriptions-item>
-                <a-descriptions-item label="Odometer">{{ number(vehicle.odometer, 0) }}</a-descriptions-item>
-                <a-descriptions-item label="Driver">{{ vehicle.driver_name || '—' }}</a-descriptions-item>
+                <a-descriptions-item :label="$t('Fl_Fuel')">{{ labelOf(FUEL_TYPES, vehicle.fuel_type) }}</a-descriptions-item>
+                <a-descriptions-item :label="$t('Fl_Odometer')">{{ number(vehicle.odometer, 0) }}</a-descriptions-item>
+                <a-descriptions-item :label="$t('Fl_Driver')">{{ vehicle.driver_name || '—' }}</a-descriptions-item>
                 <a-descriptions-item :label="$t('Warehouse')">{{ vehicle.warehouse_name || '—' }}</a-descriptions-item>
                 <a-descriptions-item label="VIN">{{ vehicle.vin || '—' }}</a-descriptions-item>
-                <a-descriptions-item label="Purchased">
+                <a-descriptions-item :label="$t('Fl_Purchased')">
                   {{ vehicle.purchase_date ? date(vehicle.purchase_date) : '—' }}
                   <template v-if="vehicle.purchase_price"> · {{ money(vehicle.purchase_price) }}</template>
                 </a-descriptions-item>
@@ -60,11 +60,11 @@
             </div>
           </a-card>
 
-          <a-card size="small" title="Compliance">
+          <a-card size="small" :title="$t('Fl_Compliance')">
             <div class="renewals">
               <div v-for="r in renewals" :key="r.key" class="renewal">
                 <span class="renewal-label">{{ r.label }}</span>
-                <span class="renewal-date">{{ r.date ? date(r.date) : 'Not set' }}</span>
+                <span class="renewal-date">{{ r.date ? date(r.date) : $t('Fl_Not_Set') }}</span>
                 <a-tag v-if="r.tone" :color="r.tone.color">{{ r.tone.text }}</a-tag>
                 <a-tag v-else-if="r.date" color="success">OK</a-tag>
                 <a-tag v-else color="default">—</a-tag>
@@ -80,24 +80,24 @@
         <a-col :xs="24" :lg="16">
           <div class="stats">
             <div class="stat">
-              <span class="stat-label">Total cost</span>
+              <span class="stat-label">{{ $t('Fl_Total_Cost') }}</span>
               <span class="stat-value">{{ money(stats.total_cost || 0) }}</span>
-              <span class="stat-note">fuel + maintenance</span>
+              <span class="stat-note">{{ $t('Fl_Fuel_Plus_Maintenance') }}</span>
             </div>
             <div class="stat">
-              <span class="stat-label">Distance logged</span>
+              <span class="stat-label">{{ $t('Fl_Distance_Logged') }}</span>
               <span class="stat-value">{{ number(stats.distance || 0, 0) }}</span>
-              <span class="stat-note">from fuel readings</span>
+              <span class="stat-note">{{ $t('Fl_From_Fuel_Readings') }}</span>
             </div>
             <div class="stat">
-              <span class="stat-label">Cost / distance</span>
+              <span class="stat-label">{{ $t('Fl_Cost_Per_Distance') }}</span>
               <span class="stat-value">{{ stats.cost_per_distance !== null ? money(stats.cost_per_distance) : '—' }}</span>
-              <span class="stat-note">per unit driven</span>
+              <span class="stat-note">{{ $t('Fl_Per_Unit_Driven') }}</span>
             </div>
             <div class="stat">
-              <span class="stat-label">Efficiency</span>
+              <span class="stat-label">{{ $t('Fl_Efficiency') }}</span>
               <span class="stat-value">{{ stats.efficiency !== null ? number(stats.efficiency, 2) : '—' }}</span>
-              <span class="stat-note">distance per unit of fuel</span>
+              <span class="stat-note">{{ $t('Fl_Distance_Per_Fuel_Unit') }}</span>
             </div>
           </div>
 
@@ -105,7 +105,7 @@
             <a-tabs v-model:activeKey="tab" @change="onTabChange">
               <a-tab-pane key="maintenance">
                 <template #tab>
-                  Maintenance <a-badge :count="stats.maintenance_count || 0" :number-style="badgeStyle" />
+                  {{ $t('Fl_Maintenance') }} <a-badge :count="stats.maintenance_count || 0" :number-style="badgeStyle" />
                 </template>
                 <a-table
                   :columns="maintenanceColumns" :data-source="maintenance" :loading="tabLoading"
@@ -129,14 +129,14 @@
                     </template>
                   </template>
                   <template #emptyText>
-                    <a-empty :image="simpleEmptyImage" description="No maintenance recorded" />
+                    <a-empty :image="simpleEmptyImage" :description="$t('Fl_No_Maintenance_Recorded')" />
                   </template>
                 </a-table>
               </a-tab-pane>
 
               <a-tab-pane key="fuel">
                 <template #tab>
-                  Fuel <a-badge :count="stats.fuel_count || 0" :number-style="badgeStyle" />
+                  {{ $t('Fl_Fuel') }} <a-badge :count="stats.fuel_count || 0" :number-style="badgeStyle" />
                 </template>
                 <a-table
                   :columns="fuelColumns" :data-source="fuelLogs" :loading="tabLoading"
@@ -150,19 +150,19 @@
                     <template v-else-if="column.key === 'total_cost'">{{ money(record.total_cost) }}</template>
                     <template v-else-if="column.key === 'full_tank'">
                       <a-tag :color="record.full_tank ? 'success' : 'default'">
-                        {{ record.full_tank ? 'Full' : 'Partial' }}
+                        {{ record.full_tank ? $t('Fl_Full') : $t('Fl_Partial') }}
                       </a-tag>
                     </template>
                   </template>
                   <template #emptyText>
-                    <a-empty :image="simpleEmptyImage" description="No fuel logged" />
+                    <a-empty :image="simpleEmptyImage" :description="$t('Fl_No_Fuel_Logged')" />
                   </template>
                 </a-table>
               </a-tab-pane>
 
               <a-tab-pane key="assignments">
                 <template #tab>
-                  Assignments <a-badge :count="stats.trip_count || 0" :number-style="badgeStyle" />
+                  {{ $t('Fl_Assignments') }} <a-badge :count="stats.trip_count || 0" :number-style="badgeStyle" />
                 </template>
                 <a-table
                   :columns="assignmentColumns" :data-source="assignments" :loading="tabLoading"
@@ -183,7 +183,7 @@
                     </template>
                   </template>
                   <template #emptyText>
-                    <a-empty :image="simpleEmptyImage" description="No assignments recorded" />
+                    <a-empty :image="simpleEmptyImage" :description="$t('Fl_No_Assignments_Recorded')" />
                   </template>
                 </a-table>
               </a-tab-pane>
@@ -193,7 +193,7 @@
       </a-row>
     </template>
 
-    <a-empty v-else description="Vehicle not found" style="padding: 64px 0" />
+    <a-empty v-else :description="$t('Fl_Vehicle_Not_Found')" style="padding: 64px 0" />
   </div>
 </template>
 
@@ -244,40 +244,40 @@ const renewals = computed(() => {
   const v = vehicle.value;
   if (!v) return [];
   return [
-    { key: 'insurance', label: 'Insurance', date: v.insurance_expiry, days: v.days_to_insurance },
-    { key: 'registration', label: 'Registration', date: v.registration_expiry, days: v.days_to_registration },
-    { key: 'inspection', label: 'Inspection', date: v.inspection_expiry, days: v.days_to_inspection },
+    { key: 'insurance', label: t('Fl_Insurance'), date: v.insurance_expiry, days: v.days_to_insurance },
+    { key: 'registration', label: t('Fl_Registration'), date: v.registration_expiry, days: v.days_to_registration },
+    { key: 'inspection', label: t('Fl_Inspection'), date: v.inspection_expiry, days: v.days_to_inspection },
   ].map(r => ({ ...r, tone: expiryTone(r.days) }));
 });
 
-const maintenanceColumns = [
-  { title: 'Date', key: 'service_date', dataIndex: 'service_date', width: 110 },
-  { title: 'Work', dataIndex: 'title', key: 'title' },
-  { title: 'Type', key: 'type', dataIndex: 'type', width: 110 },
-  { title: 'Odometer', key: 'odometer', dataIndex: 'odometer', width: 100 },
-  { title: 'Vendor', dataIndex: 'vendor', key: 'vendor', width: 140 },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 120 },
-  { title: 'Cost', key: 'cost', dataIndex: 'cost', width: 110 },
-];
+const maintenanceColumns = computed(() => [
+  { title: t('Date'), key: 'service_date', dataIndex: 'service_date', width: 110 },
+  { title: t('Fl_Work'), dataIndex: 'title', key: 'title' },
+  { title: t('Type'), key: 'type', dataIndex: 'type', width: 110 },
+  { title: t('Fl_Odometer'), key: 'odometer', dataIndex: 'odometer', width: 100 },
+  { title: t('Fl_Vendor'), dataIndex: 'vendor', key: 'vendor', width: 140 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 120 },
+  { title: t('Fl_Cost'), key: 'cost', dataIndex: 'cost', width: 110 },
+]);
 
-const fuelColumns = [
-  { title: 'Date', key: 'log_date', dataIndex: 'log_date', width: 110 },
-  { title: 'Odometer', key: 'odometer', dataIndex: 'odometer', width: 100 },
-  { title: 'Quantity', key: 'quantity', dataIndex: 'quantity', width: 100 },
-  { title: 'Unit price', key: 'unit_price', dataIndex: 'unit_price', width: 110 },
-  { title: 'Total', key: 'total_cost', dataIndex: 'total_cost', width: 110 },
-  { title: 'Station', dataIndex: 'station', key: 'station' },
-  { title: 'Tank', key: 'full_tank', width: 90 },
-];
+const fuelColumns = computed(() => [
+  { title: t('Date'), key: 'log_date', dataIndex: 'log_date', width: 110 },
+  { title: t('Fl_Odometer'), key: 'odometer', dataIndex: 'odometer', width: 100 },
+  { title: t('Quantity'), key: 'quantity', dataIndex: 'quantity', width: 100 },
+  { title: t('Fl_Unit_Price'), key: 'unit_price', dataIndex: 'unit_price', width: 110 },
+  { title: t('Total'), key: 'total_cost', dataIndex: 'total_cost', width: 110 },
+  { title: t('Fl_Station'), dataIndex: 'station', key: 'station' },
+  { title: t('Fl_Tank'), key: 'full_tank', width: 90 },
+]);
 
-const assignmentColumns = [
-  { title: 'Driver', dataIndex: 'driver_name', key: 'driver_name' },
-  { title: 'From', key: 'start_date', dataIndex: 'start_date', width: 150 },
-  { title: 'To', key: 'end_date', dataIndex: 'end_date', width: 150 },
-  { title: 'Distance', key: 'distance', dataIndex: 'distance', width: 100 },
-  { title: 'Purpose', dataIndex: 'purpose', key: 'purpose' },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 110 },
-];
+const assignmentColumns = computed(() => [
+  { title: t('Fl_Driver'), dataIndex: 'driver_name', key: 'driver_name' },
+  { title: t('From'), key: 'start_date', dataIndex: 'start_date', width: 150 },
+  { title: t('To'), key: 'end_date', dataIndex: 'end_date', width: 150 },
+  { title: t('Fl_Distance'), key: 'distance', dataIndex: 'distance', width: 100 },
+  { title: t('Fl_Purpose'), dataIndex: 'purpose', key: 'purpose' },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 110 },
+]);
 
 async function load() {
   loading.value = true;

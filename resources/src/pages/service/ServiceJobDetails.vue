@@ -68,19 +68,19 @@
       <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
         <a-col :xs="24" :md="6">
           <a-card size="small">
-            <a-statistic :title="$t('Total')" :value="formatNumber(job.total_amount)" :prefix="currencySymbol" />
+            <a-statistic :title="$t('Total')" :value="formatNumber(job.total_amount)" :prefix="symbolPrefix" :suffix="symbolSuffix" />
           </a-card>
         </a-col>
         <a-col :xs="24" :md="6">
           <a-card size="small">
-            <a-statistic :title="$t('Paid')" :value="formatNumber(job.paid_amount)" :prefix="currencySymbol" :value-style="{ color: '#3f8600' }" />
+            <a-statistic :title="$t('Paid')" :value="formatNumber(job.paid_amount)" :prefix="symbolPrefix" :suffix="symbolSuffix" :value-style="{ color: '#3f8600' }" />
             <a-progress :percent="paidPercent" size="small" />
           </a-card>
         </a-col>
         <a-col :xs="24" :md="6">
           <a-card size="small">
             <a-statistic
-              :title="$t('Balance_Due')" :value="formatNumber(job.balance_due)" :prefix="currencySymbol"
+              :title="$t('Balance_Due')" :value="formatNumber(job.balance_due)" :prefix="symbolPrefix" :suffix="symbolSuffix"
               :value-style="{ color: job.balance_due > 0 ? '#cf1322' : '#3f8600' }"
             />
             <a-tag :color="paymentColor(job.payment_status)" style="margin-top: 6px">{{ $t(job.payment_status || 'unpaid') }}</a-tag>
@@ -140,7 +140,7 @@
           <a-descriptions-item v-if="job.device_imei" :label="$t('IMEI')">{{ job.device_imei }}</a-descriptions-item>
           <a-descriptions-item v-if="job.device_password" :label="$t('Unlock_Code')">{{ job.device_password }}</a-descriptions-item>
           <a-descriptions-item v-if="job.accessories && job.accessories.length" :label="$t('Accessories_Received')" :span="3">
-            <a-tag v-for="a in job.accessories" :key="a">{{ a }}</a-tag>
+            <a-tag v-for="a in job.accessories" :key="a">{{ accessoryLabel(a) }}</a-tag>
           </a-descriptions-item>
         </a-descriptions>
       </a-card>
@@ -179,7 +179,7 @@
       >
         <a-descriptions :column="{ xs: 1, md: 3 }" size="small" bordered>
           <a-descriptions-item v-if="job.quote_amount > 0" :label="$t('Quote_Amount')">
-            {{ currencySymbol }}{{ formatNumber(job.quote_amount) }}
+            {{ withSymbol(currencySymbol, formatNumber(job.quote_amount)) }}
           </a-descriptions-item>
           <a-descriptions-item v-if="job.quote_valid_until" :label="$t('Valid_Until')">
             {{ formatDate(job.quote_valid_until) }}
@@ -215,25 +215,25 @@
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'type'">
               <a-tag :color="record.type === 'part' ? 'cyan' : record.type === 'labor' ? 'blue' : 'default'">
-                {{ record.type }}
+                {{ labelFrom(ITEM_TYPE_KEYS, record.type) }}
               </a-tag>
             </template>
             <template v-else-if="column.key === 'unit_price'">
-              {{ currencySymbol }}{{ formatNumber(record.unit_price) }}
+              {{ withSymbol(currencySymbol, formatNumber(record.unit_price)) }}
             </template>
             <template v-else-if="column.key === 'total'">
-              <strong>{{ currencySymbol }}{{ formatNumber(record.total) }}</strong>
+              <strong>{{ withSymbol(currencySymbol, formatNumber(record.total)) }}</strong>
             </template>
           </template>
           <template #footer>
             <div class="items-totals">
               <div v-if="job.diagnostic_fee > 0">
                 <span>{{ $t('Diagnostic_Fee') }}</span>
-                <span>{{ currencySymbol }}{{ formatNumber(job.diagnostic_fee) }}</span>
+                <span>{{ withSymbol(currencySymbol, formatNumber(job.diagnostic_fee)) }}</span>
               </div>
               <div>
                 <span>{{ $t('Grand_Total') }}</span>
-                <strong>{{ currencySymbol }}{{ formatNumber(job.total_amount) }}</strong>
+                <strong>{{ withSymbol(currencySymbol, formatNumber(job.total_amount)) }}</strong>
               </div>
             </div>
           </template>
@@ -245,7 +245,7 @@
         <div class="photo-grid">
           <div v-for="ph in photos" :key="ph.id" class="photo-tile" @click="previewPhoto = ph">
             <img :src="ph.url" :alt="ph.original_name" />
-            <a-tag color="cyan" class="photo-stage">{{ ph.stage }}</a-tag>
+            <a-tag color="cyan" class="photo-stage">{{ labelFrom(PHOTO_STAGE_KEYS, ph.stage) }}</a-tag>
             <small v-if="ph.caption" style="color: rgba(var(--ink-rgb), 0.45); display: block; margin-top: 4px">{{ ph.caption }}</small>
           </div>
         </div>
@@ -259,14 +259,14 @@
         <a-table :columns="paymentColumns" :data-source="payments" :pagination="false" size="small" row-key="id" :scroll="{ x: 'max-content' }">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'payment_kind'">
-              <a-tag :color="kindColor(record.payment_kind)">{{ record.payment_kind || 'payment' }}</a-tag>
+              <a-tag :color="kindColor(record.payment_kind)">{{ labelFrom(PAYMENT_KIND_KEYS, record.payment_kind || 'payment') }}</a-tag>
             </template>
             <template v-else-if="column.key === 'payment_method'">
               {{ record.payment_method || '—' }}
             </template>
             <template v-else-if="column.key === 'montant'">
               <span :style="{ color: record.payment_kind === 'refund' ? '#cf1322' : undefined, fontWeight: 600 }">
-                {{ record.payment_kind === 'refund' ? '-' : '' }}{{ currencySymbol }}{{ formatNumber(record.montant) }}
+                {{ record.payment_kind === 'refund' ? '-' : '' }}{{ withSymbol(currencySymbol, formatNumber(record.montant)) }}
               </span>
             </template>
             <template v-else-if="column.key === 'notes'">
@@ -292,6 +292,8 @@
  * with the same minimal job sheet legacy printed via $htmlToPaper.
  */
 import { ref, computed, onMounted } from 'vue';
+import { useFormat } from '../../composables/useFormat';
+import { isCurrencyAfter } from '../../lib/priceFormat';
 import { useRoute } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
@@ -316,6 +318,10 @@ const payments = ref([]);
 const photos = ref([]);
 const previewPhoto = ref(null);
 const currencySymbol = computed(() => auth.currency);
+// System Settings → Currency Position: symbol before or after the amount.
+const { withSymbol, currencyPosition } = useFormat();
+const symbolPrefix = computed(() => (isCurrencyAfter(currencyPosition.value) ? undefined : currencySymbol.value));
+const symbolSuffix = computed(() => (isCurrencyAfter(currencyPosition.value) ? currencySymbol.value : undefined));
 
 const jobId = computed(() => (route.params.id ? Number(route.params.id) : null));
 
@@ -330,13 +336,13 @@ const isCancelled = computed(() =>
   job.value && (job.value.status === 'cancelled' || job.value.status === 'declined'));
 
 const statusJourney = computed(() => [
-  { title: 'Intake' },
-  { title: 'Diagnostic' },
+  { title: t('Intake') },
+  { title: t('Diagnostic') },
   { title: t('Quote') },
   { title: t('Approved') },
   { title: t('In_Progress') },
-  { title: 'Ready' },
-  { title: 'Delivered' },
+  { title: t('Sv_Ready') },
+  { title: t('Delivered') },
 ]);
 const currentStageIndex = computed(() => {
   if (!job.value) return 0;
@@ -365,12 +371,28 @@ const paymentColumns = computed(() => [
 
 function statusLabel(status) {
   const map = {
-    pending: t('Pending'), intake: 'Intake', diagnostic: 'Diagnostic',
-    quoted: 'Quoted', approved: t('Approved'), in_progress: t('In_Progress'),
-    ready: 'Ready for Pickup', delivered: 'Delivered', declined: 'Declined',
+    pending: t('Pending'), intake: t('Intake'), diagnostic: t('Diagnostic'),
+    quoted: t('Quoted'), approved: t('Approved'), in_progress: t('In_Progress'),
+    ready: t('Ready_For_Pickup'), delivered: t('Delivered'), declined: t('Declined'),
     completed: t('complete'), cancelled: t('Cancelled'),
   };
   return map[status] || status;
+}
+
+// Stored values (English words / enum values) → translation keys, display only.
+const ACCESSORY_KEYS = {
+  Charger: 'Sv_Acc_Charger', Cable: 'Sv_Acc_Cable', Case: 'Sv_Acc_Case',
+  'SIM card': 'Sv_Acc_Sim_Card', 'Memory card': 'Sv_Acc_Memory_Card',
+  Headphones: 'Sv_Acc_Headphones', Box: 'Sv_Acc_Box',
+};
+const ITEM_TYPE_KEYS = { part: 'Part', labor: 'Labor', other: 'Other' };
+const PHOTO_STAGE_KEYS = { intake: 'Intake', before: 'before', after: 'after', delivery: 'delivery' };
+const PAYMENT_KIND_KEYS = { deposit: 'deposit', payment: 'Payment', refund: 'Refund' };
+function labelFrom(keys, value) {
+  return keys[value] ? t(keys[value]) : value;
+}
+function accessoryLabel(a) {
+  return labelFrom(ACCESSORY_KEYS, a);
 }
 function statusColor(s) {
   const map = {
@@ -424,55 +446,57 @@ function printJob() {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const checklistRows = checklist.value.map(item => `
     <tr>
-      <td style="padding:8px;">${item.is_completed ? '&#10003; Completed' : '&#9675; Pending'}</td>
+      <td style="padding:8px;">${item.is_completed ? `&#10003; ${esc(t('Completed'))}` : `&#9675; ${esc(t('Pending'))}`}</td>
       <td style="padding:8px;">${esc(item.category_name || '-')}</td>
       <td style="padding:8px;">${esc(item.item_name)}</td>
     </tr>`).join('');
+  const up = key => esc(t(key).toLocaleUpperCase());
+  const label = key => esc(t(key));
   const html = `
     <div style="padding:20px;font-family:Arial,sans-serif;">
       <div style="text-align:center;margin-bottom:20px;border-bottom:2px solid #1a56db;padding-bottom:15px;">
-        <h1 style="color:#1a56db;margin:0 0 10px 0;">SERVICE JOB</h1>
+        <h1 style="color:#1a56db;margin:0 0 10px 0;">${up('Sv_Service_Job')}</h1>
         <h2 style="color:#4b5563;margin:0;">${esc(j.Ref)}</h2>
       </div>
       <table style="width:100%;margin-bottom:20px;" cellpadding="5" cellspacing="0">
         <tr>
           <td style="width:50%;vertical-align:top;">
-            <h3 style="color:#1a56db;margin:0 0 10px 0;font-size:14px;">CUSTOMER</h3>
-            <p style="margin:5px 0;"><strong>Name:</strong> ${esc(j.client_name || '-')}</p>
-            ${j.client_phone ? `<p style="margin:5px 0;"><strong>Phone:</strong> ${esc(j.client_phone)}</p>` : ''}
-            ${j.client_email ? `<p style="margin:5px 0;"><strong>Email:</strong> ${esc(j.client_email)}</p>` : ''}
+            <h3 style="color:#1a56db;margin:0 0 10px 0;font-size:14px;">${up('Customer')}</h3>
+            <p style="margin:5px 0;"><strong>${label('Name')}:</strong> ${esc(j.client_name || '-')}</p>
+            ${j.client_phone ? `<p style="margin:5px 0;"><strong>${label('Phone')}:</strong> ${esc(j.client_phone)}</p>` : ''}
+            ${j.client_email ? `<p style="margin:5px 0;"><strong>${label('Email')}:</strong> ${esc(j.client_email)}</p>` : ''}
           </td>
           <td style="width:50%;vertical-align:top;">
-            <h3 style="color:#1a56db;margin:0 0 10px 0;font-size:14px;">JOB INFORMATION</h3>
-            <p style="margin:5px 0;"><strong>Service Item:</strong> ${esc(j.service_item || '-')}</p>
-            ${j.job_type ? `<p style="margin:5px 0;"><strong>Job Type:</strong> ${esc(j.job_type)}</p>` : ''}
-            <p style="margin:5px 0;"><strong>Technician:</strong> ${esc(j.technician_name || '-')}</p>
-            ${j.scheduled_date ? `<p style="margin:5px 0;"><strong>Scheduled Date:</strong> ${esc(formatDateTime(j.scheduled_date))}</p>` : ''}
-            <p style="margin:5px 0;"><strong>Status:</strong> ${esc(statusLabel(j.status))}</p>
+            <h3 style="color:#1a56db;margin:0 0 10px 0;font-size:14px;">${up('Sv_Job_Information')}</h3>
+            <p style="margin:5px 0;"><strong>${label('Sv_Service_Item_Short')}:</strong> ${esc(j.service_item || '-')}</p>
+            ${j.job_type ? `<p style="margin:5px 0;"><strong>${label('Job_Type')}:</strong> ${esc(j.job_type)}</p>` : ''}
+            <p style="margin:5px 0;"><strong>${label('Technician')}:</strong> ${esc(j.technician_name || '-')}</p>
+            ${j.scheduled_date ? `<p style="margin:5px 0;"><strong>${label('Scheduled_Date')}:</strong> ${esc(formatDateTime(j.scheduled_date))}</p>` : ''}
+            <p style="margin:5px 0;"><strong>${label('Status')}:</strong> ${esc(statusLabel(j.status))}</p>
           </td>
         </tr>
       </table>
       ${j.notes ? `
       <div style="margin-bottom:20px;padding:10px;background:#f9fafb;border-left:3px solid #1a56db;">
-        <h3 style="color:#1a56db;margin:0 0 10px 0;font-size:14px;">NOTES</h3>
+        <h3 style="color:#1a56db;margin:0 0 10px 0;font-size:14px;">${up('Notes')}</h3>
         <p style="margin:0;white-space:pre-line;">${esc(j.notes)}</p>
       </div>` : ''}
       ${checklist.value.length ? `
       <div style="margin-bottom:20px;">
-        <h3 style="color:#1a56db;margin:0 0 10px 0;font-size:14px;">CHECKLIST</h3>
+        <h3 style="color:#1a56db;margin:0 0 10px 0;font-size:14px;">${up('Checklist')}</h3>
         <table style="width:100%;border-collapse:collapse;" cellpadding="5" cellspacing="0" border="1">
           <thead>
             <tr style="background:#1a56db;color:white;">
-              <th style="padding:8px;text-align:left;">Status</th>
-              <th style="padding:8px;text-align:left;">Category</th>
-              <th style="padding:8px;text-align:left;">Item</th>
+              <th style="padding:8px;text-align:left;">${label('Status')}</th>
+              <th style="padding:8px;text-align:left;">${label('Category')}</th>
+              <th style="padding:8px;text-align:left;">${label('Sv_Item')}</th>
             </tr>
           </thead>
           <tbody>${checklistRows}</tbody>
         </table>
       </div>` : ''}
       <div style="margin-top:30px;text-align:center;padding-top:15px;border-top:2px solid #e5e7eb;">
-        <p style="color:#1a56db;font-weight:bold;margin:0;">Thank you for your business!</p>
+        <p style="color:#1a56db;font-weight:bold;margin:0;">${label('Set_Pdf_Thank_You_Default')}</p>
       </div>
     </div>`;
   const win = window.open('', '_blank', 'width=900,height=700');

@@ -1,6 +1,6 @@
 <template>
   <div class="pos-scope">
-  <div class="pos-codecanyon" style="display: flex; flex-direction: column; height: 100vh; background: #f7f7fb; color: #1f1f2c; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden;">
+  <div class="pos-codecanyon" style="display: flex; flex-direction: column; height: 100vh; background: #f7f7fb; color: #1f1f2c; -webkit-font-smoothing: antialiased; overflow: hidden;">
 
     <!-- ============================================================
          TOP TOOLBAR (desktop / tablet)
@@ -28,8 +28,8 @@
           style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; font-family: inherit; text-transform: uppercase; cursor: pointer; border: 0;"
           :style="{ background: (currentRegister && currentRegister.status === 'open') ? '#eaf7ef' : '#fdecec', color: (currentRegister && currentRegister.status === 'open') ? '#1e7a44' : '#a83232' }">
           <span style="width: 6px; height: 6px; border-radius: 99px; background: currentColor;"></span>
-          <span v-if="currentRegister && currentRegister.status === 'open'">OPEN</span>
-          <span v-else>CLOSED</span>
+          <span v-if="currentRegister && currentRegister.status === 'open'">{{ $t('status_open') }}</span>
+          <span v-else>{{ $t('status_closed') }}</span>
         </button>
       </div>
 
@@ -137,29 +137,6 @@
         <lucide-icon name="chevron-down" class="pos-cust-trigger-caret" />
       </div>
 
-      <!-- Salesperson select (Change Salesperson During Checkout feature) -->
-      <div
-        v-if="salesSwitchEnabled"
-        role="button"
-        tabindex="0"
-        class="pos-cust-trigger"
-        :class="{ 'is-active': selectedSellerId }"
-        :title="$t('Select_Salesperson') || 'Select salesperson'"
-        @click="sellerDrawerOpen = true"
-        @keydown.enter.prevent="sellerDrawerOpen = true"
-        @keydown.space.prevent="sellerDrawerOpen = true"
-      >
-        <span class="pos-cust-trigger-avatar" :style="selectedSellerId ? { background: catColor(selectedSellerId) } : {}">
-          <span v-if="selectedSellerId">{{ catInitial(selectedSellerLabel) }}</span>
-          <lucide-icon v-else name="user-check" />
-        </span>
-        <span class="pos-cust-trigger-body">
-          <span class="pos-cust-trigger-eyebrow">{{ $t('Salesperson') || 'Salesperson' }}</span>
-          <span class="pos-cust-trigger-label">{{ selectedSellerLabel }}</span>
-        </span>
-        <lucide-icon name="chevron-down" class="pos-cust-trigger-caret" />
-      </div>
-
       <!-- Multi-Currency: active sale currency (Settings → Features) -->
       <select
         v-if="posMultiCurrencyEnabled && pos_currencies.length > 1"
@@ -203,16 +180,81 @@
         <lucide-icon name="undo" style="font-size: 15px;" />
       </button>
 
-      <!-- Offline / sync -->
-      <button
-        v-if="!isOnline || offlineSalesCount > 0"
-        @click="syncOfflineSales"
-        :title="offlineStatusTitle"
-        class="pos-shell-icon-btn"
-        :style="{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid ' + (!isOnline ? '#fecaca' : '#e6e6ec'), background: !isOnline ? '#fef2f2' : '#ffffff', color: !isOnline ? '#a83232' : '#54546a', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, cursor: 'pointer', position: 'relative' }">
-        <lucide-icon name="cloud" style="font-size: 15px;" />
-        <span v-if="offlineSalesCount > 0" style="position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; background: #d64545; color: #fff; font-size: 10px; font-weight: 700; border-radius: 99px; display: inline-flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono', monospace;">{{ offlineSalesCount }}</span>
-      </button>
+      <!-- Offline / sync status menu: state-coloured toggle + panel with
+           counts, Sync now, review of rejected sales and (with permission)
+           the Sales > Offline Sales page for all tills. -->
+      <b-dropdown
+        v-if="showOfflineSyncMenu"
+        id="offline-sync-dd"
+        class="pos-sync-dd"
+        right
+        toggle-class="dropdown-toggle-no-caret p-0 bg-transparent border-0"
+        menu-class="pos-shell-dropdown-menu pos-sync-menu"
+        no-caret variant="link">
+        <template #button-content>
+          <span class="pos-sync-toggle" :class="'is-' + offlineSyncState" :title="offlineStatusTitle">
+            <lucide-icon :name="offlineSyncIcon" :class="{ 'pos-sync-spin': offlineSyncState === 'syncing' }" style="font-size: 15px;" />
+            <span v-if="offlineFailedCount > 0" class="pos-sync-badge is-danger">{{ offlineFailedCount }}</span>
+            <span v-else-if="offlineSalesCount > 0" class="pos-sync-badge">{{ offlineSalesCount }}</span>
+            <span v-else-if="offlineSyncState === 'ok'" class="pos-sync-dot"></span>
+          </span>
+        </template>
+        <div class="pos-sync-panel">
+          <div class="pos-sync-head" :class="'is-' + offlineSyncState">
+            <span class="pos-sync-head-icon">
+              <lucide-icon :name="offlineSyncIcon" :class="{ 'pos-sync-spin': offlineSyncState === 'syncing' }" />
+            </span>
+            <span class="pos-sync-head-text">
+              <span class="pos-sync-head-title">{{ offlineSyncTitle }}</span>
+              <span class="pos-sync-head-sub">{{ offlineSyncSubtitle }}</span>
+            </span>
+          </div>
+
+          <div class="pos-sync-stats">
+            <div class="pos-sync-stat">
+              <span class="pos-sync-stat-value">{{ offlineSalesCount }}</span>
+              <span class="pos-sync-stat-label">{{ tfp('pos.Sync_Waiting', null, 'Waiting to upload') }}</span>
+            </div>
+            <div class="pos-sync-stat" :class="{ 'is-danger': offlineFailedCount > 0 }">
+              <span class="pos-sync-stat-value">{{ offlineFailedCount }}</span>
+              <span class="pos-sync-stat-label">{{ tfp('pos.Sync_Not_Synced', null, 'Not synced') }}</span>
+            </div>
+          </div>
+          <div v-if="offlineLastSyncAt" class="pos-sync-meta">
+            <lucide-icon name="clock" /> {{ tfp('pos.Sync_Last_Upload', { time: offlineLastSyncAtLabel }, 'Last upload: ' + offlineLastSyncAtLabel) }}
+          </div>
+
+          <div class="pos-sync-actions">
+            <button type="button" class="pos-sync-action is-primary" :disabled="!isOnline || offlineSyncInProgress" @click="syncOfflineSales">
+              <lucide-icon :name="offlineSyncInProgress ? 'refresh-cw' : 'cloud-upload'" :class="{ 'pos-sync-spin': offlineSyncInProgress }" />
+              <span class="pos-sync-action-text">
+                <span>{{ offlineSyncInProgress ? tfp('pos.Sync_In_Progress', null, 'Syncing…') : tfp('pos.Sync_Now', null, 'Sync now') }}</span>
+                <span v-if="!isOnline" class="pos-sync-action-sub">{{ tfp('pos.Sync_Needs_Connection', null, 'Available when the connection is back') }}</span>
+              </span>
+            </button>
+            <button v-if="offlineFailedCount > 0" type="button" class="pos-sync-action is-danger" @click="openFailedOfflineSales">
+              <lucide-icon name="alert-triangle" />
+              <span class="pos-sync-action-text">
+                <span>{{ tfp('pos.Sync_Review_Failed', { n: offlineFailedCount }, 'Review not-synced sales (' + offlineFailedCount + ')') }}</span>
+                <span class="pos-sync-action-sub">{{ tfp('pos.Sync_Review_Failed_Sub', null, 'See why, then retry or discard on this till') }}</span>
+              </span>
+              <lucide-icon name="chevron-right" class="pos-sync-action-caret" />
+            </button>
+            <button v-if="canOpenOfflineSalesPage" type="button" class="pos-sync-action" :disabled="!isOnline" @click="goToOfflineSalesPage">
+              <lucide-icon name="external-link" />
+              <span class="pos-sync-action-text">
+                <span>{{ tfp('pos.Sync_Open_Page', null, 'Open Offline Sales page') }}</span>
+                <span class="pos-sync-action-sub">{{ tfp('pos.Sync_Open_Page_Sub', null, 'Every till · retry or discard rejected sales') }}</span>
+              </span>
+              <lucide-icon name="chevron-right" class="pos-sync-action-caret" />
+            </button>
+          </div>
+
+          <div v-if="offlineFailedCount > 0 && !canOpenOfflineSalesPage" class="pos-sync-hint">
+            {{ tfp('pos.Sync_Ask_Manager', null, 'A manager can also review these in Sales › Offline Sales.') }}
+          </div>
+        </div>
+      </b-dropdown>
 
       <!-- POS settings -->
       <button
@@ -270,6 +312,20 @@
         </div>
       </b-dropdown>
 
+      <!-- Sold by: salesperson + sales agent (right drawer) -->
+      <button
+        v-if="soldByEnabled"
+        type="button"
+        @click="soldByDrawerOpen = true"
+        :title="soldByTitle"
+        :aria-label="$t('Sold_By')"
+        class="pos-shell-icon-btn pos-shell-soldby-btn"
+        :class="{ 'is-set': selectedSalesAgentId || (salesSwitchEnabled && currentUser && selectedSellerId && String(selectedSellerId) !== String(currentUser.id)) }"
+        style="position: relative; width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--pos-border); background: var(--pos-surface); color: var(--pos-text-2); display: inline-flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; transition: all 120ms ease;">
+        <lucide-icon name="users" style="font-size: 15px;" />
+        <span v-if="selectedSalesAgentId" class="pos-soldby-dot"></span>
+      </button>
+
       <!-- Calculator -->
       <button
         @click="openCalculator"
@@ -295,7 +351,7 @@
       <div class="pos-shell-user-dd-wrapper" style="display: inline-flex;">
         <b-dropdown id="user-dd" right toggle-class="dropdown-toggle-no-caret p-0 bg-transparent border-0" no-caret variant="link">
           <template #button-content>
-            <img v-if="currentUser && currentUser.avatar" :src="'/images/avatar/'+currentUser.avatar" alt="avatar" style="width: 32px; height: 32px; border-radius: 99px; object-fit: cover; display: block;" />
+            <img v-if="currentUser && currentUser.avatar" :src="$imgUrl('avatar', currentUser.avatar)" alt="avatar" style="width: 32px; height: 32px; border-radius: 99px; object-fit: cover; display: block;" />
             <div v-else style="width: 32px; height: 32px; border-radius: 99px; background: linear-gradient(135deg, #6f53d9, #b65cd6); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600;">{{ currentUser && currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U' }}</div>
           </template>
           <div style="padding: 6px; min-width: 200px;">
@@ -369,7 +425,7 @@
                 :class="{ 'is-disabled': !details.length }"
                 :disabled="!details.length"
                 :title="$t('pos.Clear_all_items') || 'Clear cart'"
-                @click="Reset_Pos"
+                @click="requestClearCart"
               >
                 <lucide-icon name="trash-2" />
               </button>
@@ -433,7 +489,7 @@
                   <!-- qty stepper -->
                   <div style="display: inline-flex; align-items: center; border: 1px solid #e6e6ec; border-radius: 5px; height: 24px; background: #ffffff; flex-shrink: 0;">
                     <button @click="decrement(item, item.detail_id)" :title="$t('pos.Decrease')" style="width: 22px; height: 22px; background: transparent; border: 0; color: #54546a; font-size: 14px; cursor: pointer; padding: 0;">−</button>
-                    <input v-model.number="item.quantity" type="text" @change="Verified_Qty(item, item.detail_id)" style="width: 32px; height: 100%; border: 0; text-align: center; font-size: 12px; font-family: 'JetBrains Mono', monospace; background: transparent; color: #1f1f2c; outline: none; padding: 0;" />
+                    <input v-model.number="item.quantity" type="text" @focus="rememberQty(item)" @change="Verified_Qty(item, item.detail_id)" style="width: 32px; height: 100%; border: 0; text-align: center; font-size: 12px; font-family: 'JetBrains Mono', monospace; background: transparent; color: #1f1f2c; outline: none; padding: 0;" />
                     <button @click="increment(item.detail_id)" :title="$t('pos.Increase')" style="width: 22px; height: 22px; background: transparent; border: 0; color: #54546a; font-size: 14px; cursor: pointer; padding: 0;">+</button>
                   </div>
                   <!-- × unit price (darker + larger so the per-unit math reads at a glance) -->
@@ -448,7 +504,7 @@
                        unit price dropped. -->
                   <span v-if="isWholesaleTierApplied(item)" :title="$t('Wholesale_Tier_Applied')" style="height: 24px; display: inline-flex; align-items: center; padding: 0 6px; font-size: 10px; font-weight: 600; border-radius: 5px; background: #e8f5ee; color: #1c7c4a; white-space: nowrap; flex-shrink: 0;">{{ $t('Wholesale') }}</span>
                   <!-- Multi-Pack Selling: per-line pack picker (only when packs exist) -->
-                  <select v-if="item.packs && item.packs.length" v-model="item.product_pack_id" @change="onChangePack(item)" :title="$t('Pack')" style="height: 24px; padding: 0 6px; font-size: 11px; font-weight: 500; border: 1px solid #d8d8e0; border-radius: 5px; background: #ffffff; color: #1f1f2c; outline: none; cursor: pointer; flex-shrink: 0;">
+                  <select v-if="item.packs && item.packs.length" v-model="item.product_pack_id" @focus="rememberPack(item)" @change="onChangePack(item)" :title="$t('Pack')" style="height: 24px; padding: 0 6px; font-size: 11px; font-weight: 500; border: 1px solid #d8d8e0; border-radius: 5px; background: #ffffff; color: #1f1f2c; outline: none; cursor: pointer; flex-shrink: 0;">
                     <option v-for="pack in item.packs" :key="'pk-'+item.detail_id+'-'+pack.id" :value="pack.id" :disabled="!isOversellingAllowed && item.product_type !== 'is_service' && Number(pack.multiplier) > 1 && Number(pack.multiplier) > Number(item.current)">{{ pack.name }} (×{{ pack.multiplier }})<template v-if="!isOversellingAllowed && item.product_type !== 'is_service' && Number(pack.multiplier) > 1 && Number(pack.multiplier) > Number(item.current)"> — {{ $t('Out_of_Stock') || 'out of stock' }}</template></option>
                   </select>
                 </div>
@@ -530,11 +586,24 @@
                 <serial-numbers-field
                   mode="select"
                   v-model="item.serial_numbers"
-                  :required-count="item.quantity"
+                  :required-count="lineSerialUnits(item)"
                   :product-id="item.product_id"
                   :product-variant-id="item.product_variant_id"
                   :warehouse-id="sale.warehouse_id"
                 />
+              </div>
+              <!-- Combo: one serial panel per serial-tracked component -->
+              <div v-else-if="hasComboSerials(item)" style="grid-column: 1 / -1; margin-top: 6px; padding: 8px; background: #f3f3f7; border-radius: 8px;">
+                <div v-for="c in item.serial_components" :key="c.product_id" style="margin-bottom: 6px;">
+                  <div style="font-size: 12px; font-weight: 600; color: #1e293b; margin-bottom: 4px;">{{ c.name }}</div>
+                  <serial-numbers-field
+                    mode="select"
+                    :model-value="(item.serial_groups || {})[c.product_id] || []"
+                    @update:model-value="v => applyComboSerialGroup(item, c.product_id, v)"
+                    :required-count="comboSerialRequired(c, lineSerialUnits(item))"
+                    :fetch-params="sale.warehouse_id ? { product_id: c.product_id, warehouse_id: sale.warehouse_id, for_combo: 1 } : null"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -555,14 +624,19 @@
             <label style="display: block;">
               <div style="font-size: 9px; font-weight: 700; letter-spacing: 0.08em; color: #8d8da0; margin-bottom: 4px;">{{ $t('Discount') }}</div>
               <div style="display: flex; align-items: center; height: 28px; border: 1px solid #e6e6ec; border-radius: 6px; background: #ffffff;">
-                <button type="button" @click="toggleDiscountType" :title="sale.discount_Method === '1' ? $t('Switch_to_Fixed') : $t('Switch_to_Percentage')" style="padding-left: 8px; padding-right: 0; background: transparent; border: 0; color: #8d8da0; font-size: 12px; cursor: pointer; font-family: 'JetBrains Mono', monospace;">{{ sale.discount_Method === '1' ? '%' : currentUser.currency }}</button>
+                <!-- Both options visible, the active one highlighted, so the % mode is discoverable. -->
+                <button type="button" @click="toggleDiscountType" :title="sale.discount_Method === '1' ? $t('Switch_to_Fixed') : $t('Switch_to_Percentage')" style="display: flex; align-items: center; gap: 2px; margin-left: 4px; padding: 1px 4px; background: #f3f2f8; border: 0; border-radius: 4px; font-size: 11px; cursor: pointer; font-family: 'JetBrains Mono', monospace; white-space: nowrap;">
+                  <span :style="sale.discount_Method === '1' ? 'color: #8d8da0;' : 'color: #1f1f2c; font-weight: 700;'">{{ currentUser.currency }}</span>
+                  <span style="color: #c4c4d0;">/</span>
+                  <span :style="sale.discount_Method === '1' ? 'color: #1f1f2c; font-weight: 700;' : 'color: #8d8da0;'">%</span>
+                </button>
                 <input v-model.number="sale.discount" type="text" placeholder="0" @keyup="keyup_Discount" style="width: 100%; border: 0; padding: 0 8px; background: transparent; font-size: 12px; font-family: 'JetBrains Mono', monospace; color: #1f1f2c; outline: none; min-width: 0;" />
               </div>
             </label>
             <label style="display: block;">
               <div style="font-size: 9px; font-weight: 700; letter-spacing: 0.08em; color: #8d8da0; margin-bottom: 4px;">{{ $t('Shipping') }}</div>
               <div style="display: flex; align-items: center; height: 28px; border: 1px solid #e6e6ec; border-radius: 6px; background: #ffffff;">
-                <span style="padding-left: 8px; color: #8d8da0; font-size: 12px; font-family: 'JetBrains Mono', monospace;">{{ currentUser.currency }}</span>
+                <span style="padding-left: 8px; color: #8d8da0; font-size: 12px; font-family: 'JetBrains Mono', monospace;" :style="String(currentUser.currency_position || '').startsWith('after') ? { order: 2, paddingLeft: 0, paddingRight: '8px' } : null">{{ currentUser.currency }}</span>
                 <input v-model.number="sale.shipping" type="text" placeholder="0" @keyup="keyup_Shipping" style="width: 100%; border: 0; padding: 0 8px; background: transparent; font-size: 12px; font-family: 'JetBrains Mono', monospace; color: #1f1f2c; outline: none; min-width: 0;" />
               </div>
             </label>
@@ -578,7 +652,7 @@
                 <span>{{ $t('Available_Points') }}</span>
                 <span style="font-size: 14px; font-weight: 700; color: #6f53d9; font-family: 'JetBrains Mono', monospace; margin-left: 4px;">{{ selectedClientPoints }}</span>
               </div>
-              <div v-if="discount_from_points > 0" style="font-size: 10px; color: #1e7a44; margin-top: 2px;">✅ {{ $t('Discount') }} {{ discount_from_points }} {{ currentUser.currency }} {{ $t('pos.will_be_applied') }}</div>
+              <div v-if="discount_from_points > 0" style="font-size: 10px; color: #1e7a44; margin-top: 2px;">✅ {{ $t('Discount') }} {{ attachCurrency(currentUser.currency, discount_from_points) }} {{ $t('pos.will_be_applied') }}</div>
             </div>
             <div style="display: inline-flex; align-items: center; gap: 6px;">
               <input
@@ -635,12 +709,12 @@
 
           <!-- Promo code input — hidden when the plan has no Promotions feature -->
           <div v-if="promotionsEnabled" style="margin-top: 6px;">
-            <div style="font-size: 9px; font-weight: 700; letter-spacing: 0.08em; color: #8d8da0; margin-bottom: 4px; text-transform: uppercase;">Promo code</div>
+            <div style="font-size: 9px; font-weight: 700; letter-spacing: 0.08em; color: #8d8da0; margin-bottom: 4px; text-transform: uppercase;">{{ $t('PromoCode') }}</div>
             <div style="display: flex; gap: 6px; align-items: center;">
               <input
                 v-model="promotionCode"
                 type="text"
-                placeholder="Enter code"
+                :placeholder="$t('EnterCode')"
                 @keyup.enter="Apply_Promotion_Code"
                 style="flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid #e6e6ec; border-radius: 6px; background: #ffffff; font-size: 12px; font-family: 'JetBrains Mono', monospace; color: #1f1f2c; outline: none;"
               />
@@ -699,8 +773,16 @@
                 :key="product_fil.id"
                 @mousedown="SearchProduct(product_fil)"
                 class="pos-shell-autocomplete-item"
-                style="padding: 8px 12px; font-size: 13px; color: #1f1f2c; cursor: pointer; border-radius: 6px;">
-                {{ getResultValue(product_fil) }}
+                style="padding: 8px 12px; font-size: 13px; color: #1f1f2c; cursor: pointer; border-radius: 6px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ getResultValue(product_fil) }}</span>
+                <!-- POS Settings > Show Stock in Search Results: available quantity
+                     in the sale unit, as the product tiles show it. Services have no stock. -->
+                <span
+                  v-if="pos_settings.show_search_stock && product_fil.product_type !== 'is_service'"
+                  class="pos-shell-search-stock"
+                  :style="{ flexShrink: 0, fontSize: '11px', fontFamily: 'JetBrains Mono, monospace', padding: '2px 8px', borderRadius: '999px', background: Number(product_fil.qte_sale || 0) > 0 ? '#eaf7ee' : '#fdecec', color: Number(product_fil.qte_sale || 0) > 0 ? '#1f7a3a' : '#b42318' }">
+                  {{ formatNumber(product_fil.qte_sale, 2) }} {{ product_fil.unitSale }}
+                </span>
               </li>
             </ul>
           </div>
@@ -710,6 +792,32 @@
               <path d="M3 7V4h3M14 4h3v3M17 13v3h-3M6 16H3v-3"/><path d="M5 10h10"/>
             </svg>
             <span>{{ $t('Scan') }}</span>
+          </button>
+          <!-- Grid order (remembered on this device) -->
+          <select
+            v-model="productSort"
+            @change="onProductSortChange"
+            :title="$t('pos.Sort_Products')"
+            class="pos-shell-sort-select"
+            style="height: 36px; max-width: 160px; padding: 0 8px; background: #ffffff; color: #1f1f2c; border: 1px solid #e6e6ec; border-radius: 8px; font-size: 13px; font-family: inherit; outline: none; cursor: pointer; flex-shrink: 0;">
+            <option value="newest">{{ $t('pos.Sort_Newest') }}</option>
+            <option value="oldest">{{ $t('pos.Sort_Oldest') }}</option>
+            <option value="name_asc">{{ $t('pos.Sort_Name_Asc') }}</option>
+            <option value="name_desc">{{ $t('pos.Sort_Name_Desc') }}</option>
+            <option value="price_asc">{{ $t('pos.Sort_Price_Asc') }}</option>
+            <option value="price_desc">{{ $t('pos.Sort_Price_Desc') }}</option>
+          </select>
+          <!-- Favourites only (the cashier's starred products) -->
+          <button
+            @click="toggleFavoritesOnly"
+            :title="$t('pos.Favorites_Only')"
+            :aria-pressed="productFavoritesOnly ? 'true' : 'false'"
+            class="pos-shell-action-btn"
+            :style="{ height: '36px', padding: '0 12px', background: productFavoritesOnly ? 'rgba(109,40,217,0.08)' : 'transparent', color: productFavoritesOnly ? '#6d28d9' : '#1f1f2c', border: '1px solid ' + (productFavoritesOnly ? '#6d28d9' : '#e6e6ec'), borderRadius: '8px', fontSize: '13px', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer', transition: 'all 120ms ease' }">
+            <svg viewBox="0 0 24 24" :fill="productFavoritesOnly ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" style="width: 16px; height: 16px; flex-shrink: 0;">
+              <path d="M12 2.5l2.94 5.96 6.56.95-4.75 4.63 1.12 6.54L12 17.5l-5.87 3.08 1.12-6.54L2.5 9.41l6.56-.95z"/>
+            </svg>
+            <span>{{ $t('pos.Favorites') }}</span>
           </button>
           <!-- Vehicle Fitment button (feature-flagged) -->
           <button
@@ -747,6 +855,7 @@
               <path d="m21 21-4.35-4.35"></path>
             </svg>
             <div style="font-size: 13px; color: #54546a;">{{ $t('pos.No_products_found') }}</div>
+            <div v-if="productFavoritesOnly" style="font-size: 12px; margin-top: 4px;">{{ $t('pos.Favorites_Empty_Hint') }}</div>
           </div>
 
           <div v-else class="pos-shell-products-grid">
@@ -787,6 +896,18 @@
                 </div>
                 <!-- Discount % badge (top-left) -->
                 <div v-if="product.discount" style="position: absolute; top: 6px; left: 6px; background: rgba(255,255,255,0.9); border-radius: 6px; padding: 2px 6px; color: #d64545; font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700;">-{{ product.discount }}%</div>
+                <!-- Favourite star (top-right): toggles without adding to the cart -->
+                <span
+                  role="button"
+                  class="pos-shell-card-fav"
+                  :class="{ 'is-fav': isFavorite(product) }"
+                  :title="isFavorite(product) ? $t('pos.Remove_From_Favorites') : $t('pos.Add_To_Favorites')"
+                  :aria-pressed="isFavorite(product) ? 'true' : 'false'"
+                  @click.stop.prevent="toggleFavorite(product)">
+                  <svg viewBox="0 0 24 24" :fill="isFavorite(product) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+                    <path d="M12 2.5l2.94 5.96 6.56.95-4.75 4.63 1.12 6.54L12 17.5l-5.87 3.08 1.12-6.54L2.5 9.41l6.56-.95z"/>
+                  </svg>
+                </span>
               </div>
 
               <!-- Name (single 13px line) -->
@@ -862,7 +983,7 @@
           </button>
           <div style="display: inline-flex; flex-direction: column; align-items: center; font-size: 11px; color: #8d8da0;">
             <span style="font-family: 'JetBrains Mono', monospace; color: #54546a;">{{ $t('pos.Page') }} {{ product_currentPage }}</span>
-            <span>{{ product_totalRows }} {{ $t('pos.products') }}</span>
+            <span>{{ (pos_vehicle || productFavoritesOnly) ? gridProducts.length : product_totalRows }} {{ $t('pos.products') }}</span>
           </div>
           <div style="display: inline-flex; gap: 4px;">
             <button
@@ -896,6 +1017,7 @@
         <span :style="{ width: '6px', height: '6px', borderRadius: '99px', background: isOnline ? '#2fae5e' : '#d64545' }"></span>
         <span v-if="isOnline">{{ $t('Online') || 'Online' }} <span v-if="lastProductsSyncAt" style="opacity: 0.7;">· {{ $t('pos.Synced') || 'synced' }}</span></span>
         <span v-else>{{ $t('pos.Offline_Mode') }}<span v-if="offlineSalesCount > 0" style="opacity: 0.7;"> · {{ offlineSalesCount }} {{ $t('pos.Pending') || 'pending' }}</span></span>
+        <a v-if="offlineFailedCount > 0" href="#" style="color: #a83232; font-weight: 600; text-decoration: underline;" @click.prevent="openFailedOfflineSales">· {{ offlineFailedCount }} {{ $t('pos.Offline_Sales_Failed_Short') || 'not synced' }}</a>
       </div>
 
       <div style="width: 1px; height: 24px; background: #e6e6ec; margin: 0 8px;"></div>
@@ -909,7 +1031,7 @@
         <span>{{ $t('pos.Home') }}</span>
       </router-link>
 
-      <button v-if="isOnline" @click="Reset_Pos" :title="$t('pos.Clear_all_items')" class="pos-shell-action-btn" style="height: 36px; padding: 0 14px; background: transparent; color: #1f1f2c; border: 1px solid #e6e6ec; border-radius: 8px; font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: all 120ms ease;">
+      <button v-if="isOnline" @click="requestClearCart" :title="$t('pos.Clear_all_items')" class="pos-shell-action-btn" style="height: 36px; padding: 0 14px; background: transparent; color: #1f1f2c; border: 1px solid #e6e6ec; border-radius: 8px; font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: all 120ms ease;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px;">
           <path d="M1 4v6h6"></path>
           <path d="M23 20v-6h-6"></path>
@@ -1028,7 +1150,7 @@
           </span>
         </template>
         <router-link to="/dashboard" class="dropdown-item">{{ $t('pos.Home') || 'Home' }}</router-link>
-        <button type="button" class="dropdown-item" @click="Reset_Pos">{{ $t('pos.Reset') || 'Reset' }}</button>
+        <button type="button" class="dropdown-item" @click="requestClearCart">{{ $t('pos.Reset') || 'Reset' }}</button>
         <button type="button" class="dropdown-item" @click="handleFullScreen">{{ $t('Fullscreen') || 'Fullscreen' }}</button>
         <a href="#" class="dropdown-item" @click.prevent="logoutUser">{{ $t('logout') || 'Logout' }}</a>
       </b-dropdown>
@@ -1161,6 +1283,7 @@
     :currency-id="posIsBaseCurrency ? null : pos_currency_id"
     :client-id="selectedClientId"
     :seller-id="salesSwitchEnabled ? selectedSellerId : null"
+    :sales-agent-id="selectedSalesAgentId"
     :warehouse-id="sale.warehouse_id"
     :sale="sale"
     :details="details"
@@ -1175,6 +1298,7 @@
     :promotion-context="promotionContextForCheckout"
     @payment-success="onModernPaymentSuccess"
     @invoice-ready="onModalInvoiceReady"
+    @unavailable-products="onUnavailablePosProducts"
   />
 
   <!-- POS Product Return Modal -->
@@ -1197,7 +1321,7 @@
             <div v-if="currentReceiptLayout === 1">
               <div class="info">
                 <div class="invoice_logo text-center mb-2">
-                  <img v-show="pos_settings.show_logo !== 0" :src="$imgUrl('settings', invoice_pos.setting.logo)" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                  <img v-show="pos_settings.show_logo !== 0" :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
                 </div>
                 <p>
                   <span v-show="pos_settings.show_store_name !== 0"><strong>{{invoice_pos.setting.CompanyName}}</strong><br></span>
@@ -1366,19 +1490,33 @@
                 <p class="legal" v-show="pos_settings.show_note" style="white-space:pre-line;">
                   <strong>{{pos_settings.note_customer}}</strong>
                 </p>
+                <!-- Warehouse Letterhead: the issuing branch's own footer note.
+                     Empty when the feature is off or the branch has no note. -->
+                <p v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer"
+                   class="legal receipt-branch-note" style="white-space:pre-line;">
+                  {{invoice_pos.setting.issuer_footer}}
+                </p>
                 <!-- Receipt QR codes (ZATCA + Invoice URL) -->
+                <!-- AGT (Angola) / DGI (DR Congo) e-invoicing mentions + QR -->
+                <div v-if="invoice_pos.fiscal && invoice_pos.fiscal.blocks" class="receipt-fiscal mt-2" style="text-align: center;">
+                  <div v-for="(fb, fi) in invoice_pos.fiscal.blocks" :key="'fiscal-' + fi" class="receipt-fiscal-block" style="margin-bottom: 6px;">
+                    <div class="receipt-fiscal-title" style="font-weight: 700; font-size: 11px;">{{ fb.title }}</div>
+                    <div v-for="(fl, li) in fb.lines" :key="'fl-' + li" class="receipt-fiscal-line" style="font-size: 10px; line-height: 1.35; word-break: break-word;">{{ fl }}</div>
+                    <img v-if="fb.qr" :src="fb.qr" class="receipt-fiscal-qr" alt="QR" style="width: 110px; height: 110px; margin-top: 4px;" />
+                  </div>
+                </div>
                 <div v-if="(invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0) || (pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref) || invoice_pos.fbr_invoice_number" class="receipt-qr-row mt-2">
                   <div v-if="invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0" class="receipt-qr-block">
                     <div class="receipt-qr-title">ZATCA QR</div>
                     <div class="receipt-qr-canvas" ref="zatcaQrcodePos"></div>
                   </div>
                   <div v-if="invoice_pos.fbr_invoice_number" class="receipt-qr-block">
-                    <div class="receipt-qr-title">FBR Invoice</div>
+                    <div class="receipt-qr-title">{{ $t('Pos_FBR_Invoice') }}</div>
                     <div class="receipt-qr-canvas" ref="fbrQrcodePos"></div>
                     <div class="receipt-qr-title">{{ invoice_pos.fbr_invoice_number }}</div>
                   </div>
                   <div v-if="pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref" class="receipt-qr-block">
-                    <div class="receipt-qr-title">Invoice QR</div>
+                    <div class="receipt-qr-title">{{ $t('Invoice_QR') }}</div>
                     <div class="receipt-qr-canvas" ref="invoiceUrlQr"></div>
                   </div>
                 </div>
@@ -1389,7 +1527,7 @@
             <div v-else-if="currentReceiptLayout === 2">
               <div class="info text-center">
                 <div class="invoice_logo mb-1">
-                  <img v-show="pos_settings.show_logo !== 0" :src="$imgUrl('settings', invoice_pos.setting.logo)" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                  <img v-show="pos_settings.show_logo !== 0" :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
                 </div>
                 <div>
                   <div v-show="pos_settings.show_store_name !== 0">{{invoice_pos.setting.CompanyName}}</div>
@@ -1586,19 +1724,33 @@
                 <p class="legal" v-show="pos_settings.show_note" style="white-space:pre-line;">
                   <strong>{{pos_settings.note_customer}}</strong>
                 </p>
+                <!-- Warehouse Letterhead: the issuing branch's own footer note.
+                     Empty when the feature is off or the branch has no note. -->
+                <p v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer"
+                   class="legal receipt-branch-note" style="white-space:pre-line;">
+                  {{invoice_pos.setting.issuer_footer}}
+                </p>
                 <!-- Receipt QR codes (ZATCA + Invoice URL) -->
+                <!-- AGT (Angola) / DGI (DR Congo) e-invoicing mentions + QR -->
+                <div v-if="invoice_pos.fiscal && invoice_pos.fiscal.blocks" class="receipt-fiscal mt-2" style="text-align: center;">
+                  <div v-for="(fb, fi) in invoice_pos.fiscal.blocks" :key="'fiscal-' + fi" class="receipt-fiscal-block" style="margin-bottom: 6px;">
+                    <div class="receipt-fiscal-title" style="font-weight: 700; font-size: 11px;">{{ fb.title }}</div>
+                    <div v-for="(fl, li) in fb.lines" :key="'fl-' + li" class="receipt-fiscal-line" style="font-size: 10px; line-height: 1.35; word-break: break-word;">{{ fl }}</div>
+                    <img v-if="fb.qr" :src="fb.qr" class="receipt-fiscal-qr" alt="QR" style="width: 110px; height: 110px; margin-top: 4px;" />
+                  </div>
+                </div>
                 <div v-if="(invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0) || (pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref) || invoice_pos.fbr_invoice_number" class="receipt-qr-row mt-2">
                   <div v-if="invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0" class="receipt-qr-block">
                     <div class="receipt-qr-title">ZATCA QR</div>
                     <div class="receipt-qr-canvas" ref="zatcaQrcodePos"></div>
                   </div>
                   <div v-if="invoice_pos.fbr_invoice_number" class="receipt-qr-block">
-                    <div class="receipt-qr-title">FBR Invoice</div>
+                    <div class="receipt-qr-title">{{ $t('Pos_FBR_Invoice') }}</div>
                     <div class="receipt-qr-canvas" ref="fbrQrcodePos"></div>
                     <div class="receipt-qr-title">{{ invoice_pos.fbr_invoice_number }}</div>
                   </div>
                   <div v-if="pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref" class="receipt-qr-block">
-                    <div class="receipt-qr-title">Invoice QR</div>
+                    <div class="receipt-qr-title">{{ $t('Invoice_QR') }}</div>
                     <div class="receipt-qr-canvas" ref="invoiceUrlQr"></div>
                   </div>
                 </div>
@@ -1616,7 +1768,7 @@
                     <span v-show="pos_settings.show_email">{{invoice_pos.setting.email}}</span>
                   </div>
                   <div class="invoice_logo text-center mb-2" v-show="pos_settings.show_logo !== 0">
-                    <img :src="$imgUrl('settings', invoice_pos.setting.logo)" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                    <img :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
                   </div>
                 </div>
                 <div class="mt-2" style="font-size:11px;">
@@ -1788,19 +1940,33 @@
                 <p class="legal" v-show="pos_settings.show_note" style="white-space:pre-line;">
                   <strong>{{pos_settings.note_customer}}</strong>
                 </p>
+                <!-- Warehouse Letterhead: the issuing branch's own footer note.
+                     Empty when the feature is off or the branch has no note. -->
+                <p v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer"
+                   class="legal receipt-branch-note" style="white-space:pre-line;">
+                  {{invoice_pos.setting.issuer_footer}}
+                </p>
                 <!-- Receipt QR codes (ZATCA + Invoice URL) -->
+                <!-- AGT (Angola) / DGI (DR Congo) e-invoicing mentions + QR -->
+                <div v-if="invoice_pos.fiscal && invoice_pos.fiscal.blocks" class="receipt-fiscal mt-2" style="text-align: center;">
+                  <div v-for="(fb, fi) in invoice_pos.fiscal.blocks" :key="'fiscal-' + fi" class="receipt-fiscal-block" style="margin-bottom: 6px;">
+                    <div class="receipt-fiscal-title" style="font-weight: 700; font-size: 11px;">{{ fb.title }}</div>
+                    <div v-for="(fl, li) in fb.lines" :key="'fl-' + li" class="receipt-fiscal-line" style="font-size: 10px; line-height: 1.35; word-break: break-word;">{{ fl }}</div>
+                    <img v-if="fb.qr" :src="fb.qr" class="receipt-fiscal-qr" alt="QR" style="width: 110px; height: 110px; margin-top: 4px;" />
+                  </div>
+                </div>
                 <div v-if="(invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0) || (pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref) || invoice_pos.fbr_invoice_number" class="receipt-qr-row mt-2">
                   <div v-if="invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0" class="receipt-qr-block">
                     <div class="receipt-qr-title">ZATCA QR</div>
                     <div class="receipt-qr-canvas" ref="zatcaQrcodePos"></div>
                   </div>
                   <div v-if="invoice_pos.fbr_invoice_number" class="receipt-qr-block">
-                    <div class="receipt-qr-title">FBR Invoice</div>
+                    <div class="receipt-qr-title">{{ $t('Pos_FBR_Invoice') }}</div>
                     <div class="receipt-qr-canvas" ref="fbrQrcodePos"></div>
                     <div class="receipt-qr-title">{{ invoice_pos.fbr_invoice_number }}</div>
                   </div>
                   <div v-if="pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref" class="receipt-qr-block">
-                    <div class="receipt-qr-title">Invoice QR</div>
+                    <div class="receipt-qr-title">{{ $t('Invoice_QR') }}</div>
                     <div class="receipt-qr-canvas" ref="invoiceUrlQr"></div>
                   </div>
                 </div>
@@ -1811,7 +1977,7 @@
             <div v-else-if="currentReceiptLayout === 4" class="receipt-layout-4">
               <div class="info text-center bl4-header">
                 <div class="invoice_logo mb-1" v-show="pos_settings.show_logo !== 0">
-                  <img :src="$imgUrl('settings', invoice_pos.setting.logo)" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                  <img :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
                 </div>
                 <div class="bl4-company-ar" v-if="invoice_pos.setting.company_name_ar">{{invoice_pos.setting.company_name_ar}}</div>
                 <div class="bl4-company-en">{{invoice_pos.setting.CompanyName}}</div>
@@ -2006,24 +2172,33 @@
                   <div class="bl4-thanks-en">Thank You For Shopping With Us!</div>
                 </div>
                 <div v-show="pos_settings.show_note && pos_settings.note_customer" class="bl4-policy">{{pos_settings.note_customer}}</div>
+                <div v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer" class="bl4-policy receipt-branch-note">{{invoice_pos.setting.issuer_footer}}</div>
                 <div class="bl4-footer-contact" v-if="invoice_pos.setting.CompanyPhone || invoice_pos.setting.email">
                   <span v-if="invoice_pos.setting.CompanyPhone">{{invoice_pos.setting.CompanyPhone}}</span>
                   <span v-if="invoice_pos.setting.CompanyPhone && invoice_pos.setting.email"> &middot; </span>
                   <span v-if="invoice_pos.setting.email">{{invoice_pos.setting.email}}</span>
                 </div>
                 <!-- Receipt QR codes (ZATCA + Invoice URL) -->
+                <!-- AGT (Angola) / DGI (DR Congo) e-invoicing mentions + QR -->
+                <div v-if="invoice_pos.fiscal && invoice_pos.fiscal.blocks" class="receipt-fiscal mt-2" style="text-align: center;">
+                  <div v-for="(fb, fi) in invoice_pos.fiscal.blocks" :key="'fiscal-' + fi" class="receipt-fiscal-block" style="margin-bottom: 6px;">
+                    <div class="receipt-fiscal-title" style="font-weight: 700; font-size: 11px;">{{ fb.title }}</div>
+                    <div v-for="(fl, li) in fb.lines" :key="'fl-' + li" class="receipt-fiscal-line" style="font-size: 10px; line-height: 1.35; word-break: break-word;">{{ fl }}</div>
+                    <img v-if="fb.qr" :src="fb.qr" class="receipt-fiscal-qr" alt="QR" style="width: 110px; height: 110px; margin-top: 4px;" />
+                  </div>
+                </div>
                 <div v-if="(invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0) || (pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref) || invoice_pos.fbr_invoice_number" class="receipt-qr-row mt-2">
                   <div v-if="invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0" class="receipt-qr-block">
                     <div class="receipt-qr-title">ZATCA QR</div>
                     <div class="receipt-qr-canvas" ref="zatcaQrcodePos"></div>
                   </div>
                   <div v-if="invoice_pos.fbr_invoice_number" class="receipt-qr-block">
-                    <div class="receipt-qr-title">FBR Invoice</div>
+                    <div class="receipt-qr-title">{{ $t('Pos_FBR_Invoice') }}</div>
                     <div class="receipt-qr-canvas" ref="fbrQrcodePos"></div>
                     <div class="receipt-qr-title">{{ invoice_pos.fbr_invoice_number }}</div>
                   </div>
                   <div v-if="pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref" class="receipt-qr-block">
-                    <div class="receipt-qr-title">Invoice QR</div>
+                    <div class="receipt-qr-title">{{ $t('Invoice_QR') }}</div>
                     <div class="receipt-qr-canvas" ref="invoiceUrlQr"></div>
                   </div>
                 </div>
@@ -2034,7 +2209,7 @@
             <div v-else-if="currentReceiptLayout === 5" class="receipt-layout-5">
               <div class="info text-center mb-2">
                 <div class="invoice_logo mb-2" v-show="pos_settings.show_logo !== 0">
-                  <img :src="$imgUrl('settings', invoice_pos.setting.logo)" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                  <img :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
                 </div>
                 <div class="minimal-store-name" v-show="pos_settings.show_store_name !== 0">{{invoice_pos.setting.CompanyName}}</div>
                 <div class="minimal-contact" v-if="invoice_pos.setting.CompanyAdress || invoice_pos.setting.CompanyPhone">
@@ -2075,7 +2250,7 @@
                       <div class="minimal-item-qty">{{formatNumber(detail_invoice.quantity,2)}} {{ packLineUnit(detail_invoice) }} &times; {{ formatPriceDisplay(detail_invoice.total/detail_invoice.quantity,2) }}</div>
                       <div class="minimal-item-qty" v-if="detail_invoice.pack_name && Number(detail_invoice.pack_multiplier) > 1">(×{{ detail_invoice.pack_multiplier }}) = {{ formatNumber(detail_invoice.quantity * detail_invoice.pack_multiplier, 2) }} {{ detail_invoice.unit_sale || ($t('Pcs') || 'pcs') }}</div>
                       <div class="minimal-item-discount" v-if="pos_settings.show_product_discount !== 0 && Number(detail_invoice.DiscountNet || 0) > 0">{{$t('Discount')}} &minus;{{ formatPriceDisplay(Number(detail_invoice.DiscountNet) * Number(detail_invoice.quantity), 2) }}</div>
-                      <div class="minimal-item-qty" v-show="detail_invoice.is_imei && detail_invoice.imei_number !== null">IMEI/SN: {{detail_invoice.imei_number}}</div>
+                      <div class="minimal-item-qty" v-show="detail_invoice.is_imei && detail_invoice.imei_number !== null">{{ $t('IMEI_SN') }}: {{detail_invoice.imei_number}}</div>
                     </td>
                     <td class="minimal-item-total">{{ formatPriceDisplay(detail_invoice.total,2) }}</td>
                   </tr>
@@ -2173,21 +2348,223 @@
                 {{pos_settings.note_customer}}
               </p>
 
+              <p v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer"
+                 class="minimal-note receipt-branch-note" style="white-space:pre-line;">
+                {{invoice_pos.setting.issuer_footer}}
+              </p>
+
+              <!-- AGT (Angola) / DGI (DR Congo) e-invoicing mentions + QR -->
+              <div v-if="invoice_pos.fiscal && invoice_pos.fiscal.blocks" class="receipt-fiscal mt-2" style="text-align: center;">
+                <div v-for="(fb, fi) in invoice_pos.fiscal.blocks" :key="'fiscal-' + fi" class="receipt-fiscal-block" style="margin-bottom: 6px;">
+                  <div class="receipt-fiscal-title" style="font-weight: 700; font-size: 11px;">{{ fb.title }}</div>
+                  <div v-for="(fl, li) in fb.lines" :key="'fl-' + li" class="receipt-fiscal-line" style="font-size: 10px; line-height: 1.35; word-break: break-word;">{{ fl }}</div>
+                  <img v-if="fb.qr" :src="fb.qr" class="receipt-fiscal-qr" alt="QR" style="width: 110px; height: 110px; margin-top: 4px;" />
+                </div>
+              </div>
               <div v-if="(invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0) || (pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref) || invoice_pos.fbr_invoice_number" class="receipt-qr-row mt-2">
                 <div v-if="invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0" class="receipt-qr-block">
                   <div class="receipt-qr-title">ZATCA QR</div>
                   <div class="receipt-qr-canvas" ref="zatcaQrcodePos"></div>
                 </div>
                 <div v-if="invoice_pos.fbr_invoice_number" class="receipt-qr-block">
-                  <div class="receipt-qr-title">FBR Invoice</div>
+                  <div class="receipt-qr-title">{{ $t('Pos_FBR_Invoice') }}</div>
                   <div class="receipt-qr-canvas" ref="fbrQrcodePos"></div>
                   <div class="receipt-qr-title">{{ invoice_pos.fbr_invoice_number }}</div>
                 </div>
                 <div v-if="pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref" class="receipt-qr-block">
-                  <div class="receipt-qr-title">Invoice QR</div>
+                  <div class="receipt-qr-title">{{ $t('Invoice_QR') }}</div>
                   <div class="receipt-qr-canvas" ref="invoiceUrlQr"></div>
                 </div>
               </div>
+            </div>
+
+            <!-- Layout 6 - Tabular (cash/credit invoice: boxed Description |
+                 Qty | Rate | Total grid, signature boxes, ref barcode).
+                 Markup mirrors lib/posReceiptHtml.js layout6 and
+                 PosReceipt.vue's demo; styled by /css/pos_print.css. -->
+            <div v-else-if="currentReceiptLayout === 6" class="receipt-layout-6">
+              <div class="r6-head">
+                <div class="invoice_logo r6-logo" v-if="pos_settings.show_logo !== 0">
+                  <img :src="$imgUrl('settings', invoice_pos.setting.logo)" @error="onReceiptLogoError" alt :width="pos_settings.logo_size || 60" :height="pos_settings.logo_size || 60">
+                </div>
+                <div class="r6-store" v-if="pos_settings.show_store_name !== 0">{{invoice_pos.setting.CompanyName}}</div>
+                <div class="r6-contact">
+                  <div v-if="pos_settings.show_address">{{invoice_pos.setting.CompanyAdress}}</div>
+                  <div v-if="pos_settings.show_phone">{{invoice_pos.setting.CompanyPhone}}</div>
+                  <div v-if="pos_settings.show_email">{{invoice_pos.setting.email}}</div>
+                </div>
+              </div>
+              <div class="r6-title">{{$t('Rcpt_Cash_Credit_Invoice')}}</div>
+              <table class="r6-meta">
+                <tbody>
+                  <tr v-if="invoice_pos.sale && invoice_pos.sale.Ref && pos_settings.show_reference !== 0"><td>{{$t('Rcpt_Invoice_No')}}:</td><td>{{invoice_pos.sale.Ref}}</td></tr>
+                  <tr v-if="pos_settings.show_date !== 0"><td>{{$t('Rcpt_Date_Time')}}:</td><td>{{invoice_pos.sale.date}}</td></tr>
+                  <tr v-if="pos_settings.show_Warehouse"><td>{{$t('Rcpt_Outlet')}}:</td><td>{{invoice_pos.sale.warehouse_name}}</td></tr>
+                  <tr v-if="pos_settings.show_seller !== 0"><td>{{$t('Cashier')}}:</td><td>{{invoice_pos.sale.seller_name}}</td></tr>
+                  <tr v-if="pos_settings.show_customer"><td>{{$t('Customer')}}:</td><td>{{invoice_pos.sale.client_name}}</td></tr>
+                </tbody>
+              </table>
+
+              <table class="r6-items">
+                <thead>
+                  <tr>
+                    <th class="r6-desc">{{$t('Description')}}</th>
+                    <th class="r6-c-qty">{{$t('Qty')}}</th>
+                    <th class="r6-c-rate">{{$t('Rate')}} {{invoice_pos.symbol}}</th>
+                    <th class="r6-c-tot">{{$t('Total')}} {{invoice_pos.symbol}}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="detail_invoice in invoice_pos.details">
+                    <td class="r6-desc">
+                      <div>{{detail_invoice.name}}</div>
+                      <div class="r6-sub" v-if="detail_invoice.is_imei && detail_invoice.imei_number !== null">{{$t('IMEI_SN')}}: {{detail_invoice.imei_number}}</div>
+                      <div class="r6-sub" v-if="detail_invoice.pack_name && Number(detail_invoice.pack_multiplier) > 1">(×{{ detail_invoice.pack_multiplier }}) = {{ formatNumber(detail_invoice.quantity * detail_invoice.pack_multiplier, 2) }} {{ detail_invoice.unit_sale || ($t('Pcs') || 'pcs') }}</div>
+                      <div class="r6-sub" style="font-style:italic;" v-if="pos_settings.show_product_discount !== 0 && Number(detail_invoice.DiscountNet || 0) > 0">{{$t('Discount')}}: -{{ formatPriceDisplay(Number(detail_invoice.DiscountNet) * Number(detail_invoice.quantity), 2) }}</div>
+                    </td>
+                    <td class="r6-c-qty">{{formatNumber(detail_invoice.quantity,2)}}<span class="r6-sub" v-if="packLineUnit(detail_invoice)"> {{ packLineUnit(detail_invoice) }}</span></td>
+                    <td class="r6-c-rate">{{ formatPriceDisplay(detail_invoice.total/detail_invoice.quantity,2) }}</td>
+                    <td class="r6-c-tot">{{ formatPriceDisplay(detail_invoice.total, 2) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <table class="r6-totals">
+                <tbody>
+                  <tr>
+                    <td>{{$t('Total_Items')}}</td>
+                    <td>{{ Number.isInteger(invoiceItemCount) ? invoiceItemCount : formatNumber(invoiceItemCount, 2) }}</td>
+                  </tr>
+                  <tr>
+                    <td>{{$t('pos.Subtotal')}}</td>
+                    <td>{{ formatPriceWithSymbol(invoice_pos.symbol, pos_settings.show_items_tax != 0 ? (invoiceSubtotal - invoiceDetailsTaxTotal) : invoiceSubtotal, 2) }}</td>
+                  </tr>
+                  <tr v-if="pos_settings.show_items_tax != 0 && Number(invoiceDetailsTaxTotal) > 0">
+                    <td>{{$t('TotalProductTax')}}</td>
+                    <td>{{ formatPriceWithSymbol(invoice_pos.symbol, invoiceDetailsTaxTotal, 2) }} ({{ formatNumber(invoiceProductTaxRate, 2) }} %)</td>
+                  </tr>
+                  <tr v-if="pos_settings.show_tax">
+                    <td>{{$t('OrderTax')}}</td>
+                    <td>{{ formatPriceWithSymbol(invoice_pos.symbol, invoice_pos.sale.taxe ,2) }} ({{formatNumber(invoice_pos.sale.tax_rate,2)}} %)</td>
+                  </tr>
+                  <tr v-if="pos_settings.show_discount">
+                    <td>{{$t('Discount')}}</td>
+                    <td>
+                      <template v-if="String(invoice_pos.sale.discount_Method || '2') === '1'">{{ formatNumber(invoice_pos.sale.discount, 2) }}% ({{ formatPriceWithSymbol(invoice_pos.symbol, calculatedManualDiscountAmount ,2) }})</template>
+                      <template v-else>{{ formatPriceWithSymbol(invoice_pos.symbol, calculatedManualDiscountAmount ,2) }}</template>
+                    </td>
+                  </tr>
+                  <tr v-if="pos_settings.show_discount && invoice_pos.sale.discount_from_points && Number(invoice_pos.sale.discount_from_points) > 0">
+                    <td>{{$t('Discount_from_Points')}}</td>
+                    <td>{{ formatPriceWithSymbol(invoice_pos.symbol, invoice_pos.sale.discount_from_points ,2) }}</td>
+                  </tr>
+                  <template v-if="invoicePromotions.length > 0">
+                    <tr v-for="(promo, idx) in invoicePromotions" :key="'promo-r6-' + idx + '-' + promo.id">
+                      <td>{{$t('Promotions')}} — {{ promo.name }}<span v-if="promo.code"> ({{ promo.code }})</span></td>
+                      <td>−{{ formatPriceWithSymbol(invoice_pos.symbol, promo.amount, 2) }}</td>
+                    </tr>
+                  </template>
+                  <tr v-else-if="Number(invoice_pos.sale.promotion_discount || 0) > 0">
+                    <td>{{$t('Promotions')}}<span v-if="invoice_pos.sale.promotion_code"> ({{ invoice_pos.sale.promotion_code }})</span></td>
+                    <td>−{{ formatPriceWithSymbol(invoice_pos.symbol, invoice_pos.sale.promotion_discount, 2) }}</td>
+                  </tr>
+                  <tr v-if="pos_settings.show_shipping">
+                    <td>{{$t('Shipping')}}</td>
+                    <td>{{ formatPriceWithSymbol(invoice_pos.symbol, invoice_pos.sale.shipping ,2) }}</td>
+                  </tr>
+                  <tr class="r6-grand">
+                    <td>{{$t('Total')}}</td>
+                    <td>{{ formatPriceWithSymbol(invoice_pos.symbol, invoice_pos.sale.GrandTotal ,2) }}</td>
+                  </tr>
+                  <tr class="r6-gap" v-if="pos_settings.show_paid !== 0">
+                    <td>{{$t('Amount_Paid')}}</td>
+                    <td>{{ formatPriceWithSymbol(invoice_pos.symbol, invoice_pos.sale.paid_amount ,2) }}</td>
+                  </tr>
+                  <tr v-if="pos_settings.show_due !== 0">
+                    <td>{{$t('Balance')}}</td>
+                    <td>{{ formatPriceWithSymbol(invoice_pos.symbol, (invoice_pos.sale.GrandTotal - invoice_pos.sale.paid_amount), 2) }}</td>
+                  </tr>
+                  <tr v-if="showPreviousDuesRow">
+                    <td>{{$t('Previous_Dues')}}</td>
+                    <td>{{ formatPriceWithSymbol(invoice_pos.symbol, invoicePreviousDues, 2) }}</td>
+                  </tr>
+                  <tr v-if="showNetBalanceRow">
+                    <td>{{$t('Net_Balance')}}</td>
+                    <td>{{ formatPriceWithSymbol(invoice_pos.symbol, invoiceNetBalance, 2) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <div class="r6-pay" v-if="pos_settings.show_payments !== 0 && invoice_pos.sale.paid_amount > 0 && payments.length">
+                <div class="r6-pay-title">{{$t('Payment')}}:</div>
+                <template v-for="payment_pos in payments" :key="'pay6-' + payment_pos.id">
+                  <div>{{payment_pos.payment_method ? payment_pos.payment_method.name : '---'}} — {{ formatPriceDisplay(payment_pos.montant, 2) }}<template v-if="Number(payment_pos.change) > 0"> ({{$t('Change')}}: {{ formatPriceDisplay(payment_pos.change, 2) }})</template></div>
+                  <div v-if="payment_pos.notes" class="r6-sub" style="font-style:italic;white-space:pre-line;">{{$t('Payment_note')}}: {{payment_pos.notes}}</div>
+                </template>
+              </div>
+
+              <table class="r6-sigs" v-if="pos_settings.show_signature_line">
+                <tbody><tr><td>{{ $t('Customer_Signature') }}</td><td>{{ $t('Rcpt_Management') }}</td></tr></tbody>
+              </table>
+
+              <div class="r6-barcode" v-if="pos_settings.show_barcode !== 0 && invoiceRefBarcodeSvg">
+                <div v-html="invoiceRefBarcodeSvg"></div>
+                <div class="r6-ref">{{ invoice_pos.sale.Ref }}</div>
+              </div>
+
+              <div id="legalcopy" class="r6-legal">
+                <p v-if="invoice_pos.sale && invoice_pos.sale.notes" style="font-size:9px;font-style:italic;padding-bottom:4px;white-space:pre-line;margin:0;">
+                  {{$t('sale_note')}}: {{invoice_pos.sale.notes}}
+                </p>
+                <p class="legal" v-show="pos_settings.show_note" style="white-space:pre-line;">
+                  <strong>{{pos_settings.note_customer}}</strong>
+                </p>
+                <p v-if="invoice_pos.setting && invoice_pos.setting.issuer_footer"
+                   class="legal receipt-branch-note" style="white-space:pre-line;">
+                  {{invoice_pos.setting.issuer_footer}}
+                </p>
+                <div v-if="invoice_pos.fiscal && invoice_pos.fiscal.blocks" class="receipt-fiscal mt-2" style="text-align: center;">
+                  <div v-for="(fb, fi) in invoice_pos.fiscal.blocks" :key="'fiscal6-' + fi" class="receipt-fiscal-block" style="margin-bottom: 6px;">
+                    <div class="receipt-fiscal-title" style="font-weight: 700; font-size: 11px;">{{ fb.title }}</div>
+                    <div v-for="(fl, li) in fb.lines" :key="'fl6-' + li" class="receipt-fiscal-line" style="font-size: 10px; line-height: 1.35; word-break: break-word;">{{ fl }}</div>
+                    <img v-if="fb.qr" :src="fb.qr" class="receipt-fiscal-qr" alt="QR" style="width: 110px; height: 110px; margin-top: 4px;" />
+                  </div>
+                </div>
+                <!-- Invoice QR is replaced by the ref barcode above in this layout;
+                     it only prints when the ref can't be encoded as CODE128. -->
+                <div v-if="(invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0) || invoice_pos.fbr_invoice_number || (pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref && !invoiceRefBarcodeSvg)" class="receipt-qr-row mt-2">
+                  <div v-if="invoice_pos.setting && invoice_pos.setting.zatca_enabled && invoice_pos.zatca_qr && pos_settings.show_zatca_qr !== 0" class="receipt-qr-block">
+                    <div class="receipt-qr-title">ZATCA QR</div>
+                    <div class="receipt-qr-canvas" ref="zatcaQrcodePos"></div>
+                  </div>
+                  <div v-if="invoice_pos.fbr_invoice_number" class="receipt-qr-block">
+                    <div class="receipt-qr-title">{{ $t('Pos_FBR_Invoice') }}</div>
+                    <div class="receipt-qr-canvas" ref="fbrQrcodePos"></div>
+                    <div class="receipt-qr-title">{{ invoice_pos.fbr_invoice_number }}</div>
+                  </div>
+                  <div v-if="pos_settings.show_barcode !== 0 && invoice_pos.sale && invoice_pos.sale.Ref && !invoiceRefBarcodeSvg" class="receipt-qr-block">
+                    <div class="receipt-qr-title">{{ $t('Invoice_QR') }}</div>
+                    <div class="receipt-qr-canvas" ref="invoiceUrlQr"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- License Keys › "Print keys on receipt": the software keys sold on this sale. -->
+            <div v-if="invoice_pos.license_keys && invoice_pos.license_keys.length" class="receipt-license-keys" style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #000;">
+              <div style="font-weight: 700; font-size: 11px; text-align: center;">{{ $t('LicK_Receipt_Title') }}</div>
+              <div v-for="(lk, li) in invoice_pos.license_keys" :key="'lk-' + li" style="font-size: 10px; margin-top: 3px; word-break: break-all;">
+                <div>{{ lk.product }}</div>
+                <div style="font-family: monospace; font-weight: 700; font-size: 11px;">{{ lk.key }}</div>
+                <div v-if="lk.expires_at">{{ $t('LicK_Valid_Until') }}: {{ lk.expires_at }}</div>
+              </div>
+            </div>
+
+            <!-- Settings > POS Receipt > Show Signature Line: a blank customer
+                 signature line under whichever layout printed above. -->
+            <div v-if="pos_settings.show_signature_line && currentReceiptLayout !== 6" class="receipt-signature">
+              <div class="receipt-signature-line"></div>
+              <div class="receipt-signature-label">{{ $t('Customer_Signature') }}</div>
             </div>
 
           </div>
@@ -2216,7 +2593,7 @@
             <td>{{ d.client_name }}</td>
             <td class="text-right">{{ formatNumber(d.GrandTotal, 2) }}</td>
             <td class="text-right">
-              <b-button size="sm" variant="outline-success" class="mr-2" @click="loadDraftSale(d.id)" :disabled="openingDraftId === d.id" :title="openingDraftId === d.id ? $t('Loading') : $t('Open')">
+              <b-button size="sm" variant="outline-success" class="mr-2" @click="requestLoadDraft(d.id)" :disabled="openingDraftId === d.id" :title="openingDraftId === d.id ? $t('Loading') : $t('Open')">
                 <template v-if="openingDraftId === d.id">
                   <span class="spinner sm spinner-primary"></span>
                 </template>
@@ -2224,7 +2601,7 @@
                   <lucide-icon name="arrow-right" />
                 </template>
               </b-button>
-              <b-button size="sm" variant="outline-danger" @click="Remove_Draft_Sale(d.id)" :title="$t('Delete')">
+              <b-button size="sm" variant="outline-danger" @click="requestRemoveDraft(d)" :title="$t('Delete')">
                 <lucide-icon name="trash-2" />
               </b-button>
             </td>
@@ -2337,8 +2714,8 @@
                   :placeholder="$t('Choose_Method')"
                   :options="
                  [
-                  {label: 'Exclusive', value: 1},
-                  {label: 'Inclusive', value: 2}
+                  {label: $t('Tax_Exclusive'), value: 1},
+                  {label: $t('Tax_Inclusive'), value: 2}
                  ]"
                 ></v-select>
                 <b-form-invalid-feedback>{{ errors[0] }}</b-form-invalid-feedback>
@@ -2379,8 +2756,8 @@
                   :state="errors[0] ? false : (valid ? true : null)"
                   :options="
                     [
-                      {label: 'Percent %', value: '1'},
-                      {label: 'Fixed', value: '2'}
+                      {label: $t('Pos_Percent_Option'), value: '1'},
+                      {label: $t('Fixed'), value: '2'}
                     ]"
                 ></v-select>
                 <b-form-invalid-feedback>{{ errors[0] }}</b-form-invalid-feedback>
@@ -2824,7 +3201,7 @@
               <label class="ps-toggle">
                 <div class="ps-toggle-info">
                   <div class="ps-toggle-label">{{$t('Allow_overselling') || 'Allow Overselling'}}</div>
-                  <div class="ps-toggle-help">{{$t('Allow_overselling_help') || 'Allow selling products even when stock is zero or negative.'}}</div>
+                  <div class="ps-toggle-help">{{ $t('Pos_Allow_Overselling_Help') }}</div>
                 </div>
                 <span class="ps-switch">
                   <input type="checkbox" v-model="pos_settings.allow_overselling">
@@ -2835,7 +3212,7 @@
               <label class="ps-toggle">
                 <div class="ps-toggle-info">
                   <div class="ps-toggle-label">{{$t('Enable_Print_Invoice')}}</div>
-                  <div class="ps-toggle-help">{{ $t('Enable_Print_Invoice_Help') || 'Auto-print receipt after each sale.' }}</div>
+                  <div class="ps-toggle-help">{{ $t('Pos_Auto_Print_Receipt_Help') }}</div>
                 </div>
                 <span class="ps-switch">
                   <input type="checkbox" v-model="pos_settings.is_printable" :true-value="1" :false-value="0">
@@ -2870,6 +3247,17 @@
                 </div>
                 <span class="ps-switch">
                   <input type="checkbox" v-model="pos_settings.show_stock_quantity">
+                  <span class="ps-switch-slider"></span>
+                </span>
+              </label>
+
+              <label class="ps-toggle">
+                <div class="ps-toggle-info">
+                  <div class="ps-toggle-label">{{$t('Show_Stock_In_Search_Results')}}</div>
+                  <div class="ps-toggle-help">{{$t('Show_Stock_In_Search_Results_Help')}}</div>
+                </div>
+                <span class="ps-switch">
+                  <input type="checkbox" v-model="pos_settings.show_search_stock">
                   <span class="ps-switch-slider"></span>
                 </span>
               </label>
@@ -3036,19 +3424,70 @@
     </b-modal>
 
     <!-- Close Register Modal -->
-    <b-modal id="CloseRegisterModal" :title="$t('Close Register')" hide-footer>
-      <div class="form-group">
-        <label>{{$t('Counted_Cash')}}</label>
-        <input type="text" min="0" step="0.01" class="form-control" v-model.number="closeForm.counted_cash" />
-      </div>
-      <div class="form-group">
-        <label>{{$t('Closing_Notes')}}</label>
-        <textarea class="form-control" v-model="closeForm.notes"></textarea>
-      </div>
-      <div class="text-right">
-        <b-button variant="secondary" class="mr-2" @click="$bvModal.hide('CloseRegisterModal')">{{$t('Cancel')}}</b-button>
-        <b-button variant="danger" @click="submitCloseRegister" :disabled="registerBusy">{{$t('Close Register')}}</b-button>
-      </div>
+    <b-modal id="CloseRegisterModal" :title="$t('Close Register')" hide-footer @show="closeSummary = null">
+      <!-- Before closing: take the count. After closing: show how the expected
+           figure was reached, so a difference can be read rather than guessed. -->
+      <template v-if="!closeSummary">
+        <div class="form-group">
+          <label>{{$t('Counted_Cash')}}</label>
+          <input type="text" min="0" step="0.01" class="form-control" v-model.number="closeForm.counted_cash" />
+        </div>
+        <div class="form-group">
+          <label>{{$t('Closing_Notes')}}</label>
+          <textarea class="form-control" v-model="closeForm.notes"></textarea>
+        </div>
+        <div class="text-right">
+          <b-button variant="secondary" class="mr-2" @click="$bvModal.hide('CloseRegisterModal')">{{$t('Cancel')}}</b-button>
+          <b-button variant="danger" @click="submitCloseRegister" :disabled="registerBusy">{{$t('Close Register')}}</b-button>
+        </div>
+      </template>
+      <template v-else>
+        <b-alert v-if="!closeSummary.cash_methods_configured" variant="warning" show class="mb-3">
+          {{ $t('No_Cash_Method_Configured') }}
+        </b-alert>
+        <table class="table table-sm mb-3">
+          <tbody>
+            <tr>
+              <td>{{$t('Opening_Balance')}}</td>
+              <td class="text-right">{{ formatNumber(closeSummary.opening_balance, 2) }}</td>
+            </tr>
+            <tr>
+              <td>{{$t('Cash_Received')}}</td>
+              <td class="text-right">{{ formatNumber(closeSummary.cash_received, 2) }}</td>
+            </tr>
+            <tr>
+              <td>{{$t('Cash_Refunded')}}</td>
+              <td class="text-right">-{{ formatNumber(closeSummary.cash_refunded, 2) }}</td>
+            </tr>
+            <tr>
+              <td>{{$t('Cash In')}} / {{$t('Cash Out')}}</td>
+              <td class="text-right">
+                {{ formatNumber(closeSummary.cash_in, 2) }} / -{{ formatNumber(closeSummary.cash_out, 2) }}
+              </td>
+            </tr>
+            <tr class="font-weight-bold">
+              <td>{{$t('Expected_Cash')}}</td>
+              <td class="text-right">{{ formatNumber(closeSummary.expected_cash, 2) }}</td>
+            </tr>
+            <tr>
+              <td>{{$t('Counted_Cash')}}</td>
+              <td class="text-right">{{ formatNumber(closeSummary.counted_cash, 2) }}</td>
+            </tr>
+            <tr class="font-weight-bold" :class="closeSummary.difference < 0 ? 'text-danger' : 'text-success'">
+              <td>{{$t('Difference')}}</td>
+              <td class="text-right">{{ formatNumber(closeSummary.difference, 2) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <!-- Turnover is shown apart from the drawer maths on purpose: card,
+             transfer and credit sales are part of it but never reach the till. -->
+        <p class="text-muted small mb-3">
+          {{$t('Total_Sales')}}: {{ formatNumber(closeSummary.total_sales, 2) }}
+        </p>
+        <div class="text-right">
+          <b-button variant="primary" @click="$bvModal.hide('CloseRegisterModal')">{{$t('Close')}}</b-button>
+        </div>
+      </template>
     </b-modal>
 
     <!-- Online reload confirmation modal (non-blocking) -->
@@ -3072,6 +3511,63 @@
         </b-button>
         <b-button variant="primary" @click="onOnlineReloadNow">
           {{ $t('pos.ReloadNow') || 'Reload now' }}
+        </b-button>
+      </div>
+    </b-modal>
+    <!-- Failed offline sales review: queued sales the server rejected stay on
+         this device until the cashier retries or discards them. -->
+    <b-modal
+      id="OfflineFailedSalesModal"
+      size="lg"
+      scrollable
+      hide-footer
+      :title="$t('pos.Offline_Sales_Failed_Title') || 'Offline sales that could not be synced'"
+    >
+      <p class="text-muted small mb-3">
+        {{ $t('pos.Offline_Sales_Failed_Intro') || 'The server did not accept these sales when they were uploaded. They are kept on this device until you retry or discard them. Fix the cause shown (for example, add the missing stock) and then retry.' }}
+      </p>
+      <div v-if="!failedOfflineSales.length" class="text-center text-muted py-4">
+        {{ $t('pos.Offline_Sales_Failed_None') || 'No failed offline sales.' }}
+      </div>
+      <table v-else class="table table-sm">
+        <thead>
+          <tr>
+            <th>{{ $t('date') || 'Date' }}</th>
+            <th>{{ $t('Customer') || 'Customer' }}</th>
+            <th>{{ $t('Products') || 'Products' }}</th>
+            <th class="text-right">{{ $t('Total') || 'Total' }}</th>
+            <th>{{ $t('pos.Offline_Sales_Failed_Reason') || 'Reason' }}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in failedOfflineSales" :key="row.id">
+            <td style="white-space: nowrap;">{{ row.date }}</td>
+            <td>{{ row.client }}</td>
+            <td style="max-width: 180px;">{{ row.items }}</td>
+            <td class="text-right" style="white-space: nowrap;">{{ formatPriceBaseCurrency(row.total, 2) }}</td>
+            <td class="text-danger small" style="max-width: 220px; word-break: break-word;">{{ row.error }}<span v-if="row.statusCode" class="text-muted"> ({{ row.statusCode }})</span></td>
+            <td style="white-space: nowrap;" class="text-right">
+              <b-button size="sm" variant="outline-primary" class="mr-1" :disabled="!isOnline || offlineSyncInProgress || !!failedOfflineSaleBusyId" @click="retryFailedOfflineSale(row.id)">
+                {{ $t('pos.Retry') || 'Retry' }}
+              </b-button>
+              <b-button size="sm" variant="outline-danger" :disabled="offlineSyncInProgress || !!failedOfflineSaleBusyId" @click="discardFailedOfflineSale(row.id)">
+                {{ $t('pos.Discard') || 'Discard' }}
+              </b-button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="d-flex justify-content-end align-items-center mt-2">
+        <router-link
+          v-if="isOnline && currentUserPermissions && currentUserPermissions.includes('pos_offline_sales')"
+          to="/offline-sales"
+          class="mr-auto small">
+          {{ $t('pos.Open_Offline_Sales_Page') || 'Open Offline Sales (all tills)' }}
+        </router-link>
+        <b-button variant="outline-secondary" class="mr-2" @click="$bvModal.hide('OfflineFailedSalesModal')">{{ $t('Close') }}</b-button>
+        <b-button v-if="failedOfflineSales.length" variant="primary" :disabled="!isOnline || offlineSyncInProgress || !!failedOfflineSaleBusyId" @click="retryAllFailedOfflineSales">
+          {{ $t('pos.Retry_All') || 'Retry all' }}
         </b-button>
       </div>
     </b-modal>
@@ -3139,12 +3635,77 @@
           <button
             type="button"
             class="pos-confirm-btn pos-confirm-btn-danger"
-            @click="$bvModal.hide('pos-confirm-clear-cart'); Reset_Pos();">
+            @click="$bvModal.hide('pos-confirm-clear-cart'); requestClearCart();">
             <lucide-icon name="trash-2" />
             <span>{{ $t('Yes_Clear_It') || 'Yes, Clear It' }}</span>
           </button>
         </div>
       </div>
+    </b-modal>
+
+    <!-- Manager approval to remove items (POS Settings > Require manager
+         approval): a manager types their PIN on this till. -->
+    <b-modal
+      id="pos-void-approval"
+      hide-footer
+      hide-header
+      centered
+      size="sm"
+      no-close-on-backdrop
+      modal-class="pos-confirm-clear-modal"
+      body-class="pos-confirm-clear-body"
+      @shown="focusVoidPin"
+      @hidden="onVoidApprovalHidden"
+    >
+      <form class="pos-confirm-clear pos-void-approval" @submit.prevent="submitVoidPin">
+        <div class="pos-confirm-clear-icon" aria-hidden="true">
+          <lucide-icon name="lock" />
+        </div>
+        <h3 class="pos-confirm-clear-title">{{ $t('Pv_Manager_Approval') }}</h3>
+        <p class="pos-confirm-clear-msg">{{ $t('Pv_Manager_Approval_Help') }}</p>
+        <ul class="pos-void-lines">
+          <li v-for="(line, i) in voidApproval.items.slice(0, 5)" :key="'pv-' + i">
+            <span class="pos-void-line-name">{{ line.name }}</span>
+            <span class="pos-void-line-qty">× {{ line.quantity }}</span>
+          </li>
+          <li v-if="voidApproval.items.length > 5" class="pos-void-line-more">
+            {{ $t('Pv_And_N_More', { n: voidApproval.items.length - 5 }) }}
+          </li>
+        </ul>
+        <select
+          v-model="voidApproval.approverId"
+          class="pos-void-approver"
+          :aria-label="$t('Pv_Approver')"
+          :disabled="voidApproval.busy || voidApproval.loadingApprovers"
+          @change="voidApproval.error = ''; focusVoidPin()"
+        >
+          <option :value="null" disabled>{{ voidApproval.loadingApprovers ? $t('Loading') : $t('Pv_Choose_Approver') }}</option>
+          <option v-for="a in voidApproval.approvers" :key="'pva-' + a.id" :value="a.id">{{ a.name }}</option>
+        </select>
+        <div v-if="!voidApproval.loadingApprovers && !voidApproval.approvers.length" class="pos-void-error">{{ $t('Pv_No_Approvers') }}</div>
+        <input
+          ref="voidPinInput"
+          v-model="voidApproval.pin"
+          type="password"
+          inputmode="numeric"
+          autocomplete="off"
+          maxlength="6"
+          class="pos-void-pin"
+          :placeholder="$t('Pv_Enter_Pin')"
+          :disabled="voidApproval.busy || voidApproval.locked"
+          @input="voidApproval.error = ''"
+        />
+        <div v-if="voidApproval.error" class="pos-void-error">{{ voidApproval.error }}</div>
+        <div class="pos-confirm-clear-actions">
+          <button type="button" class="pos-confirm-btn pos-confirm-btn-secondary" :disabled="voidApproval.busy" @click="$bvModal.hide('pos-void-approval')">
+            <span>{{ $t('Cancel') }}</span>
+          </button>
+          <button type="submit" class="pos-confirm-btn pos-confirm-btn-danger" :disabled="voidApproval.busy || voidApproval.locked || !voidApproval.pin || !voidApproval.approverId">
+            <lucide-icon name="check" />
+            <span>{{ $t('Pv_Approve') }}</span>
+          </button>
+        </div>
+      </form>
     </b-modal>
 
     <!-- ============ Categories drawer ============ -->
@@ -3529,69 +4090,130 @@
       </div>
     </transition>
 
-    <!-- ============ Salesperson picker (reuses the customer modal theme) ============ -->
-    <transition name="cust-drawer">
+    <!-- ============ Sold by drawer (right side): salesperson + sales agent ============ -->
+    <transition name="wh-drawer">
       <div
-        v-if="sellerDrawerOpen"
-        class="cust-drawer-backdrop"
-        @click.self="sellerDrawerOpen = false"
-        @keydown.esc="sellerDrawerOpen = false"
+        v-if="soldByDrawerOpen"
+        class="wh-drawer-backdrop"
+        @click.self="soldByDrawerOpen = false"
+        @keydown.esc="soldByDrawerOpen = false"
       >
-        <section class="cust-drawer" role="dialog" :aria-label="$t('Select_Salesperson') || 'Select salesperson'">
-          <button
-            type="button"
-            class="cust-drawer-close"
-            :aria-label="$t('Close')"
-            @click="sellerDrawerOpen = false"
-          >
-            <lucide-icon name="x" />
-          </button>
-
-          <header class="cust-drawer-header">
-            <div class="cust-drawer-hero-icon">
-              <lucide-icon name="user-check" />
+        <aside class="wh-drawer soldby-drawer" role="dialog" :aria-label="$t('Sold_By')">
+          <header class="wh-drawer-header">
+            <button
+              type="button"
+              class="wh-drawer-close"
+              :aria-label="$t('Close')"
+              @click="soldByDrawerOpen = false"
+            >
+              <lucide-icon name="x" />
+            </button>
+            <div class="wh-drawer-hero-icon">
+              <lucide-icon name="users" />
             </div>
-            <div class="cust-drawer-hero-text">
-              <div class="cust-drawer-hero-eyebrow">{{ $t('Salesperson') || 'Salesperson' }}</div>
-              <div class="cust-drawer-hero-title">{{ $t('Select_Salesperson') || 'Select Salesperson' }}</div>
-              <div class="cust-drawer-hero-sub">
-                {{ (salespeople || []).length }}
+            <div class="wh-drawer-hero-text">
+              <div class="wh-drawer-hero-eyebrow">{{ $t('Sold_By') }}</div>
+              <div class="wh-drawer-hero-title">{{ selectedSellerLabel }}</div>
+              <div class="wh-drawer-hero-sub" v-if="(salesAgents || []).length">
+                {{ $t('Sales_Agent') }}: {{ selectedSalesAgentLabel }}
               </div>
             </div>
           </header>
 
-          <div class="cust-drawer-list">
-            <button
-              type="button"
-              class="cust-drawer-card"
-              :class="{ active: String(selectedSellerId) === String(s.id) }"
-              v-for="s in salespeople"
-              :key="'seller-' + s.id"
-              @click="selectSeller(s.id)"
-            >
-              <span class="cust-drawer-card-avatar" :style="{ background: catColor(s.id) }">
-                {{ catInitial(s.name || s.username) }}
-              </span>
-              <span class="cust-drawer-card-body">
-                <span class="cust-drawer-card-name">
-                  {{ s.name || s.username }}
-                  <template v-if="currentUser && String(s.id) === String(currentUser.id)"> ({{ $t('You') || 'You' }})</template>
-                </span>
-                <span class="cust-drawer-card-meta" v-if="s.username && s.username !== (s.name || s.username)">
-                  <span>{{ s.username }}</span>
-                </span>
-              </span>
-              <span v-if="String(selectedSellerId) === String(s.id)" class="cust-drawer-card-check">
-                <lucide-icon name="check" />
-              </span>
-            </button>
+          <div class="wh-drawer-list">
+            <!-- Salesperson (Change Salesperson During Checkout feature) -->
+            <template v-if="salesSwitchEnabled">
+              <div class="soldby-section-title">
+                <lucide-icon name="users" />
+                <span>{{ $t('Salesperson') }}</span>
+              </div>
+              <button
+                type="button"
+                class="wh-drawer-card"
+                :class="{ active: String(selectedSellerId) === String(s.id) }"
+                v-for="s in salespeople"
+                :key="'seller-' + s.id"
+                @click="selectSeller(s.id)"
+              >
+                <div class="wh-drawer-card-icon" :style="{ background: catColor(s.id) }">
+                  {{ catInitial(s.name || s.username) }}
+                </div>
+                <div class="wh-drawer-card-body">
+                  <div class="wh-drawer-card-name">
+                    {{ s.name || s.username }}
+                    <template v-if="currentUser && String(s.id) === String(currentUser.id)"> ({{ $t('You') }})</template>
+                  </div>
+                  <div class="wh-drawer-card-meta" v-if="s.username && s.username !== (s.name || s.username)">
+                    <span class="wh-drawer-card-id">{{ s.username }}</span>
+                  </div>
+                </div>
+                <div class="wh-drawer-card-arrow">
+                  <lucide-icon v-if="String(selectedSellerId) === String(s.id)" name="check-circle" />
+                </div>
+              </button>
+              <div class="wh-drawer-empty" v-if="!(salespeople || []).length">
+                <div class="wh-drawer-empty-icon"><lucide-icon name="users" /></div>
+                <div class="wh-drawer-empty-text">{{ $t('No_results') }}</div>
+              </div>
+            </template>
 
-            <div class="cust-drawer-empty" v-if="!(salespeople || []).length">
-              <div class="cust-drawer-empty-icon"><lucide-icon name="users" /></div>
-              <div class="cust-drawer-empty-text">{{ $t('No_results') || 'No results' }}</div>
-            </div>
+            <!-- Sales Agent (Commissions — same field as Create Sale) -->
+            <template v-if="(salesAgents || []).length">
+              <div class="soldby-section-title">
+                <lucide-icon name="briefcase-business" />
+                <span>{{ $t('Sales_Agent') }}</span>
+              </div>
+              <button
+                type="button"
+                class="wh-drawer-card wh-drawer-card-clear"
+                :class="{ active: !selectedSalesAgentId }"
+                @click="selectSalesAgent(null)"
+              >
+                <div class="wh-drawer-card-icon clear">
+                  <lucide-icon name="refresh-cw" />
+                </div>
+                <div class="wh-drawer-card-body">
+                  <div class="wh-drawer-card-name">
+                    {{ $t('Auto_Sales_Agent') }}<template v-if="autoSalesAgent"> · {{ autoSalesAgent.name }}</template>
+                  </div>
+                  <div class="wh-drawer-card-meta">
+                    <span class="wh-drawer-card-hint">{{ $t('Pos_Sales_Agent_Hint') }}</span>
+                  </div>
+                </div>
+                <div class="wh-drawer-card-arrow">
+                  <lucide-icon v-if="!selectedSalesAgentId" name="check-circle" />
+                </div>
+              </button>
+              <button
+                type="button"
+                class="wh-drawer-card"
+                :class="{ active: String(selectedSalesAgentId) === String(a.id) }"
+                v-for="a in salesAgents"
+                :key="'agent-' + a.id"
+                @click="selectSalesAgent(a.id)"
+              >
+                <div class="wh-drawer-card-icon" :style="{ background: catColor(a.id) }">
+                  {{ catInitial(a.name) }}
+                </div>
+                <div class="wh-drawer-card-body">
+                  <div class="wh-drawer-card-name">{{ a.name }}</div>
+                  <div class="wh-drawer-card-meta" v-if="a.code">
+                    <span class="wh-drawer-card-id">{{ a.code }}</span>
+                  </div>
+                </div>
+                <div class="wh-drawer-card-arrow">
+                  <lucide-icon v-if="String(selectedSalesAgentId) === String(a.id)" name="check-circle" />
+                </div>
+              </button>
+            </template>
           </div>
-        </section>
+
+          <div class="soldby-drawer-foot">
+            <button type="button" class="soldby-done-btn" @click="soldByDrawerOpen = false">
+              {{ $t('Done') }}
+            </button>
+          </div>
+        </aside>
       </div>
     </transition>
 
@@ -3607,12 +4229,16 @@
  * vuex → posCompatMixin facade. Payment modal, product-return modal and
  * custom fields are stubs until their batches.
  */
+import { h } from "vue";
+import { Modal } from "ant-design-vue";
 import NProgress from "../../pos-compat/nprogress";
 import axios from "../../pos-compat/axios";
 import Util from "../../pos-compat/util";
-import { formatPriceDisplay, getPriceFormatSetting, getPriceDecimals } from "../../pos-compat/priceFormat";
+import { formatPriceDisplay, getPriceFormatSetting, getPriceDecimals, withCurrency, resolveHideZeroDecimals, stripZeroFraction } from "../../pos-compat/priceFormat";
 import { openCashDrawer } from "../../pos-compat/cashDrawerQz";
-import { receiptFontHeadTags, tenantFontHeadTags, whenPrintFontsReady } from "../../lib/receiptFont";
+import { receiptFontHeadTags, receiptPageHeadTag, tenantFontHeadTags, whenPrintFontsReady, whenPrintReady } from "../../lib/receiptFont";
+import { applyIssuer, applyWarehouseIssuer, stripIssuer } from "../../lib/invoiceIssuer";
+import { refBarcodeSvg } from "../../lib/receiptBarcode";
 import posKeyboardShortcutsMixin, {
   POS_SHORTCUTS,
   posShortcutsEnabled,
@@ -3625,6 +4251,10 @@ import ModernPaymentModal from "../../pos-compat/ModernPaymentModal.vue";
 import PosReturnModal from "../../pos-compat/PosReturnModal.vue";
 import CustomFieldsForm from "../../pos-compat/CustomFieldsForm.vue";
 import SerialNumbersField from "../../pos-compat/SerialNumbersField.vue";
+import { hasComboSerials, comboSerialMismatch, comboSerialRequired, setComboSerialGroup } from "../../lib/comboSerials";
+import { lineSerialUnits, loadUnitFactors } from "../../lib/serialUnits";
+import { formatLength, resolveScaleScan, scaleConfig, unitPriceForTotal } from "../../lib/scaleBarcode";
+import { hasExtraBarcode } from "../../lib/scanMatch";
 import QrcodeScanner from "../../pos-compat/QrcodeScanner";
 import LucideIcon from "../../pos-compat/LucideIcon.vue";
 import { Fire } from "../../pos-compat/bv";
@@ -3634,6 +4264,10 @@ import "vue-select/dist/vue-select.css";
 import VSelect from "../../pos-compat/vselect";
 
 const loadStripe = () => Promise.resolve(null); // Stripe processing removed upstream; keep call sites harmless.
+// Manager approval to remove items: last approver picked on this device, and
+// direct removals made offline waiting to be logged.
+const VOID_LAST_APPROVER_KEY = 'pos_void_last_approver';
+const VOID_LOG_QUEUE_KEY = 'pos_void_log_queue_v1';
 export default {
   name: 'PosPage',
   components: {
@@ -3744,6 +4378,8 @@ export default {
       products_pos: [],
       // ---- Vehicle Fitment (feature-flagged; see System Settings → Features)
       vehicle_fitment_enabled: false,
+      // Flip to true once the fitment API is ported (see loadVehicleLookup).
+      vehicle_fitment_available: false,
       pos_vehicle: null, // {make_id, model_id, year, engine, label}
       vehicle_incompatible_ids: [],
       vehicle_makes: [],
@@ -3763,6 +4399,7 @@ export default {
         barcode_scanning_sound: true,
         show_product_images: true,
         show_stock_quantity: true,
+        show_search_stock: true,
         enable_hold_sales: true,
         enable_customer_points: true,
         show_categories: true,
@@ -3795,6 +4432,12 @@ export default {
       product_perPage: 10,
       product_totalRows: 0,
       productsLoading: false,
+      // Grid sort / favourites filter: remembered per device; the favourites
+      // themselves are per cashier ("productId:variantId" keys from the server).
+      productSort: (() => { try { return localStorage.getItem('pos_product_sort') || 'newest'; } catch (e) { return 'newest'; } })(),
+      productFavoritesOnly: (() => { try { return localStorage.getItem('pos_product_favorites_only') === '1'; } catch (e) { return false; } })(),
+      posFavorites: [],
+      favoriteSaving: {},
       paginated_Brands: "",
       brand_currentPage: 1,
       brand_perPage: 3,
@@ -3853,7 +4496,11 @@ export default {
           invoice_format: "thermal"
         },
         zatca_qr: "",
-        fbr_invoice_number: ""
+        fbr_invoice_number: "",
+        // AGT / DGI fiscal block: { blocks: [{ title, lines[], qr }] } from sales_print_invoice
+        fiscal: null,
+        // Software license keys of the sale ("Print keys on receipt"): [{ product, key, expires_at }]
+        license_keys: []
       },
       selectedClientPoints: 0,
       posRewards: [],
@@ -3936,6 +4583,8 @@ export default {
         is_imei: "",
         imei_number:"",
         serial_numbers: [],
+        serial_components: [],
+        serial_groups: {},
         is_batch_tracked: false,
         packs: [],
         product_pack_id: null,
@@ -3950,6 +4599,9 @@ export default {
       registerBusy: false,
       registerForm: { warehouse_id: '', opening_balance: 0, notes: '' },
       closeForm: { counted_cash: 0, notes: '' },
+      // Breakdown returned by cash-registers/close; drives the post-close
+      // view of the modal so the cashier can see how expected cash was reached.
+      closeSummary: null,
       cashMove: { type: 'in', amount: 0, notes: '' },
       warehouseOptions: [],
       selectedClientId: "",
@@ -3957,7 +4609,11 @@ export default {
       salesSwitchEnabled: false,
       salespeople: [],
       selectedSellerId: null,
-      sellerDrawerOpen: false,
+      // Commissions: Sales Agent credited for the sale (sales.sales_agent_id)
+      salesAgents: [],
+      selectedSalesAgentId: null,
+      // "Sold by" right drawer (header icon): salesperson + sales agent
+      soldByDrawerOpen: false,
       productsReady: false,
       uiLoadingProductId: null,
       detailLoading: false,
@@ -3971,6 +4627,13 @@ export default {
       offlineSyncEnabled: true,
       offlineSyncInProgress: false,
       offlineSalesCount: 0,
+      // Queued sales the server rejected (status 'failed'). Kept on the device
+      // and listed in the failed-sales review until retried or discarded.
+      offlineFailedCount: 0,
+      failedOfflineSales: [],
+      failedOfflineSaleBusyId: null,
+      // When the last sync pass that reached the server finished (Date).
+      offlineLastSyncAt: null,
       offlineLastSyncError: null,
       // Latest backend reachability result (from /ping). This is separate from
       // browser online/offline signal and is used to gate sync/modal actions.
@@ -3986,7 +4649,10 @@ export default {
       // sync / sale. Used as the `since` value for incremental stock delta
       // polling so we avoid re-downloading the whole catalog after each sale
       // while still picking up changes made by other cashiers.
-      lastProductsSyncAt: null
+      lastProductsSyncAt: null,
+      // Manager PIN modal for removing items (pos_settings.require_void_approval).
+      // The approved change itself is held in this._voidApply (not reactive).
+      voidApproval: { action: '', items: [], pin: '', error: '', busy: false, locked: false, approvers: [], approverId: null, loadingApprovers: false }
     };
   },
   computed: {
@@ -4001,10 +4667,24 @@ export default {
       return usePlanStore().featureEnabled('promotions');
     },
 
+    // POS Settings > "Require manager approval to remove items". Users with
+    // pos_void_items still remove directly (their removals are logged).
+    voidGuardOn() {
+      const v = this.pos_settings && this.pos_settings.require_void_approval;
+      return v === true || Number(v) === 1;
+    },
+    canVoidDirectly() {
+      return !!(this.currentUserPermissions && this.currentUserPermissions.includes('pos_void_items'));
+    },
+
     // Monetary precision (2 or 3) driven by the "Enable 3 Decimal Pricing" setting.
     // Reads from the Vuex store, falling back to the localStorage cache for offline POS.
     priceDecimals() {
       return getPriceDecimals({ store: this.$store });
+    },
+    // System Settings -> Hide Zero Decimals (auth payload, localStorage when offline).
+    hideZeroDecimals() {
+      return resolveHideZeroDecimals(this.currentUser && this.currentUser.hide_zero_decimals);
     },
 
     // Vehicle Fitment: the grid list minus parts that do not fit the selected
@@ -4014,6 +4694,34 @@ export default {
       if (!this.pos_vehicle || !this.vehicle_incompatible_ids.length) return base;
       const bad = new Set(this.vehicle_incompatible_ids.map(Number));
       return base.filter(p => !bad.has(Number(p.id)));
+    },
+
+    // What the grid pages through: the vehicle-filtered list, narrowed to the
+    // cashier's favourites when that filter is on, in the chosen order. The
+    // server sends newest first, so "newest" keeps that order untouched.
+    gridProducts() {
+      let list = this.vehicleFilteredProducts;
+      if (this.productFavoritesOnly) {
+        const favs = new Set(this.posFavorites);
+        list = list.filter(p => favs.has(this.favoriteKey(p)));
+      }
+      const sort = this.productSort;
+      if (sort === 'newest') return list;
+      const byId = (a, b) => (Number(a.id) - Number(b.id)) || (Number(a.product_variant_id || 0) - Number(b.product_variant_id || 0));
+      const price = p => Number(p.Net_price) || 0;
+      const name = p => String(p.name || '');
+      const cmp = {
+        oldest: byId,
+        name_asc: (a, b) => name(a).localeCompare(name(b)),
+        name_desc: (a, b) => name(b).localeCompare(name(a)),
+        price_asc: (a, b) => price(a) - price(b) || byId(a, b),
+        price_desc: (a, b) => price(b) - price(a) || byId(a, b),
+      }[sort];
+      return cmp ? [...list].sort(cmp) : list;
+    },
+
+    favoriteSet() {
+      return new Set(this.posFavorites);
     },
 
     // Models belonging to the make picked in the vehicle modal.
@@ -4075,6 +4783,20 @@ export default {
       return { blocked: false, reason: null };
     },
 
+    // Layout 6 (Tabular): "Total Items" = sum of line quantities.
+    invoiceItemCount() {
+      const details = (this.invoice_pos && Array.isArray(this.invoice_pos.details)) ? this.invoice_pos.details : [];
+      return details.reduce((sum, d) => sum + (Number(d && d.quantity) || 0), 0);
+    },
+
+    // Layout 6 (Tabular): CODE128 barcode of the invoice ref as inline SVG
+    // (survives the innerHTML clone into the print popup).
+    invoiceRefBarcodeSvg() {
+      if (this.currentReceiptLayout !== 6) return '';
+      const ref = this.invoice_pos && this.invoice_pos.sale ? this.invoice_pos.sale.Ref : '';
+      return ref ? refBarcodeSvg(ref) : '';
+    },
+
     // Receipt subtotal (sum of invoice detail totals; before order tax/discount/shipping)
     invoiceSubtotal() {
       try {
@@ -4124,13 +4846,13 @@ export default {
       return (tax / base) * 100;
     },
 
-    // Normalize POS receipt layout selection (1, 2, 3, 4, or 5)
+    // Normalize POS receipt layout selection (1-6)
     currentReceiptLayout() {
       const raw = this.pos_settings && this.pos_settings.receipt_layout != null
         ? this.pos_settings.receipt_layout
         : 1;
       const n = Number(raw) || 1;
-      return [1, 2, 3, 4, 5].includes(n) ? n : 1;
+      return [1, 2, 3, 4, 5, 6].includes(n) ? n : 1;
     },
 
     // Outstanding balance carried by the customer before this sale. Shared by
@@ -4281,6 +5003,32 @@ export default {
       return this.$t('Select_Salesperson') || 'Select salesperson';
     },
 
+    // Agent the server credits when none is picked (CommissionService:
+    // seller's linked agent, then the cashier's).
+    autoSalesAgent() {
+      const agents = this.salesAgents || [];
+      const linked = (uid) => uid != null ? agents.find(a => a.user_id != null && String(a.user_id) === String(uid)) : null;
+      return linked(this.salesSwitchEnabled ? this.selectedSellerId : null)
+        || linked(this.currentUser ? this.currentUser.id : null)
+        || null;
+    },
+    selectedSalesAgentLabel() {
+      const a = (this.salesAgents || []).find(x => String(x.id) === String(this.selectedSalesAgentId));
+      if (a) return a.name;
+      return this.autoSalesAgent
+        ? this.$t('Auto_Sales_Agent') + ' · ' + this.autoSalesAgent.name
+        : this.$t('No_Sales_Agent');
+    },
+    soldByEnabled() {
+      return this.salesSwitchEnabled || (this.salesAgents || []).length > 0;
+    },
+    // Header icon tooltip: who gets credit for this sale at a glance
+    soldByTitle() {
+      const parts = [this.$t('Sold_By') + ': ' + this.selectedSellerLabel];
+      if ((this.salesAgents || []).length) parts.push(this.$t('Sales_Agent') + ': ' + this.selectedSalesAgentLabel);
+      return parts.join(' · ');
+    },
+
     // Customers filtered by the drawer's search box (matches name OR phone)
     filteredCustomers() {
       const q = (this.custDrawerSearch || '').trim().toLowerCase();
@@ -4295,9 +5043,10 @@ export default {
 
     // Total pages for product list
     product_lastPage() {
-      // With a vehicle selected the grid paginates the client-filtered list.
-      const total = this.pos_vehicle
-        ? this.vehicleFilteredProducts.length
+      // With a vehicle or the favourites filter on, the grid paginates the
+      // client-filtered list.
+      const total = (this.pos_vehicle || this.productFavoritesOnly)
+        ? this.gridProducts.length
         : Number(this.product_totalRows || 0);
       const per = Number(this.product_perPage || 1);
       const pages = Math.ceil(total / per);
@@ -4461,8 +5210,68 @@ export default {
       return this.categories.length;
     },
 
+    // ---- Offline sync status menu (header cloud button) ----
+    canOpenOfflineSalesPage() {
+      return !!(this.currentUserPermissions && this.currentUserPermissions.includes('pos_offline_sales'));
+    },
+    // Shown while offline, while anything is queued/rejected/syncing, and
+    // always for users who may open Sales > Offline Sales (their way in).
+    showOfflineSyncMenu() {
+      return !this.isOnline || this.offlineSyncInProgress || this.offlineSalesCount > 0 ||
+        this.offlineFailedCount > 0 || this.canOpenOfflineSalesPage;
+    },
+    // offline | syncing | failed | pending | ok — drives colour, icon, copy.
+    offlineSyncState() {
+      if (!this.isOnline) return 'offline';
+      if (this.offlineSyncInProgress) return 'syncing';
+      if (this.offlineFailedCount > 0) return 'failed';
+      if (this.offlineSalesCount > 0) return 'pending';
+      return 'ok';
+    },
+    offlineSyncIcon() {
+      return {
+        offline: 'cloud-off',
+        syncing: 'refresh-cw',
+        failed: 'alert-triangle',
+        pending: 'cloud-upload',
+        ok: 'cloud-check'
+      }[this.offlineSyncState];
+    },
+    offlineSyncTitle() {
+      const n = this.offlineFailedCount;
+      const p = this.offlineSalesCount;
+      switch (this.offlineSyncState) {
+        case 'offline': return this.tfp('pos.Sync_State_Offline', null, "You're offline");
+        case 'syncing': return this.tfp('pos.Sync_State_Syncing', null, 'Uploading offline sales…');
+        case 'failed': return this.tfp('pos.Sync_State_Failed', { n }, n + ' sales need attention');
+        case 'pending': return this.tfp('pos.Sync_State_Pending', { n: p }, p + ' sales waiting to upload');
+        default: return this.tfp('pos.Sync_State_Ok', null, 'All sales are synced');
+      }
+    },
+    offlineSyncSubtitle() {
+      switch (this.offlineSyncState) {
+        case 'offline': return this.tfp('pos.Sync_State_Offline_Sub', null, 'Sales are saved on this device and upload automatically when the connection is back.');
+        case 'syncing': return this.tfp('pos.Sync_State_Syncing_Sub', null, 'Keep this page open until it finishes.');
+        case 'failed': return this.tfp('pos.Sync_State_Failed_Sub', null, "The server didn't accept them. Check the reason, then retry or discard.");
+        case 'pending': return this.tfp('pos.Sync_State_Pending_Sub', null, 'They upload automatically. You can also sync now.');
+        default: return this.tfp('pos.Sync_State_Ok_Sub', null, 'Nothing is waiting on this device.');
+      }
+    },
+    offlineLastSyncAtLabel() {
+      if (!this.offlineLastSyncAt) return '';
+      try {
+        return this.offlineLastSyncAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } catch (e) {
+        return '';
+      }
+    },
     offlineStatusTitle() {
       try {
+        if (this.offlineFailedCount > 0) {
+          return this.$t
+            ? (this.$t('pos.Offline_Sales_Failed_Review') || 'Some offline sales could not be synced — click to review')
+            : 'Some offline sales could not be synced — click to review';
+        }
         if (!this.isOnline) {
           return this.$t ? this.$t('pos.Offline_Mode') : 'Offline mode';
         }
@@ -4600,6 +5409,10 @@ export default {
   mounted() {
     this.changeSidebarProperties();
     this.paginate_products(this.product_perPage, 0);
+    // Removals logged while offline in an earlier session.
+    setTimeout(() => this.flushVoidLogQueue(), 4000);
+    // Serial counts per sale unit (lib/serialUnits); best effort when offline.
+    loadUnitFactors();
     this.loadVehicleLookup();
     this.loadPosCurrencies();
     // Marker class so the global :fullscreen rules at the bottom of this
@@ -4651,6 +5464,38 @@ export default {
       if (!error || !error.response) return true;
       if (!error.response.status) return true;
       return /network|failed to fetch/i.test(String(error.message || ''));
+    },
+    // How an offline-queue sync attempt failed, which decides what happens to
+    // the record:
+    //  'network'   never reached the server            -> pending, stop pass
+    //  'auth'      401/419/revoked session; lib/http is
+    //              already redirecting to /login        -> pending, stop pass
+    //  'transient' gateway/rate-limit answer (the app
+    //              may not even have seen the request)  -> pending w/ retry cap
+    //  'rejected'  the app answered and refused it      -> failed (review list)
+    // Before this, every answer carrying an HTTP status was treated as
+    // 'rejected', so a 502 during reconnect or an expired session silently
+    // parked sales as failed.
+    classifySyncError(error) {
+      if (this.isNetworkFailure(error)) return 'network';
+      const status = Number((error && (error.status || (error.response && error.response.status))) || 0);
+      if ((error && (error.unauthenticated || error.sessionRevoked)) || status === 401 || status === 419) return 'auth';
+      if ([408, 425, 429, 502, 503, 504].includes(status)) return 'transient';
+      return 'rejected';
+    },
+    // Readable reason from a rejected sync attempt; Laravel validation errors
+    // (e.g. the stock guard) carry the useful text in `errors`, not `message`.
+    syncErrorMessage(error) {
+      const data = (error && error.response && error.response.data) || {};
+      if (data.errors && typeof data.errors === 'object') {
+        const parts = [];
+        Object.keys(data.errors).forEach((k) => {
+          const v = data.errors[k];
+          (Array.isArray(v) ? v : [v]).forEach((m) => { if (m) parts.push(String(m)); });
+        });
+        if (parts.length) return parts.join(' ');
+      }
+      return data.message || data.error || (error && error.message) || 'Unknown error';
     },
     async pingBackend() {
       // De-dupe concurrent pings.
@@ -4776,12 +5621,19 @@ export default {
       if (!this.currentRegister) return;
       this.registerBusy = true;
       try {
-        await axios.post('cash-registers/close', {
+        const res = await axios.post('cash-registers/close', {
           register_id: this.currentRegister.id,
           counted_cash: this.closeForm.counted_cash || 0,
           notes: this.closeForm.notes || ''
         });
-        this.$bvModal.hide('CloseRegisterModal');
+        const summary = res?.data?.summary || {};
+        const register = res?.data?.register || {};
+        this.closeSummary = {
+          ...summary,
+          opening_balance: Number(register.opening_balance) || 0,
+          cash_in: Number(register.cash_in) || 0,
+          cash_out: Number(register.cash_out) || 0,
+        };
         this.makeToast('success', this.$t('RegisterClosed'), this.$t('Success'));
         this.refreshCurrentRegister();
       } catch (e) {
@@ -5019,6 +5871,10 @@ export default {
       return out === key && fallback ? fallback : out;
     },
     loadVehicleLookup() {
+      // The vehicle-fitment module (`vehicles/lookup`, VehicleFitmentController)
+      // is not part of this SaaS build yet, so the request would always 404.
+      // Leave the vehicle UI hidden until the module is ported.
+      if (!this.vehicle_fitment_available) return;
       axios.get('vehicles/lookup')
         .then(({ data }) => {
           this.vehicle_fitment_enabled = !!(data && data.enabled);
@@ -5081,8 +5937,9 @@ export default {
       }
     },
     paginate_products(pageSize, pageNumber) {
-      // vehicleFilteredProducts === this.products when no vehicle is selected.
-      const itemsToParse = this.vehicleFilteredProducts;
+      // gridProducts === this.products with no vehicle, no favourites filter
+      // and the default (newest) order.
+      const itemsToParse = this.gridProducts;
       this.paginated_Products = itemsToParse.slice(
         pageNumber * pageSize,
         (pageNumber + 1) * pageSize
@@ -5093,6 +5950,68 @@ export default {
       // do not refetch since we already hold the full filtered list.
       this.product_currentPage = page;
       this.paginate_products(this.product_perPage, page - 1);
+    },
+
+    //------------------- Grid sort & favourites ------------------\\
+    onProductSortChange() {
+      try { localStorage.setItem('pos_product_sort', this.productSort); } catch (e) {}
+      this.product_currentPage = 1;
+      this.Product_paginatePerPage();
+    },
+    toggleFavoritesOnly() {
+      this.productFavoritesOnly = !this.productFavoritesOnly;
+      try { localStorage.setItem('pos_product_favorites_only', this.productFavoritesOnly ? '1' : '0'); } catch (e) {}
+      this.product_currentPage = 1;
+      this.Product_paginatePerPage();
+    },
+    favoriteKey(p) {
+      return (p && p.id) + ':' + ((p && p.product_variant_id) || 0);
+    },
+    isFavorite(p) {
+      return this.favoriteSet.has(this.favoriteKey(p));
+    },
+    // Cached per cashier so the stars and the filter still work offline.
+    favoritesCacheKey() {
+      return 'pos_favorites_' + (this.currentUser && this.currentUser.id ? this.currentUser.id : '0');
+    },
+    setFavorites(keys) {
+      this.posFavorites = Array.isArray(keys) ? keys.map(String) : [];
+      try { localStorage.setItem(this.favoritesCacheKey(), JSON.stringify(this.posFavorites)); } catch (e) {}
+    },
+    loadCachedFavorites() {
+      try {
+        const raw = localStorage.getItem(this.favoritesCacheKey());
+        if (raw) this.posFavorites = JSON.parse(raw) || [];
+      } catch (e) {}
+    },
+    toggleFavorite(product) {
+      if (this.isReallyOffline()) {
+        this.makeToast('warning', this.$t('pos.Favorites_Need_Connection'), this.$t('Warning'));
+        return;
+      }
+      const key = this.favoriteKey(product);
+      if (this.favoriteSaving[key]) return;
+      this.$set(this.favoriteSaving, key, true);
+      axios
+        .post('pos/favorites/toggle', {
+          product_id: product.id,
+          product_variant_id: product.product_variant_id || null,
+        })
+        .then(({ data }) => {
+          this.setFavorites(data.favorites);
+          // Unstarring inside the favourites view drops the card: re-slice,
+          // staying on the same page unless it no longer exists.
+          if (this.productFavoritesOnly) {
+            const page = Math.min(this.product_currentPage, this.product_lastPage);
+            this.Product_onPageChanged(Math.max(1, page));
+          }
+        })
+        .catch(() => {
+          this.makeToast('danger', this.$t('InvalidData'), this.$t('Error'));
+        })
+        .finally(() => {
+          this.$delete(this.favoriteSaving, key);
+        });
     },
     onProductsTouchStart(e) {
       // Mobile-only: enable swipe-paginate when the mobile layout is active.
@@ -5329,6 +6248,29 @@ export default {
     },
 
     // ==================== PAYMENT METHODS ====================
+
+    /**
+     * The tender that can hand `excess` back as change, mirroring the rule the
+     * server applies: it has to be a cash method (there is no change from a
+     * card) and big enough to cover the difference. Returns null when no line
+     * qualifies, which is the only case the POS still refuses.
+     */
+    changeLineFor(excess) {
+      if (!(excess > 0)) return null;
+
+      const cashIds = (this.payment_methods || [])
+        .filter(m => !!m.is_cash)
+        .map(m => Number(m.id));
+
+      return (
+        (this.paymentLines || []).find(
+          line =>
+            cashIds.includes(Number(line.payment_method_id)) &&
+            parseFloat(line.amount || 0) >= excess
+        ) || null
+      );
+    },
+
     Submit_Payment() {
       NProgress.start();
       NProgress.set(0.1);
@@ -5338,7 +6280,10 @@ export default {
       const due      = parseFloat(this.docGrandTotal.toFixed(this.priceDecimals));
       const multi    = this.paymentLines.length > 1;
 
-      if (multi && total > due) {
+      // Overpaying a split tender is fine as long as a cash line can hand the
+      // difference back — the server applies the same rule. Only refuse when
+      // nothing on the sale is able to give change.
+      if (multi && total > due && !this.changeLineFor(total - due)) {
         NProgress.done();
         this.makeToast(
           "warning",
@@ -5380,7 +6325,11 @@ export default {
     CreatePOS() {
       NProgress.start();
       NProgress.set(0.1);
-      if (this.paymentLines.length > 1 && this.totalPaid > this.docGrandTotal) {
+      if (
+        this.paymentLines.length > 1 &&
+        this.totalPaid > this.docGrandTotal &&
+        !this.changeLineFor(this.totalPaid - this.docGrandTotal)
+      ) {
         this.makeToast(
           "warning",
           this.$t("TotalPaidExceedsGrandTotalForMultiPayment"),
@@ -5441,6 +6390,7 @@ export default {
             client_id: this.selectedClientId,
             warehouse_id: this.sale.warehouse_id,
             seller_id: this.salesSwitchEnabled ? (this.selectedSellerId || undefined) : undefined,
+            sales_agent_id: this.selectedSalesAgentId || undefined,
             tax_rate: this.sale.tax_rate?this.sale.tax_rate:0,
             TaxNet: this.sale.TaxNet?this.sale.TaxNet:0,
             discount: this.sale.discount?this.sale.discount:0,
@@ -5510,6 +6460,7 @@ export default {
           .catch(error => {
             NProgress.done();
             this.paymentProcessing = false;
+            if (this.handleUnavailableSubmitError(error)) return;
             // Surface server-side validation (e.g. the stock guard's
             // "needs 80 but only 72 in stock") instead of a generic toast.
             this.makeToast("danger", error?.response?.data?.message || this.$t("InvalidData"), this.$t("Failed"));
@@ -5549,6 +6500,7 @@ export default {
             client_id: this.selectedClientId,
             warehouse_id: this.sale.warehouse_id,
             seller_id: this.salesSwitchEnabled ? (this.selectedSellerId || undefined) : undefined,
+            sales_agent_id: this.selectedSalesAgentId || undefined,
             tax_rate: this.sale.tax_rate ? this.sale.tax_rate : 0,
             TaxNet: this.sale.TaxNet ? this.sale.TaxNet : 0,
             discount: this.sale.discount ? this.sale.discount : 0,
@@ -5618,6 +6570,7 @@ export default {
           .catch(error => {
             this.paymentProcessing = false;
             NProgress.done();
+            if (this.handleUnavailableSubmitError(error)) return;
             this.makeToast("danger", error?.response?.data?.message || this.$t("InvalidData"), this.$t("Failed"));
           });
       }
@@ -5628,17 +6581,20 @@ export default {
       const decimals = Number.isInteger(dec) ? dec : 0;
       const n = Number(number);
       const safe = Number.isFinite(n) ? n : 0;
+      // System Settings -> Hide Zero Decimals applies to quantities and
+      // percentages too (5.00 pcs -> 5), never to the stored values.
+      const trim = s => (this.hideZeroDecimals ? stripZeroFraction(s, '.') : s);
       try {
-        return safe.toLocaleString('en-US', {
+        return trim(safe.toLocaleString('en-US', {
           minimumFractionDigits: decimals,
           maximumFractionDigits: decimals,
-        });
+        }));
       } catch (e) {
         // Fallback for environments without Intl
         const fixed = safe.toFixed(decimals);
         const [intPart, fracPart] = fixed.split('.');
         const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-        return fracPart ? `${withCommas}.${fracPart}` : withCommas;
+        return fracPart ? trim(`${withCommas}.${fracPart}`) : withCommas;
       }
     },
 
@@ -5657,7 +6613,7 @@ export default {
           this.price_format_key = key;
         }
         const effectiveKey = key || null;
-        return formatPriceDisplay(number, decimals, effectiveKey);
+        return formatPriceDisplay(number, decimals, effectiveKey, this.hideZeroDecimals);
       } catch (e) {
         // Fallback: keep legacy behavior
         return this.formatNumber(number, dec);
@@ -5669,7 +6625,7 @@ export default {
       // currency (rate 1 / base symbol when the feature is off — legacy exact).
       const symbol = this.posCurrencySymbol;
       const value = this.formatPriceDisplay((Number(number) || 0) * this.posRate, dec);
-      return symbol ? `${symbol} ${value}` : value;
+      return this.attachCurrency(symbol, value);
     },
 
     // Always-base formatter for register aggregates (today's sales, credit
@@ -5677,13 +6633,34 @@ export default {
     formatPriceBaseCurrency(number, dec) {
       const symbol = (this.currentUser && this.currentUser.currency) ? this.currentUser.currency : '';
       const value = this.formatPriceDisplay(number, dec);
-      return symbol ? `${symbol} ${value}` : value;
+      return this.attachCurrency(symbol, value);
+    },
+
+    // Symbol before or after the amount per System Settings → Currency Position.
+    attachCurrency(symbol, value) {
+      return withCurrency(symbol, value, this.currentUser && this.currentUser.currency_position);
     },
 
     formatPriceWithSymbol(symbol, number, dec) {
       const safeSymbol = symbol || '';
       const value = this.formatPriceDisplay(number, dec);
-      return safeSymbol ? `${safeSymbol} ${value}` : value;
+      return this.attachCurrency(safeSymbol, value);
+    },
+
+    // Change to hand back, shown large and kept on screen until the cashier
+    // closes it (Enter works): the receipt alone made it easy to miss.
+    // The amount is in the sale's document currency, like the payment modal.
+    showChangeDue(change) {
+      const amount = Number(change) || 0;
+      if (amount <= 0) return;
+      Modal.success({
+        title: this.$t('pos.Change_Due'),
+        content: h('div', { style: 'font-size: 32px; font-weight: 800; color: #10b981; font-family: "JetBrains Mono", monospace;' },
+          this.formatPriceWithSymbol(this.posCurrencySymbol, amount, 2)),
+        okText: this.$t('Done'),
+        zIndex: 2000,
+        centered: true,
+      });
     },
 
     makeToast(variant, msg, title) {
@@ -5871,16 +6848,16 @@ export default {
           const data = response && response.data ? response.data : {};
           if (data.ok) {
             this.promotionCodeStatus = "ok";
-            this.promotionCodeMessage = (data.promotion && data.promotion.name) || "Code applied";
+            this.promotionCodeMessage = (data.promotion && data.promotion.name) || this.$t("CodeApplied");
             this.Refresh_Promotions();
           } else {
             this.promotionCodeStatus = "error";
-            this.promotionCodeMessage = data.reason || "Invalid code";
+            this.promotionCodeMessage = data.reason || this.$t("InvalidCode");
           }
         })
         .catch(() => {
           this.promotionCodeStatus = "error";
-          this.promotionCodeMessage = "Invalid code";
+          this.promotionCodeMessage = this.$t("InvalidCode");
         });
     },
 
@@ -5903,8 +6880,18 @@ export default {
     },
 
     keyup_Discount() {
-      if (isNaN(this.sale.discount)) {
+      if (isNaN(this.sale.discount) || Number(this.sale.discount) < 0) {
         this.sale.discount = 0;
+        this.CalculTotal();
+      } else if (this.sale.discount_Method === '1' && Number(this.sale.discount) > 100) {
+        // A percentage tops out at the whole cart.
+        this.sale.discount = 100;
+        this.CalculTotal();
+      } else if (this.sale.discount_Method !== '1' && Number(this.sale.discount) > Number(this.total || 0)) {
+        // A fixed amount too: CalculTotal capped only the shown total, while
+        // the typed amount was what got saved on the sale.
+        this.sale.discount = parseFloat(Number(this.total || 0).toFixed(this.priceDecimals));
+        this.CalculTotal();
       } else if(this.sale.discount == ''){
          this.sale.discount = 0;
         this.CalculTotal();
@@ -5916,7 +6903,8 @@ export default {
     toggleDiscountType() {
       // Toggle between '1' (percentage) and '2' (fixed)
       this.sale.discount_Method = this.sale.discount_Method === '1' ? '2' : '1';
-      this.CalculTotal();
+      // Re-run the input guards: a fixed amount above 100 becomes a 100% cap.
+      this.keyup_Discount();
     },
     
     // Calculate discount amount for current sale (for display purposes)
@@ -5995,6 +6983,8 @@ export default {
         this.product.is_imei            = data.is_imei;
         this.product.imei_number        = '';
         this.product.serial_numbers     = [];
+        this.product.serial_components  = Array.isArray(data.serial_components) ? data.serial_components : [];
+        this.product.serial_groups      = {};
         this.product.is_batch_tracked   = !!data.is_batch_tracked;
         this.product.image              = data.image;
 
@@ -6064,6 +7054,7 @@ export default {
           fix_price: p.fix_price,
           is_imei: p.is_imei,
           serial_numbers: [],
+          serial_components: Array.isArray(p.serial_components) ? p.serial_components : [],
           is_batch_tracked: !!p.is_batch_tracked,
           // Image: needed by the cart-row thumb so it can render the same
           // visual as the product card (with initials fallback when missing).
@@ -6219,6 +7210,11 @@ export default {
       if (this.pos_settings.barcode_scanning_sound) {
         this.audio.play();
       }
+      // A weighing-scale price label's printed total (set by Check_Product_Exist);
+      // kept off the cart line itself.
+      const labelTotal = this.product.scale_label_total != null ? Number(this.product.scale_label_total) : null;
+      delete this.product.scale_label_total;
+
       // 1) If product already exists in the list (ignore price_type), merge and just increase quantity
       const hasProductIds = this.product.product_id !== undefined && this.product.product_id !== null;
       const targetVariantId = (this.product.product_variant_id === undefined || this.product.product_variant_id === null)
@@ -6238,6 +7234,8 @@ export default {
       if (existingIndex !== -1) {
         const row = this.details[existingIndex];
         const addQty = (typeof this.product.quantity === 'number' && this.product.quantity > 0) ? this.product.quantity : 1;
+        const prevQty = Number(row.quantity) || 0;
+        const prevTotal = prevQty * ((Number(row.Net_price) || 0) + (Number(row.taxe) || 0));
         if (row.product_type !== 'is_service') {
           const desiredQty = row.quantity + addQty;
           const _mult = Number(row.pack_multiplier) || 1;
@@ -6251,6 +7249,11 @@ export default {
           }
         } else {
           row.quantity = row.quantity + addQty;
+        }
+        // Another price-labelled pack: the line comes to what it already cost
+        // plus this label — unless the stock guard cut the quantity.
+        if (labelTotal != null && Math.abs(Number(row.quantity) - (prevQty + addQty)) < 1e-9) {
+          this.applyScaleLabelPrice(row, prevTotal + labelTotal);
         }
         this.CalculTotal();
         this.$forceUpdate();
@@ -6330,6 +7333,7 @@ export default {
           }
         }
       } catch(e) {}
+      if (labelTotal != null) this.applyScaleLabelPrice(newItem, labelTotal);
       this.details.unshift(newItem);
       setTimeout(() => {
         this.load_product = true;
@@ -6398,6 +7402,12 @@ export default {
       // Use composite key for variants to avoid overlay conflicting across variants
       const key = product.product_variant_id ? (product.id + '-' + product.product_variant_id) : product.id;
       this.uiLoadingProductId = key;
+      // A tile adds the default quantity: drop what the last scan left on
+      // this.product (a scale label's weight and price).
+      if (this.product) {
+        this.product.quantity = null;
+        delete this.product.scale_label_total;
+      }
       this.Get_Product_Details(product.id, product.product_variant_id, product)
         .catch(() => {})
         .finally(() => {
@@ -6406,7 +7416,17 @@ export default {
         });
     },
 
+    // Lowering a quantity is a removal when manager approval is on.
     decrement(detail, id) {
+      const line = (this.details || []).find(d => d.detail_id == id);
+      if (!line || Number(line.quantity) - 1 < 0) {
+        this.applyDecrement(detail, id); // shows the minimum-quantity warning
+        return;
+      }
+      this.requestVoid('decrease_qty', [this.voidLine(line, 1)], () => this.applyDecrement(detail, id));
+    },
+
+    applyDecrement(detail, id) {
       for (var i = 0; i < this.details.length; i++) {
         if (this.details[i].detail_id == id) {
           // Prevent quantity from going negative, but allow zero and fractional quantities
@@ -6421,7 +7441,38 @@ export default {
       this.$forceUpdate();
     },
 
+    // Quantity typed into the cart line: remembered on focus so a lower value
+    // can be sent for approval (and put back until a manager approves).
+    rememberQty(detail) {
+      this._qtyBeforeEdit = { id: detail.detail_id, qty: Number(detail.quantity) };
+    },
+
     Verified_Qty(detail, id) {
+      const before = this._qtyBeforeEdit && this._qtyBeforeEdit.id === id ? this._qtyBeforeEdit.qty : NaN;
+      let next = parseFloat(detail.quantity);
+      if (isNaN(next)) next = 1; // same fallback as applyVerifiedQty
+      // The committed value is the baseline for the next edit: Enter fires
+      // change while the field keeps focus, so @focus alone is not enough.
+      const commit = () => {
+        this.applyVerifiedQty(detail, id);
+        this._qtyBeforeEdit = { id, qty: Number(detail.quantity) };
+      };
+      if (this.voidGuardOn && isFinite(before) && next < before) {
+        detail.quantity = before;
+        if (next < 0) {
+          this.makeToast("warning", this.$t("MinimumQuantity"), this.$t("Warning"));
+          return;
+        }
+        this.requestVoid('decrease_qty', [this.voidLine(detail, before - next)], () => {
+          detail.quantity = next;
+          commit();
+        });
+        return;
+      }
+      commit();
+    },
+
+    applyVerifiedQty(detail, id) {
       for (var i = 0; i < this.details.length; i++) {
         if (this.details[i].detail_id === id) {
           const qty = parseFloat(detail.quantity);
@@ -6449,6 +7500,12 @@ export default {
     },
 
     delete_Product_Detail(id) {
+      const line = (this.details || []).find(d => d.detail_id === id);
+      if (!line) return;
+      this.requestVoid('remove_line', [this.voidLine(line, line.quantity)], () => this.removeDetailNow(id));
+    },
+
+    removeDetailNow(id) {
       for (var i = 0; i < this.details.length; i++) {
         if (id === this.details[i].detail_id) {
           this.details.splice(i, 1);
@@ -6456,6 +7513,197 @@ export default {
           try { this._cd_queue_broadcast && this._cd_queue_broadcast(); } catch(e) {}
         }
       }
+    },
+
+    // ---------- Manager approval to remove items ----------
+    // pos_settings.require_void_approval: a cashier without pos_void_items
+    // needs a manager's PIN (POST pos/voids/approve) before a line is removed,
+    // a quantity lowered or the cart cleared. Users with pos_void_items remove
+    // directly and the removal is logged (POST pos/voids/log). Offline the PIN
+    // cannot be checked, so cashiers cannot remove items until back online.
+    voidLine(d, qty) {
+      return {
+        product_id: d.product_id || null,
+        product_variant_id: d.product_variant_id || null,
+        name: String(d.name || ('#' + (d.product_id || ''))).slice(0, 192),
+        code: d.code ? String(d.code).slice(0, 192) : null,
+        quantity: Math.max(0, Math.round((Number(qty) || 0) * 10000) / 10000),
+        unit_price: Number(d.Total_price) || 0,
+      };
+    },
+
+    // extra: more fields for the server (draft_id when deleting a held draft).
+    requestVoid(action, lines, apply, extra) {
+      const items = (lines || []).filter(l => l.quantity > 0);
+      if (!this.voidGuardOn || !items.length) {
+        apply();
+        return;
+      }
+      const payload = { ...(extra || {}), action, items, warehouse_id: this.sale.warehouse_id || null };
+      if (this.canVoidDirectly) {
+        apply();
+        // Kept for the report; a failed log never blocks the till. Offline (or
+        // when the request cannot get through) it waits in a local queue.
+        const entry = { ...payload, occurred_at: new Date().toISOString() };
+        if (!this.isReallyOffline() && this.isOnline) {
+          axios.post('pos/voids/log', entry).catch(e => {
+            if (!(e && e.response && e.response.status)) this.queueVoidLog(entry);
+          });
+        } else {
+          this.queueVoidLog(entry);
+        }
+        return;
+      }
+      if (this.isReallyOffline() || !this.isOnline) {
+        this.makeToast('warning', this.$t('Pv_Offline_Blocked'), this.$t('Warning'));
+        return;
+      }
+      this._voidApply = apply;
+      this._voidPayload = payload;
+      this.voidApproval = { action, items, pin: '', error: '', busy: false, locked: false, approvers: [], approverId: null, loadingApprovers: true };
+      this.$bvModal.show('pos-void-approval');
+      this.loadVoidApprovers(this.voidApproval);
+    },
+
+    // Managers who can approve on this warehouse; the last one picked on this
+    // device is preselected (or the only one).
+    async loadVoidApprovers(st) {
+      try {
+        const { data } = await axios.get('pos/voids/approvers', { params: { warehouse_id: this.sale.warehouse_id || '' } });
+        if (this.voidApproval !== st) return;
+        st.approvers = (data && Array.isArray(data.approvers)) ? data.approvers : [];
+        let last = null;
+        try { last = Number(window.localStorage.getItem(VOID_LAST_APPROVER_KEY)) || null; } catch (e) {}
+        const pick = st.approvers.find(a => a.id === last) || (st.approvers.length === 1 ? st.approvers[0] : null);
+        if (pick && !st.approverId) st.approverId = pick.id;
+      } catch (e) {
+        if (this.voidApproval === st) st.error = this.$t('Pv_Offline_Blocked');
+      } finally {
+        st.loadingApprovers = false;
+        if (this.voidApproval === st && st.approverId) this.focusVoidPin();
+      }
+    },
+
+    // Removals by users with pos_void_items made offline: kept on this device
+    // and sent (with the time they happened) once the server is reachable.
+    queueVoidLog(entry) {
+      try {
+        const raw = window.localStorage.getItem(VOID_LOG_QUEUE_KEY);
+        const queue = raw ? JSON.parse(raw) : [];
+        queue.push(entry);
+        window.localStorage.setItem(VOID_LOG_QUEUE_KEY, JSON.stringify(queue.slice(-500)));
+      } catch (e) {}
+    },
+
+    async flushVoidLogQueue() {
+      if (this._voidLogFlushing || this.isReallyOffline() || !this.isOnline) return;
+      let queue = [];
+      try { queue = JSON.parse(window.localStorage.getItem(VOID_LOG_QUEUE_KEY) || '[]'); } catch (e) {}
+      if (!Array.isArray(queue) || !queue.length) return;
+      this._voidLogFlushing = true;
+      try {
+        while (queue.length) {
+          try {
+            await axios.post('pos/voids/log', queue[0]);
+          } catch (e) {
+            // No answer: still offline, try again later. A refusal (bad entry,
+            // permission gone) will never succeed, so drop it.
+            if (!(e && e.response && e.response.status)) break;
+          }
+          queue.shift();
+          try { window.localStorage.setItem(VOID_LOG_QUEUE_KEY, JSON.stringify(queue)); } catch (e) {}
+        }
+      } finally {
+        this._voidLogFlushing = false;
+      }
+    },
+
+    async submitVoidPin() {
+      const st = this.voidApproval;
+      if (st.busy || st.locked || !st.pin || !st.approverId || !this._voidPayload) return;
+      // Bind the answer to THIS request: if the modal was closed or reopened
+      // for another change meanwhile, the answer must not apply that one.
+      const payload = this._voidPayload;
+      const apply = this._voidApply;
+      st.busy = true;
+      st.error = '';
+      try {
+        const { data } = await axios.post('pos/voids/approve', { ...payload, approver_id: st.approverId, pin: String(st.pin) });
+        if (this._voidPayload !== payload) return;
+        try { window.localStorage.setItem(VOID_LAST_APPROVER_KEY, String(st.approverId)); } catch (e) {}
+        // Hiding fires @hidden, which forgets the pending change.
+        this._voidApply = null;
+        this.$bvModal.hide('pos-void-approval');
+        if (apply) apply();
+        const name = (data && data.approver && data.approver.name) || '';
+        this.makeToast('success', this.$t('Pv_Approved_By_Name', { name }), this.$t('Success'));
+      } catch (e) {
+        const status = e && e.response && e.response.status;
+        const d = (e && e.response && e.response.data) || {};
+        st.pin = '';
+        if (status === 429 && d.locked === 'approver') {
+          // Only this manager's PIN is locked: another manager can still approve.
+          const seconds = Number(d.retry_after) || 60;
+          st.error = this.$t('Pv_Approver_Locked', { n: Math.max(1, Math.ceil(seconds / 60)) });
+        } else if (status === 429) {
+          const seconds = Number(d.retry_after) || 60;
+          st.locked = true;
+          st.error = this.$t('Pv_Locked', { n: Math.max(1, Math.ceil(seconds / 60)) });
+          setTimeout(() => { if (this.voidApproval === st) st.locked = false; }, seconds * 1000);
+        } else if (status === 422 && d.attempts_left !== undefined) {
+          st.error = this.$t('Pv_Wrong_Pin', { n: d.attempts_left });
+        } else if (!status) {
+          st.error = this.$t('Pv_Offline_Blocked');
+        } else {
+          st.error = d.message || this.$t('InvalidData');
+        }
+        this.focusVoidPin();
+      } finally {
+        st.busy = false;
+      }
+    },
+
+    focusVoidPin() {
+      this.$nextTick(() => {
+        const el = this.$refs.voidPinInput;
+        if (el && typeof el.focus === 'function') el.focus();
+      });
+    },
+
+    onVoidApprovalHidden() {
+      this._voidApply = null;
+      this._voidPayload = null;
+      this.voidApproval.pin = '';
+    },
+
+    requestClearCart() {
+      const lines = (this.details || []).map(d => this.voidLine(d, d.quantity));
+      this.requestVoid('clear_cart', lines, () => this.Reset_Pos());
+    },
+
+    // Holding the cart and deleting the draft would skip the approval, so
+    // deleting a held draft needs it too (logged as one line at its total).
+    // The cashier confirms first; the approval then also unlocks the server's
+    // remove_draft_sale (draft_id), which refuses without one.
+    requestRemoveDraft(d) {
+      const ref = d.Ref || ('#' + d.id);
+      const line = {
+        product_id: null,
+        product_variant_id: null,
+        name: String(this.$t('Pv_Draft_Line', { ref })).slice(0, 192),
+        code: d.Ref ? String(d.Ref).slice(0, 192) : null,
+        quantity: 1,
+        unit_price: Number(d.GrandTotal) || 0,
+      };
+      const extra = Util.offlinePos.isLocalId(d.id) ? {} : { draft_id: d.id };
+      this.Remove_Draft_Sale(d.id, () => this.requestVoid('clear_cart', [line], () => this.deleteDraftNow(d.id), extra));
+    },
+
+    // Opening a draft replaces the cart, which throws the current items away
+    // (unless the cart is itself a loaded draft, still saved on the server).
+    requestLoadDraft(id) {
+      const lines = this.draft_sale_id ? [] : (this.details || []).map(d => this.voidLine(d, d.quantity));
+      this.requestVoid('clear_cart', lines, () => this.loadDraftSale(id));
     },
 
     // ---------- Edit Detail Logic (ported from old_pos) ----------
@@ -6513,6 +7761,13 @@ export default {
           let proposedDiscountNet = (this.detail.discount_Method == "2")
             ? this.detail.discount
             : parseFloat((proposedUnitPrice * this.detail.discount) / 100);
+
+          // 1.b) A line discount can take the item to zero, never below it —
+          // a bigger one made the line, and the sale, negative.
+          if (Number(proposedDiscountNet) < 0 || Number(proposedDiscountNet) > unitPriceNum) {
+            this.makeToast('warning', this.$t('pos.Discount_Exceeds_Price'), this.$t('Warning'));
+            return;
+          }
           let proposedNet, proposedTax;
           if (this.detail.tax_method == "1") {
             proposedNet = parseFloat(proposedUnitPrice - proposedDiscountNet);
@@ -6711,6 +7966,20 @@ export default {
     },
 
     // Recompute a cart line's derived amounts from its current Unit_price.
+    // Weighing-scale price label: price the line so it comes to exactly
+    // `target` (what the label(s) printed), keeping its discount and tax. Marked
+    // as a manual price so quantity tiers don't reprice it. A non-default pack
+    // keeps its fixed price.
+    applyScaleLabelPrice(detail, target){
+      const pack = this.getSelectedPack(detail);
+      if (pack && !pack.is_default) return;
+      const unit = unitPriceForTotal(detail, target);
+      if (unit == null) return;
+      detail.Unit_price = unit;
+      detail.price_manually_set = true;
+      this.recomputePosLine(detail);
+    },
+
     recomputePosLine(detail){
       if (detail.discount_Method == "2") {
         detail.DiscountNet = detail.discount;
@@ -6748,7 +8017,42 @@ export default {
       this.recomputePosLine(detail);
     },
 
+    // Pack in place before the cashier opens the picker (v-model has already
+    // changed it by the time @change runs).
+    rememberPack(detail) {
+      this._packBeforeEdit = { id: detail.detail_id, pack: detail.product_pack_id };
+    },
+
+    // Switching to a smaller pack lowers the units on the line, so under
+    // manager approval it is a removal (logged in base units).
     onChangePack(detail){
+      const before = this._packBeforeEdit && this._packBeforeEdit.id === detail.detail_id ? this._packBeforeEdit : null;
+      if (this.voidGuardOn && before && String(before.pack) !== String(detail.product_pack_id)) {
+        const multOf = id => {
+          const p = (detail.packs || []).find(pk => String(pk.id) === String(id));
+          return p ? (Number(p.multiplier) || 1) : 1;
+        };
+        const oldMult = multOf(before.pack);
+        const newMult = multOf(detail.product_pack_id);
+        const qty = Number(detail.quantity) || 0;
+        if (newMult < oldMult && qty > 0) {
+          const target = detail.product_pack_id;
+          detail.product_pack_id = before.pack;
+          const line = this.voidLine(detail, qty * (oldMult - newMult));
+          line.unit_price = Math.round(((Number(detail.Total_price) || 0) / oldMult) * 10000) / 10000;
+          this.requestVoid('decrease_qty', [line], () => {
+            detail.product_pack_id = target;
+            this.applyPackChange(detail);
+            this._packBeforeEdit = { id: detail.detail_id, pack: detail.product_pack_id };
+          });
+          return;
+        }
+      }
+      this.applyPackChange(detail);
+      this._packBeforeEdit = { id: detail.detail_id, pack: detail.product_pack_id };
+    },
+
+    applyPackChange(detail) {
       this.applyPackPrice(detail);
       // Stock guard: a pack consumes pack_multiplier base units per pack.
       if (!this.isOversellingAllowed && detail.product_type !== 'is_service') {
@@ -6778,10 +8082,8 @@ export default {
 
     // ==================== RESET METHOD ====================
     async Reset_Pos() {
-      // The sale is over (completed, drafted, or manually cleared) — drop the
-      // persisted cart snapshot so the next boot starts with a clean slate,
-      // and retire the idempotency key so the next sale gets a fresh one.
-      this.clearPersistedCart();
+      // The sale is over (completed, drafted, or manually cleared) — retire
+      // the idempotency key so the next sale gets a fresh one.
       this._legacySaleUuid = null;
 
       // Track whether a category/brand filter was active BEFORE the reset so
@@ -6893,35 +8195,39 @@ export default {
 
           let barcode = this.search_input.trim();
           let weight = null;
-          if (barcode.length === 13 && !isNaN(barcode)) {
-            // Play sound only if barcode scanning sound is enabled
-            if (this.pos_settings.barcode_scanning_sound) {
-              this.audio.play();
-            }
-            // Play sound only if barcode scanning sound is enabled
-            if (this.pos_settings.barcode_scanning_sound) {
-              this.audio.play();
-            }
-            let product = this.products_pos.find(prod =>
-              prod.code === barcode &&
-              (prod.product_type === 'is_service' || this.isOversellingAllowed || prod.always_in_stock || Number(prod.qte_sale || 0) > 0)
-            );
+          // Weighing-scale labels, read with System Settings > Weighing scale.
+          // Only input as long as a scale label takes this path; anything else
+          // is a normal search, which auto-adds only a single match.
+          const scale = scaleConfig(this.pos_settings);
+          if (scale.enabled && /^\d+$/.test(barcode) && scale.formats.some(f => formatLength(f) === barcode.length)) {
+            const sellable = prod =>
+              prod.product_type === 'is_service' || this.isOversellingAllowed || prod.always_in_stock || Number(prod.qte_sale || 0) > 0;
+            const beep = () => {
+              if (this.pos_settings.barcode_scanning_sound) this.audio.play();
+            };
+
+            // A normal product barcode that matches a code exactly always wins —
+            // out of stock too, so it is never misread as a scale label.
+            let product = this.products_pos.find(prod => prod.code === barcode || hasExtraBarcode(prod, barcode));
             if (product) {
+              if (!sellable(product)) {
+                this.makeToast("warning", this.$t("LowStock"), this.$t("Warning"));
+                this.search_input= '';
+                this.product_filter = [];
+                return;
+              }
+              beep();
               this.Check_Product_Exist(product, product.id, weight);
               return;
-            }else{
+            }
 
-              let productCode = barcode.substring(0, 7);
-              let weight = parseFloat(barcode.substring(7, 12)) / 1000;
-              let product = this.products_pos.find(prod =>
-                prod.code === productCode &&
-                (prod.product_type === 'is_service' || this.isOversellingAllowed || prod.always_in_stock || Number(prod.qte_sale || 0) > 0)
-              );
-              if (product) {
-                // Play sound only if barcode scanning sound is enabled
-                if (this.pos_settings.barcode_scanning_sound) {
-                  this.audio.play();
-                }
+            // A price label is turned back into a weight at the shelf price.
+            const hit = resolveScaleScan(this.products_pos, barcode, scale.formats, prod => Number(prod.Total_price));
+            if (hit) {
+              product = hit.idx !== -1 ? this.products_pos[hit.idx] : null;
+              if (product && sellable(product)) {
+                beep();
+                weight = hit.weight;
                 // Ensure weight does not exceed available quantity (unless overselling is allowed)
                 const available = Number(product.qte_sale || 0);
                 if (!this.isOversellingAllowed && !product.always_in_stock && available > 0 && weight > available) {
@@ -6929,20 +8235,26 @@ export default {
                   weight = available;
                 }
                 product.quantity = weight;
-                this.Check_Product_Exist(product, product.id, weight);
+                // A price label is charged exactly as printed, unless the
+                // weight had to be cut to the stock.
+                this.Check_Product_Exist(product, product.id, weight, weight === hit.weight ? hit.price : null);
                 return;
               }
-            }
 
-            this.makeToast("danger", "Invalid product code scanned", this.$t("Error"));
-            this.search_input= '';
-            this.product_filter = [];
+              const reason = hit.error === 'check_digit' ? 'Scale_Check_Digit_Failed'
+                : hit.error === 'no_price' ? 'Scale_No_Price' : 'Pos_Invalid_Product_Code_Scanned';
+              this.makeToast("danger", this.$t(reason), this.$t("Error"));
+              this.search_input= '';
+              this.product_filter = [];
+              return;
+            }
           }
-          
+
           const product_filter = this.products_pos.filter(product =>
             this.productFitsVehicle(product) &&
             (product.product_type === 'is_service' || this.isOversellingAllowed || product.always_in_stock || Number(product.qte_sale || 0) > 0) &&
-            (product.code === this.search_input || String(product.barcode || '').includes(this.search_input))
+            (product.code === this.search_input || String(product.barcode || '').includes(this.search_input)
+              || hasExtraBarcode(product, this.search_input.trim()))
           );
           if(product_filter.length === 1){
             // Play sound only if barcode scanning sound is enabled
@@ -6959,11 +8271,13 @@ export default {
               const name = String(product.name || '').toLowerCase();
               const code = String(product.code || '').toLowerCase();
               const barcodeStr = String(product.barcode || '').toLowerCase();
+              const extraStr = Array.isArray(product.barcodes) ? product.barcodes.join(' ').toLowerCase() : '';
               const term = this.search_input.toLowerCase();
               return (
                 name.includes(term) ||
                 code.includes(term) ||
-                barcodeStr.includes(term)
+                barcodeStr.includes(term) ||
+                extraStr.includes(term)
               );
             });
           }
@@ -6977,7 +8291,7 @@ export default {
       }
     },
 
-    Check_Product_Exist(product, id, weight = null) {
+    Check_Product_Exist(product, id, weight = null, labelTotal = null) {
       // Vehicle Fitment purchase guard: incompatible parts cannot be added.
       if (product && !this.productFitsVehicle(product)) {
         this.makeToast(
@@ -7004,6 +8318,8 @@ export default {
 
           if (weight !== null) {
             this.product.quantity = weight;
+            // Weighing-scale price label: add_product prices the line from it.
+            if (labelTotal != null) this.product.scale_label_total = labelTotal;
           } else {
             // Overselling: start at 1 instead of the zero/negative stock value.
             this.product.quantity = (!this.isOversellingAllowed && !product.always_in_stock && product.qte_sale < 1) ? product.qte_sale : 1;
@@ -7192,6 +8508,16 @@ export default {
             if (d.retail_unit_price === undefined) d.retail_unit_price = d.Unit_price;
             if (d.wholesale_unit_price === undefined) d.wholesale_unit_price = (d.Unit_price_wholesale !== undefined ? d.Unit_price_wholesale : d.Unit_price);
             if (d.min_price === undefined) d.min_price = 0;
+            // Serial / IMEI picks saved with the draft (as imei_number text).
+            if (!d.serial_groups || Array.isArray(d.serial_groups)) d.serial_groups = {};
+            if (hasComboSerials(d)) {
+              d.serial_numbers = d.serial_components.flatMap(c => d.serial_groups[c.product_id] || []);
+              d.imei_number = d.serial_numbers.join(',');
+            } else if (!Array.isArray(d.serial_numbers)) {
+              d.serial_numbers = d.is_imei && d.imei_number
+                ? String(d.imei_number).split(/[\r\n,;\t]+/).map(s => s.trim()).filter(Boolean)
+                : [];
+            }
             if (d.current === undefined || d.current === null) d.current = (d.fix_stock !== undefined ? d.fix_stock : d.quantity);
             if (d.fix_stock === undefined || d.fix_stock === null) d.fix_stock = d.current;
 
@@ -7240,7 +8566,9 @@ export default {
         });
     },
 
-    Remove_Draft_Sale(id) {
+    // afterConfirm: run instead of deleting (requestRemoveDraft asks for the
+    // manager PIN only once the cashier has confirmed).
+    Remove_Draft_Sale(id, afterConfirm) {
       this.$swal({
         title: this.$t("Delete_Title"),
         text: this.$t("Delete_Text"),
@@ -7251,43 +8579,47 @@ export default {
         cancelButtonText: this.$t("Delete_cancelButtonText"),
         confirmButtonText: this.$t("Delete_confirmButtonText")
       }).then(result => {
-        if (result.value) {
-          // Offline-held draft: delete the local record, no server call.
-          if (Util.offlinePos.isLocalId(id)) {
-            try { Util.offlinePos.removeOfflineDraft(id); } catch (e) {}
-            if (this.draft_sale_id && String(this.draft_sale_id) === String(id)) {
-              this.draft_sale_id = '';
-            }
-            this.$swal(
-              this.$t("Delete_Deleted"),
-              this.$t("Deleted_in_successfully"),
-              "success"
-            );
-            Fire.$emit("event_delete_draft_sale");
-            return;
-          }
-          NProgress.start();
-          NProgress.set(0.1);
-          axios
-            .delete("remove_draft_sale/" + id)
-            .then(() => {
-              this.$swal(
-                this.$t("Delete_Deleted"),
-                this.$t("Deleted_in_successfully"),
-                "success"
-              );
-              Fire.$emit("event_delete_draft_sale");
-            })
-            .catch(() => {
-              setTimeout(() => NProgress.done(), 500);
-              this.$swal(
-                this.$t("Delete_Failed"),
-                this.$t("Delete_Therewassomethingwronge"),
-                "warning"
-              );
-            });
-        }
+        if (!result.value) return;
+        if (typeof afterConfirm === 'function') afterConfirm();
+        else this.deleteDraftNow(id);
       });
+    },
+
+    deleteDraftNow(id) {
+      // Offline-held draft: delete the local record, no server call.
+      if (Util.offlinePos.isLocalId(id)) {
+        try { Util.offlinePos.removeOfflineDraft(id); } catch (e) {}
+        if (this.draft_sale_id && String(this.draft_sale_id) === String(id)) {
+          this.draft_sale_id = '';
+        }
+        this.$swal(
+          this.$t("Delete_Deleted"),
+          this.$t("Deleted_in_successfully"),
+          "success"
+        );
+        Fire.$emit("event_delete_draft_sale");
+        return;
+      }
+      NProgress.start();
+      NProgress.set(0.1);
+      axios
+        .delete("remove_draft_sale/" + id)
+        .then(() => {
+          this.$swal(
+            this.$t("Delete_Deleted"),
+            this.$t("Deleted_in_successfully"),
+            "success"
+          );
+          Fire.$emit("event_delete_draft_sale");
+        })
+        .catch(() => {
+          setTimeout(() => NProgress.done(), 500);
+          this.$swal(
+            this.$t("Delete_Failed"),
+            this.$t("Delete_Therewassomethingwronge"),
+            "warning"
+          );
+        });
     },
 
     updateParams(newProps) {
@@ -7332,6 +8664,7 @@ export default {
           // Use the same unified list for barcode scanning / quick search.
           this.products_pos = rawProducts.map(p => ({ ...p }));
           this.product_totalRows = response.data.totalRows;
+          if (Array.isArray(response.data.favorites)) this.setFavorites(response.data.favorites);
           // Capture backend server time as the baseline for incremental delta
           // sync. If absent (older backend), fall back to null so delta sync
           // will stay disabled until the next successful call provides one.
@@ -7379,6 +8712,7 @@ export default {
                   this.products_pos = baseProducts.map(p => ({ ...p }));
                 }
                 this.product_totalRows = snap.product_totalRows || baseProducts.length;
+                this.loadCachedFavorites();
                 // Restore last delta-sync baseline so when we regain connectivity
                 // we can resume incremental sync from where we left off instead
                 // of re-fetching the whole catalog.
@@ -7682,11 +9016,23 @@ export default {
       return false;
     },
 
+    // Combo lines: serials of their tracked components (lib/comboSerials).
+    hasComboSerials,
+    comboSerialRequired,
+    // One serial per base unit: quantity × pack × sale-unit factor.
+    lineSerialUnits,
+    applyComboSerialGroup(item, productId, serials) {
+      setComboSerialGroup(item, productId, serials);
+    },
+
     // Serial / IMEI: true when a serialized line's selected serial count != quantity.
     serialCountMismatch(detail) {
+      // Offline the component serials can't be loaded; the sale syncs without
+      // them and they can be added later with "Assign serials".
+      if (hasComboSerials(detail)) return !this.isReallyOffline() && comboSerialMismatch(detail);
       if (!detail || !detail.is_imei) return false;
       const count = Array.isArray(detail.serial_numbers) ? detail.serial_numbers.length : 0;
-      return count !== Math.round(Number(detail.quantity) || 0);
+      return count !== lineSerialUnits(detail);
     },
 
     first_batch_error_message() {
@@ -8114,6 +9460,22 @@ export default {
       this.points_to_convert = val;
     },
 
+    // Receipt logo fallback: a stored filename whose file is gone (or a tenant
+    // provisioned without a default logo) prints as a broken-image box. Swap
+    // the <img> to the platform default once; the print popup clones the DOM
+    // so it inherits the swapped src. Hide it if even the default is missing.
+    onReceiptLogoError(e) {
+      const img = e && e.target;
+      if (!img) return;
+      const fallback = '/images/logo-default.png';
+      if (img.getAttribute('src') !== fallback && !img.dataset.logoFallback) {
+        img.dataset.logoFallback = '1';
+        img.src = fallback;
+      } else {
+        img.style.display = 'none';
+      }
+    },
+
     // ==================== INVOICE & PRINT METHODS ====================
     // opts.forcePrint: print even when is_printable (auto-print) is off —
     // used by the explicit "print last receipt" action.
@@ -8183,7 +9545,7 @@ export default {
             win.document.write('#loading{height:100%;display:flex;align-items:center;justify-content:center;font-family:Arial;color:#444;}');
             win.document.write('embed,object,iframe{width:100%;height:100%;border:0;display:none;}</style>');
             win.document.write('</head><body>');
-            win.document.write('<div id="loading">Loading invoice…</div>');
+            win.document.write('<div id="loading">' + this.$t('Pos_Loading_Invoice') + '</div>');
             win.document.write('<object id="pdfObject" type="application/pdf"></object>');
             win.document.write('<embed id="pdfEmbed" type="application/pdf" />');
             win.document.write('<iframe id="pdfFrame"></iframe>');
@@ -8204,7 +9566,7 @@ export default {
             // Timed fallbacks: PDFs can take time to render before print dialog appears.
             win.document.write('setTimeout(doPrint, 900); setTimeout(doPrint, 1800); setTimeout(doPrint, 2800);');
             win.document.write('};');
-            win.document.write('window.__setError=function(msg){try{document.getElementById("loading").innerText=msg||"Failed to load invoice";}catch(e){}};');
+            win.document.write('window.__setError=function(msg){try{document.getElementById("loading").innerText=msg||' + JSON.stringify(this.$t('Pos_Failed_Load_Invoice')) + ';}catch(e){}};');
             win.document.write('})();<\/script>');
             win.document.write('</body></html>');
             win.document.close();
@@ -8233,7 +9595,7 @@ export default {
                 win.document.write(html);
                 win.document.close();
               } catch (e) {
-                try { win.__setError && win.__setError('Failed to render invoice'); } catch (_) {}
+                try { win.__setError && win.__setError(this.$t('Pos_Failed_Render_Invoice')); } catch (_) {}
                 return;
               }
               // Ensure the popup preview (screen) and print dialog use the same A4 sizing.
@@ -8323,10 +9685,10 @@ export default {
                 try { win.print(); } catch (_) {}
               }, 700);
             } catch (e) {
-              try { win.__setError && win.__setError('Failed to load invoice'); } catch (_) {}
+              try { win.__setError && win.__setError(this.$t('Pos_Failed_Load_Invoice')); } catch (_) {}
             }
           }).catch(() => {
-            try { win.__setError && win.__setError('Failed to load invoice'); } catch (_) {}
+            try { win.__setError && win.__setError(this.$t('Pos_Failed_Load_Invoice')); } catch (_) {}
           });
         }
         return;
@@ -8340,10 +9702,14 @@ export default {
           this.invoice_pos.sale.discount_Method = '2';
         }
         this.invoice_pos.details = response.data.details;
-        this.invoice_pos.setting = response.data.setting;
+        // Branch letterhead: the receipt header shows the warehouse that issued
+        // the sale, not the head-office company settings.
+        this.invoice_pos.setting = applyIssuer(response.data.setting, response.data.issuer);
         this.invoice_pos.symbol = response.data.symbol;
         this.invoice_pos.zatca_qr = response.data.zatca_qr;
         this.invoice_pos.fbr_invoice_number = response.data.fbr_invoice_number || '';
+        this.invoice_pos.fiscal = response.data.fiscal || null;
+        this.invoice_pos.license_keys = response.data.license_keys || [];
         this.public_invoice_url = response.data.public_invoice_url || '';
         this.payments = response.data.payments;
         if (response.data.pos_settings) {
@@ -9106,7 +10472,21 @@ export default {
       this.getProducts();
     },
     selectWarehouse(id) {
-      this.sale.warehouse_id = (id != null) ? id : null;
+      const next = (id != null) ? id : null;
+      // Switching warehouse empties the cart (sale.warehouse_id watcher), so
+      // under manager approval it counts as clearing the cart.
+      if (this.voidGuardOn && this.sale.warehouse_id && String(next) !== String(this.sale.warehouse_id)
+        && (this.details || []).length) {
+        this.whDrawerOpen = false;
+        this.whDrawerSearch = '';
+        const lines = this.details.map(d => this.voidLine(d, d.quantity));
+        this.requestVoid('clear_cart', lines, () => this.applyWarehouse(next));
+        return;
+      }
+      this.applyWarehouse(next);
+    },
+    applyWarehouse(id) {
+      this.sale.warehouse_id = id;
       this.whDrawerOpen = false;
       this.whDrawerSearch = '';
       this.Selected_Warehouse(this.sale.warehouse_id);
@@ -9122,7 +10502,8 @@ export default {
     // over — not on every invoice.
     selectSeller(id) {
       this.selectedSellerId = id != null ? id : null;
-      this.sellerDrawerOpen = false;
+      // Both pickers share the drawer: stay open while the agent can still be set.
+      if (!(this.salesAgents || []).length) this.soldByDrawerOpen = false;
     },
     // Default the salesperson to the authenticated user (the cashier) whenever
     // the POS loads; a mid-session pick lasts only until the page reloads.
@@ -9138,6 +10519,19 @@ export default {
         ? Number(this.currentUser.id)
         : null;
       try { localStorage.removeItem('pos_selected_seller_id'); } catch (e) {}
+    },
+    // Commissions: like the salesperson, the agent pick lasts across sales
+    // until the page reloads; a pick no longer in the list is dropped.
+    selectSalesAgent(id) {
+      this.selectedSalesAgentId = id != null ? id : null;
+      if (!this.salesSwitchEnabled) this.soldByDrawerOpen = false;
+    },
+    setSalesAgents(list) {
+      this.salesAgents = Array.isArray(list) ? list : [];
+      if (this.selectedSalesAgentId != null
+        && !this.salesAgents.some(a => String(a.id) === String(this.selectedSalesAgentId))) {
+        this.selectedSalesAgentId = null;
+      }
     },
     catInitial(name) {
       const s = (name || '?').trim();
@@ -9195,7 +10589,7 @@ export default {
             // Normalize integer 0/1 → boolean for toggles
             const boolKeys = [
               'quick_add_customer','barcode_scanning_sound','show_product_images',
-              'show_stock_quantity','enable_hold_sales','enable_customer_points',
+              'show_stock_quantity','show_search_stock','enable_hold_sales','enable_customer_points',
               'show_categories','show_brands','allow_overselling','cash_drawer_auto_open',
             ];
             boolKeys.forEach(k => {
@@ -9269,6 +10663,7 @@ export default {
           barcode_scanning_sound: this.pos_settings.barcode_scanning_sound,
           show_product_images: this.pos_settings.show_product_images,
           show_stock_quantity: this.pos_settings.show_stock_quantity,
+          show_search_stock: this.pos_settings.show_search_stock ? 1 : 0,
           enable_hold_sales: this.pos_settings.enable_hold_sales,
           enable_customer_points: this.pos_settings.enable_customer_points,
           show_categories: this.pos_settings.show_categories,
@@ -9355,11 +10750,11 @@ export default {
               } catch (_) {}
               return { ok: true };
             }
-            const message = (response && response.data && response.data.message) || 'Network printer error';
+            const message = (response && response.data && response.data.message) || this.$t('Network_Printer_Error');
             return { ok: false, configured: true, message };
           })
           .catch((err) => {
-            const message = (err && err.response && err.response.data && err.response.data.message) || (err && err.message) || 'Network printer unreachable';
+            const message = (err && err.response && err.response.data && err.response.data.message) || (err && err.message) || this.$t('Network_Printer_Unreachable');
             return { ok: false, configured: true, message };
           });
       } catch (e) {
@@ -9423,7 +10818,7 @@ export default {
       var a = window.open('', '', 'height=600,width=480');
       if (!a) { return; }
       const bodyClass = this.currentReceiptPaperSizeClass || '';
-      a.document.write('<html><head><link rel="stylesheet" href="/css/pos_print.css">' + this.receiptFontCssTag + '</head><body class="' + bodyClass + '">');
+      a.document.write('<html><head><link rel="stylesheet" href="/css/pos_print.css">' + receiptPageHeadTag(this.pos_settings) + this.receiptFontCssTag + '</head><body class="' + bodyClass + '">');
       // Wrap in #invoice-POS so print CSS applies correctly and centers content
       a.document.write('<div id="invoice-POS">');
       a.document.write(divContents);
@@ -9442,8 +10837,11 @@ export default {
       };
       try { window.addEventListener('focus', afterPrint); } catch(e) {}
       try { a.onafterprint = afterPrint; } catch(e) {}
-      // Wait for the custom receipt webfont (if any) before snapshotting.
-      whenPrintFontsReady(a, () => {
+      // Wait for the receipt webfont, the print stylesheet AND the logo /
+      // QR images before snapshotting — print() does not wait for pending
+      // images, so a fonts-only gate printed receipts with an empty logo box
+      // whenever the logo was not already in the browser cache.
+      whenPrintReady(a, () => {
         try { a.focus(); } catch(e) {}
         try { a.print(); } catch(e) { afterPrint(); }
       });
@@ -9479,6 +10877,7 @@ export default {
         const html = `<!doctype html><html><head>
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <link rel="stylesheet" href="/css/pos_print.css" id="pos-print-css">
+          ${receiptPageHeadTag(this.pos_settings)}
           <style>${inlineQrStyles}</style>
           ${this.receiptFontCssTag}
         </head><body class="${bodyClass}"><div id="invoice-POS">${el.innerHTML}</div></body></html>`;
@@ -9593,7 +10992,13 @@ export default {
             if (raw) cachedSetting = JSON.parse(raw);
           } catch (e) {}
         }
-        const normalizedSetting = { ...(cachedSetting || {}), ...(set || {}) };
+        let normalizedSetting = { ...stripIssuer(cachedSetting), ...(set || {}) };
+        // Branch letterhead. Online the server sends the resolved issuer; offline
+        // we rebuild it from the cached warehouse list so the queued receipt
+        // prints the same header as it would have online.
+        normalizedSetting = (data && data.issuer)
+          ? applyIssuer(normalizedSetting, data.issuer)
+          : applyWarehouseIssuer(normalizedSetting, this.warehouses, s.warehouse_id || this.sale.warehouse_id);
 
         // Keep receipt behavior consistent: use the same modal/template for both online and offline.
         try {
@@ -9614,6 +11019,9 @@ export default {
         try { this.$set(this.invoice_pos, 'symbol', symbol); } catch (e) { try { this.invoice_pos.symbol = symbol; } catch(_) {} }
         try { this.invoice_pos.zatca_qr = zatca_qr; } catch (e) {}
         try { this.invoice_pos.fbr_invoice_number = fbr_invoice_number; } catch (e) {}
+        try { this.invoice_pos.fiscal = (data && data.fiscal) ? data.fiscal : null; } catch (e) {}
+        // Never carry the previous sale's license keys onto this receipt.
+        try { this.invoice_pos.license_keys = (data && Array.isArray(data.license_keys)) ? data.license_keys : []; } catch (e) {}
         try { this.public_invoice_url = (data && data.public_invoice_url) ? data.public_invoice_url : ''; } catch (e) {}
         try { this.payments = payments; } catch (e) {}
 
@@ -9671,6 +11079,7 @@ export default {
           this.salesSwitchEnabled = response.data.enable_pos_salesperson_switch === true;
           this.salespeople = Array.isArray(response.data.salespeople) ? response.data.salespeople : [];
           this.restoreSelectedSeller();
+          this.setSalesAgents(response.data.sales_agents);
           this.default_account_id = response.data.default_account_id ?? null;
           this.default_payment_method_id = response.data.default_payment_method_id ?? null;
           this.sale.warehouse_id = response.data.defaultWarehouse;
@@ -9693,7 +11102,7 @@ export default {
           // Hydrate company/receipt header info (also used for offline printing)
           try {
             if (response.data && response.data.setting) {
-              const merged = { ...(this.invoice_pos && this.invoice_pos.setting ? this.invoice_pos.setting : {}), ...response.data.setting };
+              const merged = { ...stripIssuer(this.invoice_pos ? this.invoice_pos.setting : {}), ...response.data.setting };
               this.invoice_pos.setting = merged;
               // Cache preferred invoice format for POS printing
               if (merged && typeof merged.invoice_format === 'string' && ['thermal', 'a4'].includes(merged.invoice_format)) {
@@ -9741,6 +11150,9 @@ export default {
             if (typeof this.pos_settings.show_stock_quantity === 'number') {
               this.pos_settings.show_stock_quantity = this.pos_settings.show_stock_quantity === 1;
             }
+            if (typeof this.pos_settings.show_search_stock === 'number') {
+              this.pos_settings.show_search_stock = this.pos_settings.show_search_stock === 1;
+            }
             if (typeof this.pos_settings.enable_hold_sales === 'number') {
               this.pos_settings.enable_hold_sales = this.pos_settings.enable_hold_sales === 1;
             }
@@ -9775,7 +11187,7 @@ export default {
           // Re-cache the receipt/company setting clearCache just removed.
           try {
             if (response.data && response.data.setting) {
-              const merged = { ...(this.invoice_pos && this.invoice_pos.setting ? this.invoice_pos.setting : {}), ...response.data.setting };
+              const merged = { ...stripIssuer(this.invoice_pos ? this.invoice_pos.setting : {}), ...response.data.setting };
               localStorage.setItem('pos_receipt_company_setting', JSON.stringify(merged));
             }
           } catch (e) {}
@@ -9788,9 +11200,6 @@ export default {
           // Customers created offline that haven't synced yet won't be in the
           // server list — keep them pickable.
           try { this.mergeOfflineClientsIntoList(); } catch (e) {}
-          // Bring back any in-progress cart that a refresh interrupted (must
-          // run after the defaults above so the saved warehouse/client win).
-          try { this.restoreCartState(); } catch (e) {}
           // The bootstrap succeeded, so the server is reachable: flush any
           // leftover offline queues (sales/drafts/customers from a session
           // that ended before reconnect). Delayed so boot requests settle
@@ -9798,6 +11207,10 @@ export default {
           try {
             if (this.hasPendingOfflineWork()) {
               setTimeout(() => { try { this.trySyncOfflineSales(); } catch (e) {} }, 3000);
+            }
+            // Failed sales a manager resolved from Sales > Offline Sales.
+            if (this.offlineFailedCount > 0) {
+              setTimeout(() => { try { this.reconcileFailedOfflineSales(); } catch (e) {} }, 4000);
             }
           } catch (e) {}
           this.isLoading = false;
@@ -9819,6 +11232,7 @@ export default {
               this.salesSwitchEnabled = cached.enable_pos_salesperson_switch === true;
               this.salespeople = Array.isArray(cached.salespeople) ? cached.salespeople : [];
               this.restoreSelectedSeller();
+              this.setSalesAgents(cached.sales_agents);
               this.default_account_id = cached.default_account_id ?? null;
               this.default_payment_method_id = cached.default_payment_method_id ?? null;
 
@@ -9865,7 +11279,7 @@ export default {
                   } catch (e) {}
                 }
                 if (setting) {
-                  this.invoice_pos.setting = { ...(this.invoice_pos && this.invoice_pos.setting ? this.invoice_pos.setting : {}), ...setting };
+                  this.invoice_pos.setting = { ...stripIssuer(this.invoice_pos ? this.invoice_pos.setting : {}), ...setting };
                   if (typeof setting.offline_sync_enabled !== 'undefined') {
                     this.offlineSyncEnabled = setting.offline_sync_enabled === true
                       || setting.offline_sync_enabled === 1
@@ -9909,8 +11323,6 @@ export default {
           // Customers created offline that haven't synced yet won't be in the
           // cached list — keep them pickable.
           try { this.mergeOfflineClientsIntoList(); } catch (e) {}
-          // Bring back any in-progress cart that an offline refresh interrupted.
-          try { this.restoreCartState(); } catch (e) {}
           this.isLoading = false;
         });
     },
@@ -9925,9 +11337,11 @@ export default {
           this.invoice_pos.sale.discount_Method = '2';
         }
         this.invoice_pos.details = data.details || [];
-        this.invoice_pos.setting = data.setting || {};
+        // Branch letterhead of the warehouse that issued the sale.
+        this.invoice_pos.setting = applyIssuer(data.setting || {}, data.issuer);
         this.invoice_pos.symbol = data.symbol || '';
         this.invoice_pos.zatca_qr = data.zatca_qr || null;
+        this.invoice_pos.license_keys = data.license_keys || [];
         this.public_invoice_url = data.public_invoice_url || '';
         this.payments = data.payments || [];
         if (data.pos_settings) {
@@ -9940,6 +11354,8 @@ export default {
     },
 
     onModernPaymentSuccess(evt) {
+      this.showChangeDue(evt && evt.change);
+
       // If the finished sale came from an offline-held (local) draft, its id
       // never reached the server — delete the local record here. (Server
       // drafts are deleted server-side via the payload's draft_sale_id.)
@@ -10210,6 +11626,7 @@ export default {
       // backend reachability before showing the "Internet restored" modal or
       // performing reconnect actions (reload / sync triggers).
       this.isOnline = true;
+      this.flushVoidLogQueue();
 
       if (this._posOnlineProbeInProgress) return;
       this._posOnlineProbeInProgress = true;
@@ -10266,8 +11683,12 @@ export default {
       // completing the current sale — and sync any queued sales in the
       // background right away (the cart itself is untouched by the sync).
       if (hadActiveCart) {
-        this.onlineReloadModalVisible = true;
-        this.onlineReloadAfterSale = false;
+        // handleOnline() also runs on the ~15s reconnect re-probes while a
+        // sync keeps failing; once the cashier picked "After this sale", don't
+        // ask again (and don't undo that choice). handleOffline() resets it.
+        if (!this.onlineReloadAfterSale) {
+          this.onlineReloadModalVisible = true;
+        }
         try {
           // Not just sales: queued customers/drafts must flush too.
           if (this.hasPendingOfflineWork()) this.trySyncOfflineSales();
@@ -10303,6 +11724,8 @@ export default {
         const list = Util.offlinePos.getOfflineSales() || [];
         // Only count sales that are still pending or actively syncing.
         this.offlineSalesCount = list.filter(s => s && (s.status === 'pending' || s.status === 'syncing')).length;
+        // Rejected sales are counted separately so they stay visible.
+        this.offlineFailedCount = list.filter(s => s && s.status === 'failed').length;
         // If there are no pending/syncing offline sales, clear any residual shadow stock
         if (this.offlineSalesCount === 0) {
           try {
@@ -10348,107 +11771,71 @@ export default {
         pointsConverted: this.pointsConverted === true
       };
     },
-    persistCartState() {
-      if (this._restoringCart) return;
-      try {
-        if (this._persistCartTimer) clearTimeout(this._persistCartTimer);
-      } catch (e) {}
-      this._persistCartTimer = setTimeout(() => {
-        try {
-          if (!Util || !Util.offlinePos) return;
-          if (!this.details || !this.details.length) {
-            // Cart emptied (sale finished or lines removed) — drop the snapshot
-            // so the next boot starts clean.
-            Util.offlinePos.clearCartState && Util.offlinePos.clearCartState();
-            return;
-          }
-          Util.offlinePos.saveCartState && Util.offlinePos.saveCartState(this.buildCartStateSnapshot());
-        } catch (e) {}
-      }, 400);
-    },
-    // Synchronous, non-debounced write — used on pagehide/beforeunload where a
-    // pending debounce timer would never fire.
-    flushCartState() {
-      try {
-        if (this._persistCartTimer) {
-          clearTimeout(this._persistCartTimer);
-          this._persistCartTimer = null;
-        }
-      } catch (e) {}
-      if (this._restoringCart) return;
-      try {
-        if (!Util || !Util.offlinePos) return;
-        if (!this.details || !this.details.length) {
-          Util.offlinePos.clearCartState && Util.offlinePos.clearCartState();
-          return;
-        }
-        Util.offlinePos.saveCartState && Util.offlinePos.saveCartState(this.buildCartStateSnapshot());
-      } catch (e) {}
-    },
     // Hydrate the whole POS sale state from a cart snapshot (the shape
-    // buildCartStateSnapshot produces). Shared by refresh-survival restore
-    // and by reopening offline-held drafts.
+    // buildCartStateSnapshot produces) when reopening an offline-held draft.
     applyCartSnapshot(saved) {
-      this._restoringCart = true;
-      try {
-        this.details = Array.isArray(saved.details) ? saved.details : [];
-        if (saved.sale) {
-          const s = saved.sale;
-          if (s.tax_rate !== undefined && s.tax_rate !== null) this.sale.tax_rate = s.tax_rate;
-          this.sale.discount = s.discount || 0;
-          this.sale.discount_Method = String(s.discount_Method || '2');
-          this.sale.shipping = s.shipping || 0;
-          this.sale.notes = s.notes || '';
-          if (s.warehouse_id && String(s.warehouse_id) !== String(this.sale.warehouse_id)) {
-            this.sale.warehouse_id = s.warehouse_id;
-            // Reload the grid for the cart's warehouse (falls back to the
-            // cached snapshot when offline).
-            try { this.Selected_Warehouse(this.sale.warehouse_id); } catch (e) {}
-          }
+      this.details = Array.isArray(saved.details) ? saved.details : [];
+      if (saved.sale) {
+        const s = saved.sale;
+        if (s.tax_rate !== undefined && s.tax_rate !== null) this.sale.tax_rate = s.tax_rate;
+        this.sale.discount = s.discount || 0;
+        this.sale.discount_Method = String(s.discount_Method || '2');
+        this.sale.shipping = s.shipping || 0;
+        this.sale.notes = s.notes || '';
+        if (s.warehouse_id && String(s.warehouse_id) !== String(this.sale.warehouse_id)) {
+          this.sale.warehouse_id = s.warehouse_id;
+          // Reload the grid for the cart's warehouse (falls back to the
+          // cached snapshot when offline).
+          try { this.Selected_Warehouse(this.sale.warehouse_id); } catch (e) {}
         }
-        if (saved.selectedClientId) {
-          this.selectedClientId = saved.selectedClientId;
-          this.client_name = saved.client_name || this.client_name;
-          this.clientIsEligible = saved.clientIsEligible === true;
-          this.selectedClientPoints = saved.selectedClientPoints || 0;
-          this.selectedClientCreditLimit = saved.selectedClientCreditLimit || 0;
-          this.selectedClientNetBalance = saved.selectedClientNetBalance || 0;
-        }
-        this.draft_sale_id = saved.draft_sale_id || '';
-        this.promotionCode = saved.promotionCode || '';
-        this.promotionDiscount = saved.promotionDiscount || 0;
-        this.appliedPromotions = Array.isArray(saved.appliedPromotions) ? saved.appliedPromotions : [];
-        this.used_points = saved.used_points || 0;
-        this.discount_from_points = saved.discount_from_points || 0;
-        this.points_to_convert = saved.points_to_convert || 0;
-        this.pointsConverted = saved.pointsConverted === true;
-        try { this.CalculTotal(); } catch (e) {}
-      } finally {
-        this._restoringCart = false;
       }
+      if (saved.selectedClientId) {
+        this.selectedClientId = saved.selectedClientId;
+        this.client_name = saved.client_name || this.client_name;
+        this.clientIsEligible = saved.clientIsEligible === true;
+        this.selectedClientPoints = saved.selectedClientPoints || 0;
+        this.selectedClientCreditLimit = saved.selectedClientCreditLimit || 0;
+        this.selectedClientNetBalance = saved.selectedClientNetBalance || 0;
+      }
+      this.draft_sale_id = saved.draft_sale_id || '';
+      this.promotionCode = saved.promotionCode || '';
+      this.promotionDiscount = saved.promotionDiscount || 0;
+      this.appliedPromotions = Array.isArray(saved.appliedPromotions) ? saved.appliedPromotions : [];
+      this.used_points = saved.used_points || 0;
+      this.discount_from_points = saved.discount_from_points || 0;
+      this.points_to_convert = saved.points_to_convert || 0;
+      this.pointsConverted = saved.pointsConverted === true;
+      try { this.CalculTotal(); } catch (e) {}
     },
-    restoreCartState() {
-      const saved = Util && Util.offlinePos && Util.offlinePos.getCartState
-        ? Util.offlinePos.getCartState()
-        : null;
-      if (!saved) return;
-      // Never clobber a cart the cashier already started in this session.
-      if (this.details && this.details.length) return;
-      this.applyCartSnapshot(saved);
-      try {
-        const msg = this.$t ? (this.$t('pos.Cart_Restored') || 'Your cart was restored') : 'Your cart was restored';
-        this.makeToast && this.makeToast('info', msg, this.$t ? this.$t('Notice') : 'Notice');
-      } catch (e) {}
+    // Drop cart lines matching the predicate; returns the removed names.
+    removePosLines(predicate) {
+      const removed = [];
+      this.details = (this.details || []).filter((d) => {
+        if (!predicate(d)) return true;
+        removed.push(d.name || ('#' + d.product_id));
+        return false;
+      });
+      if (removed.length) {
+        try { this.CalculTotal(); } catch (e) {}
+        try { this._cd_queue_broadcast && this._cd_queue_broadcast(); } catch (e) {}
+      }
+      return removed;
     },
-    clearPersistedCart() {
-      try {
-        if (this._persistCartTimer) clearTimeout(this._persistCartTimer);
-      } catch (e) {}
-      try {
-        if (Util && Util.offlinePos && Util.offlinePos.clearCartState) {
-          Util.offlinePos.clearCartState();
-        }
-      } catch (e) {}
+    // The sale submit was refused for these products (see PosController).
+    onUnavailablePosProducts(productIds) {
+      const bad = new Set((productIds || []).map(Number));
+      this.removePosLines(d => bad.has(Number(d.product_id)));
+    },
+    // create_pos refused products deleted / marked "Not for sale" since they
+    // were added: show the server's message, drop the lines. True if handled.
+    handleUnavailableSubmitError(error) {
+      const data = error && error.response && error.response.data;
+      const ids = data && Array.isArray(data.unavailable_product_ids) ? data.unavailable_product_ids : null;
+      if (!ids || !ids.length) return false;
+      this.makeToast('danger', data.message || this.$t('InvalidData'), this.$t('Failed'));
+      this.onUnavailablePosProducts(ids);
+      try { this.$bvModal.hide('Add_Payment'); } catch (e) {}
+      return true;
     },
     // Handle result of auto/offline sync (both global auto-sync and local POS sync
     // call this so the feedback is consistent with clicking the offline sync button).
@@ -10458,9 +11845,39 @@ export default {
         this.refreshOfflineSalesCount();
       } catch (e) {}
 
+      // Keep an open review list in step with the queue.
+      try { this.loadFailedOfflineSales(); } catch (e) {}
+
       if (!payload || typeof this.makeToast !== 'function') return;
       const syncedCount = Number(payload.syncedCount || 0);
+      const failedCount = Number(payload.failedCount || 0);
       const lastError = payload.lastError || null;
+
+      // Sales the server refused during this pass. Previously a partial pass
+      // only toasted "N synced" (the error branch below never ran when
+      // anything succeeded), the badge dropped the failed records and the
+      // page auto-reloaded — the rejected sales vanished from view. Say so
+      // explicitly, point at the review list, and skip the auto-reload so
+      // the message is not wiped.
+      if (failedCount > 0) {
+        this.reloadAfterOfflineSync = false;
+        // vue-i18n returns the key itself when a tenant's translations table
+        // predates these keys (not re-seeded yet) — fall back to English.
+        const tr = (key, params, fallback) => {
+          const out = this.$t(key, params);
+          return out && out !== key ? out : fallback;
+        };
+        const msg = syncedCount > 0
+          ? tr('pos.Offline_Sync_Partial', { synced: syncedCount, failed: failedCount },
+              `${syncedCount} offline sales synced, ${failedCount} could not be synced — click the cloud button to review them.`)
+          : tr('pos.Offline_Sync_Failed_Count', { failed: failedCount },
+              `${failedCount} offline sales could not be synced — click the cloud button to review them.`);
+        this.makeToast('danger', msg, this.$t ? this.$t('Warning') : 'Warning');
+        if (syncedCount > 0) {
+          try { this.syncProductsDelta(); } catch (e) {}
+        }
+        return;
+      }
 
       if (syncedCount > 0) {
         const successMsg = syncedCount === 1
@@ -10476,8 +11893,7 @@ export default {
         // where the browser `online` event is missed but sync succeeded.
         try {
           const hadActiveCart = this.details && this.details.length > 0;
-          if (hadActiveCart && this.isOnline && !this.onlineReloadModalVisible) {
-            this.onlineReloadAfterSale = false;
+          if (hadActiveCart && this.isOnline && !this.onlineReloadModalVisible && !this.onlineReloadAfterSale) {
             this.onlineReloadModalVisible = true;
           }
         } catch (e) {}
@@ -10511,7 +11927,7 @@ export default {
         }
 
         const short = errDetail.slice(0, 200);
-        const baseMsg = 'Failed to sync offline sales';
+        const baseMsg = this.$t ? this.$t('Pos_Failed_Sync_Offline_Sales') : 'Failed to sync offline sales';
         const fullMsg = short ? `${baseMsg}: ${short}` : baseMsg;
         this.makeToast(
           'danger',
@@ -10576,16 +11992,15 @@ export default {
           }
           Util.offlinePos.removeOfflineClient(rec.id);
         } catch (error) {
-          const isNetworkError = this.isNetworkFailure(error);
-          if (isNetworkError) {
+          // Network / expired session / gateway error: not a verdict on the
+          // record — keep it pending and stop the pass.
+          if (this.classifySyncError(error) !== 'rejected') {
             Util.offlinePos.markClientStatus(rec.id, 'pending');
             // Let the online-signal poll re-probe and retry (~15s).
             this.backendReachable = false;
             return false;
           }
-          const msg =
-            (error.response && error.response.data && (error.response.data.message || error.response.data.error)) ||
-            error.message || 'Unknown error';
+          const msg = this.syncErrorMessage(error);
           Util.offlinePos.markClientStatus(rec.id, 'failed', msg);
           this.offlineLastSyncError = msg;
         }
@@ -10614,15 +12029,12 @@ export default {
             Util.offlinePos.markDraftStatus(rec.id, 'failed', 'Invalid response from server');
           }
         } catch (error) {
-          const isNetworkError = this.isNetworkFailure(error);
-          if (isNetworkError) {
+          if (this.classifySyncError(error) !== 'rejected') {
             Util.offlinePos.markDraftStatus(rec.id, 'pending');
             this.backendReachable = false;
             return false;
           }
-          const msg =
-            (error.response && error.response.data && (error.response.data.message || error.response.data.error)) ||
-            error.message || 'Unknown error';
+          const msg = this.syncErrorMessage(error);
           Util.offlinePos.markDraftStatus(rec.id, 'failed', msg);
           this.offlineLastSyncError = msg;
         }
@@ -10635,6 +12047,11 @@ export default {
       // Used by the manual sync button — without it a sale that failed once
       // (e.g. a transient 500) could never be retried and was silently stuck.
       const includeFailed = !!(options && options.includeFailed);
+      // options.onlyIds: limit the sales pass to these records (failed-sales
+      // review "Retry" on a single row).
+      const onlyIds = (options && Array.isArray(options.onlyIds) && options.onlyIds.length)
+        ? options.onlyIds.map(String)
+        : null;
       if (this.offlineSyncInProgress) return;
       // Claim the lock BEFORE the async ping below — otherwise two triggers
       // (boot timer, online event, manual click) awaiting the ping together
@@ -10681,6 +12098,9 @@ export default {
       } catch (e) {}
       this.offlineLastSyncError = null;
       let syncedCount = 0;
+      // Sales that ended this pass as 'failed' (rejected, or out of transient
+      // retries) — reported so a partial pass is never shown as a clean one.
+      let failedCount = 0;
       try {
         if (!Util || !Util.offlinePos || !Util.offlinePos.getOfflineSales) {
           return;
@@ -10700,6 +12120,7 @@ export default {
           // retried only on an explicit manual sync.
           if (!sale || !sale.payload || sale.status === 'synced' || sale.status === 'syncing') continue;
           if (sale.status === 'failed' && !includeFailed) continue;
+          if (onlyIds && !onlyIds.includes(String(sale.id))) continue;
           // Customer still only exists locally (its sync failed above) — the
           // server would reject the temporary id; retry on the next pass.
           if (Util.offlinePos.isLocalId(sale.payload.client_id)) continue;
@@ -10753,6 +12174,7 @@ export default {
                 'Invalid response from server',
                 response && response.status
               );
+              failedCount++;
               // Restore shadow stock for this failed sale
               try {
                 if (Util && Util.shadowStock && Util.shadowStock.revertDeductions) {
@@ -10761,7 +12183,8 @@ export default {
               } catch (e) {}
             }
           } catch (error) {
-            const isNetworkError = this.isNetworkFailure(error);
+            const errorKind = this.classifySyncError(error);
+            const isNetworkError = errorKind === 'network';
             if (typeof window !== 'undefined') {
               try {
                 if (window.navigator && window.navigator.onLine === false) {
@@ -10785,17 +12208,49 @@ export default {
               this.backendReachable = false;
               break;
             }
-            const msg =
-              (error.response &&
-                (error.response.data &&
-                  (error.response.data.message || error.response.data.error))) ||
-              error.message ||
-              'Unknown error';
-            Util.offlinePos.markSaleAsFailed(
-              sale.id,
-              msg,
-              error.response && error.response.status
-            );
+            const statusCode = (error.response && error.response.status) || error.status || null;
+            if (errorKind === 'auth') {
+              // Session expired during the offline period: lib/http is already
+              // sending the cashier to /login. The sale was not judged — keep
+              // it pending so it syncs after they sign back in.
+              try { Util.offlinePos.markSaleAsPending(sale.id); } catch (e) {}
+              break;
+            }
+            const msg = this.syncErrorMessage(error);
+            if (errorKind === 'transient') {
+              // Gateway / rate-limit answer: retry automatically (the online
+              // poll re-probes in ~15s), but park the sale as failed after 5
+              // attempts rather than looping forever. A 504 may hide a sale
+              // the server did create — the retry is safe (sale_uuid dedupe).
+              let status = 'pending';
+              try {
+                status = Util.offlinePos.recordSaleTransientFailure(sale.id, msg, statusCode, 5);
+              } catch (e) {}
+              if (status === 'failed') {
+                failedCount++;
+                this.offlineLastSyncError = msg;
+                try {
+                  if (Util && Util.shadowStock && Util.shadowStock.revertDeductions) {
+                    Util.shadowStock.revertDeductions(sale.id);
+                  }
+                } catch (e) {}
+              }
+              this.backendReachable = false;
+              break;
+            }
+            // A manager discarded this sale in Sales > Offline Sales: the
+            // server refuses it for good, so drop the till's copy too.
+            if (error.response && error.response.data && error.response.data.discarded === true) {
+              try { Util.offlinePos.removeOfflineSale(sale.id); } catch (e) {}
+              try {
+                if (Util && Util.shadowStock && Util.shadowStock.revertDeductions) {
+                  Util.shadowStock.revertDeductions(sale.id);
+                }
+              } catch (e) {}
+              continue;
+            }
+            Util.offlinePos.markSaleAsFailed(sale.id, msg, statusCode);
+            failedCount++;
             this.offlineLastSyncError = msg;
             // Server rejected the sale: roll back local shadow stock to keep UI consistent
             try {
@@ -10807,16 +12262,148 @@ export default {
         }
       } finally {
         this.offlineSyncInProgress = false;
+        // Only passes that reached the server get here (the ping gates them).
+        this.offlineLastSyncAt = new Date();
+        // Synced records are on the server and nothing reads them again, but
+        // they used to stay in localStorage forever (full payload each),
+        // slowly eating the quota the queue itself needs.
+        try { Util.offlinePos.pruneSyncedSales(); } catch (e) {}
         this.refreshOfflineSalesCount();
         // Notify UI that POS offline sync has finished
         try {
           if (typeof window !== 'undefined' && window.Fire && window.Fire.$emit) {
-            window.Fire.$emit('offline-sync:end', { syncedCount, lastError: this.offlineLastSyncError });
+            window.Fire.$emit('offline-sync:end', { syncedCount, failedCount, lastError: this.offlineLastSyncError });
           }
         } catch (e) {}
         // Show same feedback as auto-sync handler
-        this.handleAutoOfflineSyncResult({ syncedCount, lastError: this.offlineLastSyncError });
+        this.handleAutoOfflineSyncResult({ syncedCount, failedCount, lastError: this.offlineLastSyncError });
       }
+    },
+    // $t with an English fallback: vue-i18n returns the key itself when a
+    // tenant's translations table predates it (not re-seeded yet).
+    tfp(key, params, fallback) {
+      try {
+        const out = params ? this.$t(key, params) : this.$t(key);
+        return out && out !== key ? out : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    },
+    // Sales > Offline Sales (all tills).
+    goToOfflineSalesPage() {
+      this.$router.push('/offline-sales');
+    },
+    // Rows for the failed-sales review, built from the queue records.
+    loadFailedOfflineSales() {
+      let list = [];
+      try {
+        list = (Util.offlinePos.getOfflineSales() || []).filter(s => s && s.status === 'failed');
+      } catch (e) {
+        list = [];
+      }
+      this.failedOfflineSales = list.map((s) => {
+        const p = s.payload || {};
+        const client = (this.clients || []).find(c => c && String(c.id) === String(p.client_id));
+        const lines = Array.isArray(p.details) ? p.details : [];
+        let date = s.createdAt || '';
+        try { date = new Date(s.createdAt).toLocaleString(); } catch (e) {}
+        return {
+          id: s.id,
+          date,
+          client: client ? client.name : (p.client_id != null ? '#' + p.client_id : ''),
+          items: lines.map(d => `${d.name || d.code || ''} × ${Number(d.quantity) || 0}`).join(', '),
+          total: Number(p.GrandTotal) || 0,
+          error: (s.lastError && s.lastError.message) || '',
+          statusCode: (s.lastError && s.lastError.statusCode) || null
+        };
+      });
+    },
+    openFailedOfflineSales() {
+      this.loadFailedOfflineSales();
+      this.$bvModal.show('OfflineFailedSalesModal');
+      // Drop rows a manager already resolved in Sales > Offline Sales.
+      try { this.reconcileFailedOfflineSales(); } catch (e) {}
+    },
+    // Ask the server which of this till's failed sales were resolved in
+    // Sales > Offline Sales (retried -> synced, or discarded) and clear them
+    // locally, so the till does not keep showing or resubmitting them.
+    async reconcileFailedOfflineSales() {
+      let failed = [];
+      try {
+        failed = (Util.offlinePos.getOfflineSales() || [])
+          .filter(s => s && s.status === 'failed' && s.payload && s.payload.sale_uuid);
+      } catch (e) {
+        return;
+      }
+      if (!failed.length) return;
+      try {
+        const res = await axios.post('pos/offline_sales/statuses', {
+          uuids: failed.map(s => String(s.payload.sale_uuid))
+        });
+        const statuses = (res && res.data && res.data.statuses) || {};
+        let changed = false;
+        failed.forEach((s) => {
+          const st = statuses[String(s.payload.sale_uuid)];
+          if (!st) return;
+          if (st.status === 'synced') {
+            Util.offlinePos.markSaleAsSynced(s.id, st.sale_id);
+            changed = true;
+          } else if (st.status === 'discarded') {
+            Util.offlinePos.removeOfflineSale(s.id);
+            changed = true;
+          }
+        });
+        if (changed) {
+          Util.offlinePos.pruneSyncedSales();
+          this.refreshOfflineSalesCount();
+          this.loadFailedOfflineSales();
+        }
+      } catch (e) { /* older server / offline: keep the local rows */ }
+    },
+    async retryFailedOfflineSale(id) {
+      if (!id || this.offlineSyncInProgress) return;
+      this.failedOfflineSaleBusyId = id;
+      try {
+        await this.trySyncOfflineSales({ includeFailed: true, onlyIds: [id], notifyUnreachable: true });
+      } finally {
+        this.failedOfflineSaleBusyId = null;
+        this.loadFailedOfflineSales();
+      }
+    },
+    async retryAllFailedOfflineSales() {
+      if (this.offlineSyncInProgress) return;
+      this.failedOfflineSaleBusyId = 'all';
+      try {
+        await this.trySyncOfflineSales({ includeFailed: true, notifyUnreachable: true });
+      } finally {
+        this.failedOfflineSaleBusyId = null;
+        this.loadFailedOfflineSales();
+      }
+    },
+    // Permanently drop a rejected sale from this device (e.g. it was rung up
+    // again by hand). Confirmed first — this is the only copy.
+    discardFailedOfflineSale(id) {
+      if (!id) return;
+      this.$swal({
+        title: this.$t('pos.Offline_Sale_Discard_Title') || 'Discard this sale?',
+        text: this.$t('pos.Offline_Sale_Discard_Text') || 'It has not been recorded on the server. Discarding deletes it from this device permanently.',
+        type: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        cancelButtonText: this.$t('Delete_cancelButtonText'),
+        confirmButtonText: this.$t('pos.Discard') || 'Discard'
+      }).then((result) => {
+        if (!result || !result.value) return;
+        try { Util.offlinePos.removeOfflineSale(id); } catch (e) {}
+        try {
+          if (Util && Util.shadowStock && Util.shadowStock.revertDeductions) {
+            Util.shadowStock.revertDeductions(id);
+          }
+        } catch (e) {}
+        this.refreshOfflineSalesCount();
+        this.loadFailedOfflineSales();
+      });
     },
     syncOfflineSales() {
       if (!this.isOnline) {
@@ -10958,16 +12545,86 @@ export default {
       }
       // Guard: total payable must not be negative (zero allowed)
       if (Number(this.GrandTotal) < 0) {
-        const msg = this.$t ? `${this.$t('pos.Total_Payable')} cannot be negative` : 'Total Payable cannot be negative';
+        const msg = this.$t ? this.$t('Pos_Total_Payable_Negative') : 'Total Payable cannot be negative';
         this.makeToast('warning', msg, this.$t ? this.$t('Warning') : 'Warning');
         return;
       }
+      // Guard: the role's discount limit and minimum prices after the order
+      // discount (the server re-checks both on save).
+      const discountProblem = this.discountGuard();
+      if (discountProblem) {
+        this.makeToast('danger', discountProblem, this.$t('Failed'));
+        return;
+      }
+      // Optional (POS Settings): confirm before selling items at 0.
+      const zeroLines = this.pos_settings && this.pos_settings.confirm_zero_price
+        ? this.details.filter(d => Number(d.Unit_price) <= 0 || Number(d.Net_price) + Number(d.taxe || 0) <= 0)
+        : [];
+      if (zeroLines.length) {
+        Modal.confirm({
+          title: this.$t('Pos_Zero_Price_Title'),
+          content: zeroLines.map(d => d.name).join(', '),
+          okText: this.$t('Pos_Zero_Price_Sell_Anyway'),
+          cancelText: this.$t('Cancel'),
+          zIndex: 2000,
+          onOk: () => this.showPaymentModal(),
+        });
+        return;
+      }
+      this.showPaymentModal();
+    },
+
+    showPaymentModal() {
       // Open modern payment modal with current sale data
       this.$refs.modernPaymentModal.openModal({
         amountDue: this.docGrandTotal,
         reference: this.sale.Ref || "POS-" + new Date().getTime(),
         notes: this.selectedClientId ? `Payment for Customer #${this.selectedClientId}` : 'POS Payment'
       });
+    },
+
+    /**
+     * Mirrors App\Services\PosDiscountLimit: the cashier's line + order
+     * discount as a share of price × qty must stay within the role's limit
+     * (null = none), and no discounted line may end below its minimum price
+     * once its share of the order discount is taken too. Returns a message or null.
+     */
+    discountGuard() {
+      // Tax-inclusive basis, as the cart total the order discount comes off.
+      let gross = 0;
+      let afterLines = 0;
+      const lines = this.details.map(d => {
+        const price = Number(d.Unit_price) || 0;
+        const qty = Number(d.quantity) || 0;
+        const net = String(d.discount_Method || '2') === '2' ? Number(d.discount) || 0 : price * (Number(d.discount) || 0) / 100;
+        const taxFactor = String(d.tax_method || '1') === '1' ? 1 + (Number(d.tax_percent) || 0) / 100 : 1;
+        gross += price * taxFactor * qty;
+        afterLines += Math.max(price - net, 0) * taxFactor * qty;
+        return { d, price, net };
+      });
+      const lineDiscount = gross - afterLines;
+      const orderValue = Number(this.sale.discount) || 0;
+      const order = String(this.sale.discount_Method || '2') === '1'
+        ? afterLines * orderValue / 100
+        : Math.min(orderValue, afterLines);
+      const share = afterLines > 0 ? order / afterLines : 0;
+
+      const limit = this.currentUser && this.currentUser.max_discount_percent;
+      if (limit !== null && limit !== undefined && limit !== '' && gross > 0) {
+        const percent = (lineDiscount + order) / gross * 100;
+        if (percent > Number(limit) + 0.01) {
+          return this.$t('Pos_Discount_Over_Limit', { percent: percent.toFixed(2), limit: Number(limit) });
+        }
+      }
+      for (const { d, price, net } of lines) {
+        const min = Number(d.min_price) || 0;
+        if (min <= 0 || (net <= 0 && share <= 0)) continue;
+        const effective = (price - net) * (1 - share);
+        if (effective < min - 0.005) {
+          return this.$t('Pos_Below_Min_Price', { product: d.name, min: this.formatPriceDisplay(min, 2) });
+        }
+      }
+      return null;
     },
 
     // F9 entry point: reprint the most recent completed sale. Routes through
@@ -11025,6 +12682,9 @@ export default {
       }
     } catch (e) {}
 
+    // Favourite stars before the first product load (and when offline).
+    this.loadCachedFavorites();
+
     this.initOfflineStatus();
     // When browser signal flips POS to online, immediately confirm backend
     // reachability and run the same reconnect flow as the browser "online"
@@ -11047,15 +12707,15 @@ export default {
       this.$watch('backendReachable', (val, oldVal) => {
         if (val === true && oldVal !== true) {
           const hadActiveCart = this.details && this.details.length > 0;
-          if (hadActiveCart && this.isOnline && !this.onlineReloadModalVisible) {
+          // backendReachable flips false -> true on every successful re-probe
+          // after a failed sync attempt; skip once "After this sale" is chosen.
+          if (hadActiveCart && this.isOnline && !this.onlineReloadModalVisible && !this.onlineReloadAfterSale) {
             try {
               this.$nextTick(() => {
                 this.onlineReloadModalVisible = true;
-                this.onlineReloadAfterSale = false;
               });
             } catch (e) {
               this.onlineReloadModalVisible = true;
-              this.onlineReloadAfterSale = false;
             }
           }
         }
@@ -11077,33 +12737,9 @@ export default {
 
     this.GetElementsPos(); // This will fetch fresh data and rebuild the cache when online
     this.addPaymentLine();
-    // Persist the in-progress cart (debounced) so a refresh or crash — online
-    // or offline — never loses the sale. Cleared by Reset_Pos() after each
-    // completed sale; restored by restoreCartState() once bootstrap resolves.
-    try {
-      this.$watch(
-        () => [
-          this.details,
-          this.sale,
-          this.selectedClientId,
-          this.promotionCode,
-          this.used_points,
-          this.discount_from_points,
-          this.draft_sale_id
-        ],
-        () => { try { this.persistCartState(); } catch (e) {} },
-        { deep: true }
-      );
-    } catch (e) {}
-    // A refresh can land inside the 400ms persist debounce — flush the pending
-    // snapshot synchronously as the page goes away so nothing is lost.
-    try {
-      if (typeof window !== 'undefined') {
-        this._flushCartOnPageHide = () => { try { this.flushCartState(); } catch (e) {} };
-        window.addEventListener('pagehide', this._flushCartOnPageHide);
-        window.addEventListener('beforeunload', this._flushCartOnPageHide);
-      }
-    } catch (e) {}
+    // The cart is not kept across refreshes: every POS load starts empty.
+    // Remove a snapshot an older build may have left behind.
+    try { Util.offlinePos.clearCartState && Util.offlinePos.clearCartState(); } catch (e) {}
     // Initialize warehouse options and sync selection once data is loaded
     this.$watch('warehouses', (ws) => {
       this.warehouseOptions = (ws || []).map(w => ({ value: w.id, text: w.name }));
@@ -11126,7 +12762,7 @@ export default {
       setTimeout(() => {
         // Guard: prevent opening legacy payment modal if total is negative
         if (Number(this.GrandTotal) < 0) {
-          const msg = this.$t ? `${this.$t('pos.Total_Payable')} cannot be negative` : 'Total Payable cannot be negative';
+          const msg = this.$t ? this.$t('Pos_Total_Payable_Negative') : 'Total Payable cannot be negative';
           this.makeToast('warning', msg, this.$t ? this.$t('Warning') : 'Warning');
           // Complete the animation of the progress bar.
           NProgress.done();
@@ -11193,16 +12829,6 @@ export default {
 
   },
   beforeUnmount() {
-    // Flush any pending (debounced) cart snapshot so navigating away inside
-    // the SPA can't lose the last edit, then stop the timer.
-    try { this.flushCartState(); } catch (e) {}
-    try {
-      if (typeof window !== 'undefined' && this._flushCartOnPageHide) {
-        window.removeEventListener('pagehide', this._flushCartOnPageHide);
-        window.removeEventListener('beforeunload', this._flushCartOnPageHide);
-        this._flushCartOnPageHide = null;
-      }
-    } catch (e) {}
     try {
       if (typeof document !== 'undefined' && document.documentElement) {
         document.documentElement.classList.remove('pos-active');
@@ -11285,7 +12911,9 @@ $color-success: #10b981;
 $color-warning: #f59e0b;
 $color-danger: #ef4444;
 
-$font-family-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+// Tenant font (partials.tenant-font) first, then Cairo in RTL (--pos-rtl-font,
+// set in the unscoped block below, mirrors theme.css), then Inter.
+$font-family-primary: var(--tenant-font, var(--pos-rtl-font, 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif));
 $font-size-xs: 12px;
 $font-size-sm: 14px;
 $font-size-base: 16px;
@@ -13337,7 +14965,7 @@ $transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 .ps-close {
   position: absolute;
   top: 14px;
-  right: 14px;
+  inset-inline-end: 14px;
   width: 32px;
   height: 32px;
   border-radius: 10px;
@@ -14314,6 +15942,57 @@ $transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   font-weight: 500;
   color: $color-text-tertiary;
   font-style: italic;
+}
+
+/* "Sold by" drawer — reuses the warehouse drawer; adds section titles + footer */
+.soldby-drawer {
+  .wh-drawer-card-icon { font-size: 16px; font-weight: 700; }
+  .wh-drawer-card-hint { white-space: normal; }
+}
+.soldby-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: $color-text-tertiary;
+  svg { width: 14px; height: 14px; }
+  &:first-child { margin-top: 4px; }
+}
+.soldby-drawer-foot {
+  flex: 0 0 auto;
+  padding: 12px 18px 18px;
+  border-top: 1px solid var(--pos-dk-line, #e6eef1);
+}
+.soldby-done-btn {
+  width: 100%;
+  height: 44px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #0e7490, #06b6d4);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  &:hover { filter: brightness(1.05); }
+}
+.pos-shell-soldby-btn.is-set {
+  border-color: var(--pos-accent) !important;
+  color: var(--pos-accent) !important;
+  background: var(--pos-accent-soft) !important;
+}
+.pos-soldby-dot {
+  position: absolute;
+  top: -3px;
+  inset-inline-end: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #10b981;
+  border: 2px solid var(--pos-surface);
 }
 .wh-drawer-card-body {
   flex: 1 1 auto;
@@ -17930,6 +19609,179 @@ $transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 .pos-codecanyon .dropdown > .pos-shell-icon-btn {
   display: inline-flex !important;
 }
+
+/* ---- Offline sync status menu (header cloud button) ---- */
+.pos-sync-toggle {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid #e6e6ec;
+  background: #ffffff;
+  color: #54546a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.pos-sync-toggle .lucide-icon { width: 16px; height: 16px; }
+.pos-sync-toggle:hover { border-color: #d8d8e0; background: #f7f7fb; }
+.pos-sync-toggle.is-ok { color: #1e7a44; }
+.pos-sync-toggle.is-pending,
+.pos-sync-toggle.is-syncing { background: #f5f3fd; border-color: #ece9fb; color: #6f53d9; }
+.pos-sync-toggle.is-failed { background: #fff7ed; border-color: #fed7aa; color: #b45309; }
+.pos-sync-toggle.is-offline { background: #fef2f2; border-color: #fecaca; color: #a83232; }
+.pos-sync-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 99px;
+  border: 2px solid #ffffff;
+  background: #6f53d9;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+}
+.pos-sync-badge.is-danger { background: #dc2626; }
+.pos-sync-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  background: #2fae5e;
+  box-shadow: 0 0 0 2px #ffffff;
+}
+.pos-sync-spin { animation: pos-sync-rotate 1s linear infinite; }
+@keyframes pos-sync-rotate { to { transform: rotate(360deg); } }
+
+.pos-sync-panel {
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  padding: 12px;
+  color: #1f1f2c;
+  font-size: 12.5px;
+  white-space: normal;
+}
+.pos-sync-head {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f7f7fb;
+}
+.pos-sync-head-icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  color: #54546a;
+}
+.pos-sync-head-icon .lucide-icon { width: 18px; height: 18px; }
+.pos-sync-head.is-ok { background: #eaf7ef; }
+.pos-sync-head.is-ok .pos-sync-head-icon { color: #1e7a44; }
+.pos-sync-head.is-pending,
+.pos-sync-head.is-syncing { background: #f5f3fd; }
+.pos-sync-head.is-pending .pos-sync-head-icon,
+.pos-sync-head.is-syncing .pos-sync-head-icon { color: #6f53d9; }
+.pos-sync-head.is-failed { background: #fff7ed; }
+.pos-sync-head.is-failed .pos-sync-head-icon { color: #b45309; }
+.pos-sync-head.is-offline { background: #fef2f2; }
+.pos-sync-head.is-offline .pos-sync-head-icon { color: #a83232; }
+.pos-sync-head-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pos-sync-head-title { font-size: 13.5px; font-weight: 700; line-height: 1.3; }
+.pos-sync-head-sub { color: #54546a; line-height: 1.4; }
+
+.pos-sync-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.pos-sync-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #e6e6ec;
+  border-radius: 9px;
+}
+.pos-sync-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.1;
+  font-family: 'JetBrains Mono', monospace;
+}
+.pos-sync-stat-label { font-size: 11px; color: #8a8aa0; }
+.pos-sync-stat.is-danger { border-color: #fecaca; background: #fef2f2; }
+.pos-sync-stat.is-danger .pos-sync-stat-value { color: #dc2626; }
+.pos-sync-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: #8a8aa0;
+}
+.pos-sync-meta .lucide-icon { width: 13px; height: 13px; }
+
+.pos-sync-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #efeff4;
+}
+.pos-sync-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #1f1f2c;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.pos-sync-action > .lucide-icon { flex: 0 0 auto; width: 16px; height: 16px; color: #54546a; }
+.pos-sync-action:hover:not(:disabled) { background: #f3f3f7; }
+.pos-sync-action:disabled { opacity: 0.5; cursor: not-allowed; }
+.pos-sync-action-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; font-weight: 600; }
+.pos-sync-action-sub { font-size: 11px; font-weight: 400; color: #8a8aa0; }
+.pos-sync-action-caret { flex: 0 0 auto; width: 14px !important; height: 14px !important; color: #b0b0c0 !important; }
+.pos-sync-action.is-primary { background: #6f53d9; color: #ffffff; }
+.pos-sync-action.is-primary > .lucide-icon,
+.pos-sync-action.is-primary .pos-sync-action-sub { color: rgba(255, 255, 255, 0.85); }
+.pos-sync-action.is-primary:hover:not(:disabled) { background: #5e44c4; }
+.pos-sync-action.is-danger > .lucide-icon { color: #dc2626; }
+.pos-sync-action.is-danger { color: #a83232; }
+.pos-sync-hint {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f7f7fb;
+  font-size: 11.5px;
+  color: #54546a;
+}
 /* Dropdown menus opened from icon-button toggles — clean white panel with our palette */
 .pos-codecanyon .pos-shell-dropdown-menu,
 .pos-codecanyon .pos-shell-dropdown-menu.dropdown-menu {
@@ -17958,6 +19810,38 @@ $transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 .pos-codecanyon .pos-shell-product-card:hover {
   border-color: #6f53d9 !important;
   box-shadow: 0 4px 12px rgba(20, 20, 40, 0.06);
+}
+
+/* Favourite star on a product card: faint until hovered or starred */
+.pos-codecanyon .pos-shell-card-fav {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #8d8da0;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.pos-codecanyon .pos-shell-card-fav svg {
+  width: 14px;
+  height: 14px;
+}
+.pos-codecanyon .pos-shell-product-card:hover .pos-shell-card-fav,
+.pos-codecanyon .pos-shell-card-fav:hover {
+  opacity: 1;
+}
+.pos-codecanyon .pos-shell-card-fav:hover {
+  transform: scale(1.08);
+}
+.pos-codecanyon .pos-shell-card-fav.is-fav {
+  opacity: 1;
+  color: #f5a524;
 }
 
 .pos-codecanyon .pos-shell-cart-row:hover {
@@ -18356,6 +20240,10 @@ $transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     justify-content: center !important;
     flex-shrink: 0 !important;
   }
+  .pos-codecanyon .pos-shell-sort-select {
+    height: 38px !important;
+    max-width: 110px !important;
+  }
 
   /* --- Products grid: 3 cols --- */
   .pos-codecanyon .pos-shell-products-grid {
@@ -18650,6 +20538,13 @@ $transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     flex: 0 0 auto !important;
     display: inline-flex !important;
   }
+  /* Sold by (salesperson + agent) — same slot as the calculator; without an
+     order it would fall to order 0, left of the logo. */
+  .pos-codecanyon .pos-shell-header > button.pos-shell-soldby-btn {
+    order: 2 !important;
+    flex: 0 0 auto !important;
+    display: inline-flex !important;
+  }
   /* Product return — visible on mobile, sits right beside Today's sales */
   .pos-codecanyon .pos-shell-header > button.pos-shell-return-btn {
     order: 2 !important;
@@ -18662,6 +20557,21 @@ $transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     order: 3 !important;
     flex: 0 0 auto !important;
     display: inline-flex !important;
+  }
+  /* Offline sync status menu (a b-dropdown wrapper, not a <button>, so the
+     rule above misses it and it fell to order 0 — left of the logo). Same
+     slot as the old sync button. display:block (not inline-flex like the
+     other dropdowns) so its panel's static position is BELOW the toggle —
+     the unscoped block at the end of this file pins that panel full-width. */
+  .pos-codecanyon .pos-shell-header > #offline-sync-dd {
+    order: 3 !important;
+    flex: 0 0 32px !important;
+    display: block !important;
+    width: 32px !important;
+    height: 32px !important;
+    align-self: center !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
   /* Languages dropdown */
   .pos-codecanyon .pos-shell-header > #lang-dd {
@@ -18692,6 +20602,7 @@ $transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   /* Inner b-dropdown toggle button — kill leftover padding/margin/border from bootstrap */
   .pos-codecanyon .pos-shell-header > #lang-dd > button,
   .pos-codecanyon .pos-shell-header > #display-screen-dd > button,
+  .pos-codecanyon .pos-shell-header > #offline-sync-dd > button,
   .pos-codecanyon .pos-shell-header > .pos-shell-user-dd-wrapper button {
     padding: 0 !important;
     margin: 0 !important;
@@ -19207,6 +21118,10 @@ $transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
      and the document chain (html → body → #app → .pos-codecanyon) doesn't
      guarantee 100% height, leaving the layout misaligned in fullscreen. -->
 <style>
+/* RTL default for $font-family-primary when no tenant font is chosen —
+   same stack as theme.css [dir="rtl"] body / RTL_FONT_STACK in App.vue. */
+[dir="rtl"] { --pos-rtl-font: 'Cairo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, Arial, sans-serif; }
+
 /* ============================================
    Mobile tab bar — the "More" dropup menu
    The .dropdown / .dropdown-menu wrappers are created inside the BDropdown
@@ -19590,5 +21505,118 @@ html.pos-active:fullscreen .layout-sidebar-large .main-content-wrap {
 .pos-confirm-btn-danger:hover {
   background: #b83838;
   border-color: #b83838;
+}
+.pos-confirm-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Manager approval (PIN) modal — reuses the confirm-clear shell above. */
+.pos-void-approval .pos-confirm-clear-icon {
+  background: #f5f3fd;
+  color: #6f53d9;
+}
+.pos-void-lines {
+  list-style: none;
+  width: 100%;
+  margin: -8px 0 14px;
+  padding: 8px 10px;
+  border: 1px solid #e6e6ec;
+  border-radius: 8px;
+  background: #fafafc;
+  font-size: 12px;
+  text-align: left;
+}
+.pos-void-lines li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+}
+.pos-void-line-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1f1f2c;
+}
+.pos-void-line-qty {
+  flex-shrink: 0;
+  color: #54546a;
+  font-family: 'JetBrains Mono', monospace;
+}
+.pos-void-line-more {
+  color: #8d8da0;
+}
+.pos-void-pin {
+  width: 100%;
+  height: 46px;
+  border: 1px solid #d8d8e0;
+  border-radius: 8px;
+  text-align: center;
+  font-size: 22px;
+  letter-spacing: 0.4em;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+  margin-bottom: 8px;
+}
+.pos-void-pin:focus,
+.pos-void-approver:focus {
+  border-color: #6f53d9;
+  box-shadow: 0 0 0 3px rgba(111, 83, 217, 0.15);
+}
+.pos-void-approver {
+  width: 100%;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid #d8d8e0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1f1f2c;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.pos-void-error {
+  width: 100%;
+  font-size: 12px;
+  color: #d64545;
+  margin-bottom: 8px;
+}
+.pos-void-approval .pos-confirm-clear-actions {
+  margin-top: 8px;
+}
+
+/* Offline sync status panel on phones. The toggle sits mid-row among the
+   header icons, so a 300px panel anchored to its right edge would run off
+   the left of the screen. Pin it across the viewport instead (12px gutters);
+   top:auto keeps it at its static position, just below the toggle (the
+   wrapper is display:block on phones for exactly this). Unscoped because the
+   .dropdown-menu element is rendered inside the BDropdown shim. */
+@media (max-width: 768px) {
+  .pos-codecanyon #offline-sync-dd > .dropdown-menu.pos-sync-menu {
+    position: fixed !important;
+    left: 12px !important;
+    right: 12px !important;
+    top: auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    margin-top: 6px !important;
+    transform: none !important;
+  }
+  .pos-codecanyon #offline-sync-dd .pos-sync-panel {
+    width: auto;
+    max-width: none;
+  }
+}
+/* Tablet: the header wraps and the icon row starts right after the logo, so
+   a right-anchored panel would open off the left edge — anchor it left. */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .pos-codecanyon #offline-sync-dd > .dropdown-menu.pos-sync-menu {
+    left: 0 !important;
+    right: auto !important;
+  }
 }
 </style>

@@ -260,13 +260,27 @@ function confirmApprove(tenantId) {
             });
 
             var formData = new FormData(form);
+            // JSON answer (TenantController::asyncResult): an early refusal
+            // shows its message instead of a poll that never resolves.
             fetch(form.action, {
                 method: 'POST',
-                headers: { 'X-CSRF-TOKEN': csrfToken },
+                headers: { 'X-CSRF-TOKEN': csrfToken, 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                 body: formData,
-                redirect: 'manual',
-            }).then(function() {
-                pollApproveStatus(tenantId);
+            }).then(function(r) {
+                return r.json().catch(function() { return {}; }).then(function(data) {
+                    return { ok: r.ok, data: data };
+                });
+            }).then(function(res) {
+                if (res.ok) {
+                    pollApproveStatus(tenantId);
+                    return;
+                }
+                Swal.fire({
+                    title: trans.provisioningFailedTitle,
+                    text: (res.data && res.data.message) || trans.requestFailed,
+                    icon: 'error',
+                    confirmButtonColor: '#ef4444',
+                });
             }).catch(function() {
                 pollApproveStatus(tenantId);
             });
@@ -292,7 +306,7 @@ function pollApproveStatus(tenantId) {
         if (stepEl) {
             var mins = Math.floor(seconds / 60);
             var secs = seconds % 60;
-            stepEl.textContent = 'Elapsed: ' + (mins > 0 ? mins + 'm ' : '') + secs + 's';
+            stepEl.textContent = __s('elapsed') + ' ' + (mins > 0 ? mins + 'm ' : '') + secs + 's';
         }
 
         fetch(statusUrl, {
@@ -308,7 +322,7 @@ function pollApproveStatus(tenantId) {
                     icon: 'success',
                     confirmButtonColor: '#10b981',
                 }).then(function() { location.reload(); });
-            } else if (data.status === 'failed') {
+            } else if (data.status === 'failed' || (data.status === 'pending' && data.error)) {
                 clearInterval(timer);
                 Swal.fire({
                     title: trans.provisioningFailedTitle,

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Central\EInvoicingProviderSetting;
 use App\Models\Sale;
 use App\Models\SaleReturn;
 use App\Models\Setting;
@@ -33,6 +34,7 @@ class ZatcaController extends Controller
 
         return response()->json([
             'settings' => $this->publicSettings($zatca),
+            'platform_enabled' => EInvoicingProviderSetting::platformEnabled('zatca'),
             'company' => [
                 'name' => $setting->CompanyName ?? null,
                 'name_ar' => $setting->company_name_ar ?? null,

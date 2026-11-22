@@ -2,16 +2,22 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Account;
 use App\Models\Asset;
 use App\Models\AssetCategory;
 use App\Models\UserWarehouse;
 use App\Models\Warehouse;
+use App\Traits\ScopesAssetAccess;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use App\Services\AccountingV2\AssetJournal;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schema;
 
 class AssetController extends BaseController
 {
+    use ScopesAssetAccess;
+
     // -------------- Get All Assets ---------------\\
     public function index(Request $request)
     {
@@ -44,16 +50,19 @@ class AssetController extends BaseController
         $query = Asset::leftJoin('warehouses', 'warehouses.id', '=', 'assets.warehouse_id')
             ->leftJoin('asset_categories', 'asset_categories.id', '=', 'assets.asset_category_id')
             ->whereNull('assets.deleted_at')
+            ->visibleIn($this->warehouseScopeIds())
             ->select('assets.*', 'warehouses.name as warehouse_name', 'asset_categories.name as asset_category_name')
             ->where(function ($q) use ($request) {
                 return $q->when($request->filled('search'), function ($q) use ($request) {
                     $s = $request->search;
 
-                    return $q->where('name', 'LIKE', "%{$s}%")
-                        ->orWhere('tag', 'LIKE', "%{$s}%")
+                    // Qualified: the warehouses and asset_categories joins both
+                    // carry `name`, and an unqualified column makes MySQL reject the query.
+                    return $q->where('assets.name', 'LIKE', "%{$s}%")
+                        ->orWhere('assets.tag', 'LIKE', "%{$s}%")
                         ->orWhere('asset_categories.name', 'LIKE', "%{$s}%")
-                        ->orWhere('serial_number', 'LIKE', "%{$s}%")
-                        ->orWhere('status', 'LIKE', "%{$s}%")
+                        ->orWhere('assets.serial_number', 'LIKE', "%{$s}%")
+                        ->orWhere('assets.status', 'LIKE', "%{$s}%")
                         ->orWhere('warehouses.name', 'LIKE', "%{$s}%");
                 });
             });
@@ -81,6 +90,8 @@ class AssetController extends BaseController
             $item['warehouse_name'] = $asset->warehouse_name ?? null;
             $item['purchase_date'] = $asset->purchase_date;
             $item['purchase_cost'] = $asset->purchase_cost;
+            $item['book_value'] = $asset->bookValue();
+            $item['disposal_date'] = $asset->disposal_date ? $asset->disposal_date->format('Y-m-d') : null;
             $item['last_verification'] = $asset->last_verification ? $asset->last_verification->format('Y-m-d') : null;
             $item['next_validation'] = $asset->next_validation ? $asset->next_validation->format('Y-m-d') : null;
             $data[] = $item;
@@ -97,6 +108,7 @@ class AssetController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'view', Asset::class);
         $asset = Asset::where('deleted_at', '=', null)->findOrFail($id);
+        $this->abortIfAssetDenied($asset);
 
         return response()->json([
             'id' => $asset->id,
@@ -107,6 +119,11 @@ class AssetController extends BaseController
             'description' => $asset->description,
             'purchase_date' => $asset->purchase_date,
             'purchase_cost' => $asset->purchase_cost,
+            'supplier' => $asset->supplier,
+            'warranty_expiry' => $asset->warranty_expiry ? $asset->warranty_expiry->format('Y-m-d') : null,
+            'depreciation_method' => $asset->depreciation_method ?: 'none',
+            'useful_life_months' => $asset->useful_life_months,
+            'salvage_value' => $asset->salvage_value,
             'status' => $asset->status,
             'warehouse_id' => $asset->warehouse_id,
             'assigned_to_id' => $asset->assigned_to_id,
@@ -125,9 +142,13 @@ class AssetController extends BaseController
             'name' => 'required',
             'asset_category_id' => 'nullable|exists:asset_categories,id',
             'warehouse_id' => 'nullable|exists:warehouses,id',
+            'depreciation_method' => 'nullable|in:none,straight_line,declining_balance',
+            'useful_life_months' => 'nullable|integer|min:1|max:1200',
+            'salvage_value' => 'nullable|numeric|min:0|lte:purchase_cost',
         ]);
+        $this->abortIfAssetWarehouseDenied($request['warehouse_id']);
 
-        Asset::create([
+        $asset = Asset::create($this->paidFromField($request) + [
             'tag' => $request['tag'],
             'name' => $request['name'],
             'asset_category_id' => $request['asset_category_id'],
@@ -135,12 +156,21 @@ class AssetController extends BaseController
             'description' => $request['description'],
             'purchase_date' => $request['purchase_date'],
             'purchase_cost' => $request['purchase_cost'],
+            'supplier' => $request['supplier'],
+            'warranty_expiry' => $request['warranty_expiry'],
+            'depreciation_method' => $request['depreciation_method'] ?: 'none',
+            'useful_life_months' => $request['useful_life_months'] ?: null,
+            'salvage_value' => $request['salvage_value'] ?: 0,
             'status' => $request['status'] ?: 'in_use',
             'warehouse_id' => $request['warehouse_id'],
             'assigned_to_id' => $request['assigned_to_id'],
             'last_verification' => $request['last_verification'],
             'next_validation' => $request['next_validation'],
         ]);
+
+        // Paid from a cash/bank account: the money leaves it now.
+        Account::adjustBalance($asset->account_id, -(float) $asset->purchase_cost);
+        AssetJournal::sync($asset->id);
 
         return response()->json(['success' => true], 200);
     }
@@ -150,15 +180,25 @@ class AssetController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'update', Asset::class);
         $asset = Asset::findOrFail($id);
+        $this->abortIfAssetDenied($asset);
 
         request()->validate([
             'tag' => 'required|unique:assets,tag,'.$id,
             'name' => 'required',
             'asset_category_id' => 'nullable|exists:asset_categories,id',
             'warehouse_id' => 'nullable|exists:warehouses,id',
+            'depreciation_method' => 'nullable|in:none,straight_line,declining_balance',
+            'useful_life_months' => 'nullable|integer|min:1|max:1200',
+            'salvage_value' => 'nullable|numeric|min:0|lte:purchase_cost',
         ]);
+        $this->abortIfAssetWarehouseDenied($request['warehouse_id']);
 
-        $asset->update([
+        $paidFrom = $this->paidFromField($request); // may 422 — before any balance moves
+
+        // Give the old payment back to its account before taking the new one.
+        Account::adjustBalance($asset->account_id, (float) $asset->purchase_cost);
+
+        $asset->update($paidFrom + [
             'tag' => $request['tag'],
             'name' => $request['name'],
             'asset_category_id' => $request['asset_category_id'],
@@ -166,12 +206,20 @@ class AssetController extends BaseController
             'description' => $request['description'],
             'purchase_date' => $request['purchase_date'],
             'purchase_cost' => $request['purchase_cost'],
+            'supplier' => $request['supplier'],
+            'warranty_expiry' => $request['warranty_expiry'],
+            'depreciation_method' => $request['depreciation_method'] ?: 'none',
+            'useful_life_months' => $request['useful_life_months'] ?: null,
+            'salvage_value' => $request['salvage_value'] ?: 0,
             'status' => $request['status'] ?: 'in_use',
             'warehouse_id' => $request['warehouse_id'],
             'assigned_to_id' => $request['assigned_to_id'],
             'last_verification' => $request['last_verification'],
             'next_validation' => $request['next_validation'],
         ]);
+
+        Account::adjustBalance($asset->account_id, -(float) $asset->purchase_cost);
+        AssetJournal::sync($asset->id);
 
         return response()->json(['success' => true], 200);
     }
@@ -181,7 +229,8 @@ class AssetController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'delete', Asset::class);
         $asset = Asset::findOrFail($id);
-        $asset->update(['deleted_at' => Carbon::now()]);
+        $this->abortIfAssetDenied($asset);
+        $this->deleteAsset($asset);
 
         return response()->json(['success' => true], 200);
     }
@@ -193,7 +242,8 @@ class AssetController extends BaseController
         $selectedIds = $request->selectedIds ?: [];
         foreach ($selectedIds as $assetId) {
             $asset = Asset::findOrFail($assetId);
-            $asset->update(['deleted_at' => Carbon::now()]);
+            $this->abortIfAssetDenied($asset);
+            $this->deleteAsset($asset);
         }
 
         return response()->json(['success' => true], 200);
@@ -226,6 +276,7 @@ class AssetController extends BaseController
         return response()->json([
             'warehouses' => $warehouses,
             'asset_categories' => $asset_categories,
+            'accounts' => $this->ledgerAccounts(),
         ]);
     }
 
@@ -235,6 +286,7 @@ class AssetController extends BaseController
         $this->authorizeForUser($request->user('api'), 'view', Asset::class);
 
         $asset = Asset::where('deleted_at', '=', null)->findOrFail($id);
+        $this->abortIfAssetDenied($asset);
 
         $user_auth = auth()->user();
         if ($user_auth && $user_auth->is_all_warehouses) {
@@ -265,15 +317,54 @@ class AssetController extends BaseController
                 'description' => $asset->description,
                 'purchase_date' => $asset->purchase_date,
                 'purchase_cost' => $asset->purchase_cost,
+                'supplier' => $asset->supplier,
+                'warranty_expiry' => $asset->warranty_expiry ? $asset->warranty_expiry->format('Y-m-d') : null,
+                'depreciation_method' => $asset->depreciation_method ?: 'none',
+                'useful_life_months' => $asset->useful_life_months,
+                'salvage_value' => $asset->salvage_value,
                 'status' => $asset->status,
                 'warehouse_id' => $asset->warehouse_id,
                 'assigned_to_id' => $asset->assigned_to_id,
                 'last_verification' => $asset->last_verification ? $asset->last_verification->format('Y-m-d') : null,
                 'next_validation' => $asset->next_validation ? $asset->next_validation->format('Y-m-d') : null,
+                'account_id' => $asset->account_id,
             ],
             'warehouses' => $warehouses,
             'asset_categories' => $asset_categories,
+            'accounts' => $this->ledgerAccounts(),
         ]);
+    }
+
+    /** Cash/bank accounts an asset can be paid from (or its sale paid into). */
+    private function ledgerAccounts()
+    {
+        return Account::whereNull('deleted_at')->orderBy('account_name')->get(['id', 'account_name']);
+    }
+
+    /** `account_id` only once the ledger migration has run, so saving never breaks before it. */
+    private function paidFromField(Request $request): array
+    {
+        if (! Schema::hasColumn('assets', 'account_id')) {
+            return [];
+        }
+        $id = $request['account_id'] ?: null;
+        if ($id && ! Account::whereNull('deleted_at')->whereKey($id)->exists()) {
+            abort(422, 'The selected account does not exist.');
+        }
+
+        return ['account_id' => $id];
+    }
+
+    /** Soft-delete: hand the purchase money (and any sale proceeds) back, then reverse its journals. */
+    private function deleteAsset(Asset $asset): void
+    {
+        $asset->update(['deleted_at' => Carbon::now()]);
+
+        Account::adjustBalance($asset->account_id, (float) $asset->purchase_cost);
+        if ($asset->disposal_date) {
+            Account::adjustBalance($asset->disposal_account_id, -(float) $asset->disposal_amount);
+        }
+        AssetJournal::sync($asset->id);
     }
 
     /**
@@ -306,6 +397,7 @@ class AssetController extends BaseController
             ->whereNull('assets.deleted_at')
             ->whereNotNull('assets.next_validation')
             ->whereDate('assets.next_validation', '<=', $limit)
+            ->visibleIn($this->warehouseScopeIds())
             ->select('assets.*', 'warehouses.name as warehouse_name', 'asset_categories.name as asset_category_name')
             ->orderBy('assets.next_validation', 'asc');
 
@@ -324,6 +416,8 @@ class AssetController extends BaseController
             $item['warehouse_name'] = $asset->warehouse_name ?? null;
             $item['purchase_date'] = $asset->purchase_date;
             $item['purchase_cost'] = $asset->purchase_cost;
+            $item['book_value'] = $asset->bookValue();
+            $item['disposal_date'] = $asset->disposal_date ? $asset->disposal_date->format('Y-m-d') : null;
             $item['last_verification'] = $asset->last_verification ? $asset->last_verification->format('Y-m-d') : null;
             $item['next_validation'] = $asset->next_validation ? $asset->next_validation->format('Y-m-d') : null;
             $data[] = $item;

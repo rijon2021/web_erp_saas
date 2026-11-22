@@ -6,9 +6,16 @@
     />
 
     <a-alert
+      v-if="!storeFeature"
       type="info" show-icon style="margin-bottom: 16px"
-      message="Every gateway here is offered at the ONLINE STORE checkout once its credentials are stored and its switch is on."
-      description="Each tab has its own on/off switch, saved the moment you flip it: switching a gateway off leaves its credentials in place, the checkout simply stops offering it. Stripe keys are shared globally (admin and online store use the same Stripe integration). Offline Payments holds cash on delivery and mobile money, which are paid outside the system."
+      :message="$t('Pg_Stripe_Shared_Notice')"
+      :description="$t('Pg_Store_Feature_Not_In_Plan')"
+    />
+    <a-alert
+      v-else
+      type="info" show-icon style="margin-bottom: 16px"
+      :message="$t('Pg_Intro_Title')"
+      :description="$t('Pg_Intro_Desc')"
     />
 
     <div v-if="loading" style="display: flex; justify-content: center; padding: 96px 0">
@@ -41,24 +48,26 @@
             <div class="pg-head__right">
               <a-tag :color="stripeOffered ? 'success' : 'default'">
                 <template #icon><component :is="stripeOffered ? CheckCircleFilled : StopOutlined" /></template>
-                {{ stripeOffered ? 'Enabled' : 'Disabled' }}
+                {{ stripeOffered ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
-              <a-switch v-model:checked="stripeEnabled" :loading="!!flagSaving.stripe" @change="saveStripeFlag" />
+              <a-switch v-if="storeFeature" v-model:checked="stripeEnabled" :loading="!!flagSaving.stripe" @change="saveStripeFlag" />
             </div>
           </div>
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-if="storeFeature" v-model:checked="autoConfirm.credit_card" :loading="!!acSaving.credit_card" @change="saveAutoConfirm('credit_card')" />
+
           <!-- Keys stay editable even when cards are switched off, so turning
                them back on does not mean re-entering credentials. -->
           <a-form layout="vertical" class="pg-form">
             <!-- Field labels literal like legacy's .env-style naming. -->
-            <a-form-item label="STRIPE KEY">
+            <a-form-item :label="$t('Pg_Label_Stripe_Key')">
               <a-input v-model:value="gateway.stripe_key" :placeholder="$t('LeaveBlank')">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="STRIPE SECRET" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Stripe_Secret')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="gateway.stripe_secret" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
@@ -66,13 +75,13 @@
           </a-form>
           <a-alert
             v-if="!stripeEnabled" type="info" show-icon style="margin-bottom: 20px"
-            message="Card payments are switched off"
-            description="Your keys are kept — the online-store checkout simply stops offering the card option until you switch it back on."
+            :message="$t('Pg_Card_Payments_Off')"
+            :description="$t('Pg_Card_Keys_Kept')"
           />
           <a-alert
             v-else-if="!gateway.stripe_key" type="warning" show-icon style="margin-bottom: 20px"
-            message="No Stripe key stored"
-            description="Enter your Stripe key and secret to start accepting card payments in the online store."
+            :message="$t('Pg_No_Stripe_Key')"
+            :description="$t('Pg_Enter_Stripe_Key')"
           />
 
           <a-space>
@@ -90,6 +99,8 @@
           </a-space>
         </a-tab-pane>
 
+        <!-- Everything below is online-store-only (online_orders plan feature). -->
+        <template v-if="storeFeature">
         <!-- ============================== Razorpay ============================== -->
         <a-tab-pane key="razorpay">
           <template #tab>
@@ -105,14 +116,14 @@
                 <template #icon><ThunderboltOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">Razorpay <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">Razorpay <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.razorpay ? 'success' : 'default'">
                 <template #icon><component :is="offered.razorpay ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.razorpay ? 'Enabled' : 'Disabled' }}
+                {{ offered.razorpay ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.razorpay" :loading="!!flagSaving.razorpay" @change="saveMethodFlag('razorpay')" />
             </div>
@@ -120,28 +131,30 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.razorpay" :loading="!!acSaving.razorpay" @change="saveAutoConfirm('razorpay')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.razorpay" type="info" show-icon style="margin-bottom: 20px"
-            message="Razorpay is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering Razorpay until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'Razorpay' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'Razorpay' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="RAZORPAY KEY ID">
+            <a-form-item :label="$t('Pg_Label_Razorpay_Key_Id')">
               <a-input v-model:value="razorpay.key_id" placeholder="rzp_test_xxxxxxxx">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="RAZORPAY KEY SECRET" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Razorpay_Key_Secret')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="razorpay.key_secret" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
             <a-alert
               type="info" show-icon style="margin-bottom: 20px"
-              message="Uses Razorpay Checkout at the storefront (cards, UPI, netbanking, wallets). Test vs live is decided by the key pair (rzp_test_/rzp_live_) — there is no separate sandbox switch. The checkout offers Razorpay as soon as both keys are stored."
+              :message="$t('Pg_Razorpay_Help')"
             />
           </a-form>
 
@@ -152,7 +165,7 @@
             </a-button>
             <a-popconfirm
               v-if="razorpay.key_id"
-              title="Remove the stored Razorpay keys? The checkout stops offering Razorpay."
+              :title="$t('Pg_Remove_Keys_Confirm', { name: 'Razorpay', short: 'Razorpay' })"
               @confirm="clearRazorpay"
             >
               <a-button danger :loading="razorpaySaving">{{ $t('RemoveKeys') }}</a-button>
@@ -175,14 +188,14 @@
                 <template #icon><MobileOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">bKash <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">bKash <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.bkash ? 'success' : 'default'">
                 <template #icon><component :is="offered.bkash ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.bkash ? 'Enabled' : 'Disabled' }}
+                {{ offered.bkash ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.bkash" :loading="!!flagSaving.bkash" @change="saveMethodFlag('bkash')" />
             </div>
@@ -190,44 +203,46 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.bkash" :loading="!!acSaving.bkash" @change="saveAutoConfirm('bkash')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.bkash" type="info" show-icon style="margin-bottom: 20px"
-            message="bKash is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering bKash until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'bKash' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'bKash' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="BKASH APP KEY">
+            <a-form-item :label="$t('Pg_Label_Bkash_App_Key')">
               <a-input v-model:value="bkash.app_key">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="BKASH APP SECRET" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Bkash_App_Secret')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="bkash.app_secret" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="BKASH USERNAME">
+            <a-form-item :label="$t('Pg_Label_Bkash_Username')">
               <a-input v-model:value="bkash.username" placeholder="01XXXXXXXXX">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="BKASH PASSWORD" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Bkash_Password')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="bkash.password" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
             <a-form-item
-              label="Sandbox (test mode)"
-              extra="ON uses tokenized.sandbox.bka.sh with your sandbox credentials; turn OFF to charge real bKash accounts on tokenized.pay.bka.sh."
+              :label="$t('Pg_Sandbox_Test_Mode')"
+              :extra="$t('Pg_Bkash_Sandbox_Help')"
             >
               <a-switch v-model:checked="bkash.test_mode" />
             </a-form-item>
             <a-alert
               type="info" show-icon style="margin-bottom: 20px"
-              message="Uses bKash Tokenized Checkout (merchant credentials from the bKash merchant portal). Charges in BDT. The checkout offers bKash as soon as all four credentials are stored."
+              :message="$t('Pg_Bkash_Help')"
             />
           </a-form>
 
@@ -238,7 +253,7 @@
             </a-button>
             <a-popconfirm
               v-if="bkash.app_key"
-              title="Remove the stored bKash credentials? The checkout stops offering bKash."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'bKash', short: 'bKash' })"
               @confirm="clearBkash"
             >
               <a-button danger :loading="bkashSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -261,14 +276,14 @@
                 <template #icon><SafetyCertificateOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">SSLCommerz <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">SSLCommerz <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.sslcommerz ? 'success' : 'default'">
                 <template #icon><component :is="offered.sslcommerz ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.sslcommerz ? 'Enabled' : 'Disabled' }}
+                {{ offered.sslcommerz ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.sslcommerz" :loading="!!flagSaving.sslcommerz" @change="saveMethodFlag('sslcommerz')" />
             </div>
@@ -276,38 +291,40 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.sslcommerz" :loading="!!acSaving.sslcommerz" @change="saveAutoConfirm('sslcommerz')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.sslcommerz" type="info" show-icon style="margin-bottom: 20px"
-            message="SSLCommerz is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering SSLCommerz until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'SSLCommerz' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'SSLCommerz' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="SSLCOMMERZ STORE ID">
+            <a-form-item :label="$t('Pg_Label_Sslcommerz_Store_Id')">
               <a-input v-model:value="sslcommerz.store_id" placeholder="teststore00live">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="SSLCOMMERZ STORE PASSWORD" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Sslcommerz_Store_Password')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="sslcommerz.store_password" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
             <a-form-item
-              label="Sandbox (test mode)"
-              extra="ON uses sandbox.sslcommerz.com with sandbox credentials; turn OFF to charge real customers on securepay.sslcommerz.com."
+              :label="$t('Pg_Sandbox_Test_Mode')"
+              :extra="$t('Pg_Sslcommerz_Sandbox_Help')"
             >
               <a-switch v-model:checked="sslcommerz.test_mode" />
             </a-form-item>
             <a-alert
               type="info" show-icon style="margin-bottom: 12px"
-              message="Hosted checkout covering cards, bKash/Nagad/Rocket mobile banking and internet banking in Bangladesh. Charges in BDT."
+              :message="$t('Pg_Sslcommerz_Help')"
             />
             <a-alert type="info" show-icon style="margin-bottom: 20px">
               <template #message>
-                IPN URL (recommended backstop — set it under My Stores → IPN Settings on the SSLCommerz merchant panel):
+                {{ $t('Pg_Sslcommerz_Ipn_Help') }}
                 <a-typography-text code copyable>{{ sslcommerzIpnUrl }}</a-typography-text>
               </template>
             </a-alert>
@@ -320,7 +337,7 @@
             </a-button>
             <a-popconfirm
               v-if="sslcommerz.store_id"
-              title="Remove the stored SSLCommerz credentials? The checkout stops offering SSLCommerz."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'SSLCommerz', short: 'SSLCommerz' })"
               @confirm="clearSslcommerz"
             >
               <a-button danger :loading="sslcommerzSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -343,14 +360,14 @@
                 <template #icon><GlobalOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">Paymob <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">Paymob <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.paymob ? 'success' : 'default'">
                 <template #icon><component :is="offered.paymob ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.paymob ? 'Enabled' : 'Disabled' }}
+                {{ offered.paymob ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.paymob" :loading="!!flagSaving.paymob" @change="saveMethodFlag('paymob')" />
             </div>
@@ -358,57 +375,59 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.paymob" :loading="!!acSaving.paymob" @change="saveAutoConfirm('paymob')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.paymob" type="info" show-icon style="margin-bottom: 20px"
-            message="Paymob is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering Paymob until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'Paymob' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'Paymob' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="REGION" extra="Country of your Paymob account: egypt, ksa, uae, pakistan or oman (selects the API host; defaults to egypt).">
+            <a-form-item :label="$t('Pg_Label_Region')" :extra="$t('Pg_Paymob_Region_Help')">
               <a-input v-model:value="paymob.region" placeholder="egypt">
                 <template #prefix><GlobalOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="PUBLIC KEY">
+            <a-form-item :label="$t('Pg_Label_Public_Key')">
               <a-input v-model:value="paymob.public_key" placeholder="egy_pk_test_...">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="SECRET KEY" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Secret_Key')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="paymob.secret_key" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="API KEY" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Api_Key')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="paymob.api_key" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="INTEGRATION ID(S)" extra="From Paymob Dashboard → Developers → Payment Integrations; comma-separate several to offer multiple methods.">
-              <a-input v-model:value="paymob.integration_id" placeholder="e.g. 4419544 or 4419544,4419545">
+            <a-form-item :label="$t('Pg_Label_Integration_Ids')" :extra="$t('Pg_Paymob_Integration_Help')">
+              <a-input v-model:value="paymob.integration_id" :placeholder="$t('Pg_Paymob_Integration_Placeholder')">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="HMAC SECRET" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Hmac_Secret')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="paymob.hmac_secret" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="CHARGE CURRENCY" extra="Must match your Paymob account's currency (EGP, SAR, AED, PKR or OMR) and your store's base currency.">
+            <a-form-item :label="$t('Pg_Label_Charge_Currency')" :extra="$t('Pg_Paymob_Currency_Help')">
               <a-input v-model:value="paymob.currency" placeholder="EGP" style="max-width: 120px">
                 <template #prefix><DollarOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
             <a-alert
               type="info" show-icon style="margin-bottom: 12px"
-              message="Uses the Paymob Unified Checkout (cards, wallets and local methods in Egypt, KSA, UAE, Pakistan and Oman). All five credentials come from Paymob Dashboard → Settings → Account Info + Payment Integrations."
+              :message="$t('Pg_Paymob_Help')"
             />
             <a-alert type="info" show-icon style="margin-bottom: 20px">
               <template #message>
-                Webhook is set automatically per payment — no dashboard setup needed. Backstop callback URL for reference:
+                {{ $t('Pg_Paymob_Webhook_Help') }}
                 <a-typography-text code copyable>{{ paymobWebhookUrl }}</a-typography-text>
               </template>
             </a-alert>
@@ -421,7 +440,7 @@
             </a-button>
             <a-popconfirm
               v-if="paymob.public_key"
-              title="Remove the stored Paymob credentials? The checkout stops offering Paymob."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'Paymob', short: 'Paymob' })"
               @confirm="clearPaymob"
             >
               <a-button danger :loading="paymobSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -444,14 +463,14 @@
                 <template #icon><WalletOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">MyFatoorah <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">MyFatoorah <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.myfatoorah ? 'success' : 'default'">
                 <template #icon><component :is="offered.myfatoorah ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.myfatoorah ? 'Enabled' : 'Disabled' }}
+                {{ offered.myfatoorah ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.myfatoorah" :loading="!!flagSaving.myfatoorah" @change="saveMethodFlag('myfatoorah')" />
             </div>
@@ -459,39 +478,41 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.myfatoorah" :loading="!!acSaving.myfatoorah" @change="saveAutoConfirm('myfatoorah')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.myfatoorah" type="info" show-icon style="margin-bottom: 20px"
-            message="MyFatoorah is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering MyFatoorah until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'MyFatoorah' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'MyFatoorah' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="API TOKEN" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Api_Token')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="myfatoorah.api_token" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="ACCOUNT COUNTRY (LIVE)" extra="ISO code of your MyFatoorah account country — KWT, SAU, QAT, EGY, ARE, BHR, OMN or JOR. Selects the live API host; ignored in sandbox mode.">
+            <a-form-item :label="$t('Pg_Label_Account_Country_Live')" :extra="$t('Pg_Myfatoorah_Country_Help')">
               <a-input v-model:value="myfatoorah.country" placeholder="KWT" style="max-width: 120px">
                 <template #prefix><GlobalOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="CHARGE CURRENCY" extra="Must match your MyFatoorah account currency (KWD, SAR, AED, QAR, BHD, OMR, JOD, EGP…) and your store's base currency.">
+            <a-form-item :label="$t('Pg_Label_Charge_Currency')" :extra="$t('Pg_Myfatoorah_Currency_Help')">
               <a-input v-model:value="myfatoorah.currency" placeholder="KWD" style="max-width: 120px">
                 <template #prefix><DollarOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
             <a-form-item
-              label="Sandbox (test mode)"
-              extra="ON uses apitest.myfatoorah.com with a demo API token; turn OFF to charge real customers on the live API."
+              :label="$t('Pg_Sandbox_Test_Mode')"
+              :extra="$t('Pg_Myfatoorah_Sandbox_Help')"
             >
               <a-switch v-model:checked="myfatoorah.test_mode" />
             </a-form-item>
             <a-alert
               type="info" show-icon style="margin-bottom: 20px"
-              message="Hosted invoice link covering KNET, mada, cards, Apple Pay and STC Pay across the GCC. The API token comes from MyFatoorah Vendor Portal → Integration Settings → API Key."
+              :message="$t('Pg_Myfatoorah_Help')"
             />
           </a-form>
 
@@ -502,7 +523,7 @@
             </a-button>
             <a-popconfirm
               v-if="myfatoorah.configured"
-              title="Remove the stored MyFatoorah credentials? The checkout stops offering MyFatoorah."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'MyFatoorah', short: 'MyFatoorah' })"
               @confirm="clearMyfatoorah"
             >
               <a-button danger :loading="myfatoorahSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -525,14 +546,14 @@
                 <template #icon><CreditCardOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">Moyasar <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">Moyasar <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.moyasar ? 'success' : 'default'">
                 <template #icon><component :is="offered.moyasar ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.moyasar ? 'Enabled' : 'Disabled' }}
+                {{ offered.moyasar ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.moyasar" :loading="!!flagSaving.moyasar" @change="saveMethodFlag('moyasar')" />
             </div>
@@ -540,28 +561,30 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.moyasar" :loading="!!acSaving.moyasar" @change="saveAutoConfirm('moyasar')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.moyasar" type="info" show-icon style="margin-bottom: 20px"
-            message="Moyasar is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering Moyasar until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'Moyasar' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'Moyasar' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="SECRET KEY" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Secret_Key')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="moyasar.secret_key" placeholder="sk_test_... or sk_live_..." autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="CHARGE CURRENCY" extra="SAR by default — must match your store's base currency.">
+            <a-form-item :label="$t('Pg_Label_Charge_Currency')" :extra="$t('Pg_Moyasar_Currency_Help')">
               <a-input v-model:value="moyasar.currency" placeholder="SAR" style="max-width: 120px">
                 <template #prefix><DollarOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
             <a-alert
               type="info" show-icon style="margin-bottom: 20px"
-              message="Hosted invoice page covering mada, credit cards, Apple Pay and STC Pay in Saudi Arabia. Use an sk_test_ key for sandbox — Moyasar has no separate test host."
+              :message="$t('Pg_Moyasar_Help')"
             />
           </a-form>
 
@@ -572,7 +595,7 @@
             </a-button>
             <a-popconfirm
               v-if="moyasar.configured"
-              title="Remove the stored Moyasar credentials? The checkout stops offering Moyasar."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'Moyasar', short: 'Moyasar' })"
               @confirm="clearMoyasar"
             >
               <a-button danger :loading="moyasarSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -594,14 +617,14 @@
                 <template #icon><CreditCardOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">XPay by PostEx <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">XPay by PostEx <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.xpay ? 'success' : 'default'">
                 <template #icon><component :is="offered.xpay ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.xpay ? 'Enabled' : 'Disabled' }}
+                {{ offered.xpay ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.xpay" :loading="!!flagSaving.xpay" @change="saveMethodFlag('xpay')" />
             </div>
@@ -609,57 +632,59 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.xpay" :loading="!!acSaving.xpay" @change="saveAutoConfirm('xpay')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.xpay" type="info" show-icon style="margin-bottom: 20px"
-            message="XPay is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering XPay until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'XPay' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'XPay' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="ACCOUNT ID" extra="XPay Dashboard > Settings > Store Info.">
-              <a-input v-model:value="xpay.account_id" placeholder="Your XPay account id">
+            <a-form-item :label="$t('Pg_Label_Account_Id')" :extra="$t('Pg_Xpay_Account_Help')">
+              <a-input v-model:value="xpay.account_id" :placeholder="$t('Pg_Xpay_Account_Placeholder')">
                 <template #prefix><IdcardOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="PUBLISHABLE KEY" extra="Settings > Store Info > Key Details > API Keys — used by the card element in the browser.">
+            <a-form-item :label="$t('Pg_Label_Publishable_Key')" :extra="$t('Pg_Xpay_Publishable_Help')">
               <a-input v-model:value="xpay.publishable_key" placeholder="xpay_pk_test_... or xpay_pk_live_...">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="SECRET KEY" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Secret_Key')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="xpay.secret_key" placeholder="xpay_sk_..." autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="API HMAC SECRET" :extra="$t('LeaveBlank')">
-              <a-input-password v-model:value="xpay.hmac_secret" placeholder="Key Details > HMAC Keys" autocomplete="new-password">
+            <a-form-item :label="$t('Pg_Label_Api_Hmac_Secret')" :extra="$t('LeaveBlank')">
+              <a-input-password v-model:value="xpay.hmac_secret" :placeholder="$t('Pg_Xpay_Hmac_Placeholder')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="WEBHOOK HMAC SECRET" :extra="xpay.webhook_secret_set ? $t('LeaveBlank') : 'Optional but recommended — lets XPay confirm late payments server-to-server.'">
-              <a-input-password v-model:value="xpay.webhook_hmac_secret" placeholder="Key Details > HMAC Keys" autocomplete="new-password">
+            <a-form-item :label="$t('Pg_Label_Webhook_Hmac_Secret')" :extra="xpay.webhook_secret_set ? $t('LeaveBlank') : $t('Pg_Xpay_Webhook_Secret_Help')">
+              <a-input-password v-model:value="xpay.webhook_hmac_secret" :placeholder="$t('Pg_Xpay_Hmac_Placeholder')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="WEBHOOK URL" extra="Paste this URL into XPay Dashboard > Settings > Store Info > Webhook URL.">
+            <a-form-item :label="$t('Pg_Label_Webhook_Url')" :extra="$t('Pg_Xpay_Webhook_Help')">
               <a-typography-text code copyable>{{ xpayWebhookUrl }}</a-typography-text>
             </a-form-item>
-            <a-form-item label="CHARGE CURRENCY" extra="PKR — must match your store's base currency.">
+            <a-form-item :label="$t('Pg_Label_Charge_Currency')" :extra="$t('Pg_Xpay_Currency_Help')">
               <a-input v-model:value="xpay.currency" placeholder="PKR" style="max-width: 120px">
                 <template #prefix><DollarOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
             <a-form-item
-              label="Sandbox (test mode)"
-              extra="ON uses xstak-pay-stg.xstak.com with your staging keys; turn OFF (and store your live keys) to charge real customers."
+              :label="$t('Pg_Sandbox_Test_Mode')"
+              :extra="$t('Pg_Xpay_Sandbox_Help')"
             >
               <a-switch v-model:checked="xpay.test_mode" />
             </a-form-item>
             <a-alert
               type="info" show-icon style="margin-bottom: 20px"
-              message="Cards are entered in an XPay element embedded in the checkout page (no redirect). Every payment is re-verified server-side before the order is created. Note: XPay's SDK requires the API HMAC secret in the browser, as in XPay's official plugins."
+              :message="$t('Pg_Xpay_Help')"
             />
           </a-form>
 
@@ -670,7 +695,7 @@
             </a-button>
             <a-popconfirm
               v-if="xpay.configured"
-              title="Remove the stored XPay credentials? The checkout stops offering XPay."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'XPay', short: 'XPay' })"
               @confirm="clearXpay"
             >
               <a-button danger :loading="xpaySaving">{{ $t('RemoveKeys') }}</a-button>
@@ -692,14 +717,14 @@
                 <template #icon><BankOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">PayFast <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">PayFast <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.payfast ? 'success' : 'default'">
                 <template #icon><component :is="offered.payfast ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.payfast ? 'Enabled' : 'Disabled' }}
+                {{ offered.payfast ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.payfast" :loading="!!flagSaving.payfast" @change="saveMethodFlag('payfast')" />
             </div>
@@ -707,36 +732,38 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.payfast" :loading="!!acSaving.payfast" @change="saveAutoConfirm('payfast')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.payfast" type="info" show-icon style="margin-bottom: 20px"
-            message="PayFast is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering PayFast until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'PayFast' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'PayFast' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="PAYFAST MERCHANT ID">
+            <a-form-item :label="$t('Pg_Label_Payfast_Merchant_Id')">
               <a-input v-model:value="payfast.merchant_id">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="PAYFAST MERCHANT KEY" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Payfast_Merchant_Key')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="payfast.merchant_key" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="PAYFAST PASSPHRASE" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Payfast_Passphrase')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="payfast.passphrase" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="Sandbox (test mode)" extra="ON uses sandbox.payfast.co.za; turn OFF to charge real cards on www.payfast.co.za.">
+            <a-form-item :label="$t('Pg_Sandbox_Test_Mode')" :extra="$t('Pg_Payfast_Sandbox_Help')">
               <a-switch v-model:checked="payfast.sandbox" />
             </a-form-item>
             <a-alert type="info" show-icon style="margin-bottom: 20px">
               <template #message>
-                Hosted checkout (ZAR). Payment confirmation arrives on the ITN URL below — it is passed automatically with every payment, no dashboard setup needed:
+                {{ $t('Pg_Payfast_Help') }}
                 <a-typography-text code copyable>{{ storeBase }}/payfast/itn</a-typography-text>
               </template>
             </a-alert>
@@ -749,7 +776,7 @@
             </a-button>
             <a-popconfirm
               v-if="payfast.merchant_id"
-              title="Remove the stored PayFast credentials? The checkout stops offering PayFast."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'PayFast', short: 'PayFast' })"
               @confirm="clearPayfast"
             >
               <a-button danger :loading="payfastSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -772,14 +799,14 @@
                 <template #icon><WalletOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">LigdiCash <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">LigdiCash <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.ligdicash ? 'success' : 'default'">
                 <template #icon><component :is="offered.ligdicash ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.ligdicash ? 'Enabled' : 'Disabled' }}
+                {{ offered.ligdicash ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.ligdicash" :loading="!!flagSaving.ligdicash" @change="saveMethodFlag('ligdicash')" />
             </div>
@@ -787,28 +814,30 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.ligdicash" :loading="!!acSaving.ligdicash" @change="saveAutoConfirm('ligdicash')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.ligdicash" type="info" show-icon style="margin-bottom: 20px"
-            message="LigdiCash is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering LigdiCash until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'LigdiCash' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'LigdiCash' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="LIGDICASH API KEY">
+            <a-form-item :label="$t('Pg_Label_Ligdicash_Api_Key')">
               <a-input v-model:value="ligdicash.api_key">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="LIGDICASH AUTH TOKEN" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Ligdicash_Auth_Token')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="ligdicash.auth_token" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
             <a-alert type="info" show-icon style="margin-bottom: 20px">
               <template #message>
-                Hosted checkout for mobile money in West Africa (XOF). The callback URL below is sent with every invoice and every callback is re-verified server-side:
+                {{ $t('Pg_Ligdicash_Help') }}
                 <a-typography-text code copyable>{{ storeBase }}/ligdicash/callback</a-typography-text>
               </template>
             </a-alert>
@@ -821,7 +850,7 @@
             </a-button>
             <a-popconfirm
               v-if="ligdicash.api_key"
-              title="Remove the stored LigdiCash credentials? The checkout stops offering LigdiCash."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'LigdiCash', short: 'LigdiCash' })"
               @confirm="clearLigdicash"
             >
               <a-button danger :loading="ligdicashSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -844,14 +873,14 @@
                 <template #icon><GlobalOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">Dodo Payments <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">Dodo Payments <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.dodo ? 'success' : 'default'">
                 <template #icon><component :is="offered.dodo ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.dodo ? 'Enabled' : 'Disabled' }}
+                {{ offered.dodo ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.dodo" :loading="!!flagSaving.dodo" @change="saveMethodFlag('dodo')" />
             </div>
@@ -859,36 +888,38 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.dodo" :loading="!!acSaving.dodo" @change="saveAutoConfirm('dodo')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.dodo" type="info" show-icon style="margin-bottom: 20px"
-            message="Dodo Payments is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering Dodo Payments until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'Dodo Payments' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'Dodo Payments' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="DODO PRODUCT ID" extra="A one-time “Pay What You Want” product created in your Dodo dashboard; the order total is passed as its price.">
+            <a-form-item :label="$t('Pg_Label_Dodo_Product_Id')" :extra="$t('Pg_Dodo_Product_Help')">
               <a-input v-model:value="dodo.product_id" placeholder="pdt_xxxxxxxx">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="DODO API KEY" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Dodo_Api_Key')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="dodo.api_key" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="DODO WEBHOOK SECRET" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Dodo_Webhook_Secret')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="dodo.webhook_secret" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><ApiOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="Test mode" extra="ON uses test.dodopayments.com; turn OFF for live payments on live.dodopayments.com.">
+            <a-form-item :label="$t('Pg_Test_Mode')" :extra="$t('Pg_Dodo_Test_Help')">
               <a-switch v-model:checked="dodo.test_mode" />
             </a-form-item>
             <a-alert type="info" show-icon style="margin-bottom: 20px">
               <template #message>
-                Merchant-of-record hosted checkout. Register this webhook URL (Standard Webhooks signature) in your Dodo dashboard with the secret above:
+                {{ $t('Pg_Dodo_Help') }}
                 <a-typography-text code copyable>{{ storeBase }}/dodo/webhook</a-typography-text>
               </template>
             </a-alert>
@@ -901,7 +932,7 @@
             </a-button>
             <a-popconfirm
               v-if="dodo.product_id"
-              title="Remove the stored Dodo Payments credentials? The checkout stops offering Dodo."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'Dodo Payments', short: 'Dodo' })"
               @confirm="clearDodo"
             >
               <a-button danger :loading="dodoSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -924,14 +955,14 @@
                 <template #icon><MobileOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">WaafiPay <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">WaafiPay <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.waafipay ? 'success' : 'default'">
                 <template #icon><component :is="offered.waafipay ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.waafipay ? 'Enabled' : 'Disabled' }}
+                {{ offered.waafipay ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.waafipay" :loading="!!flagSaving.waafipay" @change="saveMethodFlag('waafipay')" />
             </div>
@@ -939,51 +970,53 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.waafipay" :loading="!!acSaving.waafipay" @change="saveAutoConfirm('waafipay')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.waafipay" type="info" show-icon style="margin-bottom: 20px"
-            message="WaafiPay is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering WaafiPay until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'WaafiPay' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'WaafiPay' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="WAAFIPAY MERCHANT UID">
+            <a-form-item :label="$t('Pg_Label_Waafipay_Merchant_Uid')">
               <a-input v-model:value="waafipay.merchant_uid">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="WAAFIPAY API USER ID" extra="Direct mobile-wallet charge (EVC Plus / Zaad / Sahal): the shopper enters a 252… number and confirms on the handset.">
+            <a-form-item :label="$t('Pg_Label_Waafipay_Api_User_Id')" :extra="$t('Pg_Waafipay_Api_User_Help')">
               <a-input v-model:value="waafipay.api_user_id">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="WAAFIPAY API KEY" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Waafipay_Api_Key')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="waafipay.api_key" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="WAAFIPAY STORE ID" extra="Hosted payment page (fallback when no API user is set).">
+            <a-form-item :label="$t('Pg_Label_Waafipay_Store_Id')" :extra="$t('Pg_Waafipay_Store_Help')">
               <a-input v-model:value="waafipay.store_id">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="WAAFIPAY HPP KEY" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Waafipay_Hpp_Key')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="waafipay.hpp_key" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="WAAFIPAY WEBHOOK SECRET" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Waafipay_Webhook_Secret')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="waafipay.webhook_secret" :placeholder="$t('LeaveBlank')" autocomplete="new-password">
                 <template #prefix><ApiOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="Sandbox (test mode)" extra="ON uses sandbox.waafipay.net; turn OFF to charge real wallets on api.waafipay.net.">
+            <a-form-item :label="$t('Pg_Sandbox_Test_Mode')" :extra="$t('Pg_Waafipay_Sandbox_Help')">
               <a-switch v-model:checked="waafipay.test_mode" />
             </a-form-item>
             <a-alert type="info" show-icon style="margin-bottom: 20px">
               <template #message>
-                Hosted-page payments confirm through this webhook URL (register it with the secret above):
+                {{ $t('Pg_Waafipay_Webhook_Help') }}
                 <a-typography-text code copyable>{{ storeBase }}/waafipay/webhook</a-typography-text>
               </template>
             </a-alert>
@@ -996,7 +1029,7 @@
             </a-button>
             <a-popconfirm
               v-if="waafipay.merchant_uid"
-              title="Remove the stored WaafiPay credentials? The checkout stops offering WaafiPay."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'WaafiPay', short: 'WaafiPay' })"
               @confirm="clearWaafipay"
             >
               <a-button danger :loading="waafipaySaving">{{ $t('RemoveKeys') }}</a-button>
@@ -1019,14 +1052,14 @@
                 <template #icon><GlobalOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">PayPal <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">PayPal <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.paypal ? 'success' : 'default'">
                 <template #icon><component :is="offered.paypal ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.paypal ? 'Enabled' : 'Disabled' }}
+                {{ offered.paypal ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.paypal" :loading="!!flagSaving.paypal" @change="saveMethodFlag('paypal')" />
             </div>
@@ -1034,40 +1067,42 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.paypal" :loading="!!acSaving.paypal" @change="saveAutoConfirm('paypal')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.paypal" type="info" show-icon style="margin-bottom: 20px"
-            message="PayPal is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering PayPal until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'PayPal' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'PayPal' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="CLIENT ID">
+            <a-form-item :label="$t('Pg_Label_Client_Id')">
               <a-input v-model:value="paypal.client_id" placeholder="AY...">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="CLIENT SECRET" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Client_Secret')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="paypal.client_secret" placeholder="EC..." autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="WEBHOOK ID" extra="From your PayPal app's webhook settings. Required before webhook events are accepted — without it they are rejected.">
+            <a-form-item :label="$t('Pg_Label_Webhook_Id')" :extra="$t('Pg_Paypal_Webhook_Id_Help')">
               <a-input v-model:value="paypal.webhook_id" placeholder="8SF...">
                 <template #prefix><ApiOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="SANDBOX MODE" extra="On = api-m.sandbox.paypal.com with your sandbox app credentials.">
+            <a-form-item :label="$t('Pg_Label_Sandbox_Mode')" :extra="$t('Pg_Paypal_Sandbox_Help')">
               <a-switch v-model:checked="paypal.test_mode" />
             </a-form-item>
-            <a-form-item label="WEBHOOK URL" extra="Add this to your PayPal dashboard. It is the server-to-server backstop that settles an order when the buyer's browser never makes it back.">
+            <a-form-item :label="$t('Pg_Label_Webhook_Url')" :extra="$t('Pg_Paypal_Webhook_Url_Help')">
               <a-typography-text code copyable>{{ storeBase }}/api/store/webhooks/paypal</a-typography-text>
             </a-form-item>
 
             <a-alert
               type="info" show-icon style="margin-bottom: 20px"
-              message="Hosted PayPal checkout (Orders API v2). The buyer approves on PayPal and the payment is captured server-side when they return — an abandoned approval never marks the order paid."
+              :message="$t('Pg_Paypal_Help')"
             />
 
           </a-form>
@@ -1079,7 +1114,7 @@
             </a-button>
             <a-popconfirm
               v-if="paypal.configured"
-              title="Remove the stored PayPal credentials? The checkout stops offering PayPal."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'PayPal', short: 'PayPal' })"
               @confirm="clearPaypal"
             >
               <a-button danger :loading="paypalSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -1101,14 +1136,14 @@
                 <template #icon><WalletOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">Paystack <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">Paystack <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.paystack ? 'success' : 'default'">
                 <template #icon><component :is="offered.paystack ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.paystack ? 'Enabled' : 'Disabled' }}
+                {{ offered.paystack ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.paystack" :loading="!!flagSaving.paystack" @change="saveMethodFlag('paystack')" />
             </div>
@@ -1116,32 +1151,34 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.paystack" :loading="!!acSaving.paystack" @change="saveAutoConfirm('paystack')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.paystack" type="info" show-icon style="margin-bottom: 20px"
-            message="Paystack is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering Paystack until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'Paystack' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'Paystack' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="PUBLIC KEY">
+            <a-form-item :label="$t('Pg_Label_Public_Key')">
               <a-input v-model:value="paystack.public_key" placeholder="pk_test_... or pk_live_...">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="SECRET KEY" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Secret_Key')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="paystack.secret_key" placeholder="sk_test_... or sk_live_..." autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="WEBHOOK URL" extra="Add this to your Paystack dashboard. It is the server-to-server backstop that settles an order when the buyer's browser never makes it back.">
+            <a-form-item :label="$t('Pg_Label_Webhook_Url')" :extra="$t('Pg_Paystack_Webhook_Url_Help')">
               <a-typography-text code copyable>{{ storeBase }}/api/store/webhooks/paystack</a-typography-text>
             </a-form-item>
 
             <a-alert
               type="info" show-icon style="margin-bottom: 20px"
-              message="Hosted Paystack checkout for cards, bank transfer and mobile money across Africa. Test vs live is decided by the key pair, so there is no sandbox switch."
+              :message="$t('Pg_Paystack_Help')"
             />
 
           </a-form>
@@ -1153,7 +1190,7 @@
             </a-button>
             <a-popconfirm
               v-if="paystack.configured"
-              title="Remove the stored Paystack credentials? The checkout stops offering Paystack."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'Paystack', short: 'Paystack' })"
               @confirm="clearPaystack"
             >
               <a-button danger :loading="paystackSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -1175,14 +1212,14 @@
                 <template #icon><GlobalOutlined /></template>
               </a-avatar>
               <div>
-                <div class="pg-head__title">Flutterwave <a-tag color="blue" style="margin-left: 4px">Online Store</a-tag></div>
-                <div class="pg-head__sub">Used by the online store checkout only — offered while switched on and credentials are stored</div>
+                <div class="pg-head__title">Flutterwave <a-tag color="blue" style="margin-left: 4px">{{ $t('Online_Store') }}</a-tag></div>
+                <div class="pg-head__sub">{{ $t('Pg_Online_Store_Only_Sub') }}</div>
               </div>
             </div>
             <div class="pg-head__right">
               <a-tag :color="offered.flutterwave ? 'success' : 'default'">
                 <template #icon><component :is="offered.flutterwave ? CheckCircleFilled : StopOutlined" /></template>
-                {{ offered.flutterwave ? 'Enabled' : 'Disabled' }}
+                {{ offered.flutterwave ? $t('Enabled') : $t('Disabled') }}
               </a-tag>
               <a-switch v-model:checked="methodFlags.flutterwave" :loading="!!flagSaving.flutterwave" @change="saveMethodFlag('flutterwave')" />
             </div>
@@ -1190,41 +1227,43 @@
 
           <a-divider style="margin: 16px 0 20px" />
 
+          <AutoConfirmSwitch v-model:checked="autoConfirm.flutterwave" :loading="!!acSaving.flutterwave" @change="saveAutoConfirm('flutterwave')" />
+
           <!-- Switched off keeps the credentials; only the checkout stops
                offering the gateway. -->
           <a-alert
             v-if="!methodFlags.flutterwave" type="info" show-icon style="margin-bottom: 20px"
-            message="Flutterwave is switched off"
-            description="Your credentials are kept — the online-store checkout simply stops offering Flutterwave until you switch it back on."
+            :message="$t('Pg_Gateway_Switched_Off', { name: 'Flutterwave' })"
+            :description="$t('Pg_Credentials_Kept', { name: 'Flutterwave' })"
           />
 
           <a-form layout="vertical" class="pg-form">
-            <a-form-item label="PUBLIC KEY">
+            <a-form-item :label="$t('Pg_Label_Public_Key')">
               <a-input v-model:value="flutterwave.public_key" placeholder="FLWPUBK_TEST-... or FLWPUBK-...">
                 <template #prefix><KeyOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input>
             </a-form-item>
-            <a-form-item label="SECRET KEY" :extra="$t('LeaveBlank')">
+            <a-form-item :label="$t('Pg_Label_Secret_Key')" :extra="$t('LeaveBlank')">
               <a-input-password v-model:value="flutterwave.secret_key" placeholder="FLWSECK_TEST-... or FLWSECK-..." autocomplete="new-password">
                 <template #prefix><LockOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="SECRET HASH" :extra="$t('LeaveBlank')">
-              <a-input-password v-model:value="flutterwave.secret_hash" placeholder="Your webhook Secret Hash" autocomplete="new-password">
+            <a-form-item :label="$t('Pg_Label_Secret_Hash')" :extra="$t('LeaveBlank')">
+              <a-input-password v-model:value="flutterwave.secret_hash" :placeholder="$t('Pg_Flutterwave_Hash_Placeholder')" autocomplete="new-password">
                 <template #prefix><SafetyCertificateOutlined style="color: rgba(var(--ink-rgb), 0.25)" /></template>
               </a-input-password>
             </a-form-item>
-            <a-form-item label="WEBHOOK URL" extra="Add this to your Flutterwave dashboard. It is the server-to-server backstop that settles an order when the buyer's browser never makes it back.">
+            <a-form-item :label="$t('Pg_Label_Webhook_Url')" :extra="$t('Pg_Flutterwave_Webhook_Url_Help')">
               <a-typography-text code copyable>{{ storeBase }}/api/store/webhooks/flutterwave</a-typography-text>
             </a-form-item>
 
             <a-alert
               type="info" show-icon style="margin-bottom: 20px"
-              message="Hosted Flutterwave v3 Standard checkout. Test vs live is decided by the key pair (FLWSECK_TEST- vs FLWSECK-), so there is no sandbox switch."
+              :message="$t('Pg_Flutterwave_Help')"
             />
             <a-alert
               type="warning" show-icon style="margin-bottom: 20px"
-              message="Set the same Secret Hash in your Flutterwave dashboard under Settings → Webhooks. Without it, webhook events are rejected and only the browser return leg can settle an order."
+              :message="$t('Pg_Flutterwave_Hash_Help')"
             />
 
           </a-form>
@@ -1236,7 +1275,7 @@
             </a-button>
             <a-popconfirm
               v-if="flutterwave.configured"
-              title="Remove the stored Flutterwave credentials? The checkout stops offering Flutterwave."
+              :title="$t('Pg_Remove_Credentials_Confirm', { name: 'Flutterwave', short: 'Flutterwave' })"
               @confirm="clearFlutterwave"
             >
               <a-button danger :loading="flutterwaveSaving">{{ $t('RemoveKeys') }}</a-button>
@@ -1451,8 +1490,8 @@
 
           <a-alert
             v-if="!anyOfflineEnabled" type="warning" show-icon style="margin-top: 20px"
-            message="No offline method is offered"
-            description="Shoppers can only pay through the gateways whose credentials are stored in the other tabs."
+            :message="$t('Pg_No_Offline_Method')"
+            :description="$t('Pg_No_Offline_Method_Desc')"
           />
 
           <a-button type="primary" :loading="manualSaving" style="margin-top: 20px" @click="saveManual">
@@ -1460,6 +1499,7 @@
             {{ $t('submit') }}
           </a-button>
         </a-tab-pane>
+        </template>
       </a-tabs>
 
     </a-card>
@@ -1486,9 +1526,17 @@ import {
   GlobalOutlined, ThunderboltOutlined, ShopOutlined, UploadOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import AutoConfirmSwitch from '../../components/AutoConfirmSwitch.vue';
 import http from '../../lib/http';
+import { usePlanStore } from '../../stores/plan';
 
 const { t } = useI18n();
+
+// Settings → Payment Gateway is reachable on plans without the online store.
+// The store endpoints answer 403 feature_unavailable there (which pops the
+// upgrade modal), so only Stripe's shared keys are shown and loaded.
+const planStore = usePlanStore();
+const storeFeature = computed(() => planStore.featureEnabled('online_orders'));
 
 // Rendered from two routes: /store/payment-gateway ('store', default) and
 // /settings/payment-gateway ('settings' — only the breadcrumb differs).
@@ -1755,6 +1803,36 @@ async function saveMethodFlag(key) {
   }
 }
 
+// Per-gateway "Auto-confirm paid orders" switches (store_settings.
+// auto_confirm_methods, off by default). Each saves on its own as a one-key
+// map the server merges into the stored list. credit_card = Stripe.
+const AUTO_CONFIRM_KEYS = [
+  'credit_card', 'razorpay', 'bkash', 'sslcommerz', 'paymob', 'myfatoorah', 'moyasar', 'xpay',
+  'payfast', 'ligdicash', 'dodo', 'waafipay', 'paypal', 'paystack', 'flutterwave',
+];
+const autoConfirm = reactive(Object.fromEntries(AUTO_CONFIRM_KEYS.map((k) => [k, false])));
+const acSaving = reactive({});
+
+async function saveAutoConfirm(key) {
+  acSaving[key] = true;
+  try {
+    const data = await http.post('admin/store/settings', { auto_confirm_methods: { [key]: autoConfirm[key] ? 1 : 0 } });
+    // Not migrated yet: the server drops the value, so show what was stored.
+    const stored = Array.isArray(data?.auto_confirm_methods) ? data.auto_confirm_methods : [];
+    if (stored.includes(key) !== !!autoConfirm[key]) {
+      autoConfirm[key] = stored.includes(key);
+      message.warning(t('Pg_Auto_Confirm_Not_Saved'));
+      return;
+    }
+    message.success(t('Successfully_Updated'));
+  } catch (e) {
+    autoConfirm[key] = !autoConfirm[key];
+    message.warning(t('Pg_Auto_Confirm_Not_Saved'));
+  } finally {
+    acSaving[key] = false;
+  }
+}
+
 /** Same for the card switch; save() keeps sending the flag along with the keys. */
 async function saveStripeFlag() {
   flagSaving.stripe = true;
@@ -1771,7 +1849,7 @@ async function saveStripeFlag() {
 
 async function saveBkash() {
   if (!bkash.app_key.trim() || !bkash.username.trim()) {
-    message.warning('bKash App Key and Username are required');
+    message.warning(t('Pg_Req_bKash_App_Key_and_Username'));
     return;
   }
   bkashSaving.value = true;
@@ -1814,7 +1892,7 @@ async function clearBkash() {
 
 async function saveSslcommerz() {
   if (!sslcommerz.store_id.trim()) {
-    message.warning('SSLCommerz Store ID is required');
+    message.warning(t('Pg_Req_SSLCommerz_Store_ID'));
     return;
   }
   sslcommerzSaving.value = true;
@@ -1852,7 +1930,7 @@ async function clearSslcommerz() {
 
 async function savePaymob() {
   if (!paymob.public_key.trim() || !paymob.integration_id.trim()) {
-    message.warning('Paymob Public Key and Integration ID are required');
+    message.warning(t('Pg_Req_Paymob_Public_Key_and_Integration_ID'));
     return;
   }
   paymobSaving.value = true;
@@ -1900,7 +1978,7 @@ async function clearPaymob() {
 
 async function saveMyfatoorah() {
   if (!myfatoorah.configured && !myfatoorah.api_token.trim()) {
-    message.warning('MyFatoorah API Token is required');
+    message.warning(t('Pg_Req_MyFatoorah_API_Token'));
     return;
   }
   myfatoorahSaving.value = true;
@@ -1942,7 +2020,7 @@ async function clearMyfatoorah() {
 
 async function saveMoyasar() {
   if (!moyasar.configured && !moyasar.secret_key.trim()) {
-    message.warning('Moyasar Secret Key is required');
+    message.warning(t('Pg_Req_Moyasar_Secret_Key'));
     return;
   }
   moyasarSaving.value = true;
@@ -1975,11 +2053,11 @@ const flutterwaveSaving = ref(false);
 
 async function savePaypal() {
   if (!paypal.client_id.trim()) {
-    message.warning('PayPal Client ID is required');
+    message.warning(t('Pg_Req_PayPal_Client_ID'));
     return;
   }
   if (!paypal.configured && !paypal.client_secret.trim()) {
-    message.warning('PayPal Client Secret is required');
+    message.warning(t('Pg_Req_PayPal_Client_Secret'));
     return;
   }
   paypalSaving.value = true;
@@ -2020,11 +2098,11 @@ async function clearPaypal() {
 
 async function savePaystack() {
   if (!paystack.public_key.trim()) {
-    message.warning('Paystack Public Key is required');
+    message.warning(t('Pg_Req_Paystack_Public_Key'));
     return;
   }
   if (!paystack.configured && !paystack.secret_key.trim()) {
-    message.warning('Paystack Secret Key is required');
+    message.warning(t('Pg_Req_Paystack_Secret_Key'));
     return;
   }
   paystackSaving.value = true;
@@ -2060,11 +2138,11 @@ async function clearPaystack() {
 
 async function saveFlutterwave() {
   if (!flutterwave.public_key.trim()) {
-    message.warning('Flutterwave Public Key is required');
+    message.warning(t('Pg_Req_Flutterwave_Public_Key'));
     return;
   }
   if (!flutterwave.configured && !flutterwave.secret_key.trim()) {
-    message.warning('Flutterwave Secret Key is required');
+    message.warning(t('Pg_Req_Flutterwave_Secret_Key'));
     return;
   }
   flutterwaveSaving.value = true;
@@ -2120,11 +2198,11 @@ async function clearMoyasar() {
 
 async function saveXpay() {
   if (!xpay.account_id.trim() || !xpay.publishable_key.trim()) {
-    message.warning('XPay Account ID and Publishable Key are required');
+    message.warning(t('Pg_Req_XPay_Account_ID_and_Publishable_Key'));
     return;
   }
   if (!xpay.configured && (!xpay.secret_key.trim() || !xpay.hmac_secret.trim())) {
-    message.warning('XPay Secret Key and API HMAC Secret are required');
+    message.warning(t('Pg_Req_XPay_Secret_Key_and_API_HMAC_Secret'));
     return;
   }
   xpaySaving.value = true;
@@ -2193,7 +2271,7 @@ async function postGateway(savingRef, body, after) {
 
 function saveRazorpay() {
   if (!razorpay.key_id.trim()) {
-    message.warning('Razorpay Key ID is required');
+    message.warning(t('Pg_Req_Razorpay_Key_ID'));
     return;
   }
   return postGateway(razorpaySaving, {
@@ -2211,7 +2289,7 @@ function clearRazorpay() {
 
 function savePayfast() {
   if (!payfast.merchant_id.trim()) {
-    message.warning('PayFast Merchant ID is required');
+    message.warning(t('Pg_Req_PayFast_Merchant_ID'));
     return;
   }
   return postGateway(payfastSaving, {
@@ -2233,7 +2311,7 @@ function clearPayfast() {
 
 function saveLigdicash() {
   if (!ligdicash.api_key.trim()) {
-    message.warning('LigdiCash API Key is required');
+    message.warning(t('Pg_Req_LigdiCash_API_Key'));
     return;
   }
   return postGateway(ligdicashSaving, {
@@ -2251,7 +2329,7 @@ function clearLigdicash() {
 
 function saveDodo() {
   if (!dodo.product_id.trim()) {
-    message.warning('Dodo Product ID is required');
+    message.warning(t('Pg_Req_Dodo_Product_ID'));
     return;
   }
   return postGateway(dodoSaving, {
@@ -2273,7 +2351,7 @@ function clearDodo() {
 
 function saveWaafipay() {
   if (!waafipay.merchant_uid.trim()) {
-    message.warning('WaafiPay Merchant UID is required');
+    message.warning(t('Pg_Req_WaafiPay_Merchant_UID'));
     return;
   }
   return postGateway(waafipaySaving, {
@@ -2305,12 +2383,14 @@ async function save() {
     // The offer-cards-at-checkout switch lives on the store settings, which a
     // gateway-only role may not be allowed to write — the keys still save.
     let flagSaved = true;
-    try {
-      await http.post('admin/store/settings', {
-        payment_stripe_enabled: stripeEnabled.value ? 1 : 0,
-      });
-    } catch (e) {
-      flagSaved = false;
+    if (storeFeature.value) {
+      try {
+        await http.post('admin/store/settings', {
+          payment_stripe_enabled: stripeEnabled.value ? 1 : 0,
+        });
+      } catch (e) {
+        flagSaved = false;
+      }
     }
     enabled.value = !!gateway.value.stripe_key;
     gateway.value.stripe_secret = '';
@@ -2346,10 +2426,10 @@ onMounted(async () => {
   try {
     const [gw, store, br] = await Promise.all([
       http.get('get_payment_gateway'),
-      http.get('admin/store/settings').catch(() => null),
+      storeFeature.value ? http.get('admin/store/settings').catch(() => null) : null,
       // Cash-on-pickup branch rows; only this tab uses them, so a failure
       // here must not take the whole page down.
-      http.get('store/pickup-branches').catch(() => null),
+      storeFeature.value ? http.get('store/pickup-branches').catch(() => null) : null,
     ]);
     const g = gw?.gateway || {};
     gateway.value = { stripe_key: g.stripe_key || '', stripe_secret: '' };
@@ -2402,6 +2482,8 @@ onMounted(async () => {
       const v = s[`payment_${k}_enabled`];
       methodFlags[k] = v == null ? true : !!Number(v);
     });
+    const acOn = Array.isArray(s.auto_confirm_methods) ? s.auto_confirm_methods : [];
+    AUTO_CONFIRM_KEYS.forEach((k) => { autoConfirm[k] = acOn.includes(k); });
     // Callback URLs shown in the tabs follow the configured store base path.
     if (s.store_effective_url) storeBase.value = String(s.store_effective_url).replace(/\/+$/, '');
     applyManualSettings(s);

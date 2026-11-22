@@ -45,7 +45,7 @@ class GroceryStoreController extends ElectronicsStoreController
 
         $counts = Product::query()
             ->where('is_active', 1)
-            ->where('hide_from_online_store', 0)
+            ->where('hide_from_online_store', 0)->forStorefrontWarehouses()
             ->select('category_id', DB::raw('COUNT(*) AS c'))
             ->groupBy('category_id')
             ->pluck('c', 'category_id');
@@ -54,7 +54,7 @@ class GroceryStoreController extends ElectronicsStoreController
             ->filter(fn ($c) => (int) ($counts[$c->id] ?? 0) > 0)
             ->map(function ($c) use ($counts) {
                 $img = Product::query()
-                    ->where('category_id', $c->id)->where('is_active', 1)->where('hide_from_online_store', 0)
+                    ->where('category_id', $c->id)->where('is_active', 1)->where('hide_from_online_store', 0)->forStorefrontWarehouses()
                     ->whereNotNull('image')->where('image', '!=', '')->where('image', '!=', 'no-image.png')
                     ->orderByDesc('is_featured')->orderByDesc('created_at')->value('image');
 
@@ -151,7 +151,7 @@ class GroceryStoreController extends ElectronicsStoreController
 
         $brands = collect();
         if ($sections['brands']) {
-            $brandIds = Product::where('is_active', 1)->where('hide_from_online_store', 0)->whereNotNull('brand_id')->distinct()->pluck('brand_id');
+            $brandIds = Product::where('is_active', 1)->where('hide_from_online_store', 0)->forStorefrontWarehouses()->whereNotNull('brand_id')->distinct()->pluck('brand_id');
             $brands = $brandIds->count() >= 3 ? Brand::whereIn('id', $brandIds)->orderBy('name')->take(12)->get() : collect();
         }
 

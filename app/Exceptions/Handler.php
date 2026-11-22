@@ -26,7 +26,7 @@ class Handler extends ExceptionHandler
         // Unknown hosts (server IP, bot Host headers, unregistered domains) are
         // expected traffic on a SaaS and already handled in render() with a
         // redirect to the central app — don't spam laravel.log / system_logs.
-        \Stancl\Tenancy\Exceptions\TenantCouldNotBeIdentifiedException::class,
+        \Stancl\Tenancy\Contracts\TenantCouldNotBeIdentifiedException::class,
     ];
 
     /**
@@ -37,6 +37,13 @@ class Handler extends ExceptionHandler
     protected $dontFlash = [
         'password',
         'password_confirmation',
+        // Never write these to the session on a validation redirect.
+        'admin_password',
+        'admin_password_confirmation',
+        'current_password',
+        'new_password',
+        'new_password_confirmation',
+        'NewPassword',
     ];
 
     /**
@@ -108,7 +115,7 @@ class Handler extends ExceptionHandler
     public function render($request, Throwable $exception)
     {
         // Unrecognised domain/subdomain (e.g. server IP) — redirect to the central app URL
-        if ($exception instanceof \Stancl\Tenancy\Exceptions\TenantCouldNotBeIdentifiedException) {
+        if ($exception instanceof \Stancl\Tenancy\Contracts\TenantCouldNotBeIdentifiedException) {
             $centralUrl = config('app.url', '/');
 
             if ($request->expectsJson()) {
@@ -125,6 +132,21 @@ class Handler extends ExceptionHandler
             }
 
             return redirect($centralUrl);
+        }
+
+        // Storefront session expired (idle past the lifetime, or signed in/out
+        // in another tab): send the shopper back to the form, which reloads
+        // with a fresh token, instead of the bare "419 Page Expired" page.
+        if ($exception instanceof \Illuminate\Session\TokenMismatchException && is_store_request($request)) {
+            $message = __('messages.StoreSessionExpired');
+
+            if ($request->expectsJson()) {
+                return response()->json(['message' => $message, 'error' => $message], 419);
+            }
+
+            return redirect()->back()
+                ->withInput($request->except('_token', 'password', 'password_confirmation'))
+                ->withErrors(['session' => $message]);
         }
 
         if ($exception instanceof \Illuminate\Database\Eloquent\ModelNotFoundException) {

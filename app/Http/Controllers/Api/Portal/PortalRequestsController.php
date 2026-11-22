@@ -26,7 +26,7 @@ class PortalRequestsController extends Controller
     {
         $portalClient = Auth::guard('portal')->user();
         if (! $portalClient || (int) $portalClient->status !== 1) {
-            abort(403, 'Portal access is disabled');
+            abort(403, __('portal.portal_disabled'));
         }
 
         return (int) $portalClient->client_id;
@@ -77,14 +77,23 @@ class PortalRequestsController extends Controller
         if (! is_dir($dir)) {
             mkdir($dir, 0755, true);
         }
-        foreach ($files as $file) {
+        // Allow-listed extension for every file BEFORE anything is written:
+        // this folder is served from public/, so a client-chosen ".php" or
+        // ".html" would run as code or as a page on the app's origin.
+        $extensions = [];
+        foreach ($files as $i => $file) {
+            if ($file && $file->isValid()) {
+                $extensions[$i] = \App\Support\SafeUpload::documentExtension($file, 'attachments');
+            }
+        }
+        foreach ($files as $i => $file) {
             if (! $file || ! $file->isValid()) {
                 continue;
             }
-            $ext = strtolower($file->getClientOriginalExtension() ?: 'bin');
-            $name = Str::random(24).'.'.$ext;
+            $ext = $extensions[$i];
+            $name = \App\Support\SafeUpload::name($ext);
             // Capture metadata BEFORE move() — the temp file is gone afterwards.
-            $originalName = $file->getClientOriginalName();
+            $originalName = \App\Support\SafeUpload::displayName($file);
             $size = $file->getSize();
             $file->move($dir, $name);
             ProtocolRequestAttachment::create([
@@ -110,12 +119,18 @@ class PortalRequestsController extends Controller
             ->when($request->filled('status'), fn ($x) => $x->where('status', $request->status))
             ->when($request->filled('search'), fn ($x) => $x->where(fn ($w) => $w->where('Ref', 'LIKE', '%'.$request->search.'%')->orWhere('subject', 'LIKE', '%'.$request->search.'%')));
         $total = (clone $q)->count();
-        $rows = $q->with('currentDesk')->orderByDesc('last_activity_at')->orderByDesc('id')
+        // Whitelisted sort for the portal DataTable: ?sort=<column>&dir=asc|desc.
+        $sortable = ['Ref' => 'Ref', 'subject' => 'subject', 'type' => 'type', 'status' => 'status', 'last_activity_at' => 'last_activity_at', 'created_at' => 'created_at'];
+        $sort = $sortable[(string) $request->input('sort', '')] ?? 'last_activity_at';
+        $dir = strtolower((string) $request->input('dir', 'desc')) === 'asc' ? 'asc' : 'desc';
+        $rows = $q->with('currentDesk')->orderBy($sort, $dir)->orderByDesc('id')
             ->offset(($page - 1) * $perPage)->limit($perPage)->get()->map(fn ($r) => $this->serialize($r));
 
         return response()->json([
             'requests' => $rows,
             'total' => $total,
+            'totalRows' => $total,
+            'statuses' => ProtocolRequest::STATUSES,
             'per_page' => $perPage,
             'current_page' => $page,
             'last_page' => max(1, (int) ceil($total / $perPage)),
@@ -183,7 +198,7 @@ class PortalRequestsController extends Controller
         $clientId = $this->clientId();
         $req = ProtocolRequest::whereNull('deleted_at')->where('client_id', $clientId)->findOrFail($id);
         if ($req->status === 'closed') {
-            return response()->json(['message' => 'This request is closed.'], 422);
+            return response()->json(['message' => __('portal.rq_closed_note')], 422);
         }
         $data = $request->validate([
             'note' => 'required|string|max:10000',

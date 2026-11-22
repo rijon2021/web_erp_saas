@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 @php
-    $isRtl = in_array(app()->getLocale(), ['ar', 'he', 'fa', 'ur']);
+    $isRtl = \App\Models\Central\CentralLanguage::isRtl(app()->getLocale());
     $generalSettings = \App\Models\Central\GeneralSetting::instance();
     $appName = $generalSettings->app_name ?: 'Stocky';
 @endphp
@@ -99,8 +99,14 @@
                 </div>
             @endif
 
+            {{-- Multi-currency pricing: change the currency the plans are shown
+                 (and billed) in. Its own GET form — it can't sit inside the POST form. --}}
+            @if(! empty($currencySwitcher))
+                <div class="currency-switcher-wrap">@include('central.partials.currency-switcher', ['anchor' => ''])</div>
+            @endif
             <form method="POST" action="{{ route('central.register.submit') }}" id="register-form" autocomplete="on">
                 @csrf
+                <input type="hidden" name="currency" value="{{ $signupCurrency ?? '' }}">
 
                 {{-- Subdomain --}}
                 <div class="form-group">
@@ -294,10 +300,15 @@
                     @error('plan_id') <p class="field-error">{{ $message }}</p> @enderror
                 </div>
 
-                {{-- Billing cycle --}}
+                {{-- Billing cycle. With a single cycle on offer there is nothing
+                     to choose, so the group is replaced by a hidden field and
+                     register.js bails out (it requires #billing-cycle-group). --}}
+                @php $cycles = $billingCycles ?? ['monthly', 'yearly']; @endphp
+                @if (count($cycles) > 1)
                 <div class="form-group cycle-group" id="billing-cycle-group">
                     <label>{{ __('landing.billing_cycle') }}</label>
                     <div class="cycle-options">
+                        @if (in_array('monthly', $cycles))
                         <label class="cycle-option">
                             <input type="radio" name="billing_cycle" value="monthly" class="billing-cycle-radio" {{ old('billing_cycle', 'monthly') === 'monthly' ? 'checked' : '' }}>
                             <div class="cycle-card">
@@ -305,6 +316,8 @@
                                 <span class="cycle-price" id="monthly-price"></span>
                             </div>
                         </label>
+                        @endif
+                        @if (in_array('yearly', $cycles))
                         <label class="cycle-option">
                             <input type="radio" name="billing_cycle" value="yearly" class="billing-cycle-radio" {{ old('billing_cycle') === 'yearly' ? 'checked' : '' }}>
                             <div class="cycle-card">
@@ -312,8 +325,12 @@
                                 <span class="cycle-price" id="yearly-price"></span>
                             </div>
                         </label>
+                        @endif
                     </div>
                 </div>
+                @else
+                <input type="hidden" name="billing_cycle" value="{{ $cycles[0] }}">
+                @endif
                 @endif
 
                 <button type="submit" class="btn-register" id="btn-register">
@@ -326,6 +343,13 @@
                 </button>
             </form>
 
+            <p class="login-link">
+                {{ __('landing.already_have_workspace') }}
+                <a href="{{ route('central.workspace.login') }}">{{ __('landing.sign_in') }}</a>
+            </p>
+
+            {{-- With the landing disabled, / just leads back here or to the sign-in page. --}}
+            @if ($generalSettings->landingMode() !== \App\Models\Central\GeneralSetting::LANDING_MODE_DISABLED)
             <a class="back-home" href="{{ route('central.welcome') }}">
                 <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="19" y1="12" x2="5" y2="12"/>
@@ -333,6 +357,7 @@
                 </svg>
                 {{ __('landing.back_to_homepage') }}
             </a>
+            @endif
 
             <div class="reg-footer">
                 &copy; {{ date('Y') }} {{ $appName }}. All rights reserved.

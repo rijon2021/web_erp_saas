@@ -113,6 +113,7 @@ class SerialNumberController extends BaseController
                 'reference_type' => $m->reference_type,
                 'reference_id' => $m->reference_id,
                 'reference_ref' => $this->referenceRef($m->reference_type, $m->reference_id),
+                'notes' => $m->notes,
                 'user_name' => $m->user_id ? optional(\App\Models\User::find($m->user_id))->username : null,
                 'created_at' => $m->created_at ? $m->created_at->format('Y-m-d H:i') : null,
             ]);
@@ -165,6 +166,9 @@ class SerialNumberController extends BaseController
             'Purchase' => \App\Models\Purchase::class,
             'SaleReturn' => \App\Models\SaleReturn::class,
             'PurchaseReturn' => \App\Models\PurchaseReturn::class,
+            'Transfer' => \App\Models\Transfer::class,
+            'Adjustment' => \App\Models\Adjustment::class,
+            'Damage' => \App\Models\Damage::class,
         ];
         if (! isset($map[$type])) {
             return null;
@@ -176,14 +180,27 @@ class SerialNumberController extends BaseController
     /**
      * Available serials for a product (+ optional variant) in a warehouse.
      * Used by the create-sale / POS serial picker. Query params:
-     * product_id (required), warehouse_id (required), product_variant_id (optional).
+     * product_id (required), warehouse_id (required), product_variant_id,
+     * include_sale_id, for_combo, in_kit (optional).
      */
     public function available(Request $request, SerialNumberService $service)
     {
-        // Authorize against Sale creation (not the serial-management module): this
-        // lookup is used by the create-sale / POS serial picker, so any user who can
-        // make a sale must be able to load available serials — mirrors batches_for_sale.
-        $this->authorizeForUser($request->user('api'), 'create', Sale::class);
+        // Authorize against the documents that pick from stock (not the
+        // serial-management module): the sale / POS pickers and the adjustment
+        // and damage pickers all use this lookup, so anyone who can create one
+        // of those may load available serials — mirrors batches_for_sale.
+        $user = $request->user('api');
+        $canPick = collect([Sale::class, \App\Models\Adjustment::class, \App\Models\Damage::class])
+            ->contains(function ($document) use ($user) {
+                try {
+                    return $user && $user->can('create', $document);
+                } catch (\Throwable $e) {
+                    return false; // e.g. a policy whose permission row is missing
+                }
+            });
+        if (! $canPick) {
+            $this->authorizeForUser($user, 'create', Sale::class);
+        }
 
         $productId = (int) $request->product_id;
         $warehouseId = (int) $request->warehouse_id;
@@ -193,15 +210,20 @@ class SerialNumberController extends BaseController
 
         $variantId = $request->filled('product_variant_id') ? (int) $request->product_variant_id : null;
         $includeSaleId = $request->filled('include_sale_id') ? (int) $request->include_sale_id : null;
+        // Units assembled into kits: for_combo=1 also offers them (selling a
+        // combo), in_kit=1 offers only them (kit disassembly).
+        $kitUnits = $request->boolean('in_kit') ? 'only'
+            : ($request->boolean('for_combo') && $service->kitUnitsSellable() ? 'include' : 'exclude');
 
         return response()->json([
-            'serials' => $service->availableSerialsForSale($productId, $variantId, $warehouseId, $includeSaleId),
+            'serials' => $service->availableSerialsForSale($productId, $variantId, $warehouseId, $includeSaleId, $kitUnits),
         ]);
     }
 
     /**
      * Serials sold on a given sale (for the sale-return picker).
-     * Query params: sale_id (required), product_id, product_variant_id (optional).
+     * Query params: sale_id (required), product_id, product_variant_id,
+     * sale_detail_id (optional — narrows a combo component to its combo line).
      */
     public function forSale(Request $request)
     {
@@ -209,6 +231,7 @@ class SerialNumberController extends BaseController
 
         $rows = ProductSerial::where('sale_id', (int) $request->sale_id)
             ->where('status', ProductSerial::STATUS_SOLD)
+            ->when($request->filled('sale_detail_id'), fn ($q) => $q->where('sale_detail_id', (int) $request->sale_detail_id))
             ->when($request->filled('product_id'), fn ($q) => $q->where('product_id', $request->product_id))
             ->when($request->filled('product_variant_id'), fn ($q) => $q->where('product_variant_id', $request->product_variant_id))
             ->orderBy('id', 'asc')
@@ -227,6 +250,8 @@ class SerialNumberController extends BaseController
 
         $rows = ProductSerial::where('purchase_id', (int) $request->purchase_id)
             ->where('status', ProductSerial::STATUS_AVAILABLE)
+            // Units transferred elsewhere can't be returned from this warehouse.
+            ->when($request->filled('warehouse_id'), fn ($q) => $q->where('warehouse_id', $request->warehouse_id))
             ->when($request->filled('product_id'), fn ($q) => $q->where('product_id', $request->product_id))
             ->when($request->filled('product_variant_id'), fn ($q) => $q->where('product_variant_id', $request->product_variant_id))
             ->orderBy('id', 'asc')

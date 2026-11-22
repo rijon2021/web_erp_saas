@@ -3,90 +3,100 @@
 namespace App\Http\Controllers\Central\Super;
 
 use App\Http\Controllers\Controller;
-use App\Models\Central\Plan;
 use App\Models\Central\TenantSubscription;
-use App\Tenant;
-use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
+use App\Services\SuperDashboard\WidgetData;
+use App\Support\SuperDashboard\DashboardLayout;
+use App\Support\SuperDashboard\WidgetRegistry;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class DashboardController extends Controller
 {
-    public function index()
+    /** Period chips in the dashboard header: key => days back (mtd = month to date). */
+    public const PERIODS = ['7d' => 7, '30d' => 30, '90d' => 90, 'mtd' => null];
+
+    /**
+     * The dashboard is a grid of widgets laid out in Settings > General >
+     * Dashboard. Only the enabled widgets this admin may see are built.
+     */
+    public function index(Request $request, WidgetData $data)
     {
-        $tenantsCount = Tenant::count();
-        $activeSubscriptions = TenantSubscription::whereIn('status', ['active', 'trial'])->count();
-        $plansCount = Plan::where('is_active', true)->count();
+        // Flip lapsed trials/periods to expired first so the counts below are
+        // truthful without the cron.
+        TenantSubscription::expireLapsed();
 
-        // Inactive tenants: no activity in 30+ days or never active
-        $inactiveTenantsCount = Tenant::where('status', '!=', Tenant::STATUS_PENDING)
-            ->where(function ($q) {
-                $q->whereNull('last_activity_at')
-                  ->orWhere('last_activity_at', '<', now()->subDays(30));
-            })
-            ->count();
+        $user = Auth::guard('central')->user();
+        $layout = DashboardLayout::current();
+        $data->forUser($user);
 
-        // Expired subscriptions count
-        $expiredSubscriptions = TenantSubscription::where('status', TenantSubscription::STATUS_EXPIRED)->count();
+        // Period chip: a backward-looking window applied to every widget that
+        // has a "days" or "range" option. Remembered for the session; absent
+        // (the default) each widget keeps its own configured period.
+        $period = $this->resolvePeriod($request);
+        $periodDays = $period === null ? null : ($period === 'mtd' ? max(1, (int) now()->startOfMonth()->diffInDays(now()) + 1) : self::PERIODS[$period]);
 
-        // Suspended tenants count
-        $suspendedTenantsCount = Tenant::where('status', Tenant::STATUS_SUSPENDED)->count();
-
-        // Subscription status breakdown for donut chart
-        $subscriptionStatusCounts = TenantSubscription::query()
-            ->select('status', DB::raw('count(*) as count'))
-            ->groupBy('status')
-            ->pluck('count', 'status')
-            ->all();
-
-        // Tenants created per month (last 6 months) for area chart
-        $driver = Tenant::query()->getConnection()->getDriverName();
-        $dateFormat = match ($driver) {
-            'mysql' => "DATE_FORMAT(created_at, '%Y-%m')",
-            'pgsql' => "to_char(created_at, 'YYYY-MM')",
-            default => "strftime('%Y-%m', created_at)",
-        };
-        $tenantsByMonth = Tenant::query()
-            ->select(DB::raw("{$dateFormat} as month"), DB::raw('count(*) as count'))
-            ->where('created_at', '>=', Carbon::now()->subMonths(6)->startOfMonth())
-            ->groupBy('month')
-            ->orderBy('month')
-            ->pluck('count', 'month')
-            ->all();
-
-        // Fill in missing months with 0
-        $last6Months = collect();
-        for ($i = 5; $i >= 0; $i--) {
-            $last6Months->put(Carbon::now()->subMonths($i)->format('Y-m'), 0);
+        $widgets = [];
+        $pendingTenants = null;
+        foreach (DashboardLayout::visibleWidgets($layout, $user) as $key => $widget) {
+            $definition = WidgetRegistry::get($key);
+            $options = $widget['options'];
+            if ($periodDays !== null) {
+                foreach (['days', 'range'] as $name) {
+                    if (array_key_exists($name, $options)) {
+                        $options[$name] = $periodDays;
+                    }
+                }
+            }
+            try {
+                $payload = $data->build($key, $options, (int) $layout['settings']['cache']);
+            } catch (\Throwable $e) {
+                // One broken widget (a missing table on an old install, say)
+                // must not take the whole dashboard down.
+                Log::warning("Super dashboard widget {$key} failed: {$e->getMessage()}");
+                continue;
+            }
+            if ($key === 'pending_tenants') {
+                // The topbar notifications list the same tenants; hand them
+                // to the layout so it does not run the query again.
+                $pendingTenants = $payload['tenants'] ?? collect();
+            }
+            if ($payload === null) {
+                continue;
+            }
+            $widgets[] = $widget + [
+                'group'  => $definition['group'],
+                'icon'   => $definition['icon'],
+                'column' => WidgetRegistry::columnClass($widget['width']),
+                'data'   => $payload,
+            ];
         }
-        $tenantsByMonth = $last6Months->merge($tenantsByMonth)->all();
-
-        // Subscriptions by plan (top 5) for bar chart
-        $subscriptionsByPlan = TenantSubscription::query()
-            ->join('plans', 'tenant_subscriptions.plan_id', '=', 'plans.id')
-            ->select('plans.name as plan_name', DB::raw('count(tenant_subscriptions.id) as count'))
-            ->groupBy('plans.id', 'plans.name')
-            ->orderByDesc('count')
-            ->limit(5)
-            ->pluck('count', 'plan_name')
-            ->all();
-
-        // Pending tenants (for shared hosting mode)
-        $pendingTenants = Tenant::with('domains')
-            ->where('status', Tenant::STATUS_PENDING)
-            ->orderByDesc('created_at')
-            ->get();
 
         return view('central.super.dashboard', [
-            'tenantsCount' => $tenantsCount,
-            'activeSubscriptions' => $activeSubscriptions,
-            'plansCount' => $plansCount,
-            'inactiveTenantsCount' => $inactiveTenantsCount,
-            'expiredSubscriptions' => $expiredSubscriptions,
-            'suspendedTenantsCount' => $suspendedTenantsCount,
-            'subscriptionStatusCounts' => $subscriptionStatusCounts,
-            'tenantsByMonth' => $tenantsByMonth,
-            'subscriptionsByPlan' => $subscriptionsByPlan,
-            'pendingTenants' => $pendingTenants,
-        ]);
+            'widgets'  => $widgets,
+            'settings' => $layout['settings'],
+            'period'   => $period,
+            'periods'  => array_keys(self::PERIODS),
+        ] + ($pendingTenants !== null ? ['pendingTenants' => $pendingTenants] : []));
+    }
+
+    /** The chosen period key, or null for "each widget's own setting". */
+    private function resolvePeriod(Request $request): ?string
+    {
+        if ($request->has('period')) {
+            $chosen = (string) $request->query('period');
+            if ($chosen === '' || ! array_key_exists($chosen, self::PERIODS)) {
+                $request->session()->forget('super_dashboard_period');
+
+                return null;
+            }
+            $request->session()->put('super_dashboard_period', $chosen);
+
+            return $chosen;
+        }
+
+        $stored = $request->session()->get('super_dashboard_period');
+
+        return is_string($stored) && array_key_exists($stored, self::PERIODS) ? $stored : null;
     }
 }

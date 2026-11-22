@@ -313,7 +313,7 @@ class GroceryDemoSeeder extends Seeder
         $s->forceFill([
             'theme' => 'grocery',
             'theme_options' => $opts,
-            'store_name' => in_array($s->store_name, [null, '', 'StoreX', 'TechNova', 'LittleJoy', 'HavenHomes', 'FreshMart'], true) ? 'FreshMart' : $s->store_name,
+            'store_name' => in_array($s->store_name, [null, '', 'StoreX', 'TechNova', 'LittleJoy', 'HavenHomes', 'FreshMart', 'Atelier'], true) ? 'FreshMart' : $s->store_name,
             'primary_color' => '#16a34a',
             'secondary_color' => '#f97316',
             'topbar_text_left' => 'Free delivery on orders over $49',
@@ -324,7 +324,7 @@ class GroceryDemoSeeder extends Seeder
         // Only one demo catalog visible at a time.
         if (Schema::hasColumn('products', 'hide_from_online_store')) {
             Product::where('code', 'like', 'GR-%')->update(['hide_from_online_store' => 0]);
-            Product::where('code', 'like', 'EL-%')->orWhere('code', 'like', 'TY-%')->update(['hide_from_online_store' => 1]);
+            Product::where('code', 'like', 'EL-%')->orWhere('code', 'like', 'TY-%')->orWhere('code', 'like', 'FA-%')->update(['hide_from_online_store' => 1]);
         }
         if (function_exists('store_url_config_clear')) {
             store_url_config_clear();

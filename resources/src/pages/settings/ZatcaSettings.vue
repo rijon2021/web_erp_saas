@@ -7,6 +7,11 @@
     </div>
 
     <a-card v-else>
+      <a-alert
+        v-if="!platformEnabled"
+        type="error" show-icon style="margin-bottom: 12px"
+        :message="$t('Einvoice_Platform_Off')"
+      />
       <a-tabs v-model:activeKey="activeTab">
         <!-- ============================== Phase 1 (QR code) ============================== -->
         <a-tab-pane key="phase1" :tab="$t('Zatca_Phase_1')">
@@ -116,7 +121,7 @@
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'result'">
                   <a-tag :color="record.passed ? 'success' : 'error'">
-                    {{ record.passed ? (record.status || 'PASSED') : 'FAILED (HTTP ' + record.http_status + ')' }}
+                    {{ record.passed ? (record.status || $t('Zatca_Passed')) : $t('Zatca_Failed_Http', { status: record.http_status }) }}
                   </a-tag>
                 </template>
                 <template v-else-if="column.key === 'messages'">
@@ -163,7 +168,7 @@
               </a-col>
               <a-col :xs="24" :md="8">
                 <a-form-item :label="$t('Zatca_Organization_Unit')">
-                  <a-input v-model:value="form.organization_unit" placeholder="Main Branch" />
+                  <a-input v-model:value="form.organization_unit" :placeholder="$t('Zatca_Org_Unit_Placeholder')" />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
@@ -173,7 +178,7 @@
               </a-col>
               <a-col :xs="24" :md="8">
                 <a-form-item :label="$t('Zatca_Business_Category')">
-                  <a-input v-model:value="form.business_category" placeholder="Retail" />
+                  <a-input v-model:value="form.business_category" :placeholder="$t('Zatca_Business_Category_Placeholder')" />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
@@ -222,7 +227,7 @@
               </a-col>
               <a-col :xs="24" :md="16">
                 <a-form-item :label="$t('Zatca_Exemption_Reason')">
-                  <a-input v-model:value="form.zero_tax_reason" placeholder="Export of goods" />
+                  <a-input v-model:value="form.zero_tax_reason" :placeholder="$t('Zatca_Exemption_Reason_Placeholder')" />
                 </a-form-item>
               </a-col>
             </a-row>
@@ -308,6 +313,7 @@ const otp = ref('');
 const activeTab = ref('phase1');
 // False when the phase 2 tables are not migrated — phase 1 still works.
 const phase2Available = ref(true);
+const platformEnabled = ref(true);
 
 // Phase 1 fields (QR on receipts) live on the general settings row; they are
 // edited here so both ZATCA phases sit on the same page.
@@ -353,10 +359,10 @@ const invoiceTypeOptions = computed(() => [
 ]);
 const docStatusOptions = computed(() => [
     { value: '', label: t('All') },
-    { value: 'reported', label: 'Reported' },
-    { value: 'cleared', label: 'Cleared' },
-    { value: 'failed', label: 'Failed' },
-    { value: 'pending', label: 'Pending' },
+    { value: 'reported', label: t('Zatca_Reported') },
+    { value: 'cleared', label: t('Zatca_Cleared') },
+    { value: 'failed', label: t('Failed') },
+    { value: 'pending', label: t('Pending') },
 ]);
 const complianceColumns = computed(() => [
     { title: t('Zatca_Document_Type'), dataIndex: 'type', key: 'type' },
@@ -396,6 +402,7 @@ async function load() {
     try {
         const data = await http.get('zatca/settings');
         phase2Available.value = data.phase2_available !== false;
+        platformEnabled.value = data.platform_enabled !== false;
         form.value = { ...form.value, ...(data.settings || {}) };
         company.value = { ...company.value, ...(data.company || {}) };
         environmentOptions.value = (data.environments || []).map(e => ({ value: e.value, label: e.label }));

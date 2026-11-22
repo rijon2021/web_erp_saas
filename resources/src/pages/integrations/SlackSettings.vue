@@ -1,9 +1,9 @@
 <template>
   <div class="page">
-    <PageHeader title="Slack" :breadcrumb="['Integrations', 'Slack']">
+    <PageHeader title="Slack" :breadcrumb="[$t('Integrations'), 'Slack']">
       <template #actions>
         <a-tag v-if="!isLoading" :color="state.enabled && state.configured ? 'success' : 'default'" style="font-size: 13px; padding: 4px 12px">
-          {{ state.enabled && state.configured ? $t('Enabled') : state.configured ? $t('Disabled') : 'Not configured' }}
+          {{ state.enabled && state.configured ? $t('Enabled') : state.configured ? $t('Disabled') : $t('Int_Not_Configured') }}
         </a-tag>
       </template>
     </PageHeader>
@@ -18,38 +18,36 @@
           <template #icon><SlackOutlined /></template>
         </a-avatar>
         <div>
-          <div class="hero-title">Slack notifications</div>
+          <div class="hero-title">{{ $t('Int_Notifications_Title', { name: 'Slack' }) }}</div>
           <div class="muted">
-            Post sales, purchases, payments and stock alerts into a Slack channel as they happen.
+            {{ $t('Slack_Hero_Desc') }}
           </div>
         </div>
       </div>
 
       <a-form layout="vertical" style="max-width: 640px">
-        <a-form-item label="Incoming webhook URL">
+        <a-form-item :label="$t('Slack_Incoming_Webhook_Url')">
           <a-input-password
             v-model:value="form.webhook_url"
-            :placeholder="state.configured ? `Saved (${state.webhook_hint}) — paste a new URL to replace it` : 'https://hooks.slack.com/services/…'"
+            :placeholder="state.configured ? $t('Slack_Saved_Paste_New_Url', { hint: state.webhook_hint }) : 'https://hooks.slack.com/services/…'"
             autocomplete="off"
           />
-          <div class="muted" style="margin-top: 4px">
-            Create one in Slack under
-            <a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener">Apps → Incoming Webhooks</a>,
-            pick the channel, then paste the URL here. It is stored write-only and never shown again in full.
-          </div>
+          <i18n-t keypath="Slack_Webhook_Help" tag="div" class="muted" style="margin-top: 4px">
+            <template #link><a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener">Apps → Incoming Webhooks</a></template>
+          </i18n-t>
         </a-form-item>
 
         <a-form-item :label="$t('Events')">
           <a-radio-group v-model:value="eventMode">
-            <a-radio-button value="all">All events</a-radio-button>
-            <a-radio-button value="selected">Selected events</a-radio-button>
+            <a-radio-button value="all">{{ $t('Int_All_Events') }}</a-radio-button>
+            <a-radio-button value="selected">{{ $t('Int_Selected_Events') }}</a-radio-button>
           </a-radio-group>
           <a-select
             v-if="eventMode === 'selected'"
             v-model:value="form.events"
             mode="multiple"
             style="width: 100%; margin-top: 8px"
-            placeholder="Pick the events to post"
+            :placeholder="$t('Slack_Pick_Events')"
             :options="state.available_events.map(ev => ({ value: ev, label: ev }))"
           />
         </a-form-item>
@@ -57,14 +55,14 @@
         <a-form-item>
           <a-space align="center">
             <a-switch v-model:checked="form.enabled" />
-            <span>Enable Slack notifications</span>
+            <span>{{ $t('Int_Enable_Notifications', { name: 'Slack' }) }}</span>
           </a-space>
         </a-form-item>
 
         <a-space wrap>
           <a-button type="primary" :loading="saving" @click="save">{{ $t('Save') }}</a-button>
           <a-button :loading="testing" :disabled="!state.configured && !form.webhook_url" @click="sendTest">
-            Send test message
+            {{ $t('Int_Send_Test_Message') }}
           </a-button>
         </a-space>
       </a-form>
@@ -134,9 +132,9 @@ async function sendTest() {
     // Persist any freshly pasted URL first so the test uses it.
     if (form.value.webhook_url) await save();
     await http.post('slack/settings/test');
-    message.success('Test message sent — check your Slack channel.');
+    message.success(t('Slack_Test_Sent'));
   } catch (e) {
-    message.error(e?.data?.error || e?.data?.message || 'Test failed');
+    message.error(e?.data?.error || e?.data?.message || t('Int_Test_Failed'));
   } finally {
     testing.value = false;
   }

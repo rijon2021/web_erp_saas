@@ -3,6 +3,9 @@ import {
     FilePptOutlined, FileZipOutlined, VideoCameraOutlined, CustomerServiceOutlined,
     FileTextOutlined, FileOutlined,
 } from '@ant-design/icons-vue';
+import { i18n } from '../../i18n';
+
+const tr = (k, args) => i18n.global.t(k, args || {});
 
 /**
  * One place deciding how a file "reads" in the archive: its icon, its accent
@@ -14,16 +17,16 @@ import {
  * mid-tone hues, never near-white or near-black.
  */
 export const DOCUMENT_KINDS = {
-    image: { label: 'Images', icon: FileImageOutlined, color: '#0891b2' },
-    pdf: { label: 'PDF', icon: FilePdfOutlined, color: '#dc2626' },
-    word: { label: 'Documents', icon: FileWordOutlined, color: '#2563eb' },
-    excel: { label: 'Spreadsheets', icon: FileExcelOutlined, color: '#16a34a' },
-    powerpoint: { label: 'Presentations', icon: FilePptOutlined, color: '#ea580c' },
-    archive: { label: 'Archives', icon: FileZipOutlined, color: '#b45309' },
-    video: { label: 'Video', icon: VideoCameraOutlined, color: '#db2777' },
-    audio: { label: 'Audio', icon: CustomerServiceOutlined, color: '#7c3aed' },
-    text: { label: 'Text', icon: FileTextOutlined, color: '#64748b' },
-    other: { label: 'Other', icon: FileOutlined, color: '#6b7280' },
+    image: { get label() { return tr('Kind_Images'); }, icon: FileImageOutlined, color: '#0891b2' },
+    pdf: { get label() { return tr('Kind_PDF'); }, icon: FilePdfOutlined, color: '#dc2626' },
+    word: { get label() { return tr('Kind_Documents'); }, icon: FileWordOutlined, color: '#2563eb' },
+    excel: { get label() { return tr('Kind_Spreadsheets'); }, icon: FileExcelOutlined, color: '#16a34a' },
+    powerpoint: { get label() { return tr('Kind_Presentations'); }, icon: FilePptOutlined, color: '#ea580c' },
+    archive: { get label() { return tr('Kind_Archives'); }, icon: FileZipOutlined, color: '#b45309' },
+    video: { get label() { return tr('Kind_Video'); }, icon: VideoCameraOutlined, color: '#db2777' },
+    audio: { get label() { return tr('Kind_Audio'); }, icon: CustomerServiceOutlined, color: '#7c3aed' },
+    text: { get label() { return tr('Kind_Text'); }, icon: FileTextOutlined, color: '#64748b' },
+    other: { get label() { return tr('Kind_Other'); }, icon: FileOutlined, color: '#6b7280' },
 };
 
 export function kindOf(record) {
@@ -32,7 +35,7 @@ export function kindOf(record) {
 
 /** Options for the type filter, in the order the tiles read best. */
 export const KIND_OPTIONS = Object.entries(DOCUMENT_KINDS)
-    .map(([value, k]) => ({ value, label: k.label }));
+    .map(([value, k]) => ({ value, get label() { return k.label; } }));
 
 /** "3 days ago" — enough precision for a file list, no dayjs plugin needed. */
 export function timeAgo(iso) {
@@ -41,7 +44,7 @@ export function timeAgo(iso) {
     if (Number.isNaN(then)) return '';
 
     const seconds = Math.round((Date.now() - then) / 1000);
-    if (seconds < 60) return 'just now';
+    if (seconds < 60) return tr('just_now');
 
     // Already in minutes; each step promotes to the next unit once it fits.
     const steps = [
@@ -55,5 +58,6 @@ export function timeAgo(iso) {
         unit = next;
     }
     const rounded = Math.round(value);
-    return `${rounded} ${unit}${rounded === 1 ? '' : 's'} ago`;
+    const unitKey = unit.charAt(0).toUpperCase() + unit.slice(1) + (rounded === 1 ? '' : 's');
+    return tr('Doc_Ago_' + unitKey, { n: rounded });
 }

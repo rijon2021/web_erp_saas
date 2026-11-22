@@ -9,23 +9,8 @@
         // Price formatting helper function
         $priceFormat = $setting['price_format'] ?? null;
         function formatPrice($number, $decimals = 2, $priceFormat = null) {
-            $number = (float) $number;
-            $decimals = (int) $decimals;
-            
-            if (empty($priceFormat)) {
-                return number_format($number, $decimals, '.', ',');
-            }
-            
-            switch ($priceFormat) {
-                case 'comma_dot':
-                    return number_format($number, $decimals, '.', ',');
-                case 'dot_comma':
-                    return number_format($number, $decimals, ',', '.');
-                case 'space_comma':
-                    return number_format($number, $decimals, ',', ' ');
-                default:
-                    return number_format($number, $decimals, '.', ',');
-            }
+            // Shared formatter: Price Format separators + the Hide Zero Decimals setting (100.00 => 100).
+            return \App\utils\helpers::format_price($number, $decimals, $priceFormat === null ? '' : $priceFormat);
         }
     @endphp
     <style>
@@ -94,10 +79,10 @@
                             <div><strong style="color: #1f2937;">{{ __('pdf.phone') }}{{ $isRtl ? '' : ':' }}</strong> {{$provider['phone']}}</div>
                             <div><strong style="color: #1f2937;">{{ __('pdf.total_purchases') }}{{ $isRtl ? '' : ':' }}</strong> {{$provider['total_purchase']}}</div>
                             <div style="margin-top: 5px; padding-top: 5px; border-top: 1px solid #ddd6fe;">
-                                <div><strong style="color: #1f2937;">{{ __('pdf.total_amount') }}{{ $isRtl ? '' : ':' }}</strong> {{$symbol}} {{formatPrice((float)$provider['total_amount'], 2, $priceFormat)}}</div>
-                                <div><strong style="color: #1f2937;">{{ __('pdf.total_paid') }}{{ $isRtl ? '' : ':' }}</strong> {{$symbol}} {{formatPrice((float)$provider['total_paid'], 2, $priceFormat)}}</div>
-                                <div><strong style="color: #ef4444;">{{ __('pdf.purchase_due') }}{{ $isRtl ? '' : ':' }}</strong> {{$symbol}} {{formatPrice((float)$provider['due'], 2, $priceFormat)}}</div>
-                                <div><strong style="color: #f59e0b;">{{ __('pdf.return_due') }}{{ $isRtl ? '' : ':' }}</strong> {{$symbol}} {{formatPrice((float)$provider['return_Due'], 2, $priceFormat)}}</div>
+                                <div><strong style="color: #1f2937;">{{ __('pdf.total_amount') }}{{ $isRtl ? '' : ':' }}</strong> {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$provider['total_amount'], 2, $priceFormat)) }}</div>
+                                <div><strong style="color: #1f2937;">{{ __('pdf.total_paid') }}{{ $isRtl ? '' : ':' }}</strong> {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$provider['total_paid'], 2, $priceFormat)) }}</div>
+                                <div><strong style="color: #ef4444;">{{ __('pdf.purchase_due') }}{{ $isRtl ? '' : ':' }}</strong> {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$provider['due'], 2, $priceFormat)) }}</div>
+                                <div><strong style="color: #f59e0b;">{{ __('pdf.return_due') }}{{ $isRtl ? '' : ':' }}</strong> {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$provider['return_Due'], 2, $priceFormat)) }}</div>
                             </div>
                         </div>
                     </div>
@@ -161,8 +146,8 @@
                     {{$formattedDate}}
                 </td>
                 <td style="padding: 8px; font-size: 8.5pt; font-weight: 600; color: #8b5cf6;">{{$purchase['Ref']}}</td>
-                <td style="padding: 8px; text-align: right; font-size: 8.5pt; color: #10b981;">{{$symbol}} {{formatPrice((float)$purchase['paid_amount'], 2, $priceFormat)}}</td>
-                <td style="padding: 8px; text-align: right; font-size: 8.5pt; font-weight: bold; color: #ef4444;">{{$symbol}} {{formatPrice((float)$purchase['due'], 2, $priceFormat)}}</td>
+                <td style="padding: 8px; text-align: right; font-size: 8.5pt; color: #10b981;">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['paid_amount'], 2, $priceFormat)) }}</td>
+                <td style="padding: 8px; text-align: right; font-size: 8.5pt; font-weight: bold; color: #ef4444;">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['due'], 2, $priceFormat)) }}</td>
                 <td style="padding: 8px; font-size: 8pt;">
                     @php
                         $paymentColors = [

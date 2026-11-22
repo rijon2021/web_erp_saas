@@ -28,7 +28,7 @@ class PwaManifestController extends Controller
      */
     protected array $surfaces = [
         'app' => [
-            'short_name'       => 'Stocky',
+            'short_name'       => 'POS',
             'description'      => 'Ultimate Inventory with POS',
             'start_url'        => '/',
             'scope'            => '/',
@@ -108,6 +108,49 @@ class PwaManifestController extends Controller
     }
 
     /**
+     * The service worker's offline fallback page, branded with the tenant's
+     * own app name, logo and favicon. The SW precaches it once and serves it
+     * with no network, so the images are inlined as data URIs (falling back to
+     * a plain URL when too large to inline).
+     */
+    public function offline()
+    {
+        $setting = $this->setting();
+        $settingsDir = upload_path('settings');
+
+        $logo = $this->inlineImage($settingsDir . '/' . trim((string) ($setting->logo ?? '')))
+            ?? $this->inlineImage(upload_path('pwa') . '/pwa-icon-192.png')
+            ?? '/pwa_images/pwa-icon-192.png';
+
+        $favicon = $this->inlineImage($settingsDir . '/' . (trim((string) ($setting->favicon ?? '')) ?: 'favicon.ico'))
+            ?? $logo;
+
+        return response()
+            ->view('pwa.offline', [
+                'appName' => $this->appName('POS'),
+                'logo'    => $logo,
+                'favicon' => $favicon,
+            ])
+            ->header('Cache-Control', 'no-cache');
+    }
+
+    /** A public/ file as a data URI, or null when missing or too big to inline. */
+    protected function inlineImage(string $relative, int $maxBytes = 262144): ?string
+    {
+        $path = public_path($relative);
+        if (! is_file($path) || filesize($path) > $maxBytes) {
+            return null;
+        }
+
+        $mime = @mime_content_type($path) ?: 'image/png';
+        if (! str_starts_with($mime, 'image/')) {
+            return null;
+        }
+
+        return 'data:' . $mime . ';base64,' . base64_encode((string) file_get_contents($path));
+    }
+
+    /**
      * Overlay the tenant's saved PWA overrides. Each is optional: a NULL or
      * blank column keeps the value already built for the surface, which is what
      * the settings page communicates with its placeholders.
@@ -177,7 +220,7 @@ class PwaManifestController extends Controller
             // Settings table may be unavailable; fall through to the default.
         }
 
-        return 'Stocky ' . $shortName;
+        return $shortName;
     }
 
     protected function icons(): array

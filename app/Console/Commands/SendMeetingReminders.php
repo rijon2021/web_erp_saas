@@ -18,8 +18,9 @@ class SendMeetingReminders extends Command
     public function handle()
     {
         // Meetings live in each tenant DB — this must run per tenant,
-        // never on the central connection.
-        foreach (Tenant::where('status', Tenant::STATUS_ACTIVE)->cursor() as $tenant) {
+        // never on the central connection. Only tenants whose plan has the
+        // module are entered: this runs every minute.
+        foreach (Tenant::activeWithFeature('meetings') as $tenant) {
             try {
                 $tenant->run(fn () => $this->processTenant($tenant));
             } catch (\Illuminate\Database\QueryException $e) {
@@ -43,8 +44,12 @@ class SendMeetingReminders extends Command
         $meetings = Meeting::with('participants.user', 'organizer')
             ->where('status', 'scheduled')
             ->where('reminder_sent', false)
-            ->whereDate('meeting_date', '>=', $now->copy()->subDay()->toDateString())
-            ->whereDate('meeting_date', '<=', $now->copy()->addDay()->toDateString())
+            // meeting_date is a DATE column: a plain range uses its index,
+            // whereDate() would wrap it in DATE() and scan.
+            ->whereBetween('meeting_date', [
+                $now->copy()->subDay()->toDateString(),
+                $now->copy()->addDay()->toDateString(),
+            ])
             ->get();
 
         $sentMeetings = 0;

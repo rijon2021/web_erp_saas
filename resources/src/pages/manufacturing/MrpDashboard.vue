@@ -1,18 +1,18 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Manufacturing"
-      subtitle="What is on the floor, what it is costing and what is holding it up."
-      :breadcrumb="['Manufacturing', 'Dashboard']"
+      :title="$t('Manufacturing')"
+      :subtitle="$t('Mrp_Dashboard_Subtitle')"
+      :breadcrumb="[$t('Manufacturing'), $t('Dashboard')]"
     >
       <template #actions>
         <a-button @click="$router.push('/mrp/planning')">
           <template #icon><CalculatorOutlined /></template>
-          Planning
+          {{ $t('Mrp_Planning') }}
         </a-button>
         <a-button type="primary" @click="$router.push('/mrp/production-orders')">
           <template #icon><PlusOutlined /></template>
-          Production orders
+          {{ $t('Mrp_Production_Orders') }}
         </a-button>
       </template>
     </PageHeader>
@@ -23,24 +23,24 @@
           <span class="kpi-ic kpi-ic--brand"><Factory :size="18" /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.orders_open || 0 }}</span>
-            <span class="kpi-label">Open orders</span>
-            <span v-if="data.orders_late" class="kpi-sub kpi-sub--bad">{{ data.orders_late }} past due</span>
+            <span class="kpi-label">{{ $t('Mrp_Open_Orders') }}</span>
+            <span v-if="data.orders_late" class="kpi-sub kpi-sub--bad">{{ data.orders_late }} {{ $t('Mrp_Past_Due') }}</span>
           </span>
         </button>
         <button type="button" class="kpi" @click="$router.push('/mrp/work-orders')">
           <span class="kpi-ic kpi-ic--work"><Hammer :size="18" /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.open_work_orders || 0 }}</span>
-            <span class="kpi-label">Operations queued</span>
+            <span class="kpi-label">{{ $t('Mrp_Operations_Queued') }}</span>
           </span>
         </button>
         <div class="kpi kpi--static">
           <span class="kpi-ic kpi-ic--ok"><CheckCircleOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ number(data.produced_month || 0, 0) }}</span>
-            <span class="kpi-label">Produced this month</span>
+            <span class="kpi-label">{{ $t('Mrp_Produced_This_Month') }}</span>
             <span v-if="data.scrap_rate_month !== null" class="kpi-sub">
-              {{ data.scrap_rate_month }}% scrap
+              {{ data.scrap_rate_month }}% {{ $t('Mrp_Scrap') }}
             </span>
           </span>
         </div>
@@ -48,7 +48,7 @@
           <span class="kpi-ic kpi-ic--cost"><DollarOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ money(data.cost_month || 0) }}</span>
-            <span class="kpi-label">Production cost, month</span>
+            <span class="kpi-label">{{ $t('Mrp_Production_Cost_Month') }}</span>
           </span>
         </div>
         <button type="button" class="kpi" @click="$router.push('/mrp/quality')">
@@ -58,9 +58,9 @@
               {{ data.qc_pass_rate_30d !== null && data.qc_pass_rate_30d !== undefined
                 ? data.qc_pass_rate_30d + '%' : '—' }}
             </span>
-            <span class="kpi-label">QC pass rate, 30d</span>
+            <span class="kpi-label">{{ $t('Mrp_Qc_Pass_Rate_30d') }}</span>
             <span v-if="data.qc_rejected_30d" class="kpi-sub kpi-sub--bad">
-              {{ number(data.qc_rejected_30d, 0) }} rejected
+              {{ number(data.qc_rejected_30d, 0) }} {{ $t('Mrp_Rejected') }}
             </span>
           </span>
         </button>
@@ -68,7 +68,7 @@
           <span class="kpi-ic kpi-ic--plan"><Calculator :size="18" /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.pending_suggestions || 0 }}</span>
-            <span class="kpi-label">Planning suggestions</span>
+            <span class="kpi-label">{{ $t('Mrp_Planning_Suggestions') }}</span>
             <span v-if="data.latest_run" class="kpi-sub">{{ data.latest_run.reference }}</span>
           </span>
         </button>
@@ -79,18 +79,18 @@
           <ReportChart
             :data="data.output_trend || []"
             :fields="[
-              { key: 'produced', label: 'Produced' },
-              { key: 'scrapped', label: 'Scrapped' },
+              { key: 'produced', label: $t('Mrp_Produced') },
+              { key: 'scrapped', label: $t('Mrp_Scrapped') },
             ]"
-            title="Output — last 14 days"
+            :title="$t('Mrp_Output_Last_14_Days')"
             type="bar"
             x-key="d"
             :height="300"
           />
         </a-col>
         <a-col :xs="24" :xl="9">
-          <a-card size="small" title="Load by work centre" class="panel">
-            <a-empty v-if="!data.load_by_work_center?.length" :image="simpleImage" description="Nothing queued" />
+          <a-card size="small" :title="$t('Mrp_Load_By_Work_Centre')" class="panel">
+            <a-empty v-if="!data.load_by_work_center?.length" :image="simpleImage" :description="$t('Mrp_Nothing_Queued')" />
             <ul v-else class="bars">
               <li v-for="row in data.load_by_work_center" :key="row.label">
                 <div class="bar-head">
@@ -100,7 +100,7 @@
                 <div class="bar-track">
                   <div class="bar-fill" :style="{ width: pct(row.hours, maxLoad) }" />
                 </div>
-                <span class="bar-sub">{{ row.count }} operation{{ row.count === 1 ? '' : 's' }}</span>
+                <span class="bar-sub">{{ row.count }} {{ $t('Mrp_Operations') }}</span>
               </li>
             </ul>
           </a-card>
@@ -109,17 +109,17 @@
 
       <a-row :gutter="16" style="margin-top: 16px">
         <a-col :xs="24" :xl="12">
-          <a-card size="small" title="Waiting on material" class="panel">
+          <a-card size="small" :title="$t('Mrp_Waiting_On_Material')" class="panel">
             <template #extra>
-              <a class="link" @click="$router.push('/mrp/production-orders?status=draft')">All drafts</a>
+              <a class="link" @click="$router.push('/mrp/production-orders?status=draft')">{{ $t('Mrp_All_Drafts') }}</a>
             </template>
-            <a-empty v-if="!data.blocked_orders?.length" :image="simpleImage" description="Nothing is short" />
+            <a-empty v-if="!data.blocked_orders?.length" :image="simpleImage" :description="$t('Mrp_Nothing_Is_Short')" />
             <a-list v-else size="small" :data-source="data.blocked_orders">
               <template #renderItem="{ item }">
                 <a-list-item class="row" @click="$router.push(`/mrp/production-orders/${item.id}`)">
                   <a-list-item-meta :title="item.reference" :description="item.product_name" />
                   <a-tag color="error">
-                    {{ item.short_count }} short<template v-if="item.first_short"> · {{ item.first_short }}</template>
+                    {{ item.short_count }} {{ $t('Mrp_Short_Lc') }}<template v-if="item.first_short"> · {{ item.first_short }}</template>
                   </a-tag>
                 </a-list-item>
               </template>
@@ -127,11 +127,11 @@
           </a-card>
         </a-col>
         <a-col :xs="24" :xl="12">
-          <a-card size="small" title="Recent orders" class="panel">
+          <a-card size="small" :title="$t('Mrp_Recent_Orders')" class="panel">
             <template #extra>
-              <a class="link" @click="$router.push('/mrp/production-orders')">All orders</a>
+              <a class="link" @click="$router.push('/mrp/production-orders')">{{ $t('Mrp_All_Orders') }}</a>
             </template>
-            <a-empty v-if="!data.recent_orders?.length" :image="simpleImage" description="No orders yet" />
+            <a-empty v-if="!data.recent_orders?.length" :image="simpleImage" :description="$t('Mrp_No_Orders_Yet')" />
             <a-list v-else size="small" :data-source="data.recent_orders">
               <template #renderItem="{ item }">
                 <a-list-item class="row" @click="$router.push(`/mrp/production-orders/${item.id}`)">
@@ -156,7 +156,7 @@
 
       <a-row :gutter="16" style="margin-top: 16px">
         <a-col :span="24">
-          <a-card size="small" title="Where orders stand" class="panel">
+          <a-card size="small" :title="$t('Mrp_Where_Orders_Stand')" class="panel">
             <div class="pipeline">
               <button
                 v-for="stage in pipeline" :key="stage.value"
@@ -189,6 +189,9 @@ import ReportChart from '../../components/ReportChart.vue';
 import { useFormat } from '../../composables/useFormat';
 import { ORDER_STATUSES, PRIORITIES, labelOf, optionOf } from './mrpOptions';
 import http from '../../lib/http';
+import { useI18n } from 'vue-i18n';
+
+const { t } = useI18n();
 
 const { money, number } = useFormat();
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE;
@@ -209,11 +212,11 @@ const qcIconClass = computed(() => {
 });
 
 const pipeline = computed(() => [
-  { value: 'draft', label: 'Draft', count: data.value.orders_draft || 0, colour: 'rgba(128,128,128,0.5)' },
-  { value: 'planned', label: 'Planned', count: data.value.orders_planned || 0, colour: '#2563eb' },
-  { value: 'released', label: 'Released', count: data.value.orders_released || 0, colour: '#6d28d9' },
-  { value: 'in_progress', label: 'In progress', count: data.value.orders_in_progress || 0, colour: '#d97706' },
-  { value: 'completed', label: 'Completed', count: data.value.orders_completed || 0, colour: '#16a34a' },
+  { value: 'draft', label: t('Mrp_Status_Draft'), count: data.value.orders_draft || 0, colour: 'rgba(128,128,128,0.5)' },
+  { value: 'planned', label: t('Mrp_Status_Planned'), count: data.value.orders_planned || 0, colour: '#2563eb' },
+  { value: 'released', label: t('Mrp_Status_Released'), count: data.value.orders_released || 0, colour: '#6d28d9' },
+  { value: 'in_progress', label: t('Mrp_Status_In_Progress'), count: data.value.orders_in_progress || 0, colour: '#d97706' },
+  { value: 'completed', label: t('Mrp_Status_Completed'), count: data.value.orders_completed || 0, colour: '#16a34a' },
 ]);
 
 function pct(value, max) {

@@ -14,7 +14,8 @@ class SaleCommission extends Model
 
     protected $fillable = [
         'sale_id', 'sales_agent_id', 'commission_program_id', 'commission_rule_id',
-        'base_amount', 'commission_amount', 'status', 'commission_receipt_id', 'calculated_at', 'notes',
+        'base_amount', 'commission_amount', 'rule_terms', 'status', 'is_adjustment',
+        'commission_receipt_id', 'calculated_at', 'notes',
     ];
 
     protected $casts = [
@@ -25,6 +26,8 @@ class SaleCommission extends Model
         'commission_receipt_id' => 'integer',
         'base_amount' => 'decimal:4',
         'commission_amount' => 'decimal:4',
+        'rule_terms' => 'array',
+        'is_adjustment' => 'boolean',
         'calculated_at' => 'datetime',
     ];
 

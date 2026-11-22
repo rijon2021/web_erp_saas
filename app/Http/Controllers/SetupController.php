@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\TestDbController;
+use App\Services\Licensing\LicenseService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -81,6 +83,12 @@ class SetupController extends Controller
 
     public function viewStep2()
     {
+        // The licence step must have been answered (activated, or skipped
+        // after ui-lib.com could not be reached).
+        if (! session('setup.license') && ! session('setup.license_skipped')) {
+            return redirect('/setup/license');
+        }
+
         $connection = session('env.DB_CONNECTION') ?: config('database.default');
         $db = config("database.connections.{$connection}", []);
 
@@ -98,6 +106,11 @@ class SetupController extends Controller
 
     public function viewStep3()
     {
+        // An install sealed without an answer on the licence step locks at once.
+        if (! session('setup.license') && ! session('setup.license_skipped')) {
+            return redirect('/setup/license');
+        }
+
         $dbtype = session('env.DB_CONNECTION') ?: config('database.default');
         $db = config("database.connections.{$dbtype}", []);
         $dbDatabase = session('env.DB_DATABASE');
@@ -130,6 +143,27 @@ class SetupController extends Controller
 
     public function lastStep(Request $request)
     {
+        // An install sealed without an answer on the licence step locks at once.
+        if (! session('setup.license') && ! session('setup.license_skipped')) {
+            return redirect('/setup/license');
+        }
+
+        // The super admin account is chosen here — no default credentials
+        // (seeded superadmin@stockysaas.site, or APP_SUPER_ADMIN_* left in
+        // .env) may survive an install.
+        // On failure go back to the review page explicitly: it is reached by a
+        // POST (step-3), so "back" would land on the database step instead.
+        $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
+            'admin_email' => 'required|email|max:191',
+            'admin_password' => ['required', 'confirmed', \Illuminate\Validation\Rules\Password::min(8)->mixedCase()->numbers()->symbols()],
+        ]);
+        if ($validator->fails()) {
+            return redirect('/setup/step-3')
+                ->withErrors($validator)
+                ->withInput($request->only('admin_email'));
+        }
+        $admin = $validator->validated();
+
         ini_set('max_execution_time', 2000);
         ini_set('memory_limit', '512M');
 
@@ -160,17 +194,26 @@ class SetupController extends Controller
             // (tables land in the wrong DB while setup still reports success).
             $connection = session('env.DB_CONNECTION') ?: config('database.default');
 
-            config([
-                "database.connections.{$connection}.host"     => session('env.DB_HOST'),
-                "database.connections.{$connection}.port"     => session('env.DB_PORT'),
-                "database.connections.{$connection}.database" => session('env.DB_DATABASE'),
-                "database.connections.{$connection}.username" => session('env.DB_USERNAME'),
-                "database.connections.{$connection}.password" => str_replace('"', '', session('env.DB_PASSWORD') ?? ''),
-                'database.default'                            => $connection,
-            ]);
+            config(['database.default' => $connection]);
 
-            DB::purge($connection);
-            DB::reconnect($connection);
+            // Central migrations, models and seeders are pinned to the 'central'
+            // connection, which reads the same DB_* vars — refresh it too, or the
+            // central tables get created in the OLD database (e.g. "tenants
+            // already exists" when the old DB was a previous install).
+            $centralConnection = config('tenancy.database.central_connection', 'central');
+
+            foreach (array_unique([$connection, $centralConnection]) as $name) {
+                config([
+                    "database.connections.{$name}.host"     => session('env.DB_HOST'),
+                    "database.connections.{$name}.port"     => session('env.DB_PORT'),
+                    "database.connections.{$name}.database" => session('env.DB_DATABASE'),
+                    "database.connections.{$name}.username" => session('env.DB_USERNAME'),
+                    "database.connections.{$name}.password" => str_replace('"', '', session('env.DB_PASSWORD') ?? ''),
+                ]);
+
+                DB::purge($name);
+                DB::reconnect($name);
+            }
 
             // Central DB schema only — no tenant seeding
             $migrateExit = Artisan::call('migrate:fresh', [
@@ -199,6 +242,18 @@ class SetupController extends Controller
             Artisan::call('db:seed', [
                 '--class' => 'Database\\Seeders\\Central\\CentralUsersSeeder',
                 '--force' => true,
+            ]);
+
+            // Replace the seeded super admin's credentials with the ones
+            // entered on the install step (migrate:fresh above leaves exactly
+            // the one account the seeder just created).
+            $superAdmin = \App\Models\Central\CentralUser::query()->orderBy('id')->first();
+            if (! $superAdmin) {
+                throw new \RuntimeException('The super admin account could not be created.');
+            }
+            \App\Models\Central\CentralUser::query()->whereKey($superAdmin->getKey())->update([
+                'email' => $admin['admin_email'],
+                'password' => \Illuminate\Support\Facades\Hash::make($admin['admin_password']),
             ]);
             Artisan::call('db:seed', [
                 '--class' => 'Database\\Seeders\\Central\\PlansSeeder',
@@ -247,32 +302,34 @@ class SetupController extends Controller
                 throw new \RuntimeException('Setup ran but the expected schema is missing; not marking as installed.');
             }
 
+            // Licence activated on the licence step: persist it now that the
+            // central table exists. A failure here must not fail the install —
+            // the super-admin notice leads to Settings → Licence afterwards.
+            $this->persistLicense();
+
             Storage::disk('public')->put('installed', 'OK');
 
         } catch (\Throwable $e) {
             report($e);
 
-            // Render the styled installer error page pinned to step 4 so the
+            // Render the styled installer error page pinned to step 5 so the
             // user can read the failure and retry without losing their settings.
             return view('setup.error', [
                 'message' => $e->getMessage(),
-                'setupCurrentStep' => 4,
+                'setupCurrentStep' => 5,
             ]);
         }
 
-        $envContent = @file_get_contents(base_path() . '/.env') ?: '';
-        preg_match('/^APP_SUPER_ADMIN_EMAIL=(.*)$/m', $envContent, $emailMatch);
-        preg_match('/^APP_SUPER_ADMIN_PASSWORD=(.*)$/m', $envContent, $passwordMatch);
-        $superAdminEmail = isset($emailMatch[1]) ? trim($emailMatch[1], " \t\"'") : 'superadmin@stockysaas.site';
-        $superAdminPassword = isset($passwordMatch[1]) ? trim($passwordMatch[1], " \t\"'") : '123456';
+        // Only the e-mail chosen on the install step is shown — never a
+        // password (this page used to echo APP_SUPER_ADMIN_PASSWORD from .env).
+        $superAdminEmail = $admin['admin_email'];
 
         $appUrl = rtrim(session('env.APP_URL') ?: $request->getSchemeAndHttpHost(), '/');
         $superAdminLoginUrl = $appUrl . '/super/login';
 
         return view('setup.finishedSetup', compact(
             'superAdminLoginUrl',
-            'superAdminEmail',
-            'superAdminPassword'
+            'superAdminEmail'
         ));
     }
 
@@ -302,7 +359,220 @@ class SetupController extends Controller
             $request->session()->put('env.APP_URL', rtrim($request->app_url, '/'));
         }
 
-        return $this->viewStep2();
+        // A licence is tied to its domain: activated for another address, the
+        // token would be refused at install and the install would lock.
+        $activated = session('setup.license');
+        if ($activated && \UiLibLicenseClient::normalizeDomain((string) session('env.APP_URL')) !== ($activated['domain'] ?? null)) {
+            session()->forget('setup.license');
+        }
+
+        return redirect('/setup/license');
+    }
+
+    // ------------------------------------------------------------------
+    // Licence step (UI Lib). Activation does not need the database: the
+    // answer is checked with ui-lib.com here, kept in the session, and
+    // written to the central licence table by lastStep once it exists.
+    // ------------------------------------------------------------------
+
+    public function viewLicense()
+    {
+        return $this->renderLicense([]);
+    }
+
+    public function setupLicense(Request $request)
+    {
+        $action = (string) $request->input('action', 'activate');
+
+        if ($action === 'keep' && session('setup.license')) {
+            return redirect('/setup/step-2');
+        }
+
+        if ($action === 'change') {
+            session()->forget(['setup.license', 'setup.license_skipped']);
+
+            return redirect('/setup/license');
+        }
+
+        if ($action === 'skip') {
+            // Offered only after ui-lib.com could not be reached (renderLicense
+            // sets the flag): install goes on, the platform runs for the
+            // grace period and the super-admin notice asks for activation. A
+            // hand-made "skip" without such an answer is refused.
+            if (! session('setup.license_skip_allowed')) {
+                return $this->renderLicense(['error' => 'Activate your licence to continue.']);
+            }
+            session()->forget('setup.license');
+            session()->put('setup.license_skipped', true);
+
+            return redirect('/setup/step-2');
+        }
+
+        $license = trim((string) $request->input('license'));
+        $email = trim((string) $request->input('email'));
+        $needsEmail = \UiLibLicenseClient::needsEmail($license);
+        if (! $needsEmail) {
+            $email = '';
+        }
+
+        if ($license === '') {
+            return $this->renderLicense(['error' => 'Enter your licence key or purchase code.', 'license' => $license, 'email' => $email]);
+        }
+        if ($needsEmail && ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL))) {
+            return $this->renderLicense(['error' => 'Enter the email address to use with your Envato purchase code.', 'license' => $license, 'email' => $email]);
+        }
+
+        $client = app(\UiLibLicenseClient::class);
+        $siteUrl = $this->setupSiteUrl();
+
+        // "Deactivate there": release another domain of this licence first,
+        // then fall through to a fresh activation attempt here.
+        if ($action === 'release') {
+            $domain = trim((string) $request->input('domain'));
+            $released = $domain !== '' ? $client->deactivate($license, $email, $domain) : ['ok' => false, 'network_error' => false, 'code' => 'invalid_request', 'message' => null];
+            if (! $released['ok'] && $released['code'] !== 'not_activated') {
+                return $this->renderLicense([
+                    'license' => $license, 'email' => $email,
+                    'error' => $released['network_error'] ? null : ($released['message'] ?: 'The domain could not be released.'),
+                    'networkError' => (bool) $released['network_error'],
+                ]);
+            }
+        }
+
+        $instanceId = session('setup.license_instance_id') ?: (string) Str::uuid();
+        session()->put('setup.license_instance_id', $instanceId);
+
+        $result = $client->activate($license, $email, $siteUrl, [
+            'version' => app(LicenseService::class)->version(),
+            'instance_id' => $instanceId,
+        ]);
+
+        if ($result['ok']) {
+            $info = $result['data']['license'] ?? [];
+            session()->forget(['setup.license_skipped', 'setup.license_skip_allowed']);
+            session()->put('setup.license', [
+                'license' => $license,
+                'email' => $email,
+                'token' => $result['token'],
+                'instance_id' => $instanceId,
+                'domain' => $result['data']['domain'] ?? '',
+                'local' => (bool) ($result['data']['local'] ?? false),
+                'product_name' => $info['product_name'] ?? '',
+                'type' => $info['type'] ?? '',
+                'hint' => $info['hint'] ?? '',
+            ]);
+
+            return redirect('/setup/step-2');
+        }
+
+        if ($result['network_error']) {
+            return $this->renderLicense(['license' => $license, 'email' => $email, 'networkError' => true]);
+        }
+
+        if ($result['code'] === 'activation_limit') {
+            return $this->renderLicense([
+                'license' => $license, 'email' => $email,
+                'limit' => ['message' => $result['message'], 'domains' => $result['data']['domains'] ?? []],
+            ]);
+        }
+
+        // The host itself is unusable as a domain (e.g. Laragon's folder-named
+        // "my_shop.test" — underscores are not allowed). No licence can ever be
+        // tied to it, and an unlicensed install is locked, so the install
+        // waits until the host (step 1's Application URL) is fixed.
+        if ($result['code'] === 'invalid_domain') {
+            return $this->renderLicense(['license' => $license, 'email' => $email, 'invalidDomain' => true]);
+        }
+
+        return $this->renderLicense([
+            'license' => $license, 'email' => $email,
+            'error' => $result['message'] ?: 'The licence could not be activated ('.($result['code'] ?? 'error').').',
+        ]);
+    }
+
+    /** The URL the licence is bound to — step 1's Application URL, i.e. the future APP_URL. */
+    private function setupSiteUrl(): string
+    {
+        return (string) (session('env.APP_URL') ?: request()->getSchemeAndHttpHost());
+    }
+
+    private function renderLicense(array $vars)
+    {
+        $siteUrl = $this->setupSiteUrl();
+
+        // Only an unreachable ui-lib.com unlocks "Continue without activating":
+        // the platform then runs for the grace period and locks until it is
+        // activated. An unusable host name has to be fixed first.
+        if (! empty($vars['networkError'])) {
+            session()->put('setup.license_skip_allowed', true);
+        } else {
+            // Any real answer since then takes the offer back.
+            session()->forget('setup.license_skip_allowed');
+        }
+
+        return view('setup.license', array_merge([
+            'siteUrl' => $siteUrl,
+            'domain' => \UiLibLicenseClient::normalizeDomain($siteUrl),
+            'activated' => session('setup.license'),
+            'license' => '',
+            'email' => '',
+            'error' => null,
+            'networkError' => false,
+            'invalidDomain' => false,
+            'limit' => null,
+        ], $vars));
+    }
+
+    /** Write the licence activated on the licence step into the migrated central database. */
+    private function persistLicense(): void
+    {
+        $saved = session('setup.license');
+        if (! is_array($saved) || empty($saved['token'])) {
+            if (session('setup.license_skipped')) {
+                try {
+                    app(LicenseService::class)->recordInstallSkip();
+                } catch (\Throwable $e) {
+                    \Log::warning('Setup: could not record the licence skip - '.$e->getMessage());
+                }
+                session()->forget(['setup.license_skipped', 'setup.license_skip_allowed', 'setup.license_instance_id']);
+            }
+
+            return;
+        }
+
+        try {
+            // The token is bound to the URL the licence step activated with
+            // (the APP_URL just written). The running process still carries
+            // the pre-install config('app.url'), so pass that URL explicitly
+            // and align the live config for the rest of this request.
+            $siteUrl = $this->setupSiteUrl();
+            config(['app.url' => $siteUrl]);
+            // Step 1 may have generated a new APP_KEY: it is in .env now, but
+            // this process still encrypts with the old one. Re-key the
+            // encrypter so the stored licence key decrypts after reboot.
+            $appKey = (string) session('env.APP_KEY');
+            if ($appKey !== '' && $appKey !== config('app.key')) {
+                config(['app.key' => $appKey]);
+                app()->forgetInstance('encrypter');
+                \Illuminate\Support\Facades\Crypt::clearResolvedInstance('encrypter');
+            }
+
+            $stored = app(LicenseService::class)->importActivation(
+                (string) $saved['license'],
+                (string) ($saved['email'] ?? ''),
+                (string) $saved['token'],
+                $saved['instance_id'] ?? null,
+                $siteUrl
+            );
+            if (! $stored) {
+                \Log::warning('Setup: the licence token did not verify for '.$siteUrl.' — activate again under Settings → Licence.');
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('Setup: could not store the licence activation — '.$e->getMessage());
+        }
+
+        // The key and token have no business staying in the session once stored.
+        session()->forget(['setup.license', 'setup.license_skipped', 'setup.license_skip_allowed', 'setup.license_instance_id']);
     }
 
     public function setupStep2(Request $request)

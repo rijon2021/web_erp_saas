@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHeader title="Doctors" :breadcrumb="['Hospital', 'Doctors']">
+    <PageHeader :title="$t('Hm_Doctors')" :breadcrumb="[$t('Hm_Hospital'), $t('Hm_Doctors')]">
       <template #actions>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
@@ -12,17 +12,17 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search name, specialty or phone…"
+          v-model:value="crud.search.value" :placeholder="$t('Hm_Search_Doctor_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.department_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All departments"
+          option-filter-prop="label" :placeholder="$t('Hm_All_Departments')"
           :options="departmentOptions" @change="crud.reload"
         />
         <a-select
-          v-model:value="filters.active" class="tb-item-sm" allow-clear placeholder="All"
-          :options="[{ value: '1', label: 'Active' }, { value: '0', label: 'Inactive' }]"
+          v-model:value="filters.active" class="tb-item-sm" allow-clear :placeholder="$t('Hm_All')"
+          :options="[{ value: '1', label: $t('Hm_Active') }, { value: '0', label: $t('Hm_Inactive') }]"
           @change="crud.reload"
         />
       </div>
@@ -61,12 +61,12 @@
         </template>
         <template v-else-if="column.key === 'is_active'">
           <a-tag :color="record.is_active ? 'success' : 'default'">
-            {{ record.is_active ? 'Active' : 'Inactive' }}
+            {{ record.is_active ? $t('Hm_Active') : $t('Hm_Inactive') }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
-            <a-tooltip title="Today's schedule">
+            <a-tooltip :title="$t('Hm_Todays_Schedule')">
               <a-button type="text" size="small" @click="openSchedule(record)">
                 <template #icon><CalendarOutlined /></template>
               </a-button>
@@ -88,67 +88,64 @@
 
     <!-- Doctor form -->
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit doctor' : 'New doctor'" :width="720"
+      :open="formOpen" :title="editing ? $t('Hm_Edit_Doctor') : $t('Hm_New_Doctor')" :width="720"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Name *" name="name">
-              <a-input v-model:value="form.name" placeholder="e.g. Dr. Amina Haddad" allow-clear />
+            <a-form-item :label="$t('Name') + ' *'" name="name">
+              <a-input v-model:value="form.name" :placeholder="$t('Hm_Doctor_Name_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Code">
+            <a-form-item :label="$t('Code')">
               <a-input v-model:value="form.code" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Consultation fee">
+            <a-form-item :label="$t('Hm_Consultation_Fee')">
               <a-input-number v-model:value="form.consultation_fee" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Department">
+            <a-form-item :label="$t('Hm_Department')">
               <a-select
                 v-model:value="form.department_id" allow-clear show-search
-                option-filter-prop="label" :options="departmentOptions" placeholder="None"
+                option-filter-prop="label" :options="departmentOptions" :placeholder="$t('Hm_None')"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Specialty">
-              <a-input v-model:value="form.specialty" placeholder="e.g. Cardiology" allow-clear />
+            <a-form-item :label="$t('Hm_Specialty')">
+              <a-input v-model:value="form.specialty" :placeholder="$t('Hm_Specialty_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Qualification">
-              <a-input v-model:value="form.qualification" placeholder="e.g. MBBS, MD" allow-clear />
+            <a-form-item :label="$t('Hm_Qualification')">
+              <a-input v-model:value="form.qualification" :placeholder="$t('Hm_Qualification_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Licence no.">
+            <a-form-item :label="$t('Hm_Licence_No')">
               <a-input v-model:value="form.license_no" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Phone">
+            <a-form-item :label="$t('Phone')">
               <a-input v-model:value="form.phone" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Email" name="email">
+            <a-form-item :label="$t('Email')" name="email">
               <a-input v-model:value="form.email" allow-clear />
             </a-form-item>
           </a-col>
         </a-row>
 
-        <a-divider orientation="left" class="divider">Clinic hours</a-divider>
-        <p class="hint">
-          Used to warn when an appointment falls outside these hours. It never blocks a booking —
-          emergencies do not read timetables.
-        </p>
+        <a-divider orientation="left" class="divider">{{ $t('Hm_Clinic_Hours') }}</a-divider>
+        <p class="hint">{{ $t('Hm_Clinic_Hours_Hint') }}</p>
         <div class="hours">
           <div v-for="day in WEEK_DAYS" :key="day.value" class="hours-row">
             <a-checkbox
@@ -159,12 +156,12 @@
             </a-checkbox>
             <a-time-picker
               :value="timeValue(day.value, 0)" format="HH:mm" value-format="HH:mm"
-              :disabled="!availability[day.value]" placeholder="From" class="hours-time"
+              :disabled="!availability[day.value]" :placeholder="$t('From')" class="hours-time"
               @update:value="v => setTime(day.value, 0, v)"
             />
             <a-time-picker
               :value="timeValue(day.value, 1)" format="HH:mm" value-format="HH:mm"
-              :disabled="!availability[day.value]" placeholder="To" class="hours-time"
+              :disabled="!availability[day.value]" :placeholder="$t('To')" class="hours-time"
               @update:value="v => setTime(day.value, 1, v)"
             />
           </div>
@@ -172,12 +169,12 @@
 
         <a-row :gutter="16" style="margin-top: 8px">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Photo">
+            <a-form-item :label="$t('Hm_Photo')">
               <a-space>
                 <a-upload :show-upload-list="false" accept="image/*" :before-upload="pickImage">
                   <a-button>
                     <template #icon><UploadOutlined /></template>
-                    {{ previewUrl ? 'Replace' : 'Upload' }}
+                    {{ previewUrl ? $t('Hm_Replace') : $t('Upload') }}
                   </a-button>
                 </a-upload>
                 <a-avatar v-if="previewUrl" :size="40" :src="previewUrl" />
@@ -185,8 +182,8 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Status">
-              <a-checkbox v-model:checked="form.is_active">Accepting appointments</a-checkbox>
+            <a-form-item :label="$t('Status')">
+              <a-checkbox v-model:checked="form.is_active">{{ $t('Hm_Accepting_Appointments') }}</a-checkbox>
             </a-form-item>
           </a-col>
         </a-row>
@@ -198,22 +195,22 @@
       <a-date-picker v-model:value="scheduleDate" style="width: 100%" value-format="YYYY-MM-DD" @change="loadSchedule" />
       <a-alert
         v-if="schedule && !schedule.working" type="warning" show-icon
-        message="No clinic hours set for this day." style="margin-top: 12px"
+        :message="$t('Hm_No_Clinic_Hours_That_Day')" style="margin-top: 12px"
       />
       <a-alert
         v-else-if="schedule?.hours" type="info" show-icon
-        :message="`Clinic hours ${schedule.hours[0]} – ${schedule.hours[1]}`" style="margin-top: 12px"
+        :message="`${$t('Hm_Clinic_Hours')} ${schedule.hours[0]} – ${schedule.hours[1]}`" style="margin-top: 12px"
       />
       <a-list :data-source="schedule?.appointments || []" size="small" style="margin-top: 12px">
         <template #renderItem="{ item }">
           <a-list-item>
-            <a-list-item-meta :title="item.patient_name" :description="`${clock(item.scheduled_at)} · ${item.duration_minutes} min`" />
+            <a-list-item-meta :title="item.patient_name" :description="`${clock(item.scheduled_at)} · ${$t('Hm_N_Min', { n: item.duration_minutes })}`" />
             <a-tag :color="optionOf(APPOINTMENT_STATUSES, item.status).color">
               {{ labelOf(APPOINTMENT_STATUSES, item.status) }}
             </a-tag>
           </a-list-item>
         </template>
-        <template #empty><a-empty description="Nothing booked" /></template>
+        <template #empty><a-empty :description="$t('Hm_Nothing_Booked')" /></template>
       </a-list>
     </a-drawer>
   </div>
@@ -235,7 +232,7 @@ import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { uploadForm } from '../../lib/upload';
-import { WEEK_DAYS, APPOINTMENT_STATUSES, labelOf, optionOf } from './hospitalOptions';
+import { WEEK_DAYS, APPOINTMENT_STATUSES, labelOf, optionOf, localDate } from './hospitalOptions';
 import http from '../../lib/http';
 import { t } from '../../i18n';
 
@@ -253,13 +250,13 @@ const departments = ref([]);
 const departmentOptions = computed(() => departments.value.map(d => ({ value: d.id, label: d.name })));
 
 const columns = computed(() => [
-  { title: 'Doctor', key: 'name', dataIndex: 'name', sorter: true },
-  { title: 'Department', dataIndex: 'department_name', key: 'department_name', width: 160 },
-  { title: 'Phone', dataIndex: 'phone', key: 'phone', width: 140 },
-  { title: 'Fee', key: 'fee', dataIndex: 'consultation_fee', sorter: true, width: 120 },
-  { title: 'Clinic days', key: 'availability', width: 230 },
-  { title: 'Today', key: 'today', width: 90 },
-  { title: 'Status', key: 'is_active', dataIndex: 'is_active', sorter: true, width: 110 },
+  { title: t('Hm_Doctor'), key: 'name', dataIndex: 'name', sorter: true },
+  { title: t('Hm_Department'), dataIndex: 'department_name', key: 'department_name', width: 160 },
+  { title: t('Phone'), dataIndex: 'phone', key: 'phone', width: 140 },
+  { title: t('Hm_Fee'), key: 'fee', dataIndex: 'consultation_fee', sorter: true, width: 120 },
+  { title: t('Hm_Clinic_Days'), key: 'availability', width: 230 },
+  { title: t('Hm_Today'), key: 'today', width: 90 },
+  { title: t('Status'), key: 'is_active', dataIndex: 'is_active', sorter: true, width: 110 },
   { title: '', key: 'actions', width: 120 },
 ]);
 
@@ -289,7 +286,7 @@ function empty() {
 
 const rules = computed(() => ({
   name: [{ required: true, message: t('Field_is_required', 'This field is required') }],
-  email: [{ type: 'email', message: t('InvalidData', 'Enter a valid email address') }],
+  email: [{ type: 'email', message: t('Enter_Valid_Email') }],
 }));
 
 function openForm(record) {
@@ -374,7 +371,7 @@ function firstError(data) {
 
 const scheduleOpen = ref(false);
 const scheduleDoctor = ref(null);
-const scheduleDate = ref(new Date().toISOString().slice(0, 10));
+const scheduleDate = ref(localDate());
 const schedule = ref(null);
 
 function clock(iso) {
@@ -385,7 +382,7 @@ function clock(iso) {
 
 function openSchedule(doctor) {
   scheduleDoctor.value = doctor;
-  scheduleDate.value = new Date().toISOString().slice(0, 10);
+  scheduleDate.value = localDate();
   scheduleOpen.value = true;
   loadSchedule();
 }

@@ -2,6 +2,7 @@
 
 namespace App\Services\Fbr;
 
+use App\Models\Central\EInvoicingProviderSetting;
 use App\Models\FbrDocument;
 use App\Models\FbrSetting;
 use App\Models\Sale;
@@ -27,6 +28,9 @@ class FbrService
         $settings = FbrSetting::current();
         if (! $settings || ! $settings->isReady()) {
             throw new RuntimeException('FBR Digital Invoicing is not enabled or the seller profile/token is incomplete.');
+        }
+        if (! EInvoicingProviderSetting::platformEnabled('fbr')) {
+            throw new RuntimeException('FBR Digital Invoicing is temporarily disabled by the platform administrator.');
         }
 
         $existing = FbrDocument::forSource($source);
@@ -62,7 +66,7 @@ class FbrService
     {
         try {
             $settings = FbrSetting::current();
-            if (! $settings || ! $settings->enabled || ! $settings->auto_submit || ! $settings->isReady()) {
+            if (! $settings || ! $settings->enabled || ! $settings->auto_submit || ! $settings->isReady() || ! EInvoicingProviderSetting::platformEnabled('fbr')) {
                 return null;
             }
 

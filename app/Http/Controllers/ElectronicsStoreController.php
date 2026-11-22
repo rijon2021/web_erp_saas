@@ -48,7 +48,7 @@ class ElectronicsStoreController extends StoreFrontController
         if ($sections['categories']) {
             $counts = Product::query()
                 ->where('is_active', 1)
-                ->where('hide_from_online_store', 0)
+                ->where('hide_from_online_store', 0)->forStorefrontWarehouses()
                 ->select('category_id', DB::raw('COUNT(*) AS c'))
                 ->groupBy('category_id')
                 ->pluck('c', 'category_id');
@@ -58,7 +58,7 @@ class ElectronicsStoreController extends StoreFrontController
                     $img = Product::query()
                         ->where('category_id', $c->id)
                         ->where('is_active', 1)
-                        ->where('hide_from_online_store', 0)
+                        ->where('hide_from_online_store', 0)->forStorefrontWarehouses()
                         ->whereNotNull('image')
                         ->where('image', '!=', '')
                         ->where('image', '!=', 'no-image.png')
@@ -153,7 +153,7 @@ class ElectronicsStoreController extends StoreFrontController
 
         // ----- Stats -----
         $numbers = [
-            'products' => Product::where('is_active', 1)->where('hide_from_online_store', 0)->count(),
+            'products' => Product::where('is_active', 1)->where('hide_from_online_store', 0)->forStorefrontWarehouses()->count(),
             'customers' => Client::count(),
             'rating' => Schema::hasTable('product_reviews')
                 ? (float) (ProductReview::where('status', 'approved')->avg('rating') ?: 4.9)

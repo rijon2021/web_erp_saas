@@ -3,13 +3,16 @@
 namespace App\Http\Controllers\Central\Super;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\ImpersonationController;
 use App\Models\Central\ImpersonationLog;
 use App\Models\User;
+use App\Support\Security\ForceLogout;
 use App\Tenant;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
 
@@ -58,14 +61,34 @@ class TenantUserController extends Controller
     public function block(Tenant $tenant, int $userId): RedirectResponse
     {
         $userName = '';
+        $result = null;
 
-        $tenant->run(function () use ($userId, &$userName) {
+        $tenant->run(function () use ($tenant, $userId, &$userName, &$result) {
             $user = User::findOrFail($userId);
-            $user->update(['statut' => 0]);
+            $user->statut = 0; // explicit: statut is not mass assignable
+            $user->save();
             $userName = trim($user->firstname . ' ' . $user->lastname);
+
+            // A blocked user must not keep the sessions already open. The block
+            // itself is saved by now, so a failure here must not turn into a 500.
+            try {
+                $result = $this->signOutEverywhere($tenant, $userId);
+            } catch (\Throwable $e) {
+                report($e);
+            }
         });
 
-        return back()->with('success', "User \"{$userName}\" has been blocked.");
+        $redirect = back()->with('success', __('super.flash.user_blocked', ['name' => $userName]));
+
+        if ($result === null) {
+            return $redirect->with('error', __('central.ForceLogoutFailed'));
+        }
+
+        Log::info('[super] force logout (block)', $this->auditContext($tenant, $userId, $result['users']));
+
+        return $result['cutoff_applied']
+            ? $redirect
+            : $redirect->with('error', __('central.ForceLogoutNeedsMigration'));
     }
 
     /**
@@ -77,11 +100,12 @@ class TenantUserController extends Controller
 
         $tenant->run(function () use ($userId, &$userName) {
             $user = User::findOrFail($userId);
-            $user->update(['statut' => 1]);
+            $user->statut = 1; // explicit: statut is not mass assignable
+            $user->save();
             $userName = trim($user->firstname . ' ' . $user->lastname);
         });
 
-        return back()->with('success', "User \"{$userName}\" has been unblocked.");
+        return back()->with('success', __('super.flash.user_unblocked', ['name' => $userName]));
     }
 
     /**
@@ -103,6 +127,107 @@ class TenantUserController extends Controller
         });
 
         return back()->with('success', __('central.PasswordChangedFor', ['name' => $userName]));
+    }
+
+    /**
+     * POST /super/tenants/{tenant}/force-logout
+     *
+     * Sign every user of the tenant out of every device and browser.
+     */
+    public function forceLogoutAll(Tenant $tenant): RedirectResponse
+    {
+        return $this->forceLogout($tenant, null);
+    }
+
+    /**
+     * POST /super/tenants/{tenant}/users/{userId}/force-logout
+     */
+    public function forceLogoutUser(Tenant $tenant, int $userId): RedirectResponse
+    {
+        return $this->forceLogout($tenant, $userId);
+    }
+
+    private function forceLogout(Tenant $tenant, ?int $userId): RedirectResponse
+    {
+        $result = null;
+        $userName = null;
+        $originalTenant = tenant();
+
+        try {
+            $tenant->run(function () use ($tenant, $userId, &$result, &$userName) {
+                if ($userId !== null) {
+                    $user = User::find($userId);
+                    if (! $user) {
+                        return;
+                    }
+                    $userName = trim($user->firstname . ' ' . $user->lastname);
+                }
+
+                $result = $this->signOutEverywhere($tenant, $userId);
+            });
+        } catch (\Throwable $e) {
+            report($e);
+
+            // Tenant::run() has no finally: don't finish this central request
+            // on the tenant's database.
+            if ($originalTenant === null && tenancy()->initialized) {
+                tenancy()->end();
+            }
+
+            return back()->with('error', __('central.ForceLogoutFailed'));
+        }
+
+        if ($result === null) {
+            return back()->with('error', __('central.ImpersonateUserNotFound'));
+        }
+
+        Log::info('[super] force logout', $this->auditContext($tenant, $userId, $result['users']));
+
+        $message = $userId !== null
+            ? __('central.ForceLogoutUserDone', ['name' => $userName])
+            : __('central.ForceLogoutAllDone', ['count' => $result['users']]);
+
+        $redirect = back()->with('success', $message);
+
+        return $result['cutoff_applied']
+            ? $redirect
+            : $redirect->with('error', __('central.ForceLogoutNeedsMigration'));
+    }
+
+    /**
+     * Sign the user (or every user) out of every device. Must run in the
+     * tenant's context.
+     *
+     * @return array{users: int, cutoff_applied: bool}
+     */
+    private function signOutEverywhere(Tenant $tenant, ?int $userId): array
+    {
+        $result = ForceLogout::revoke($userId);
+
+        // A super admin's "Login as user" session is one of those sessions:
+        // close its audit trail too.
+        ImpersonationLog::query()
+            ->where('tenant_id', (string) $tenant->id)
+            ->where('status', ImpersonationLog::STATUS_ACTIVE)
+            ->when($userId !== null, fn ($q) => $q->where('user_id', $userId))
+            ->get()
+            ->each(fn (ImpersonationLog $log) => $log->end('force_logout'));
+        ImpersonationController::clearCacheFlagIfIdle();
+
+        return $result;
+    }
+
+    private function auditContext(Tenant $tenant, ?int $userId, int $users): array
+    {
+        $admin = Auth::guard('central')->user();
+
+        return [
+            'tenant_id' => (string) $tenant->id,
+            'user_id'   => $userId,
+            'users'     => $users,
+            'admin_id'  => $admin?->id,
+            'admin'     => $admin?->email,
+        ];
     }
 
     /**

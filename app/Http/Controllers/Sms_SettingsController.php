@@ -161,6 +161,7 @@ class Sms_SettingsController extends Controller
         Setting::whereId(1)->update([
             'sms_gateway' => $sms_gateway,
         ]);
+        Setting::forgetCurrent();
 
     }
 }

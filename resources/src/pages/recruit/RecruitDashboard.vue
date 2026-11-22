@@ -102,6 +102,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { CalendarOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import { recruitLabel } from './recruitLabels';
 import http from '../../lib/http';
 
 const isLoading = ref(true);
@@ -121,7 +122,7 @@ const statCards = computed(() => [
   { label: 'Total_Jobs', value: stats.value.total_jobs || 0, color: '#334155' },
 ]);
 
-function formatLabel(v) { return v ? String(v).replace(/_/g, ' ') : '-'; }
+function formatLabel(v) { return recruitLabel(v); }
 function formatDatetime(v) { return v ? String(v).replace('T', ' ').substring(0, 16) : '-'; }
 function candidateNameApp(a) {
   return a.candidate ? `${a.candidate.first_name} ${a.candidate.last_name}` : '-';

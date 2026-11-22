@@ -49,7 +49,7 @@ class AdminController extends Controller
 
         return redirect()
             ->route('super.admins.index')
-            ->with('success', "Admin \"{$validated['name']}\" created successfully.");
+            ->with('success', __('super.flash.admin_created', ['name' => $validated['name']]));
     }
 
     public function edit(CentralUser $admin): View
@@ -85,7 +85,7 @@ class AdminController extends Controller
 
         return redirect()
             ->route('super.admins.index')
-            ->with('success', "Admin \"{$admin->name}\" updated successfully.");
+            ->with('success', __('super.flash.admin_updated', ['name' => $admin->name]));
     }
 
     public function destroy(CentralUser $admin): RedirectResponse
@@ -93,11 +93,11 @@ class AdminController extends Controller
         $currentId = Auth::guard('central')->id();
 
         if ($admin->id === $currentId) {
-            return back()->withErrors(['delete' => 'You cannot delete your own account.']);
+            return back()->withErrors(['delete' => __('super.flash.admin_self_delete')]);
         }
 
         if (CentralUser::count() <= 1) {
-            return back()->withErrors(['delete' => 'Cannot delete the last remaining admin.']);
+            return back()->withErrors(['delete' => __('super.flash.admin_last')]);
         }
 
         $name = $admin->name;
@@ -105,6 +105,6 @@ class AdminController extends Controller
 
         return redirect()
             ->route('super.admins.index')
-            ->with('success', "Admin \"{$name}\" deleted successfully.");
+            ->with('success', __('super.flash.admin_deleted', ['name' => $name]));
     }
 }

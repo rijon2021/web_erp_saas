@@ -1,6 +1,18 @@
 @php
   $currency   = $currency ?? store_currency()['symbol'];
-  $hasFilters = filled($q ?? null) || filled($cat ?? null) || filled($collection ?? null) || filled($min ?? null) || filled($max ?? null);
+  $specSelected = $specSelected ?? [];
+  $brandFilter = (int) request('brand', 0) > 0 ? \App\Models\Brand::query()->whereKey((int) request('brand'))->value('name') : null;
+  $dealsFilter = request()->boolean('deals');
+  $hasFilters = filled($q ?? null) || filled($cat ?? null) || filled($collection ?? null) || filled($min ?? null) || filled($max ?? null)
+      || $specSelected || $brandFilter || $dealsFilter;
+  // URL without one selected spec value (?spec[<label>][]=<value>).
+  $withoutSpec = function (string $label, string $value) {
+      $query = request()->except('page');
+      $query['spec'][$label] = array_values(array_filter((array) ($query['spec'][$label] ?? []), fn ($v) => (string) $v !== $value));
+      if (! $query['spec'][$label]) unset($query['spec'][$label]);
+      if (empty($query['spec'])) unset($query['spec']);
+      return route('store.shop', $query);
+  };
 @endphp
 
 {{-- Applied filter chips --}}
@@ -41,6 +53,26 @@
         <x-store.icon name="x" class="w-3 h-3 ms-1 opacity-70" />
       </a>
     @endif
+    @if($brandFilter)
+      <a href="{{ route('store.shop', request()->except('brand','page')) }}" class="chip chip-accent">
+        {{ $brandFilter }}
+        <x-store.icon name="x" class="w-3 h-3 ms-1 opacity-70" />
+      </a>
+    @endif
+    @if($dealsFilter)
+      <a href="{{ route('store.shop', request()->except('deals','page')) }}" class="chip chip-accent">
+        <x-store.icon name="zap" class="w-3 h-3" /> {{ __('messages.Deals') }}
+        <x-store.icon name="x" class="w-3 h-3 ms-1 opacity-70" />
+      </a>
+    @endif
+    @foreach($specSelected as $specLabel => $specValues)
+      @foreach($specValues as $specValue)
+        <a href="{{ $withoutSpec((string) $specLabel, (string) $specValue) }}" class="chip chip-accent">
+          {{ $specLabel }}: {{ $specValue }}
+          <x-store.icon name="x" class="w-3 h-3 ms-1 opacity-70" />
+        </a>
+      @endforeach
+    @endforeach
     <a href="{{ route('store.shop') }}" class="chip chip-danger">
       <x-store.icon name="x" class="w-3 h-3" /> {{ __('messages.ResetAll') }}
     </a>
@@ -48,9 +80,10 @@
 @endif
 
 @if($products->count())
-  <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+  @php $pxGrid = isset($s) && ($s->theme ?? null) === \App\Support\PremiumElectronicsTheme::KEY; @endphp
+  <div class="{{ $pxGrid ? 'px-grid' : 'grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4' }}">
     @foreach($products as $p)
-      @include('store.partials.product-card', ['p' => $p, 'currency' => $currency])
+      @include($pxGrid ? 'store.electronics_premium.partials.product-card' : 'store.partials.product-card', ['p' => $p, 'currency' => $currency])
     @endforeach
   </div>
 

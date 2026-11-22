@@ -77,8 +77,8 @@ class BillingApiController extends Controller
                 'subscription'    => null,
                 'has_active'      => false,
                 'pending_upgrade' => null,
-                'currency_code'   => GeneralSetting::currencyCode(),
-                'currency_symbol' => GeneralSetting::currencySymbol(),
+                'currency_code'   => \App\Services\Billing\PlanPricing::tenantCurrency(tenant()),
+                'currency_symbol' => \App\Support\SellingCurrencies::symbol(\App\Services\Billing\PlanPricing::tenantCurrency(tenant())),
             ]);
         }
 
@@ -127,8 +127,8 @@ class BillingApiController extends Controller
             ] : null,
             'has_active'      => $subscription->isActive() || $subscription->isOnTrial(),
             'pending_upgrade' => $pendingUpgrade,
-            'currency_code'   => GeneralSetting::currencyCode(),
-            'currency_symbol' => GeneralSetting::currencySymbol(),
+            'currency_code'   => \App\Services\Billing\PlanPricing::tenantCurrency(tenant()),
+            'currency_symbol' => \App\Support\SellingCurrencies::symbol(\App\Services\Billing\PlanPricing::tenantCurrency(tenant())),
         ]);
     }
 
@@ -157,16 +157,13 @@ class BillingApiController extends Controller
 
         $hasPendingUpgrade = $currentSub && $pendingSub && $pendingSub->id !== $currentSub->id;
 
-        // Show public plans + the tenant's current plan (even if private)
-        $plans = Plan::where('is_active', true)
-            ->where(function ($q) use ($currentSub) {
-                $q->where('is_private', false);
-                if ($currentSub?->plan_id) {
-                    $q->orWhere('id', $currentSub->plan_id);
-                }
-            })
-            ->orderBy('price')
-            ->get();
+        // Show public plans + the tenant's own plan (even if private), priced
+        // in the currency this workspace is billed in (multi-currency pricing).
+        $currency = \App\Services\Billing\PlanPricing::tenantCurrency($tenant);
+        $plans = \App\Services\Billing\PlanPricing::displayPlans(
+            Plan::availableToTenant($tenant->id)->orderBy('price')->get(),
+            $currency
+        );
 
         $plansData = $plans->map(function ($plan) use ($currentSub) {
             return [
@@ -186,29 +183,28 @@ class BillingApiController extends Controller
         return response()->json([
             'plans'               => $plansData,
             'current_plan_id'     => $currentSub?->plan_id,
-            'current_plan_price'  => $currentSub?->plan ? (float) $currentSub->plan->price : null,
+            'current_plan_price'  => $currentSub?->plan ? (float) \App\Services\Billing\PlanPricing::displayPlan($currentSub->plan, $currency)->price : null,
             'has_active'          => $currentSub && ($currentSub->isActive() || $currentSub->isOnTrial()),
             'pending_upgrade'     => $hasPendingUpgrade ? [
                 'plan_id'   => $pendingSub->plan_id,
                 'plan_name' => $pendingSub->plan?->name,
             ] : null,
-            'currency_code'       => GeneralSetting::currencyCode(),
-            'currency_symbol'     => GeneralSetting::currencySymbol(),
+            'currency_code'       => $currency,
+            'currency_symbol'     => \App\Support\SellingCurrencies::symbol($currency),
+            // Cycles the UI may offer. One entry = no cycle selector.
+            'billing_cycles'      => GeneralSetting::enabledBillingCycles(),
         ]);
     }
 
     public function checkoutData(Plan $plan): JsonResponse
     {
         $this->authorizeBilling();
+        // Only gateways the super admin switched on — Bank Transfer included:
+        // the offline gateway is listed by the factory only while it is active.
         $gateways = PaymentGatewayFactory::getAvailableGateways();
-
-        // Add Offline / Bank Transfer option
-        $gateways['offline'] = [
-            'key'   => 'offline',
-            'label' => 'Bank Transfer',
-            'icon'  => 'bi-bank',
-            'color' => '#0d9488',
-        ];
+        if (isset($gateways['offline'])) {
+            $gateways['offline']['color'] = $gateways['offline']['color'] ?? '#0d9488';
+        }
 
         $tenant = tenant();
 
@@ -230,8 +226,11 @@ class BillingApiController extends Controller
         $hasPendingUpgrade = $currentSub && $pendingSub && $pendingSub->id !== $currentSub->id;
 
         $settings       = GeneralSetting::instance();
-        $systemCurrency = $settings->currency_code ?? 'USD';
-        $currencySymbol = $settings->currency_symbol ?? '$';
+        // Priced in the workspace's billing currency (multi-currency pricing).
+        $systemCurrency = \App\Services\Billing\PlanPricing::tenantCurrency($tenant);
+        $currencySymbol = \App\Support\SellingCurrencies::symbol($systemCurrency);
+        $basePlan = $plan;
+        $plan = \App\Services\Billing\PlanPricing::displayPlan($plan, $systemCurrency);
 
         return response()->json([
             'plan' => [
@@ -242,9 +241,17 @@ class BillingApiController extends Controller
                 'savings_percent' => $plan->getYearlySavingsPercent(),
                 'limits'          => $plan->getFormattedLimits(),
                 'features'        => $plan->getActiveFeatures(),
+                // Free plans skip payment: the SPA posts billing/request-free-plan.
+                'is_free'         => $plan->isFree(),
             ],
-            'gateways'           => array_values($gateways),
-            'is_upgrade'         => $currentSub && $plan->price > ($currentSub->plan->price ?? 0),
+            'gateways'           => $plan->isFree() ? [] : array_values($gateways),
+            // Same plan = renewal (the new period starts when the current one
+            // ends — TenantSubscription::activate()), neither up- nor downgrade.
+            'is_renewal'         => $currentSub && (int) $currentSub->plan_id === (int) $plan->id,
+            'is_upgrade'         => ($currentSub && (int) $currentSub->plan_id === (int) $plan->id)
+                ? null
+                // Compared in the main currency (both rows), never display copies.
+                : ($currentSub && $basePlan->price > ($currentSub->plan->price ?? 0)),
             'current_plan_name'  => $currentSub?->plan?->name,
             'currency_code'      => $systemCurrency,
             'currency_symbol'    => $currencySymbol,
@@ -253,6 +260,47 @@ class BillingApiController extends Controller
                 'plan_id'   => $pendingSub->plan_id,
                 'plan_name' => $pendingSub->plan?->name,
             ] : null,
+            // Cycles the UI may offer. One entry = no cycle selector.
+            'billing_cycles'     => GeneralSetting::enabledBillingCycles(),
+            // Renewal of the same plan: add-ons charged on this payment, per cycle.
+            'addon_lines'        => $plan->isFree() ? [] : collect(GeneralSetting::enabledBillingCycles())
+                ->mapWithKeys(fn ($c) => [$c => app(\App\Services\Billing\AddonService::class)->planCharge($tenant, $basePlan, $c, 0, $systemCurrency)['lines']])
+                ->all(),
+        ]);
+    }
+
+    /**
+     * POST /api/billing/request-free-plan
+     * Asks to switch to a free plan — pending until a super admin approves it,
+     * the same rule as the Blade billing page (TenantSubscription::requestFreePlan).
+     */
+    public function requestFreePlan(Request $request): JsonResponse
+    {
+        $this->authorizeBilling();
+
+        $request->validate([
+            'plan_id'       => 'required|integer',
+            'billing_cycle' => 'nullable|' . GeneralSetting::billingCycleRule(),
+        ]);
+
+        $plan = Plan::availableToTenant(tenant()->id)->findOrFail($request->plan_id);
+        if (! $plan->isFree()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This plan is not free — choose a payment method.',
+            ], 422);
+        }
+
+        if (! TenantSubscription::requestFreePlan(tenant()->id, $plan, $request->billing_cycle ?: 'monthly')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You have a payment awaiting confirmation. Wait for it, or cancel it, before switching to a free plan.',
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Your request to switch to the ' . $plan->name . ' plan has been submitted and is awaiting admin approval.',
         ]);
     }
 
@@ -266,10 +314,19 @@ class BillingApiController extends Controller
 
         $request->validate([
             'plan_id'        => 'required|integer',
-            'billing_cycle'  => 'required|in:monthly,yearly',
+            'billing_cycle'  => 'required|' . GeneralSetting::billingCycleRule(),
             'offline_method' => 'required|string|max:50', // e.g. bank_transfer, cash, check
             'payment_proof'  => 'required|file|mimes:jpg,jpeg,png,webp,pdf|max:5120',
         ]);
+
+        // Bank transfer must be switched on by the super admin (the checkout
+        // page only lists it then); checked before the proof is stored.
+        if (! array_key_exists('offline', PaymentGatewayFactory::getAvailableGateways())) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Bank transfer is not available.',
+            ], 422);
+        }
 
         // Store proof of payment
         $proofPath = null;
@@ -279,16 +336,24 @@ class BillingApiController extends Controller
                 \Illuminate\Support\Facades\File::makeDirectory($uploadDir, 0755, true);
             }
             $file = $request->file('payment_proof');
-            $filename = 'proof_' . tenant()->id . '_' . time() . '.' . $file->getClientOriginalExtension();
+            $filename = 'proof_' . tenant()->id . '_' . time() . '.' . \App\Support\SafeUpload::contentExtension($file, ['jpg', 'png', 'webp', 'pdf'], 'payment_proof');
             $file->move($uploadDir, $filename);
             $proofPath = upload_path('payment-proofs') . '/' . $filename;
         }
 
-        $plan = Plan::where('is_active', true)->findOrFail($request->plan_id);
+        $plan = Plan::availableToTenant(tenant()->id)->findOrFail($request->plan_id);
         $tenant = tenant();
         $cycle  = $request->billing_cycle;
 
-        $amount = $plan->getPriceForCycle($cycle);
+        // Priced in the workspace's billing currency (multi-currency pricing).
+        $billingCurrency = \App\Services\Billing\PlanPricing::tenantCurrency($tenant);
+        try {
+            $amount = \App\Services\Billing\PlanPricing::price($plan, $cycle, $billingCurrency);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => 'This plan cannot be priced in ' . $billingCurrency . ' right now. Please try again later.'], 422);
+        }
+        // Renewing the same plan: add-ons billed with it go on this payment.
+        $addonCharge = app(\App\Services\Billing\AddonService::class)->planCharge($tenant, $plan, $cycle, (float) $amount, $billingCurrency);
 
         // Block if there is already a pending upgrade.
         // Only a genuinely active subscription counts — a row still marked
@@ -317,7 +382,7 @@ class BillingApiController extends Controller
                 'plan_id'       => $plan->id,
                 'billing_cycle' => $cycle,
                 'amount'        => $amount,
-                'currency'      => GeneralSetting::currencyCode(),
+                'currency'      => $billingCurrency,
                 'starts_at'     => $existingPending->starts_at ?? now(),
             ]);
             $subscription = $existingPending;
@@ -333,7 +398,7 @@ class BillingApiController extends Controller
                 'plan_id'       => $plan->id,
                 'billing_cycle' => $cycle,
                 'amount'        => $amount,
-                'currency'      => GeneralSetting::currencyCode(),
+                'currency'      => $billingCurrency,
                 'status'        => TenantSubscription::STATUS_PENDING,
                 'starts_at'     => now(),
             ]);
@@ -344,17 +409,26 @@ class BillingApiController extends Controller
             'tenant_subscription_id' => $subscription->id,
             'plan_id'                => $plan->id,
             'gateway'                => 'manual',
-            'amount'                 => $amount,
-            'currency'               => GeneralSetting::currencyCode(),
+            'amount'                 => $addonCharge['amount'],
+            'currency'               => $billingCurrency,
             'billing_cycle'          => $cycle,
             'status'                 => TenantBillingPayment::STATUS_PENDING,
-            'metadata'               => [
+            'metadata'               => array_merge([
                 'plan_name'      => $plan->name,
                 'email'          => auth()->user()->email ?? '',
                 'offline_method' => $request->offline_method,
                 'payment_proof'  => $proofPath,
-            ],
+            ], $addonCharge['metadata']),
         ]);
+
+        EmailNotificationService::paymentProofSubmitted(
+            (string) ($tenant->admin_email ?? ''),
+            $tenant->company_name ?? $tenant->id,
+            $addonCharge['amount'],
+            $plan->name,
+            'super/payments/' . $payment->id,
+            $tenant->locale ?? null
+        );
 
         return response()->json([
             'success'    => true,
@@ -374,16 +448,39 @@ class BillingApiController extends Controller
         $request->validate([
             'plan_id'       => 'required|integer',
             'gateway'       => 'required|string',
-            'billing_cycle' => 'required|in:monthly,yearly',
+            'billing_cycle' => 'required|' . GeneralSetting::billingCycleRule(),
         ]);
 
-        $plan = Plan::where('is_active', true)->findOrFail($request->plan_id);
+        $plan = Plan::availableToTenant(tenant()->id)->findOrFail($request->plan_id);
         $tenant  = tenant();
         $cycle   = $request->billing_cycle;
         $gateway = $request->gateway;
         $amount  = $plan->getPriceForCycle($cycle);
 
-        $systemCurrency = GeneralSetting::currencyCode();
+        // A free plan has nothing to charge — it is requested instead.
+        if ($plan->isFree()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This plan is free. Request it instead of paying.',
+            ], 422);
+        }
+
+        if (! array_key_exists($gateway, PaymentGatewayFactory::getAvailableGateways())) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This payment method is not available.',
+            ], 422);
+        }
+
+        // Charged in the workspace's billing currency (multi-currency pricing;
+        // the main currency otherwise). The gateway converts only when it
+        // can't take that currency.
+        $systemCurrency = \App\Services\Billing\PlanPricing::tenantCurrency($tenant);
+        try {
+            $amount = \App\Services\Billing\PlanPricing::price($plan, $cycle, $systemCurrency);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => 'This plan cannot be priced in ' . $systemCurrency . ' right now. Please try again later.'], 422);
+        }
 
         // Block if there is already a pending upgrade with an active subscription.
         // Only a genuinely active subscription counts — a row still marked
@@ -406,10 +503,14 @@ class BillingApiController extends Controller
             ], 422);
         }
 
+        // Renewing the same plan: add-ons billed with it go on this payment.
+        // Added before conversion so the gateway charges the full total.
+        $addonCharge = app(\App\Services\Billing\AddonService::class)->planCharge($tenant, $plan, $cycle, (float) $amount, $systemCurrency);
+
         // Resolve currency conversion for the selected gateway
         $currencyConfig = PaymentGatewayFactory::getGatewayCurrencyConfig($gateway);
         $conversion = CurrencyConversionService::resolve(
-            $amount,
+            $addonCharge['amount'],
             $systemCurrency,
             $currencyConfig['supported_currencies'],
             $currencyConfig['default_currency']
@@ -448,7 +549,7 @@ class BillingApiController extends Controller
             'tenant_subscription_id' => $subscription->id,
             'plan_id'                => $plan->id,
             'gateway'                => $gateway,
-            'amount'                 => $amount,
+            'amount'                 => $addonCharge['amount'],
             'currency'               => $systemCurrency,
             'gateway_currency'       => $conversion['gateway_currency'],
             'gateway_amount'         => $conversion['gateway_amount'],
@@ -456,10 +557,10 @@ class BillingApiController extends Controller
             'conversion_applied'     => $conversion['conversion_applied'],
             'billing_cycle'          => $cycle,
             'status'                 => TenantBillingPayment::STATUS_PENDING,
-            'metadata'               => [
+            'metadata'               => array_merge([
                 'plan_name' => $plan->name,
                 'email'     => auth()->user()->email ?? '',
-            ],
+            ], $addonCharge['metadata']),
         ]);
 
         try {
@@ -533,6 +634,7 @@ class BillingApiController extends Controller
 
         $payments = TenantBillingPayment::with('plan')
             ->where('tenant_id', $tenant->id)
+            ->visibleToTenant()
             ->orderByDesc('created_at')
             ->paginate($request->get('per_page', 15));
 
@@ -540,7 +642,7 @@ class BillingApiController extends Controller
             return [
                 'id'             => $p->id,
                 'invoice_number' => $p->invoice_number,
-                'plan_name'      => $p->plan->name ?? 'N/A',
+                'plan_name'      => $p->plan->name ?? ($p->metadata['checkout_name'] ?? 'N/A'),
                 'amount'         => (float) $p->amount,
                 'tax'            => (float) $p->tax,
                 'total'          => $p->total,
@@ -559,8 +661,8 @@ class BillingApiController extends Controller
             'current_page'    => $payments->currentPage(),
             'last_page'       => $payments->lastPage(),
             'total'           => $payments->total(),
-            'currency_code'   => GeneralSetting::currencyCode(),
-            'currency_symbol' => GeneralSetting::currencySymbol(),
+            'currency_code'   => \App\Services\Billing\PlanPricing::tenantCurrency(tenant()),
+            'currency_symbol' => \App\Support\SellingCurrencies::symbol(\App\Services\Billing\PlanPricing::tenantCurrency(tenant())),
         ]);
     }
 
@@ -608,7 +710,7 @@ class BillingApiController extends Controller
             'payment' => [
                 'id'                 => $payment->id,
                 'invoice_number'     => $payment->invoice_number,
-                'plan_name'          => $payment->plan->name ?? 'N/A',
+                'plan_name'          => $payment->plan->name ?? ($payment->metadata['checkout_name'] ?? 'N/A'),
                 'amount'             => (float) $payment->amount,
                 'tax'                => (float) $payment->tax,
                 'total'              => $payment->total,
@@ -627,8 +729,8 @@ class BillingApiController extends Controller
                 'starts_at' => $payment->subscription->starts_at?->toIso8601String(),
                 'ends_at'   => $payment->subscription->ends_at?->toIso8601String(),
             ] : null,
-            'currency_code'   => GeneralSetting::currencyCode(),
-            'currency_symbol' => GeneralSetting::currencySymbol(),
+            'currency_code'   => \App\Services\Billing\PlanPricing::tenantCurrency(tenant()),
+            'currency_symbol' => \App\Support\SellingCurrencies::symbol(\App\Services\Billing\PlanPricing::tenantCurrency(tenant())),
         ]);
     }
 
@@ -641,6 +743,7 @@ class BillingApiController extends Controller
 
         $payment = TenantBillingPayment::where('tenant_id', tenant()->id)
             ->where('status', TenantBillingPayment::STATUS_FAILED)
+            ->withoutPaymentLinks()
             ->findOrFail($id);
 
         return response()->json([
@@ -777,7 +880,7 @@ class BillingApiController extends Controller
             return [
                 'id'             => $p->id,
                 'invoice_number' => $p->invoice_number,
-                'plan_name'      => $p->plan->name ?? 'N/A',
+                'plan_name'      => $p->plan->name ?? ($p->metadata['checkout_name'] ?? 'N/A'),
                 'amount'         => (float) $p->amount,
                 'tax'            => (float) $p->tax,
                 'total'          => $p->total,
@@ -795,8 +898,8 @@ class BillingApiController extends Controller
             'current_page'    => $payments->currentPage(),
             'last_page'       => $payments->lastPage(),
             'total'           => $payments->total(),
-            'currency_code'   => GeneralSetting::currencyCode(),
-            'currency_symbol' => GeneralSetting::currencySymbol(),
+            'currency_code'   => \App\Services\Billing\PlanPricing::tenantCurrency(tenant()),
+            'currency_symbol' => \App\Support\SellingCurrencies::symbol(\App\Services\Billing\PlanPricing::tenantCurrency(tenant())),
         ]);
     }
 

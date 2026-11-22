@@ -50,7 +50,10 @@
     <template v-else>
       <!-- ================= Stat cards (legacy's two rows of four) ========= -->
       <a-row :gutter="[16, 16]">
-        <a-col v-for="card in statCards" :key="card.label" :xs="12" :sm="12" :md="8" :lg="6">
+        <a-col
+          v-for="(card, i) in statCards" :key="card.label"
+          :xs="statSpan(i, 2)" :sm="statSpan(i, 2)" :md="statSpan(i, 3)" :lg="statSpan(i, 4)"
+        >
           <a-card :hoverable="true" class="stat-card" @click="card.link && goTo(card.link)">
             <div class="stat-inner">
               <span class="stat-icon" :style="{ background: card.tint }">
@@ -64,6 +67,9 @@
           </a-card>
         </a-col>
       </a-row>
+
+      <!-- ================= AI insights (hidden unless the assistant is set up) ===== -->
+      <AiInsightsCard />
 
       <!-- ================= Sales/Purchases + Top selling ================= -->
       <a-row :gutter="[16, 16]" style="margin-top: 16px">
@@ -260,6 +266,7 @@ import http from '../lib/http';
 import { useAuthStore } from '../stores/auth';
 import { useFormat } from '../composables/useFormat';
 import ViewCurrencySelect from '../components/ViewCurrencySelect.vue';
+import AiInsightsCard from '../components/AiInsightsCard.vue';
 // Links use LEGACY paths: goTo() sends each to the Vue 3 page once migrated.
 import { goTo } from '../lib/nav';
 
@@ -296,10 +303,10 @@ const customerChart = ref({ series: [], options: {} });
 // Computed so the labels follow a live locale switch (Settings saves one).
 const periodOptions = computed(() => [
   { value: 'today', label: t('Today') },
-  { value: '7d', label: '7D' },
-  { value: '30d', label: '30D' },
-  { value: 'mtd', label: 'MTD' },
-  { value: 'ytd', label: 'YTD' },
+  { value: '7d', label: t('7D') },
+  { value: '30d', label: t('30D') },
+  { value: 'mtd', label: t('Period_MTD') },
+  { value: 'ytd', label: t('Period_YTD') },
   { value: 'custom', label: t('Custom') },
 ]);
 
@@ -354,14 +361,30 @@ const statCards = computed(() => {
     { label: t('Sales_Due'), value: n('sales_due'), money: true, icon: DollarOutlined, tint: 'rgba(250,140,22,0.12)', link: '/app/sales/list' },
     { label: t('Purchase_Due'), value: n('purchase_due'), money: true, icon: WalletOutlined, tint: 'rgba(22,119,255,0.12)', link: '/app/purchases/list' },
     { label: t('Invoices'), value: n('today_invoices'), money: false, icon: FileTextOutlined, tint: 'rgba(140,140,140,0.14)', link: '/app/sales/list' },
-    { label: t('Profit'), value: n('today_profit'), money: true, icon: RiseOutlined, tint: 'rgba(82,196,26,0.14)', link: '/app/reports/profit_and_loss' },
+    // Profit is cost-derived (and links to a blocked report): hide_product_cost drops it.
+    ...(auth.canSeeCost
+      ? [{ label: t('Profit'), value: n('today_profit'), money: true, icon: RiseOutlined, tint: 'rgba(82,196,26,0.14)', link: '/app/reports/profit_and_loss' }]
+      : []),
   ];
 });
+
+/** Column span for stat card `i` at `perRow` cards per row: a partial last
+ *  row stretches its cards to fill the line instead of leaving a gap. */
+function statSpan(i, perRow) {
+  const count = statCards.value.length;
+  const rest = count % perRow;
+  if (!rest || i < count - rest || 24 % rest) return 24 / perRow;
+  return 24 / rest;
+}
 
 const stockItems = computed(() => {
   const v = stockValue.value;
   const rows = [
-    { label: t('By_Cost'), value: Number(v.by_cost) || 0, icon: DollarOutlined, color: '#6d28d9', tint: 'rgba(109,40,217,0.06)' },
+    // Valuation at cost is hidden for roles with hide_product_cost; it also
+    // stays out of the bar scale below so the other bars don't hint at it.
+    ...(auth.canSeeCost
+      ? [{ label: t('By_Cost'), value: Number(v.by_cost) || 0, icon: DollarOutlined, color: '#6d28d9', tint: 'rgba(109,40,217,0.06)' }]
+      : []),
     { label: t('By_Retail'), value: Number(v.by_retail) || 0, icon: TagOutlined, color: '#1677ff', tint: 'rgba(22,119,255,0.06)' },
     { label: t('By_Wholesale'), value: Number(v.by_wholesale) || 0, icon: AppstoreOutlined, color: '#52c41a', tint: 'rgba(82,196,26,0.06)' },
   ];
@@ -393,8 +416,9 @@ const quickActions = computed(() => [
   { label: t('New_Purchase'), perm: 'Purchases_add', to: '/app/purchases/store', icon: ShoppingOutlined, color: '#fa8c16', tint: 'rgba(250,140,22,0.12)' },
   { label: t('Add_Product'), perm: 'products_add', to: '/app/products/store', icon: AppstoreOutlined, color: '#52c41a', tint: 'rgba(82,196,26,0.12)' },
   { label: t('Add_Customer'), perm: 'Customers_add', to: '/app/People/Customers/create', icon: TeamOutlined, color: '#eb2f96', tint: 'rgba(235,47,150,0.12)' },
-  { label: t('Reports'), perm: 'Reports_profit', to: '/app/reports/profit_and_loss', icon: RiseOutlined, color: '#13c2c2', tint: 'rgba(19,194,194,0.12)' },
-].filter(a => auth.can(a.perm)));
+  // `cost`: the target report is cost-derived, blocked under hide_product_cost.
+  { label: t('Reports'), perm: 'Reports_profit', cost: true, to: '/app/reports/profit_and_loss', icon: RiseOutlined, color: '#13c2c2', tint: 'rgba(19,194,194,0.12)' },
+].filter(a => auth.can(a.perm) && (!a.cost || auth.canSeeCost)));
 
 // Top products with a bar scaled to the highest amount.
 const topItems = computed(() => {
@@ -736,7 +760,7 @@ onMounted(load);
 /* Thin proportional bar pinned to the bottom of each row. */
 .stockval-bar {
   position: absolute;
-  left: 0;
+  inset-inline-start: 0;
   bottom: 0;
   height: 3px;
   border-radius: 0 3px 3px 0;
@@ -796,7 +820,7 @@ onMounted(load);
 .pay-pct {
   flex: none;
   width: 40px;
-  text-align: right;
+  text-align: end;
   font-size: 13px;
   color: rgba(var(--ink-rgb), 0.45);
 }
@@ -918,7 +942,7 @@ onMounted(load);
 }
 .top-figures {
   flex: none;
-  text-align: right;
+  text-align: end;
 }
 .top-amount {
   font-weight: 700;

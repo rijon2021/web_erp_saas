@@ -23,6 +23,9 @@
             <div class="card-body-custom">
                 <form method="POST" action="{{ route('super.payments.store') }}">
                     @csrf
+                    @if($selectedTenantId !== '')
+                        <input type="hidden" name="return_to" value="tenant">
+                    @endif
 
                     <div class="form-row mb-4">
                         <div class="form-group">
@@ -30,8 +33,9 @@
                             <select name="tenant_id" class="form-control" required>
                                 <option value="">{{ __('super.payments.select_tenant') }}</option>
                                 @foreach($tenants as $tenant)
-                                    <option value="{{ $tenant->id }}" {{ old('tenant_id') === $tenant->id ? 'selected' : '' }}>
-                                        {{ $tenant->id }}
+                                    <option value="{{ $tenant->id }}" {{ old('tenant_id', $selectedTenantId) === $tenant->id ? 'selected' : '' }}>
+                                        {{ $tenant->company_name ?: ($tenant->domains->first()->domain ?? $tenant->id) }}
+                                        ({{ $tenant->domains->first()->domain ?? \Illuminate\Support\Str::limit($tenant->id, 8, '') }})
                                         @if($tenant->subscription && $tenant->subscription->plan)
                                             — {{ $tenant->subscription->plan->name }}
                                         @endif
@@ -45,7 +49,7 @@
                             <select name="plan_id" class="form-control">
                                 <option value="">{{ __('super.payments.auto_detect_plan') }}</option>
                                 @foreach($plans as $plan)
-                                    <option value="{{ $plan->id }}" {{ old('plan_id') == $plan->id ? 'selected' : '' }}>
+                                    <option value="{{ $plan->id }}" {{ old('plan_id', $prefill['plan_id'] ?? null) == $plan->id ? 'selected' : '' }}>
                                         {{ $plan->name }} ({{ $currencySymbol }}{{ number_format($plan->price, 2) }})
                                     </option>
                                 @endforeach
@@ -59,7 +63,7 @@
                             <div class="d-flex gap-2">
                                 <div class="currency-input-wrap">
                                     <span class="currency-input-symbol">{{ $currencySymbol }}</span>
-                                    <input type="number" name="amount" class="form-control currency-input" value="{{ old('amount') }}" step="0.01" min="0.01" required>
+                                    <input type="number" name="amount" class="form-control currency-input" value="{{ old('amount', isset($prefill['amount']) && $prefill['amount'] > 0 ? number_format((float) $prefill['amount'], 2, '.', '') : null) }}" step="0.01" min="0.01" required>
                                 </div>
                             </div>
                             @error('amount')<p class="text-danger form-error">{{ $message }}</p>@enderror
@@ -81,8 +85,9 @@
                         <div class="form-group">
                             <label class="form-label">{{ __('super.payments.billing_cycle') }} <span class="text-danger">*</span></label>
                             <select name="billing_cycle" class="form-control" required>
-                                <option value="monthly" {{ old('billing_cycle') === 'monthly' ? 'selected' : '' }}>{{ __('super.payments.monthly') }}</option>
-                                <option value="yearly" {{ old('billing_cycle') === 'yearly' ? 'selected' : '' }}>{{ __('super.payments.yearly') }}</option>
+                                @php $prefillCycle = old('billing_cycle', $prefill['billing_cycle'] ?? 'monthly'); @endphp
+                                <option value="monthly" {{ $prefillCycle === 'monthly' ? 'selected' : '' }}>{{ __('super.payments.monthly') }}</option>
+                                <option value="yearly" {{ $prefillCycle === 'yearly' ? 'selected' : '' }}>{{ __('super.payments.yearly') }}</option>
                             </select>
                         </div>
                     </div>
@@ -122,10 +127,19 @@
                         <textarea name="notes" class="form-control" rows="3" placeholder="{{ __('super.payments.notes_hint') }}">{{ old('notes') }}</textarea>
                     </div>
 
+                    <div class="form-group mb-4">
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="apply_to_subscription" value="1" class="form-check-input"
+                                   {{ (old('_token') ? old('apply_to_subscription') : true) ? 'checked' : '' }}>
+                            <span><i class="bi bi-arrow-repeat me-1"></i>{{ __('central.RecordPaymentApply') }}</span>
+                        </label>
+                        <p class="form-hint mt-1">{{ __('central.RecordPaymentApplyHint') }}</p>
+                    </div>
+
                     <div class="divider"></div>
                     <div class="d-flex gap-2">
                         <button type="submit" class="btn btn-primary"><i class="bi bi-plus-lg"></i> {{ __('super.payments.record_payment') }}</button>
-                        <a href="{{ route('super.payments.index') }}" class="btn btn-secondary">{{ __('super.common.cancel') }}</a>
+                        <a href="{{ $selectedTenantId !== '' ? route('super.tenants.show', $selectedTenantId) : route('super.payments.index') }}" class="btn btn-secondary">{{ __('super.common.cancel') }}</a>
                     </div>
                 </form>
             </div>

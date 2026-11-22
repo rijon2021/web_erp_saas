@@ -14,6 +14,7 @@ use App\Models\Language;
 use App\Models\PaymentMethod;
 use App\Models\PaymentSale;
 use App\Models\PaymentWithCreditCard;
+use App\Models\PosOfflineSale;
 use App\Models\PosSetting;
 use App\Models\Product;
 use App\Models\ProductPack;
@@ -23,6 +24,7 @@ use App\Models\PromotionUsage;
 use App\Models\Role;
 use App\Models\Sale;
 use App\Models\SaleDetail;
+use App\Models\SalesAgent;
 use App\Models\Setting;
 use App\Models\SMSMessage;
 use App\Models\Unit;
@@ -31,18 +33,25 @@ use App\Models\User;
 use App\Models\UserWarehouse;
 use App\Models\Warehouse;
 use App\Services\BatchService;
+use App\Services\Pos\OfflineSaleRecorder;
+use App\Services\PosTerminals\TerminalSaleLinker;
 use App\Services\PromotionEngine;
+use App\Services\ComboStockService;
 use App\Services\SerialNumberService;
 use App\utils\helpers;
 use Carbon\Carbon;
 use DB;
 use GuzzleHttp\Client as Client_guzzle;
 use GuzzleHttp\Client as Client_termi;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+use App\Services\WarehousePrices;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Infobip\Api\SendSmsApi;
 use Infobip\Configuration;
 use Infobip\Model\SmsAdvancedTextualRequest;
@@ -78,17 +87,357 @@ class PosController extends BaseController
         return $value['imei_number'] ?? null;
     }
 
+    /**
+     * Authorise every card line with Stripe before the sale transaction opens.
+     *
+     * Charging inside the transaction meant a real card charge could outlive a
+     * rollback: the bank debited the customer and no sale existed in Stocky. The
+     * funds are now only held here (capture_method: manual) and taken once the
+     * sale has committed; if it fails, the hold is released instead. Keeping the
+     * round trip outside the transaction also stops Stripe's network latency
+     * holding database row locks open for seconds at a time.
+     *
+     * @param  array|null  $payments  payment lines to authorise; defaults to the request's `payments`
+     *                                (submit_sale_from_draft passes its single `payment` line here)
+     * @return array<int, array{intent_id: string, charge_id: ?string, customer_stripe_id: string}>
+     *                                                          keyed by payment line index
+     */
+    private function authoriseCardPayments(Request $request, $changeLineIndex, $overpayment, ?array $payments = null): array
+    {
+        $authorisations = [];
+
+        // One idempotency base per request: a network-level retry of any Stripe
+        // create call below returns the original object instead of placing a
+        // second hold on the card. Never derived from sale_uuid — a resubmit of
+        // a sale whose earlier hold was released must get a fresh authorisation.
+        $stripeIdemBase = ($payments === null ? 'pos-sale:' : 'pos-draft-sale:').Str::uuid();
+
+        // Optional Stripe per-line metadata coming from modern payment modal / legacy POS
+        // NOTE: Saved-card usage has been disabled; we only accept per-transaction tokens.
+        $cardTokensByLine = $request->card_tokens_by_line ?? [];
+
+        foreach ($payments ?? $request->payments as $index => $payment) {
+            if (! isset($payment['amount']) || $payment['amount'] <= 0) {
+                continue;
+            }
+
+            if ($payment['payment_method_id'] != 1 && $payment['payment_method_id'] != '1') {
+                continue;
+            }
+
+            // Already charged on a POS device (Card terminal line).
+            if (TerminalSaleLinker::isTerminalLine((array) $payment)) {
+                continue;
+            }
+
+            // Hold what will actually be recorded as paid, not what was tendered.
+            $amount = (float) $payment['amount'];
+            if ($changeLineIndex !== null && $index === $changeLineIndex) {
+                $amount -= (float) $overpayment;
+            }
+
+            $helpers = new helpers();
+            $currency = strtolower($helpers->Get_Currency_Code() ?? 'usd');
+
+            $client = Client::findOrFail($request->client_id);
+            \Stripe\Stripe::setApiKey(\App\Models\PaymentSetting::current()->stripe_secret);
+
+            $existing = PaymentWithCreditCard::where('customer_id', $request->client_id)->first();
+
+            try {
+
+                // 1️⃣ Ensure Stripe customer (no legacy card "source" – we rely on PaymentMethods / PaymentIntents)
+                if (! $existing) {
+                    $customer = \Stripe\Customer::create([
+                        'email' => $client->email,
+                        'name'  => $client->name,
+                    ], ['idempotency_key' => $stripeIdemBase.':customer']);
+
+                    $customerStripeId = $customer->id;
+                } else {
+                    $customerStripeId = $existing->customer_stripe_id;
+                }
+
+                // 2️⃣ Resolve Stripe Payment Method ID (pm_...)
+                // Prefer explicit PaymentMethod id sent from frontend (new POS flow)
+                $paymentMethodId = $payment['payment_method_id_stripe'] ?? null;
+
+                // If not provided, but we have a card token (legacy token-based flow),
+                // create a PaymentMethod from the token so we can still use PaymentIntents.
+                if (! $paymentMethodId) {
+                    $tokenLine = $cardTokensByLine[$index] ?? ($request->token ?? null);
+                    if ($tokenLine) {
+                        $paymentMethod = \Stripe\PaymentMethod::create([
+                            'type' => 'card',
+                            'card' => [
+                                'token' => $tokenLine,
+                            ],
+                        ], ['idempotency_key' => $stripeIdemBase.':pm:'.$index]);
+                        $paymentMethodId = $paymentMethod->id;
+                    }
+                }
+
+                if (! $paymentMethodId) {
+                    throw new \Exception('Stripe payment method is missing');
+                }
+
+                // 3️⃣ Create & confirm PaymentIntent — authorisation only, the
+                //     capture happens after the sale has committed.
+                $intent = \Stripe\PaymentIntent::create([
+                    'amount' => (int) round($amount * 100),
+                    'currency' => $currency, // usd or mxn
+                    'customer' => $customerStripeId,
+                    'payment_method' => $paymentMethodId,
+                    'confirm' => true,
+                    'capture_method' => 'manual',
+                    'automatic_payment_methods' => [
+                        'enabled' => true,
+                        'allow_redirects' => 'never',
+                    ],
+                ], ['idempotency_key' => $stripeIdemBase.':pi:'.$index]);
+
+                if ($intent->status !== 'requires_capture') {
+                    throw new \Exception('Payment failed');
+                }
+
+                $authorisations[$index] = [
+                    'intent_id' => $intent->id,
+                    'charge_id' => $intent->latest_charge,
+                    'customer_stripe_id' => $customerStripeId,
+                ];
+
+            } catch (\Stripe\Exception\CardException $e) {
+
+                // Release anything already held for earlier lines of this sale.
+                $this->releaseCardAuthorisations($authorisations);
+
+                // ✅ Correct: Stripe card error → bubble up
+                throw new \Exception($e->getError()->message);
+
+            } catch (\Throwable $e) {
+
+                $this->releaseCardAuthorisations($authorisations);
+
+                // ✅ Correct: Throwable has NO getError()
+                throw new \Exception($e->getMessage());
+            }
+        }
+
+        return $authorisations;
+    }
+
+    /**
+     * Take the held funds once the sale is safely committed.
+     *
+     * A capture that fails here leaves a recorded sale against an authorisation
+     * that was never taken, so it is logged loudly rather than swallowed: the
+     * hold lapses on Stripe's side and the merchant has to settle it by hand.
+     * Throwing instead would be worse — the sale already exists.
+     */
+    private function captureCardAuthorisations(array $authorisations): void
+    {
+        foreach ($authorisations as $auth) {
+            try {
+                \Stripe\PaymentIntent::retrieve($auth['intent_id'])->capture();
+            } catch (\Throwable $e) {
+                Log::error('[POS] Stripe capture failed after the sale committed', [
+                    'intent' => $auth['intent_id'],
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Release holds for a sale that was not written, so the customer is not left
+     * short of available funds for a sale that does not exist.
+     */
+    private function releaseCardAuthorisations(array $authorisations): void
+    {
+        foreach ($authorisations as $auth) {
+            try {
+                \Stripe\PaymentIntent::retrieve($auth['intent_id'])->cancel();
+            } catch (\Throwable $e) {
+                Log::error('[POS] Stripe authorisation could not be released', [
+                    'intent' => $auth['intent_id'],
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    // ---------------- Sellable check for live sales ----------------\\
+
+    /** Products the POS sells: not deleted and not marked "Not for sale" (same as the grid). */
+    protected function posSellableProducts()
+    {
+        return Product::query()->whereNull('deleted_at')->where('not_selling', 0);
+    }
+
+    /**
+     * Lines of a live sale whose product was deleted / marked "Not for sale",
+     * or whose variant was deleted or belongs to another product.
+     * Returns [product_id => name] for the offending lines.
+     */
+    protected function unsellablePosLines(array $details): array
+    {
+        $productIds = collect($details)->pluck('product_id')->map(fn ($v) => (int) $v)->filter()->unique()->values();
+        $variantIds = collect($details)->pluck('product_variant_id')->map(fn ($v) => (int) $v)->filter()->unique()->values();
+
+        $sellable = $productIds->isEmpty() ? collect() : $this->posSellableProducts()
+            ->whereIn('id', $productIds)->pluck('id')->map(fn ($id) => (int) $id)->flip();
+        $variants = $variantIds->isEmpty() ? collect() : ProductVariant::whereIn('id', $variantIds)
+            ->whereNull('deleted_at')->pluck('product_id', 'id');
+
+        $bad = [];
+        foreach ($details as $d) {
+            $pid = (int) ($d['product_id'] ?? 0);
+            $pvid = (int) ($d['product_variant_id'] ?? 0);
+            if (! $pid) {
+                continue;
+            }
+            if (! $sellable->has($pid) || ($pvid && (int) ($variants[$pvid] ?? 0) !== $pid)) {
+                $bad[$pid] = (string) ($d['name'] ?? '');
+            }
+        }
+
+        if ($bad) {
+            // Fill names the payload did not carry.
+            $names = Product::whereIn('id', array_keys($bad))->pluck('name', 'id');
+            foreach ($bad as $pid => $name) {
+                $bad[$pid] = $name !== '' ? $name : (string) ($names[$pid] ?? '#'.$pid);
+            }
+        }
+
+        return $bad;
+    }
+
+    /**
+     * Change Salesperson During Checkout: the user the POS asked to credit, or
+     * null when the feature is off, nothing was sent, or the id is not an
+     * active user. Stored in sales.seller_id — user_id stays the cashier.
+     */
+    private function resolvePosSellerId(Request $request): ?int
+    {
+        if (! $request->filled('seller_id')) {
+            return null;
+        }
+        $settings = Setting::where('deleted_at', '=', null)->first();
+        if (! (bool) ($settings->enable_pos_salesperson_switch ?? false)) {
+            return null;
+        }
+
+        return User::where('id', (int) $request->seller_id)
+            ->where('deleted_at', '=', null)
+            ->where('statut', 1)
+            ->value('id');
+    }
+
+    /**
+     * Commissions: the Sales Agent picked on the POS screen (same field as
+     * Create Sale). Only an active, non-deleted agent is kept; otherwise null,
+     * and CommissionService falls back to the agent linked to the seller/cashier.
+     */
+    private function resolvePosSalesAgentId(Request $request): ?int
+    {
+        if (! $request->filled('sales_agent_id')) {
+            return null;
+        }
+
+        return SalesAgent::where('id', (int) $request->sales_agent_id)
+            ->where('is_active', true)
+            ->value('id');
+    }
+
+    /**
+     * Commissions for a completed POS sale (idempotent, never blocks the sale).
+     * Takes the transaction's result as-is: a closure that bailed out with a
+     * JSON error response is skipped instead of throwing on ->id.
+     */
+    private function calculatePosCommissions($sale): void
+    {
+        if (! $sale instanceof Sale) {
+            return;
+        }
+        try {
+            // Fresh row: paid_amount/payment_statut were written to another
+            // instance inside the transaction ("Paid Amount" rules need them).
+            $fresh = $sale->fresh();
+            if ($fresh && $fresh->statut === 'completed') {
+                app(\App\Services\CommissionService::class)->calculateForSale($fresh);
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('Commission calculation failed (non-blocking on POS): '.$e->getMessage(), ['sale_id' => $sale->id]);
+        }
+    }
+
+    /**
+     * POST pos/create_pos. Sales replayed from a till's offline queue (they
+     * carry `offline_id`) are also recorded for Sales > Offline Sales —
+     * synced, or rejected with the reason — and a sale a manager discarded
+     * there is refused (`discarded: true`) so the till drops its copy.
+     * Every other sale goes straight to createPosSale(), unchanged.
+     */
     public function CreatePOS(Request $request)
+    {
+        if (! OfflineSaleRecorder::applies($request)) {
+            return $this->createPosSale($request);
+        }
+
+        $recorded = OfflineSaleRecorder::find($request);
+        if ($recorded && $recorded->status === PosOfflineSale::STATUS_DISCARDED) {
+            return response()->json([
+                'success' => false,
+                'discarded' => true,
+                'message' => 'This offline sale was discarded by a manager.',
+            ], 409);
+        }
+
+        try {
+            $response = $this->createPosSale($request);
+        } catch (ValidationException $e) {
+            OfflineSaleRecorder::failed($request, OfflineSaleRecorder::validationMessage($e), $e->status);
+            throw $e;
+        } catch (AuthorizationException $e) {
+            OfflineSaleRecorder::failed($request, $e->getMessage() ?: 'This action is unauthorized.', 403);
+            throw $e;
+        } catch (HttpExceptionInterface $e) {
+            OfflineSaleRecorder::failed($request, $e->getMessage() ?: 'HTTP '.$e->getStatusCode(), $e->getStatusCode());
+            throw $e;
+        } catch (\Throwable $e) {
+            OfflineSaleRecorder::failed($request, $e->getMessage(), 500);
+            throw $e;
+        }
+
+        OfflineSaleRecorder::fromResponse($request, $response);
+
+        return $response;
+    }
+
+    protected function createPosSale(Request $request)
     {
         $this->authorizeForUser($request->user('api'), 'Sales_pos', Sale::class);
 
-        request()->validate([
+        // $request, not request(): a manager's retry from Sales > Offline Sales
+        // replays the stored payload as its own Request object.
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account. Set per line (a
+        // wildcard closure would be skipped for a missing account) and never
+        // for a Customer Wallet line: that money does not land in an account.
+        $accountRules = [];
+        $walletService = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+        foreach ((array) $request->input('payments', []) as $index => $line) {
+            if (! $walletService->isWalletMethod(is_array($line) ? ($line['payment_method_id'] ?? null) : null)) {
+                $accountRules['payments.'.$index.'.account_id'] = $this->paymentAccountRule();
+            }
+        }
+        $request->validate([
             'client_id' => 'required',
             'warehouse_id' => 'required',
             'payments' => 'required|array|min:1',
             'payments.*.amount' => 'required|numeric',
             'payments.*.payment_method_id' => 'required',
-        ]);
+        ] + $accountRules);
 
         // Optional idempotency key generated on the frontend (crypto.randomUUID).
         // When provided, we must:
@@ -117,6 +466,34 @@ class PosController extends BaseController
             }
         }
 
+        // A live sale must not include products deleted or marked "Not for
+        // sale" since they were rung up (e.g. a cart restored after a refresh).
+        // Offline replays are exempt: those goods were already handed over.
+        if (! $request->filled('offline_id')) {
+            $unsellable = $this->unsellablePosLines((array) $request->input('details', []));
+            if ($unsellable) {
+                return response()->json([
+                    'message' => __('messages.SomeProductsNotFound').' '.implode(', ', $unsellable),
+                    'unavailable_product_ids' => array_keys($unsellable),
+                ], 422);
+            }
+        }
+
+        // The role's discount limit and the minimum price after the order
+        // discount — for offline replays too: offline_id is client-supplied,
+        // and the register applies the same check before payment offline, so
+        // only a tampered sale (or a limit lowered meanwhile) stops here; the
+        // offline queue then shows it under Sales > Offline Sales.
+        $violation = \App\Services\PosDiscountLimit::violation(
+            $request->user('api'),
+            (array) $request->input('details', []),
+            $request->input('discount', 0),
+            $request->input('discount_Method', '2')
+        );
+        if ($violation) {
+            return response()->json(['message' => $violation], 422);
+        }
+
         // Offline-queued sales carry the moment they were rung up; book the
         // sale (and its payments/lines) on that date rather than the sync time.
         $saleAt = $this->resolveOfflineSaleTimestamp($request, $saleUuid);
@@ -125,13 +502,40 @@ class PosController extends BaseController
         // unless Settings > Features > Allow overselling is on.
         $this->assertSaleStockSufficient($request);
 
-        // Block overpayment if multiple methods used
+        // Overpayment is normal retail: the customer hands over a larger note and
+        // takes the difference back as change. It can only come out of a cash
+        // tender though — there is no change from a card — so on a split payment
+        // the excess has to be covered by one cash line. Whichever line absorbs
+        // it is recorded here and applied when the payments are written below.
         $totalPaid = collect($request->payments)->sum('amount');
-        if (count($request->payments) > 1 && $totalPaid > $request->GrandTotal) {
-            return response()->json([
-                'message' => 'Total Paid Exceeds Grand Total',
-                'change_return' => $totalPaid - $request->GrandTotal,
-            ], 422);
+        $overpayment = round($totalPaid - (float) $request->GrandTotal, 4);
+        $changeLineIndex = null;
+
+        if ($overpayment > 0) {
+            if (count($request->payments) === 1) {
+                // Single tender: unchanged behaviour, that one line absorbs it.
+                $changeLineIndex = array_key_first($request->payments);
+            } else {
+                $cashMethodIds = PaymentMethod::cashMethodIds();
+
+                foreach ($request->payments as $index => $payment) {
+                    $isCash = in_array((int) ($payment['payment_method_id'] ?? 0), $cashMethodIds, true);
+
+                    if ($isCash && (float) ($payment['amount'] ?? 0) >= $overpayment) {
+                        $changeLineIndex = $index;
+                        break;
+                    }
+                }
+            }
+
+            // Nothing can give the change back: a card-only overpayment, or a
+            // cash line too small to cover it.
+            if ($changeLineIndex === null) {
+                return response()->json([
+                    'message' => 'Total Paid Exceeds Grand Total',
+                    'change_return' => $overpayment,
+                ], 422);
+            }
         }
 
         // Re-evaluate promotions server-side so the client can't fabricate a discount.
@@ -150,8 +554,50 @@ class PosController extends BaseController
         $promotionCodeApplied = trim((string) $request->input('promotion_code', '')) ?: null;
         $appliedPromotions = $promotionResult['applied'] ?? [];
 
+        // Customer-wallet tender: refuse early (before a card is authorised)
+        // when the wallet is off, frozen or short. The debit itself happens
+        // inside the transaction below, under a row lock.
+        $walletService = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+        $walletPayTotal = 0.0;
+        foreach ($request->payments as $index => $payment) {
+            if ($walletService->isWalletMethod($payment['payment_method_id'] ?? null) && (float) ($payment['amount'] ?? 0) > 0) {
+                $walletPayTotal += (float) $payment['amount'] - (($changeLineIndex !== null && $index === $changeLineIndex) ? $overpayment : 0);
+            }
+        }
+        if ($walletPayTotal > 0) {
+            $summary = $walletService->summaryFor((int) $request->client_id);
+            if (! $summary['enabled']) {
+                return response()->json(['success' => false, 'code' => 'wallet_disabled', 'message' => 'Customer wallet is not enabled.'], 422);
+            }
+            if ($summary['status'] !== 'active') {
+                return response()->json(['success' => false, 'code' => 'wallet_frozen', 'message' => 'This customer wallet is frozen.'], 422);
+            }
+            if (! $summary['allow_negative'] && round($walletPayTotal, 2) > round((float) $summary['balance'], 2)) {
+                return response()->json([
+                    'success' => false,
+                    'code' => 'wallet_insufficient_balance',
+                    'message' => 'Insufficient wallet balance.',
+                    'balance' => $summary['balance'],
+                    'required' => round($walletPayTotal, 2),
+                ], 422);
+            }
+        }
+
+        // Lines paid on a POS device (Ingenico etc.) carry the approved
+        // terminal transaction; check them before anything is written.
+        $terminalCharges = TerminalSaleLinker::claim($request, $changeLineIndex);
+
+        // Card lines are authorised with Stripe BEFORE the transaction opens, so a
+        // network round trip never holds database row locks, and a sale that fails
+        // to commit never leaves a captured charge behind on the customer's card.
         try {
-            $sale = \DB::transaction(function () use ($request, $totalPaid, $saleUuid, $saleAt, $promotionDiscount, $promotionCodeApplied, $appliedPromotions) {
+            $cardAuthorisations = $this->authoriseCardPayments($request, $changeLineIndex, $overpayment);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        try {
+            $sale = \DB::transaction(function () use ($request, $totalPaid, $saleUuid, $saleAt, $promotionDiscount, $promotionCodeApplied, $appliedPromotions, $overpayment, $changeLineIndex, $cardAuthorisations, $terminalCharges) {
                 $helpers = new helpers;
                 $user = Auth::user();
                 // New way: Check user's record_view field (user-level boolean)
@@ -179,12 +625,11 @@ class PosController extends BaseController
                 $order->payment_statut = 'unpaid';
                 $order->user_id = Auth::user()->id;
                 // POS "Change Salesperson": credit another active user for the
-                // sale while user_id stays the cashier who rang it up. Ignored
-                // unless it names a real, non-deleted user.
-                $sellerId = (int) $request->input('seller_id');
-                $order->seller_id = ($sellerId && User::where('id', $sellerId)->whereNull('deleted_at')->exists())
-                    ? $sellerId
-                    : null;
+                // sale while user_id stays the cashier who rang it up. Only
+                // honoured while the Features switch is on, and only for a
+                // real, active, non-deleted user.
+                $order->seller_id = $this->resolvePosSellerId($request);
+                $order->sales_agent_id = $this->resolvePosSalesAgentId($request);
                 // Multi-Currency snapshot (NULL/NULL = base currency); every
                 // amount on the sale is stored in the base currency.
                 $docCurrency = helpers::resolve_request_currency($request);
@@ -275,11 +720,14 @@ class PosController extends BaseController
                             $product_warehouse = product_warehouse::where('warehouse_id', $order->warehouse_id)
                                 ->where('product_id', $value['product_id'])
                                 ->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
+                        } elseif (app(ComboStockService::class)->moveComponents((int) $value['product_id'], (int) $order->warehouse_id, -ComboStockService::baseQty($packQty, $unit))) {
+                            // Virtual combo: its components were taken instead of its own row.
+                            $product_warehouse = null;
                         } else {
                             $product_warehouse = product_warehouse::where('warehouse_id', $order->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
                         }
 
                         if ($product_warehouse) {
@@ -335,6 +783,9 @@ class PosController extends BaseController
                     }
                 }
 
+                // Software License products: claim / issue one key per unit sold.
+                \App\Services\LicenseKeys\LicenseFulfilment::afterSaleWrite($order->id);
+
                 $sale = Sale::findOrFail($order->id);
                 // Check If User Has Permission view All Records
                 // Warehouse half of the same rule: record_view says whose documents,
@@ -346,10 +797,6 @@ class PosController extends BaseController
                     $this->authorizeForUser($request->user('api'), 'check_record', $sale);
                 }
 
-                // Optional Stripe per-line metadata coming from modern payment modal / legacy POS
-                // NOTE: Saved-card usage has been disabled; we only accept per-transaction tokens.
-                $cardTokensByLine = $request->card_tokens_by_line ?? [];
-
                 foreach ($request->payments as $index => $payment) {
                     if (isset($payment['amount']) && $payment['amount'] > 0) {
                         // Prefer per-line account selection; no global account fallback
@@ -359,107 +806,50 @@ class PosController extends BaseController
                         $paymentAmount = $originalAmount;
                         $changeReturn = 0;
 
-                        // Adjust if overpaid in single-payment mode
-                        if (count($request->payments) === 1 && $originalAmount > $request->GrandTotal) {
-                            $paymentAmount = $request->GrandTotal;
-                            $changeReturn = $originalAmount - $request->GrandTotal;
+                        // The tender chosen above gives the change back, so only
+                        // the part that stays in the drawer is recorded as paid.
+                        if ($changeLineIndex !== null && $index === $changeLineIndex) {
+                            $paymentAmount = $originalAmount - $overpayment;
+                            $changeReturn = $overpayment;
                         }
 
-                        if ($payment['payment_method_id'] == 1 || $payment['payment_method_id'] == '1') {
+                        // Card lines were authorised with Stripe before this
+                        // transaction opened; here we only read the result.
+                        $customerStripeId = $cardAuthorisations[$index]['customer_stripe_id'] ?? null;
+                        $stripeChargeId = $cardAuthorisations[$index]['charge_id'] ?? null;
 
-                            $helpers  = new helpers();
-                            $currency = strtolower($helpers->Get_Currency_Code() ?? 'usd');
 
-                            $client = Client::findOrFail($request->client_id);
-                            \Stripe\Stripe::setApiKey(\App\Models\PaymentSetting::current()->stripe_secret);
-
-                            $existing = PaymentWithCreditCard::where('customer_id', $request->client_id)->first();
-
-                            try {
-
-                                // 1️⃣ Ensure Stripe customer (no legacy card "source" – we rely on PaymentMethods / PaymentIntents)
-                                if (! $existing) {
-                                    $customer = \Stripe\Customer::create([
-                                        'email' => $client->email,
-                                        'name'  => $client->name,
-                                    ]);
-
-                                    $customerStripeId = $customer->id;
-                                } else {
-                                    $customerStripeId = $existing->customer_stripe_id;
-                                }
-
-                                // 2️⃣ Resolve Stripe Payment Method ID (pm_...)
-                                // Prefer explicit PaymentMethod id sent from frontend (new POS flow)
-                                $paymentMethodId = $payment['payment_method_id_stripe'] ?? null;
-
-                                // If not provided, but we have a card token (legacy token-based flow),
-                                // create a PaymentMethod from the token so we can still use PaymentIntents.
-                                if (! $paymentMethodId) {
-                                    $tokenLine = $cardTokensByLine[$index] ?? ($request->token ?? null);
-                                    if ($tokenLine) {
-                                        $paymentMethod = \Stripe\PaymentMethod::create([
-                                            'type' => 'card',
-                                            'card' => [
-                                                'token' => $tokenLine,
-                                            ],
-                                        ]);
-                                        $paymentMethodId = $paymentMethod->id;
-                                    }
-                                }
-
-                                if (! $paymentMethodId) {
-                                    throw new \Exception('Stripe payment method is missing');
-                                }
-
-                                // 3️⃣ Create & confirm PaymentIntent
-                                $intent = \Stripe\PaymentIntent::create([
-                                    'amount' => (int) round($paymentAmount * 100),
-                                    'currency' => $currency, // usd or mxn
-                                    'customer' => $customerStripeId,
-                                    'payment_method' => $paymentMethodId,
-                                    'confirm' => true,
-                                    'automatic_payment_methods' => [
-                                        'enabled' => true,
-                                        'allow_redirects' => 'never',
-                                    ],
-                                ]);
-
-                                if ($intent->status !== 'succeeded') {
-                                    throw new \Exception('Payment failed');
-                                }
-
-                                // Save for DB usage
-                                $stripeChargeId = $intent->latest_charge;
-
-                            } catch (\Stripe\Exception\CardException $e) {
-
-                                // ✅ Correct: Stripe card error → bubble up
-                                throw new \Exception($e->getError()->message);
-
-                            } catch (\Throwable $e) {
-
-                                // ✅ Correct: Throwable has NO getError()
-                                throw new \Exception($e->getMessage());
-                            }
+                        // Customer-wallet tender: debit the wallet, no cash account.
+                        $wallets = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+                        $fromWallet = $wallets->isWalletMethod($payment['payment_method_id'] ?? null);
+                        $paymentRef = app('App\\Http\\Controllers\\PaymentSalesController')->getNumberOrder();
+                        $walletTxId = null;
+                        if ($fromWallet) {
+                            $accountId = null;
+                            $walletTxId = $wallets->payFromWallet((int) $order->client_id, (float) $paymentAmount, 'sale_payment', [
+                                'reference_type' => Sale::class,
+                                'reference_id' => $order->id,
+                                'note' => 'POS sale '.$order->Ref.' · '.$paymentRef,
+                                'date' => $saleAt->copy(),
+                                'user_id' => Auth::id(),
+                            ])->id;
                         }
-
 
                         $paymentSale = PaymentSale::create([
                             'sale_id' => $order->id,
                             'account_id' => $accountId,
-                            'Ref' => app('App\\Http\\Controllers\\PaymentSalesController')->getNumberOrder(),
+                            'Ref' => $paymentRef,
                             'date' => $saleAt->copy(),
                             'payment_method_id' => $payment['payment_method_id'],
                             'montant' => $paymentAmount,
-                            'change' => $changeReturn,
+                            'change' => $fromWallet ? 0 : $changeReturn,
                             'notes' => $request['payment_note'] ?? null,
                             'user_id' => Auth::user()->id,
-                        ]);
+                        ] + \App\Services\CustomerWallet\CustomerWalletService::txColumn($walletTxId));
 
+                        TerminalSaleLinker::link($terminalCharges, $index, $order, $paymentSale);
 
-
-                        if ($payment['payment_method_id'] == 1 || $payment['payment_method_id'] == '1') {
+                        if (($payment['payment_method_id'] == 1 || $payment['payment_method_id'] == '1') && ! isset($terminalCharges[$index])) {
                             PaymentWithCreditCard::create([
                                 'customer_id' => $request->client_id,
                                 'payment_id' => $paymentSale->id,
@@ -468,17 +858,11 @@ class PosController extends BaseController
                             ]);
                         }
 
-                        if ($accountId) {
-                            $account = Account::find($accountId);
-                            if ($account) {
-                                $account->update(['balance' => $account->balance + $paymentAmount]);
-                            }
-                        }
+                        Account::adjustBalance($accountId, $paymentAmount);
                     }
                 }
 
                 $totalPaidAdjusted = min($totalPaid, $request->GrandTotal);
-                $due = $order->GrandTotal - $totalPaidAdjusted;
 
                 // 🪙 Points logic
                 $client = Client::find($request->client_id);
@@ -512,7 +896,7 @@ class PosController extends BaseController
                     'earned_points' => $order_earned_points,
                     'discount_from_points' => $order_discount_from_points,
                     'paid_amount' => $totalPaidAdjusted,
-                    'payment_statut' => $due <= 0 ? 'paid' : ($due < $order->GrandTotal ? 'partial' : 'unpaid'),
+                    'payment_statut' => Sale::paymentStatusFor($order->GrandTotal, $totalPaidAdjusted),
                 ]);
 
                 // If converting from a draft, remove the draft after successful sale creation
@@ -532,7 +916,16 @@ class PosController extends BaseController
 
             }, 10);
 
+            // Committed: take the money that was only held until now.
+            $this->captureCardAuthorisations($cardAuthorisations);
+
         } catch (\Throwable $e) {
+            // Nothing was written, so let the holds go rather than leaving the
+            // customer short of funds for a sale that does not exist. This also
+            // covers the idempotent-duplicate path below: the request that won
+            // the race carries its own authorisation.
+            $this->releaseCardAuthorisations($cardAuthorisations);
+
             // If a concurrent request created the same sale with the same UUID, the unique
             // constraint on sale_uuid will trigger here. In that case, treat this as a
             // successful, idempotent result by returning the already‑created sale instead
@@ -554,12 +947,18 @@ class PosController extends BaseController
                 }
             }
 
+            if ($e instanceof \App\Services\SupplierWallet\WalletException) {
+                return $e->toResponse();
+            }
+
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
             ], 422);
         }
 
+        // ---------- AFTER COMMIT: sales-agent commissions (best effort) ----------
+        $this->calculatePosCommissions($sale);
 
         // ---------- AFTER COMMIT: ZATCA Phase 2 reporting (best effort) ----------
         try {
@@ -573,6 +972,13 @@ class PosController extends BaseController
             \App\Jobs\SubmitSaleToFbr::dispatch(\App\Models\Sale::class, $sale->id)->afterCommit();
         } catch (\Throwable $e) {
             \Log::warning('FBR submit dispatch failed (non-blocking): '.$e->getMessage(), ['sale_id' => $sale->id]);
+        }
+
+        // ---------- AFTER COMMIT: AGT e-invoicing, Angola (best effort) ----------
+        try {
+            \App\Jobs\SubmitDocumentToAgt::dispatch(\App\Models\Sale::class, $sale->id)->afterCommit();
+        } catch (\Throwable $e) {
+            \Log::warning('AGT submit dispatch failed (non-blocking): '.$e->getMessage(), ['sale_id' => $sale->id]);
         }
 
         // ---------- AFTER COMMIT: QBO sync (best effort, non-blocking) ----------
@@ -646,7 +1052,7 @@ class PosController extends BaseController
         // existing sales workflow is unchanged when the feature is off or not requested.
         try {
             $kitchenAction = (string) $request->input('kitchen_action', 'none');
-            $kitchenEnabled = (bool) optional(\App\Models\Setting::first())->enable_kitchen_display;
+            $kitchenEnabled = (bool) optional(\App\Models\Setting::current())->enable_kitchen_display;
 
             if ($kitchenEnabled && $kitchenAction === 'send') {
                 KitchenOrderController::createForSale($sale->id, $request->notes);
@@ -665,6 +1071,7 @@ class PosController extends BaseController
         try {
             $warehouseId = $sale->warehouse_id;
             $seen = [];
+            $rows = collect();
             foreach ((array) $request->details as $line) {
                 if (!is_array($line) || !isset($line['product_id'])) continue;
                 $pid = $line['product_id'];
@@ -682,7 +1089,11 @@ class PosController extends BaseController
                 } else {
                     $q->whereNull('product_variant_id');
                 }
-                $pw = $q->first();
+                if ($pw = $q->first()) {
+                    $rows->push($pw);
+                }
+            }
+            foreach ($this->withVirtualComboRows($rows, $warehouseId) as $pw) {
                 $formatted = $this->formatStockRow($pw);
                 if ($formatted !== null) {
                     $updatedStock[] = $formatted;
@@ -711,6 +1122,18 @@ class PosController extends BaseController
         return response()->json($response, 200);
     }
 
+    /**
+     * GET pos/wallet-balance/{client}: the customer's wallet for the POS
+     * payment modal (balance hint on the "Customer Wallet" tender). Answers
+     * {enabled:false} rather than an error when the feature is off.
+     */
+    public function walletBalance(Request $request, $clientId)
+    {
+        $this->authorizeForUser($request->user('api'), 'Sales_pos', Sale::class);
+
+        return response()->json(app(\App\Services\CustomerWallet\CustomerWalletService::class)->summaryFor((int) $clientId));
+    }
+
     public function Send_Email($id)
     {
 
@@ -723,7 +1146,7 @@ class PosController extends BaseController
         $currency = $docCurrency['symbol'];
 
         // settings
-        $settings = Setting::where('deleted_at', '=', null)->first();
+        $settings = Setting::current();
 
         // the custom msg of sale
         $emailMessage = EmailMessage::getForLocale('sale');
@@ -737,13 +1160,12 @@ class PosController extends BaseController
         }
 
         // Tags
-        $random_number = Str::random(10);
-        $invoice_url = url('/api/sale_pdf/'.$id.'?'.$random_number);
+        $invoice_url = $sale->shareUrl();
         $invoice_number = $sale->Ref;
 
-        $total_amount = $currency.' '.number_format($sale->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $paid_amount = $currency.' '.number_format($sale->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $due_amount = $currency.' '.number_format(($sale->GrandTotal - $sale->paid_amount) * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
+        $total_amount = helpers::with_currency($currency, helpers::format_price($sale->GrandTotal * $docCurrency['rate'], null, 'comma_dot'));
+        $paid_amount = helpers::with_currency($currency, helpers::format_price($sale->paid_amount * $docCurrency['rate'], null, 'comma_dot'));
+        $due_amount = helpers::with_currency($currency, helpers::format_price(($sale->GrandTotal - $sale->paid_amount) * $docCurrency['rate'], null, 'comma_dot'));
 
         $contact_name = $sale['client']->name;
         $business_name = $settings->CompanyName;
@@ -752,8 +1174,8 @@ class PosController extends BaseController
         $receiver_email = $sale['client']->email;
 
         // replace the text with tags
-        $message_body = str_replace('{contact_name}', $contact_name, $message_body);
-        $message_body = str_replace('{business_name}', $business_name, $message_body);
+        $message_body = str_replace('{contact_name}', e((string) $contact_name), $message_body);
+        $message_body = str_replace('{business_name}', e((string) $business_name), $message_body);
         $message_body = str_replace('{invoice_url}', $invoice_url, $message_body);
         $message_body = str_replace('{invoice_number}', $invoice_number, $message_body);
 
@@ -787,7 +1209,7 @@ class PosController extends BaseController
         $currency = $docCurrency['symbol'];
 
         // settings
-        $settings = Setting::where('deleted_at', '=', null)->first();
+        $settings = Setting::current();
 
         $default_sms_gateway = sms_gateway::where('id', $settings->sms_gateway)
             ->where('deleted_at', '=', null)->first();
@@ -802,13 +1224,12 @@ class PosController extends BaseController
         }
 
         // Tags
-        $random_number = Str::random(10);
-        $invoice_url = url('/api/sale_pdf/'.$id.'?'.$random_number);
+        $invoice_url = $sale->shareUrl();
         $invoice_number = $sale->Ref;
 
-        $total_amount = $currency.' '.number_format($sale->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $paid_amount = $currency.' '.number_format($sale->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $due_amount = $currency.' '.number_format(($sale->GrandTotal - $sale->paid_amount) * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
+        $total_amount = helpers::with_currency($currency, helpers::format_price($sale->GrandTotal * $docCurrency['rate'], null, 'comma_dot'));
+        $paid_amount = helpers::with_currency($currency, helpers::format_price($sale->paid_amount * $docCurrency['rate'], null, 'comma_dot'));
+        $due_amount = helpers::with_currency($currency, helpers::format_price(($sale->GrandTotal - $sale->paid_amount) * $docCurrency['rate'], null, 'comma_dot'));
 
         $contact_name = $sale['client']->name;
         $business_name = $settings->CompanyName;
@@ -966,7 +1387,7 @@ class PosController extends BaseController
                         'tax_method' => $value['tax_method'],
                         'discount' => $value['discount'],
                         'discount_method' => $value['discount_Method'],
-                        'imei_number' => $value['imei_number'],
+                        'imei_number' => $this->resolveImeiString($value),
                         'price_type' => isset($value['price_type']) ? $value['price_type'] : 'retail',
                         'product_pack_id' => isset($value['product_pack_id']) && $value['product_pack_id'] ? (int) $value['product_pack_id'] : null,
                         'pack_multiplier' => isset($value['pack_multiplier']) && (float) $value['pack_multiplier'] > 0 ? (float) $value['pack_multiplier'] : 1,
@@ -1013,7 +1434,7 @@ class PosController extends BaseController
                         'tax_method' => $value['tax_method'],
                         'discount' => $value['discount'],
                         'discount_method' => $value['discount_Method'],
-                        'imei_number' => $value['imei_number'],
+                        'imei_number' => $this->resolveImeiString($value),
                         'price_type' => isset($value['price_type']) ? $value['price_type'] : 'retail',
                         'product_pack_id' => isset($value['product_pack_id']) && $value['product_pack_id'] ? (int) $value['product_pack_id'] : null,
                         'pack_multiplier' => isset($value['pack_multiplier']) && (float) $value['pack_multiplier'] > 0 ? (float) $value['pack_multiplier'] : 1,
@@ -1035,6 +1456,14 @@ class PosController extends BaseController
     public function remove_draft_sale(Request $request, $id)
     {
         $this->authorizeForUser($request->user('api'), 'Sales_pos', Sale::class);
+
+        // POS Settings > manager approval: deleting a held draft throws its items
+        // away, so it needs a manager PIN (pos/voids/approve with this draft_id).
+        $user = $request->user('api');
+        if (\App\Services\Pos\PosApprovalPin::requiredFor($user)
+            && ! \App\Services\Pos\PosApprovalPin::consumeDraftDelete($user, (int) $id)) {
+            return response()->json(['message' => __('A manager must approve deleting this draft.')], 422);
+        }
 
         \DB::transaction(function () use ($id, $request) {
 
@@ -1068,303 +1497,299 @@ class PosController extends BaseController
         // Every managed-stock line must be covered by stock unless overselling is allowed.
         $this->assertSaleStockSufficient($request);
 
-        $draft = DraftSale::findOrFail($request['draft_sale_id']);
+        // Same register discount rules as a direct POS sale (see createPosSale).
+        $violation = \App\Services\PosDiscountLimit::violation(
+            $request->user('api'),
+            (array) $request->input('details', []),
+            $request->input('discount', 0),
+            $request->input('discount_Method', '2')
+        );
+        if ($violation) {
+            return response()->json(['message' => $violation], 422);
+        }
+
+        // A submitted draft is flagged deleted_at (no SoftDeletes trait), so it
+        // must be filtered here or a retried / double-clicked submit converts
+        // the same draft into a second sale — and charges the card twice.
+        $draft = DraftSale::whereNull('deleted_at')->findOrFail($request['draft_sale_id']);
         if ($draft) {
 
-            $sale = \DB::transaction(function () use ($request, $draft) {
-                $helpers = new helpers;
-                $user = Auth::user();
-                // New way: Check user's record_view field (user-level boolean)
-                // Backward compatibility: If record_view is null, fall back to role permission check
-                $order = new Sale;
-
-                $order->is_pos = 1;
-                $order->date = Carbon::now();
-                $order->time = now()->toTimeString();
-                $order->Ref = app('App\Http\Controllers\SalesController')->getNumberOrder();
-                $order->client_id = $request->client_id;
-                $order->warehouse_id = $request->warehouse_id;
-                $order->tax_rate = $request->tax_rate;
-                $order->TaxNet = $request->TaxNet;
-                $order->discount = $request->discount;
-                // Ensure discount_Method is saved correctly: '1' for percentage, '2' for fixed
-                $order->discount_Method = $request->has('discount_Method') ? (string) $request->discount_Method : '2';
-                $order->shipping = $request->shipping;
-                $order->GrandTotal = $request->GrandTotal;
-                $order->notes = $request->notes;
-                $order->statut = 'completed';
-                $order->payment_statut = 'unpaid';
-                $order->user_id = Auth::user()->id;
-                // Multi-Currency snapshot (NULL/NULL = base currency): the sale
-                // inherits the draft's pair unless the request re-picks one.
-                $docCurrency = helpers::resolve_request_currency($request, $draft->currency_id, $draft->exchange_rate);
-                $order->currency_id = $docCurrency['currency_id'];
-                $order->exchange_rate = $docCurrency['exchange_rate'];
-
-                $order->save();
-
-                $data = $request['details'];
-                $total_points_earned = 0;
-                foreach ($data as $key => $value) {
-
-                    $product = Product::find($value['product_id']);
-                    $unit = Unit::where('id', $value['sale_unit_id'])->first();
-                    $total_points_earned += $value['quantity'] * $product->points;
-
-                    // Multi-Pack Selling: a selected pack multiplies the base-unit
-                    // stock movement. Defaults to 1 so non-pack lines are unchanged.
-                    $packMultiplier = isset($value['pack_multiplier']) && (float) $value['pack_multiplier'] > 0
-                        ? (float) $value['pack_multiplier'] : 1;
-                    $packQty = $value['quantity'] * $packMultiplier;
-
-                    $baseDate = Carbon::now();
-                    $warrantyGuarantee = SaleDetail::computeWarrantyGuaranteeDates($product, $baseDate);
-
-                    $orderDetails[] = array_merge([
-                        'date' => Carbon::now(),
-                        'sale_id' => $order->id,
-                        'sale_unit_id' => $value['sale_unit_id'],
-                        'quantity' => $value['quantity'],
-                        'product_id' => $value['product_id'],
-                        'product_variant_id' => $value['product_variant_id'],
-                        'total' => $value['subtotal'],
-                        'price' => $value['Unit_price'],
-                        'TaxNet' => $value['tax_percent'],
-                        'tax_method' => $value['tax_method'],
-                        'discount' => $value['discount'],
-                        'discount_method' => $value['discount_Method'],
-                        'imei_number' => $this->resolveImeiString($value),
-                        'price_type' => isset($value['price_type']) ? $value['price_type'] : 'retail',
-                        'product_pack_id' => isset($value['product_pack_id']) && $value['product_pack_id'] ? (int) $value['product_pack_id'] : null,
-                        'pack_multiplier' => $packMultiplier,
-                        'pack_name' => $value['pack_name'] ?? null,
-                    ], $warrantyGuarantee);
-
-                    if ($value['product_variant_id'] !== null) {
-                        $product_warehouse = product_warehouse::where('warehouse_id', $order->warehouse_id)
-                            ->where('product_id', $value['product_id'])->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
-
-                        if ($unit && $product_warehouse) {
-                            if ($unit->operator == '/') {
-                                $product_warehouse->qte -= $packQty / $unit->operator_value;
-                            } else {
-                                $product_warehouse->qte -= $packQty * $unit->operator_value;
-                            }
-                            $product_warehouse->save();
-                        }
-
-                    } else {
-                        $product_warehouse = product_warehouse::where('warehouse_id', $order->warehouse_id)
-                            ->where('product_id', $value['product_id'])
-                            ->first();
-                        if ($unit && $product_warehouse) {
-                            if ($unit->operator == '/') {
-                                $product_warehouse->qte -= $packQty / $unit->operator_value;
-                            } else {
-                                $product_warehouse->qte -= $packQty * $unit->operator_value;
-                            }
-                            $product_warehouse->save();
-                        }
-                    }
+            // A card payment is authorised with Stripe BEFORE the transaction
+            // opens, as in CreatePOS: the network round trip never holds stock
+            // row locks, and a deadlock retry of the closure can never charge
+            // the card a second time. The hold is captured once the sale commits.
+            $cardAuthorisations = [];
+            $isCardPayment = ($request->payment['payment_method_id'] ?? null) == 1;
+            if ($request['amount'] > 0 && $isCardPayment) {
+                // Same rule as CreatePOS: a card cannot give change back.
+                $overpayment = round((float) $request['amount'] - (float) $request->GrandTotal, 4);
+                if ($overpayment > 0) {
+                    return response()->json([
+                        'message' => 'Total Paid Exceeds Grand Total',
+                        'change_return' => $overpayment,
+                    ], 422);
                 }
-
-                SaleDetail::insert($orderDetails);
-
-                // Serial / IMEI: mark selected serials as sold.
-                $serialService = app(SerialNumberService::class);
-                if ($serialService->isSupported()) {
-                    $persistedSerials = SaleDetail::where('sale_id', $order->id)
-                        ->orderBy('id', 'asc')
-                        ->get();
-                    foreach (array_values($data) as $i => $row) {
-                        $detail = $persistedSerials->get($i);
-                        if (! $detail) {
-                            continue;
-                        }
-                        $serialService->sellOnSale($order, $detail, $row['serial_numbers'] ?? null);
-                    }
-                }
-
-                $sale = Sale::findOrFail($order->id);
 
                 try {
+                    $cardAuthorisations = $this->authoriseCardPayments($request, null, 0, [
+                        array_merge((array) $request->payment, ['amount' => $request['amount']]),
+                    ]);
+                } catch (\Throwable $e) {
+                    return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+                }
+            }
 
-                    $total_paid = $sale->paid_amount + $request['amount'];
-                    $due = $sale->GrandTotal - $total_paid;
-
-                    if ($due === 0.0 || $due < 0.0) {
-                        $payment_statut = 'paid';
-                    } elseif ($due != $sale->GrandTotal) {
-                        $payment_statut = 'partial';
-                    } elseif ($due == $sale->GrandTotal) {
-                        $payment_statut = 'unpaid';
+            try {
+                $sale = \DB::transaction(function () use ($request, $draft, $isCardPayment, $cardAuthorisations) {
+                    // Two submits racing past the check above: the row lock lets
+                    // only one convert the draft; the other finds it taken and
+                    // fails, which releases its card hold below.
+                    if (! DraftSale::whereKey($draft->id)->whereNull('deleted_at')->lockForUpdate()->first(['id'])) {
+                        throw new \RuntimeException('This draft has already been submitted.');
                     }
 
-                    if ($request['amount'] > 0) {
-                        if ($request->payment['payment_method_id'] == 1 || $request->payment['payment_method_id'] == '1') {
+                    $helpers = new helpers;
+                    $user = Auth::user();
+                    // New way: Check user's record_view field (user-level boolean)
+                    // Backward compatibility: If record_view is null, fall back to role permission check
+                    $order = new Sale;
 
-                            $Client = Client::whereId($request->client_id)->first();
-                            Stripe\Stripe::setApiKey(\App\Models\PaymentSetting::current()->stripe_secret);
+                    $order->is_pos = 1;
+                    $order->date = Carbon::now();
+                    $order->time = now()->toTimeString();
+                    $order->Ref = app('App\Http\Controllers\SalesController')->getNumberOrder();
+                    $order->client_id = $request->client_id;
+                    $order->warehouse_id = $request->warehouse_id;
+                    $order->tax_rate = $request->tax_rate;
+                    $order->TaxNet = $request->TaxNet;
+                    $order->discount = $request->discount;
+                    // Ensure discount_Method is saved correctly: '1' for percentage, '2' for fixed
+                    $order->discount_Method = $request->has('discount_Method') ? (string) $request->discount_Method : '2';
+                    $order->shipping = $request->shipping;
+                    $order->GrandTotal = $request->GrandTotal;
+                    $order->notes = $request->notes;
+                    $order->statut = 'completed';
+                    $order->payment_statut = 'unpaid';
+                    $order->user_id = Auth::user()->id;
+                    $order->sales_agent_id = $this->resolvePosSalesAgentId($request);
+                    // Multi-Currency snapshot (NULL/NULL = base currency): the sale
+                    // inherits the draft's pair unless the request re-picks one.
+                    $docCurrency = helpers::resolve_request_currency($request, $draft->currency_id, $draft->exchange_rate);
+                    $order->currency_id = $docCurrency['currency_id'];
+                    $order->exchange_rate = $docCurrency['exchange_rate'];
 
-                            // Always require a fresh card token for each transaction.
-                            if (! $request->token) {
-                                throw new \Exception('Stripe card token is missing');
+                    $order->save();
+
+                    $data = $request['details'];
+                    $total_points_earned = 0;
+                    foreach ($data as $key => $value) {
+
+                        $product = Product::find($value['product_id']);
+                        $unit = Unit::where('id', $value['sale_unit_id'])->first();
+                        $total_points_earned += $value['quantity'] * $product->points;
+
+                        // Multi-Pack Selling: a selected pack multiplies the base-unit
+                        // stock movement. Defaults to 1 so non-pack lines are unchanged.
+                        $packMultiplier = isset($value['pack_multiplier']) && (float) $value['pack_multiplier'] > 0
+                            ? (float) $value['pack_multiplier'] : 1;
+                        $packQty = $value['quantity'] * $packMultiplier;
+
+                        $baseDate = Carbon::now();
+                        $warrantyGuarantee = SaleDetail::computeWarrantyGuaranteeDates($product, $baseDate);
+
+                        $orderDetails[] = array_merge([
+                            'date' => Carbon::now(),
+                            'sale_id' => $order->id,
+                            'sale_unit_id' => $value['sale_unit_id'],
+                            'quantity' => $value['quantity'],
+                            'product_id' => $value['product_id'],
+                            'product_variant_id' => $value['product_variant_id'],
+                            'total' => $value['subtotal'],
+                            'price' => $value['Unit_price'],
+                            'TaxNet' => $value['tax_percent'],
+                            'tax_method' => $value['tax_method'],
+                            'discount' => $value['discount'],
+                            'discount_method' => $value['discount_Method'],
+                            'imei_number' => $this->resolveImeiString($value),
+                            'price_type' => isset($value['price_type']) ? $value['price_type'] : 'retail',
+                            'product_pack_id' => isset($value['product_pack_id']) && $value['product_pack_id'] ? (int) $value['product_pack_id'] : null,
+                            'pack_multiplier' => $packMultiplier,
+                            'pack_name' => $value['pack_name'] ?? null,
+                        ], $warrantyGuarantee);
+
+                        if ($value['product_variant_id'] !== null) {
+                            $product_warehouse = product_warehouse::where('warehouse_id', $order->warehouse_id)
+                                ->where('product_id', $value['product_id'])->where('product_variant_id', $value['product_variant_id'])
+                                ->lockForUpdate()->first();
+
+                            if ($unit && $product_warehouse) {
+                                if ($unit->operator == '/') {
+                                    $product_warehouse->qte -= $packQty / $unit->operator_value;
+                                } else {
+                                    $product_warehouse->qte -= $packQty * $unit->operator_value;
+                                }
+                                $product_warehouse->save();
                             }
 
-                            // Optionally reuse the Stripe customer, but never reuse a saved card without a new token.
-                            $PaymentWithCreditCard = PaymentWithCreditCard::where('customer_id', $request->client_id)->first();
-
-                            if (! $PaymentWithCreditCard) {
-                                // Create a new customer and charge with the provided card token
-                                $customer = \Stripe\Customer::create([
-                                    'source' => $request->token,
-                                    'email' => $Client->email,
-                                    'name' => $Client->name,
-                                ]);
-
-                                $charge = \Stripe\Charge::create([
-                                    'amount' => $request['amount'] * 100,
-                                    'currency' => 'usd',
-                                    'customer' => $customer->id,
-                                ]);
-
-                                $PaymentCard['customer_stripe_id'] = $customer->id;
-                            } else {
-                                // Reuse the Stripe customer but attach/charge using the new card token
-                                $customer_id = $PaymentWithCreditCard->customer_stripe_id;
-
-                                // Attach new card source to existing customer
-                                $card = \Stripe\Customer::createSource(
-                                    $customer_id,
-                                    [
-                                        'source' => $request->token,
-                                    ]
-                                );
-
-                                $charge = \Stripe\Charge::create([
-                                    'amount' => $request['amount'] * 100,
-                                    'currency' => 'usd',
-                                    'customer' => $customer_id,
-                                    'source' => $card->id,
-                                ]);
-
-                                $PaymentCard['customer_stripe_id'] = $customer_id;
-                            }
-
-                            $PaymentSale = new PaymentSale;
-                            $PaymentSale->sale_id = $order->id;
-                            $PaymentSale->Ref = app('App\Http\Controllers\PaymentSalesController')->getNumberOrder();
-                            $PaymentSale->date = Carbon::now();
-                            $PaymentSale->payment_method_id = $request->payment['payment_method_id'];
-                            $PaymentSale->montant = $request['amount'];
-                            $PaymentSale->change = $request['change'];
-                            $PaymentSale->notes = $request->payment['notes'];
-                            $PaymentSale->user_id = Auth::user()->id;
-                            $PaymentSale->account_id = $request->payment['account_id'] ? $request->payment['account_id'] : null;
-
-                            $PaymentSale->save();
-
-                            $account = Account::where('id', $request->payment['account_id'])->exists();
-
-                            if ($account) {
-                                // Account exists, perform the update
-                                $account = Account::find($request->payment['account_id']);
-                                $account->update([
-                                    'balance' => $account->balance + $request['amount'],
-                                ]);
-                            }
-
-                            $sale->update([
-                                'paid_amount' => $total_paid,
-                                'payment_statut' => $payment_statut,
-                            ]);
-
-                            $PaymentCard['customer_id'] = $request->client_id;
-                            $PaymentCard['payment_id'] = $PaymentSale->id;
-                            $PaymentCard['charge_id'] = $charge->id;
-                            PaymentWithCreditCard::create($PaymentCard);
-
-                            // Paying Method Cash
+                        } elseif ($unit && app(ComboStockService::class)->moveComponents((int) $value['product_id'], (int) $order->warehouse_id, -ComboStockService::baseQty($packQty, $unit))) {
+                            // Virtual combo: its components were taken instead of its own row.
                         } else {
-
-                            PaymentSale::create([
-                                'sale_id' => $order->id,
-                                'account_id' => $request->payment['account_id'] ? $request->payment['account_id'] : null,
-                                'Ref' => app('App\Http\Controllers\PaymentSalesController')->getNumberOrder(),
-                                'date' => Carbon::now(),
-                                'payment_method_id' => $request->payment['payment_method_id'],
-                                'montant' => $request['amount'],
-                                'change' => $request['change'],
-                                'notes' => $request->payment['notes'],
-                                'user_id' => Auth::user()->id,
-                            ]);
-
-                            $account = Account::where('id', $request->payment['account_id'])->exists();
-
-                            if ($account) {
-                                // Account exists, perform the update
-                                $account = Account::find($request->payment['account_id']);
-                                $account->update([
-                                    'balance' => $account->balance + $request['amount'],
-                                ]);
+                            $product_warehouse = product_warehouse::where('warehouse_id', $order->warehouse_id)
+                                ->where('product_id', $value['product_id'])
+                                ->lockForUpdate()->first();
+                            if ($unit && $product_warehouse) {
+                                if ($unit->operator == '/') {
+                                    $product_warehouse->qte -= $packQty / $unit->operator_value;
+                                } else {
+                                    $product_warehouse->qte -= $packQty * $unit->operator_value;
+                                }
+                                $product_warehouse->save();
                             }
+                        }
+                    }
 
-                            $sale->update([
-                                'paid_amount' => $total_paid,
-                                'payment_statut' => $payment_statut,
-                            ]);
+                    SaleDetail::insert($orderDetails);
+
+                    // Serial / IMEI: mark selected serials as sold.
+                    $serialService = app(SerialNumberService::class);
+                    if ($serialService->isSupported()) {
+                        $persistedSerials = SaleDetail::where('sale_id', $order->id)
+                            ->orderBy('id', 'asc')
+                            ->get();
+                        foreach (array_values($data) as $i => $row) {
+                            $detail = $persistedSerials->get($i);
+                            if (! $detail) {
+                                continue;
+                            }
+                            $serialService->sellOnSale($order, $detail, $row['serial_numbers'] ?? null);
+                        }
+                    }
+
+                    // Software License products: claim / issue one key per unit sold.
+                    \App\Services\LicenseKeys\LicenseFulfilment::afterSaleWrite($order->id);
+
+                    $sale = Sale::findOrFail($order->id);
+
+                    // `amount` can include change to hand back, which must not
+                    // count as received (same rule as CreatePOS).
+                    $received = (float) $request['amount'];
+                    $leftToPay = max((float) $sale->GrandTotal - (float) $sale->paid_amount, 0);
+                    $paymentAmount = min($received, $leftToPay);
+                    $changeReturn = $received > $leftToPay ? round($received - $leftToPay, 4) : $request['change'];
+
+                    $total_paid = $sale->paid_amount + $paymentAmount;
+                    $payment_statut = Sale::paymentStatusFor($sale->GrandTotal, $total_paid);
+
+                    // Any failure here propagates so the whole sale rolls back (the
+                    // old catch returned a response from inside the closure, which
+                    // committed the sale with its stock already deducted).
+                    if ($paymentAmount > 0) {
+                        // Customer-wallet tender: debit the wallet, no cash account.
+                        $wallets = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+                        $fromWallet = $wallets->isWalletMethod($request->payment['payment_method_id'] ?? null);
+                        $paymentRef = app('App\Http\Controllers\PaymentSalesController')->getNumberOrder();
+                        $walletTxId = null;
+                        if ($fromWallet) {
+                            $walletTxId = $wallets->payFromWallet((int) $order->client_id, (float) $paymentAmount, 'sale_payment', [
+                                'reference_type' => Sale::class,
+                                'reference_id' => $order->id,
+                                'note' => 'POS sale '.$order->Ref.' · '.$paymentRef,
+                                'user_id' => Auth::id(),
+                            ])->id;
                         }
 
+                        $paymentSale = PaymentSale::create([
+                            'sale_id' => $order->id,
+                            'account_id' => (! $fromWallet && $request->payment['account_id']) ? $request->payment['account_id'] : null,
+                            'Ref' => $paymentRef,
+                            'date' => Carbon::now(),
+                            'payment_method_id' => $request->payment['payment_method_id'],
+                            'montant' => $paymentAmount,
+                            'change' => $fromWallet ? 0 : $changeReturn,
+                            'notes' => $request->payment['notes'],
+                            'user_id' => Auth::user()->id,
+                        ] + \App\Services\CustomerWallet\CustomerWalletService::txColumn($walletTxId));
+
+                        if (! $fromWallet) {
+                            Account::adjustBalance($request->payment['account_id'], $paymentAmount);
+                        }
+
+                        $sale->update([
+                            'paid_amount' => $total_paid,
+                            'payment_statut' => $payment_statut,
+                        ]);
+
+                        // Card: authorised with Stripe before the transaction opened;
+                        // here we only record the result.
+                        if ($isCardPayment) {
+                            PaymentWithCreditCard::create([
+                                'customer_id' => $request->client_id,
+                                'payment_id' => $paymentSale->id,
+                                'customer_stripe_id' => $cardAuthorisations[0]['customer_stripe_id'] ?? null,
+                                'charge_id' => $cardAuthorisations[0]['charge_id'] ?? null,
+                            ]);
+                        }
                     }
 
-                } catch (Exception $e) {
-                    return response()->json(['message' => $e->getMessage()], 500);
-                }
+                    // 🪙 Points logic
+                    $client = Client::find($request->client_id);
+                    $used_points = $request->used_points ?? 0;
+                    $discount_from_points = $request->discount_from_points ?? 0;
+                    $earned_points = 0;
 
-                // 🪙 Points logic
-                $client = Client::find($request->client_id);
-                $used_points = $request->used_points ?? 0;
-                $discount_from_points = $request->discount_from_points ?? 0;
-                $earned_points = 0;
+                    if ($client && ($client->is_royalty_eligible == 1 || $client->is_royalty_eligible || $client->is_royalty_eligible === 1)) {
 
-                if ($client && ($client->is_royalty_eligible == 1 || $client->is_royalty_eligible || $client->is_royalty_eligible === 1)) {
+                        // Deduct used points if valid
+                        if ($used_points > 0 && $client->points >= $used_points) {
+                            $client->decrement('points', $used_points);
+                        }
 
-                    // Deduct used points if valid
-                    if ($used_points > 0 && $client->points >= $used_points) {
-                        $client->decrement('points', $used_points);
+                        // Earn points
+                        $earned_points = $total_points_earned;
+
+                        $client->increment('points', $earned_points);
+
+                        $order_used_points = $used_points;
+                        $order_earned_points = $earned_points;
+                        $order_discount_from_points = $discount_from_points;
+                    } else {
+                        $order_used_points = 0;
+                        $order_earned_points = 0;
+                        $order_discount_from_points = 0;
                     }
 
-                    // Earn points
-                    $earned_points = $total_points_earned;
+                    $order->update([
+                        'used_points' => $order_used_points,
+                        'earned_points' => $order_earned_points,
+                        'discount_from_points' => $order_discount_from_points,
+                    ]);
 
-                    $client->increment('points', $earned_points);
+                    $draft->details()->delete();
+                    $draft->update([
+                        'deleted_at' => Carbon::now(),
+                    ]);
 
-                    $order_used_points = $used_points;
-                    $order_earned_points = $earned_points;
-                    $order_discount_from_points = $discount_from_points;
-                } else {
-                    $order_used_points = 0;
-                    $order_earned_points = 0;
-                    $order_discount_from_points = 0;
+                    return $order;
+
+                }, 10);
+            } catch (\Throwable $e) {
+                // The sale was not written: release the card hold.
+                $this->releaseCardAuthorisations($cardAuthorisations);
+
+                if ($e instanceof \App\Services\SupplierWallet\WalletException) {
+                    return $e->toResponse();
                 }
 
-                $order->update([
-                    'used_points' => $order_used_points,
-                    'earned_points' => $order_earned_points,
-                    'discount_from_points' => $order_discount_from_points,
-                ]);
-
-                $draft->details()->delete();
-                $draft->update([
-                    'deleted_at' => Carbon::now(),
-                ]);
-
-                return $order;
-
-            }, 10);
+                return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            }
 
             // ============================ END TRANSACTION ============================
+
+            // The sale is committed: take the held card funds.
+            $this->captureCardAuthorisations($cardAuthorisations);
+
+            // ---------- AFTER COMMIT: sales-agent commissions (best effort) ----------
+            $this->calculatePosCommissions($sale);
 
             // ---------- AFTER COMMIT: QBO sync (best effort, non-blocking) ----------
             $qboSync = 'skipped';
@@ -1436,11 +1861,11 @@ class PosController extends BaseController
         // get warehouses assigned to user
         $user_auth = auth()->user();
         if ($user_auth->is_all_warehouses) {
-            $warehouses = Warehouse::where('deleted_at', '=', null)->get(['id', 'name']);
+            $warehouses = Warehouse::where('deleted_at', '=', null)->get(['id', 'name', 'address', 'mobile', 'email', 'zip', 'country', 'logo', 'invoice_footer']);
 
         } else {
             $warehouses_id = UserWarehouse::where('user_id', $user_auth->id)->pluck('warehouse_id')->toArray();
-            $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name']);
+            $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name', 'address', 'mobile', 'email', 'zip', 'country', 'logo', 'invoice_footer']);
         }
 
         if ($draft_sale_data->client_id) {
@@ -1492,7 +1917,7 @@ class PosController extends BaseController
         // Multi-Pack Selling: preload active packs per product so the reloaded
         // POS cart can restore the pack picker. Empty map when feature is off.
         $mpPacksByProduct = [];
-        $mpSetting = Setting::whereNull('deleted_at')->first();
+        $mpSetting = Setting::current();
         if ((bool) ($mpSetting->enable_multi_pack_selling ?? false)) {
             $mpProductIds = collect($draft_sale_data['details'])->pluck('product_id')->unique()->values()->all();
             if (! empty($mpProductIds)) {
@@ -1513,6 +1938,12 @@ class PosController extends BaseController
             }
         }
 
+        // Combo lines pick serials of their tracked components.
+        $serialService = app(SerialNumberService::class);
+        $serialComponentsByCombo = $serialService->comboSerialComponents(
+            collect($draft_sale_data['details'])->pluck('product_id')->all()
+        );
+
         $detail_id = 0;
         foreach ($draft_sale_data['details'] as $detail) {
 
@@ -1527,9 +1958,9 @@ class PosController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
                 $data['no_unit'] = 0;
             }
 
@@ -1560,6 +1991,8 @@ class PosController extends BaseController
                 $item_product = product_warehouse::where('product_id', $detail->product_id)
                     ->where('deleted_at', '=', null)->where('warehouse_id', $draft_sale_data->warehouse_id)
                     ->where('product_variant_id', '=', null)->first();
+                // Virtual combo stock: show what the components can still fill.
+                app(\App\Services\ComboStockService::class)->overlayRows(array_filter([$item_product]));
 
                 $item_product ? $data['del'] = 0 : $data['del'] = 1;
                 $data['product_variant_id'] = null;
@@ -1591,6 +2024,14 @@ class PosController extends BaseController
             $data['sale_unit_id'] = $unit ? $unit->id : '';
             $data['is_imei'] = $detail['product']['is_imei'];
             $data['imei_number'] = $detail->imei_number;
+            $data['serial_components'] = $serialComponentsByCombo[(int) $detail->product_id] ?? [];
+            // The draft's picks (kept as imei_number text) regrouped per component.
+            $data['serial_groups'] = (object) ($data['serial_components'] && $detail->imei_number
+                ? array_intersect_key(
+                    $serialService->groupSerialsByProduct($detail->imei_number),
+                    array_flip(array_column($data['serial_components'], 'product_id'))
+                )
+                : []);
             $data['subtotal'] = $detail->total;
 
             // Multi-Pack Selling: restore the selected pack + available packs.
@@ -1610,6 +2051,34 @@ class PosController extends BaseController
             $tax_price = $detail->TaxNet * (($detail->price - $data['DiscountNet']) / 100);
             $data['Unit_price'] = $detail->price;
             $data['price_type'] = method_exists($detail, 'getAttribute') && $detail->getAttribute('price_type') ? $detail->price_type : 'retail';
+
+            // Retail / wholesale baselines per sale unit (same rules as
+            // get_products_pos) so the reopened cart can switch price types.
+            // The held price stays the baseline of the type it was held with.
+            $priceVariant = $detail->product_variant_id ? $productsVariants : null;
+            $priceUnit = $unit ?: $detail['product']['unitSale'];
+            $toSaleUnit = fn ($p) => $priceUnit
+                ? ($priceUnit->operator == '/' ? $p / $priceUnit->operator_value : $p * $priceUnit->operator_value)
+                : $p;
+            $retailBase = $priceVariant ? $priceVariant->price : $detail['product']['price'];
+            // Different prices per store: the draft's warehouse prices.
+            $draftStoreRow = WarehousePrices::find($detail->product_id, $detail->product_variant_id, $draft_sale_data->warehouse_id);
+            $retailBase = WarehousePrices::pick($draftStoreRow, 'price', $retailBase);
+            if ($priceVariant && $priceVariant->wholesale > 0) {
+                $wholesaleBase = $priceVariant->wholesale;
+            } elseif ($detail['product']['wholesale_price'] > 0) {
+                $wholesaleBase = $detail['product']['wholesale_price'];
+            } else {
+                $wholesaleBase = $retailBase;
+            }
+            $wholesaleBase = WarehousePrices::pick($draftStoreRow, 'wholesale_price', $wholesaleBase);
+            $heldWholesale = $data['price_type'] === 'wholesale';
+            $data['Unit_price_wholesale'] = $toSaleUnit($wholesaleBase);
+            $data['retail_unit_price'] = $heldWholesale ? $toSaleUnit($retailBase) : $detail->price;
+            $data['wholesale_unit_price'] = $heldWholesale ? $detail->price : $data['Unit_price_wholesale'];
+            $data['min_price'] = WarehousePrices::pick($draftStoreRow, 'min_price', ($priceVariant && $priceVariant->min_price > 0)
+                ? $priceVariant->min_price
+                : ($detail['product']['min_price'] ?? 0));
 
             $data['tax_percent'] = $detail->TaxNet;
             $data['tax_method'] = $detail->tax_method;
@@ -1632,7 +2101,7 @@ class PosController extends BaseController
         $categories = Category::where('deleted_at', '=', null)->get(['id', 'name']);
         $brands = Brand::where('deleted_at', '=', null)->get();
         $stripe_key = \App\Models\PaymentSetting::current()->stripe_key;
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name', 'is_cash']);
 
         return response()->json([
             'stripe_key' => $stripe_key,
@@ -1687,13 +2156,21 @@ class PosController extends BaseController
         // zero or negative stock must still appear in the POS grid / search —
         // otherwise the cashier can never reach them even though selling them
         // is permitted.
-        $mpSetting = Setting::whereNull('deleted_at')->first();
+        $mpSetting = Setting::current();
         $allow_overselling = (bool) ($mpSetting->allow_overselling ?? false);
+        // Virtual combo stock: a combo's own row stays at 0, so combos skip the
+        // SQL stock filter and are filtered on their component availability below.
+        $virtualCombos = ComboStockService::enabled();
+        $stockFiltered = $request->stock == '1' && $request->product_service == '1' && ! $allow_overselling;
 
         $product_warehouse_query = product_warehouse::where('warehouse_id', $request->warehouse_id)
             ->with('product', 'product.unitSale')
+            // Products belong to a warehouse (Settings -> Features): drop the
+            // zero-stock rows of products owned by another branch.
+            ->whereHas('product', fn ($p) => $this->scopeProductsToWarehouses($p))
             ->where('deleted_at', '=', null)
-            ->where(function ($query) use ($request, $allow_overselling) {
+            ->withoutVariantParentRows()
+            ->where(function ($query) use ($request, $allow_overselling, $virtualCombos) {
                 return $query->whereHas('product', function ($q) {
                     $q->where('not_selling', '=', 0);
                 })
@@ -1706,7 +2183,7 @@ class PosController extends BaseController
                             }
                         });
                     })
-                    ->where(function ($query) use ($request, $allow_overselling) {
+                    ->where(function ($query) use ($request, $allow_overselling, $virtualCombos) {
                         if ($request->stock == '1' && $request->product_service == '1') {
                             // Overselling ON → drop the stock filter so
                             // zero / negative rows stay in the grid.
@@ -1714,7 +2191,8 @@ class PosController extends BaseController
                                 ? $query
                                 : $query->where('qte', '>', 0)->orWhere('manage_stock', false)
                                     // "Always in stock" products stay in the grid at zero stock.
-                                    ->orWhereHas('product', fn ($p) => $p->where('always_in_stock', 1));
+                                    ->orWhereHas('product', fn ($p) => $p->where('always_in_stock', 1))
+                                    ->when($virtualCombos, fn ($q) => $q->orWhereHas('product', fn ($p) => $p->where('type', 'is_combo')));
 
                         } elseif ($request->stock == '1' && $request->product_service == '0') {
                             // Overselling ON → stock-managed products only, no qte filter.
@@ -1746,14 +2224,37 @@ class PosController extends BaseController
             })
             ->orderBy('product_id', 'desc');
 
-        $totalRows = $product_warehouse_query->count();
-
+        // The POS keeps the whole warehouse catalogue client-side (offline
+        // selling, local barcode lookup), so the row count is taken from the
+        // rows actually returned (see the response) — no separate COUNT query.
         $product_warehouse_data = $product_warehouse_query->get();
+
+        if ($virtualCombos) {
+            app(ComboStockService::class)->overlayRows($product_warehouse_data);
+            if ($stockFiltered) {
+                $product_warehouse_data = $product_warehouse_data->reject(fn ($pw) => optional($pw->product)->type === 'is_combo'
+                    && $pw->qte <= 0
+                    && ! $pw->combo_unlimited
+                    && ! $pw->product->always_in_stock
+                )->values();
+            }
+        }
+
+        // Every variant row's variant in one query instead of one per row.
+        $variantIds = $product_warehouse_data->pluck('product_variant_id')->filter()->unique()->values()->all();
+        $variantsById = empty($variantIds) ? collect() : ProductVariant::whereIn('id', $variantIds)
+            ->where('deleted_at', null)
+            ->get()
+            ->keyBy('id');
+
+        // Combo tiles carry their tracked components for the serial pickers.
+        $serialComponentsByCombo = app(SerialNumberService::class)->comboSerialComponents(
+            $product_warehouse_data->filter(fn ($pw) => optional($pw->product)->type === 'is_combo')->pluck('product_id')->all()
+        );
 
         // Multi-Pack Selling: preload active packs for single products (one query)
         // when the feature is enabled. Empty map otherwise, so POS is unchanged.
         $packsByProduct = [];
-        $mpSetting = Setting::whereNull('deleted_at')->first();
         if ((bool) ($mpSetting->enable_multi_pack_selling ?? false)) {
             $productIds = $product_warehouse_data->pluck('product_id')->unique()->values()->all();
             if (! empty($productIds)) {
@@ -1775,78 +2276,126 @@ class PosController extends BaseController
             }
         }
 
-        foreach ($product_warehouse_data as $product_warehouse) {
-            if ($product_warehouse->product_variant_id) {
-                $productsVariants = ProductVariant::where('product_id', $product_warehouse->product_id)
-                    ->where('id', $product_warehouse->product_variant_id)
-                    ->where('deleted_at', null)
-                    ->first();
+        // Additional barcodes (manufacturer EANs …) for the POS's local scan lookup.
+        $barcodeMap = \App\Services\ProductBarcodes::map($product_warehouse_data->pluck('product_id')->all());
 
-                $item['product_variant_id'] = $product_warehouse->product_variant_id;
-                $item['Variant'] = '['.$productsVariants->name.']'.$product_warehouse['product']->name;
-                $item['name'] = '['.$productsVariants->name.']'.$product_warehouse['product']->name;
+        // Different prices per store: this POS warehouse's own prices, one query.
+        $storePriceMap = WarehousePrices::map($request->warehouse_id);
+
+        $num = fn ($v) => $v === null ? null : (float) $v;
+
+        foreach ($product_warehouse_data as $product_warehouse) {
+            // Plain reads (see ProductsController::Products_by_Warehouse): each
+            // Eloquent attribute read costs ~10 µs here and this loop made ~80 per
+            // product, so a 21,000-product POS took ~20 s to load its grid.
+            // Raw values, cast exactly as the Product model casts them.
+            $a = $product_warehouse['product']->getAttributes();
+            $prodRow = (object) [
+                'code' => $a['code'] ?? null,
+                'name' => $a['name'] ?? null,
+                'type' => $a['type'] ?? null,
+                'image' => $a['image'] ?? null,
+                'scale_plu' => $a['scale_plu'] ?? null,
+                'not_selling' => $a['not_selling'] ?? null,
+                'is_imei' => isset($a['is_imei']) ? (int) $a['is_imei'] : null,
+                'is_batch_tracked' => isset($a['is_batch_tracked']) ? (bool) $a['is_batch_tracked'] : null,
+                'hide_from_online_store' => isset($a['hide_from_online_store']) ? (bool) $a['hide_from_online_store'] : null,
+                'always_in_stock' => isset($a['always_in_stock']) ? (bool) $a['always_in_stock'] : null,
+                'price' => $num($a['price'] ?? null),
+                'wholesale_price' => $num($a['wholesale_price'] ?? null),
+                'min_price' => $num($a['min_price'] ?? null),
+                'discount' => $num($a['discount'] ?? null),
+                'discount_method' => $a['discount_method'] ?? null,
+                'TaxNet' => $num($a['TaxNet'] ?? null),
+                'tax_method' => $a['tax_method'] ?? null,
+            ];
+            $unitSale = $product_warehouse['product']->unitSale;
+            $pwRaw = $product_warehouse->getAttributes();
+            $pwQte = $num($pwRaw['qte'] ?? null);
+            $pwProductId = isset($pwRaw['product_id']) ? (int) $pwRaw['product_id'] : null;
+            $pwVariantId = $pwRaw['product_variant_id'] ?? null;
+            $item['barcodes'] = $barcodeMap[$pwProductId.'|'.($pwVariantId ?? '')] ?? [];
+            if ($pwVariantId) {
+                $productsVariants = $variantsById->get($pwVariantId);
+
+                // A deleted variant (or one pointing at another product) is not
+                // sellable; this used to fatal on the null and fail the whole grid.
+                if (! $productsVariants || $productsVariants->product_id != $pwProductId) {
+                    continue;
+                }
+
+                $item['product_variant_id'] = $pwVariantId;
+                $item['Variant'] = '['.$productsVariants->name.']'.$prodRow->name;
+                $item['name'] = '['.$productsVariants->name.']'.$prodRow->name;
 
                 $item['code'] = $productsVariants->code;
                 $item['barcode'] = $productsVariants->code;
 
-                $product_price = $product_warehouse['productVariant']->price;
+                $product_price = $productsVariants->price;
 
             } else {
                 $item['product_variant_id'] = null;
                 $item['Variant'] = null;
-                $item['code'] = $product_warehouse['product']->code;
-                $item['name'] = $product_warehouse['product']->name;
-                $item['barcode'] = $product_warehouse['product']->code;
+                $item['code'] = $prodRow->code;
+                $item['name'] = $prodRow->name;
+                $item['barcode'] = $prodRow->code;
 
-                $product_price = $product_warehouse['product']->price;
+                $product_price = $prodRow->price;
 
             }
-            $item['id'] = $product_warehouse->product_id;
-            $firstimage = explode(',', $product_warehouse['product']->image);
+            $storeRow = $storePriceMap[WarehousePrices::key($pwProductId, $pwVariantId)] ?? null;
+            $product_price = WarehousePrices::pick($storeRow, 'price', $product_price);
+            $item['id'] = $pwProductId;
+            $firstimage = explode(',', $prodRow->image);
             $item['image'] = $firstimage[0];
 
             // Common product flags & meta
-            $item['product_type'] = $product_warehouse['product']->type;
-            $item['is_imei'] = $product_warehouse['product']->is_imei;
-            $item['is_batch_tracked'] = (bool) ($product_warehouse['product']->is_batch_tracked ?? false);
-            $item['not_selling'] = $product_warehouse['product']->not_selling;
-            $item['hide_from_online_store'] = $product_warehouse['product']->hide_from_online_store ?? 0;
+            $item['product_type'] = $prodRow->type;
+            // Weighing-scale item code (standard products only).
+            $item['scale_plu'] = ! $pwVariantId && $prodRow->type === 'is_single'
+                ? ($prodRow->scale_plu ?? null) : null;
+            $item['is_imei'] = $prodRow->is_imei;
+            $item['serial_components'] = $serialComponentsByCombo[(int) $pwProductId] ?? [];
+            $item['is_batch_tracked'] = (bool) ($prodRow->is_batch_tracked ?? false);
+            $item['not_selling'] = $prodRow->not_selling;
+            $item['hide_from_online_store'] = $prodRow->hide_from_online_store ?? 0;
             // Product-level overselling flag (sellable at zero stock).
-            $item['always_in_stock'] = (bool) ($product_warehouse['product']->always_in_stock ?? false);
+            $item['always_in_stock'] = (bool) ($prodRow->always_in_stock ?? false)
+                || (bool) ($pwRaw['combo_unlimited'] ?? null);
 
             // Multi-Pack Selling: only single products (null variant) carry packs.
-            $item['packs'] = ($item['product_variant_id'] === null && isset($packsByProduct[$product_warehouse->product_id]))
-                ? $packsByProduct[$product_warehouse->product_id]
+            $item['packs'] = ($item['product_variant_id'] === null && isset($packsByProduct[$pwProductId]))
+                ? $packsByProduct[$pwProductId]
                 : [];
 
             // Persist tax/discount metadata so the POS can work without per‑click calls
-            $item['tax_method'] = $product_warehouse['product']->tax_method;
-            $item['tax_percent'] = $product_warehouse['product']->TaxNet;
-            $item['discount_method'] = $product_warehouse['product']->discount_method;
+            $item['tax_method'] = $prodRow->tax_method;
+            $item['tax_percent'] = $prodRow->TaxNet;
+            $item['discount_method'] = $prodRow->discount_method;
             // Legacy camel-cased name used in some existing JS
-            $item['discount_Method'] = $product_warehouse['product']->discount_method;
-            $item['discount'] = $product_warehouse['product']->discount;
+            $item['discount_Method'] = $prodRow->discount_method;
+            $item['discount'] = $prodRow->discount;
 
-            if ($product_warehouse['product']['unitSale']) {
+            if ($unitSale) {
 
-                if ($product_warehouse['product']['unitSale']->operator == '/') {
-                    $item['qte_sale'] = $product_warehouse->qte * $product_warehouse['product']['unitSale']->operator_value;
-                    $price = $product_price / $product_warehouse['product']['unitSale']->operator_value;
+                if ($unitSale->operator == '/') {
+                    $item['qte_sale'] = $pwQte * $unitSale->operator_value;
+                    $price = $product_price / $unitSale->operator_value;
 
                 } else {
-                    $item['qte_sale'] = $product_warehouse->qte / $product_warehouse['product']['unitSale']->operator_value;
-                    $price = $product_price * $product_warehouse['product']['unitSale']->operator_value;
+                    $item['qte_sale'] = $pwQte / $unitSale->operator_value;
+                    $price = $product_price * $unitSale->operator_value;
 
                 }
 
             } else {
-                $item['qte_sale'] = $product_warehouse['product']->type != 'is_service' ? $product_warehouse->qte : '---';
+                $item['qte_sale'] = $prodRow->type != 'is_service' ? $pwQte : '---';
                 $price = $product_price;
             }
 
-            $item['unitSale'] = $product_warehouse['product']['unitSale'] ? $product_warehouse['product']['unitSale']->ShortName : '';
-            $item['sale_unit_id'] = $product_warehouse['product']['unitSale'] ? $product_warehouse['product']['unitSale']->id : null;
-            $item['qte'] = $product_warehouse['product']->type != 'is_service' ? $product_warehouse->qte : '---';
+            $item['unitSale'] = $unitSale ? $unitSale->ShortName : '';
+            $item['sale_unit_id'] = $unitSale ? $unitSale->id : null;
+            $item['qte'] = $prodRow->type != 'is_service' ? $pwQte : '---';
 
             // Base (retail) price per sale unit and original/base price (fix_price)
             $item['Unit_price'] = $price;
@@ -1857,7 +2406,7 @@ class PosController extends BaseController
             $baseWholesale = null;
             $baseMinPrice = null;
 
-            if ($product_warehouse->product_variant_id && isset($productsVariants)) {
+            if ($pwVariantId && isset($productsVariants)) {
                 // Variant wholesale column is `wholesale` (NOT wholesale_price)
                 if (isset($productsVariants->wholesale) && $productsVariants->wholesale > 0) {
                     $baseWholesale = $productsVariants->wholesale;
@@ -1869,8 +2418,8 @@ class PosController extends BaseController
 
             // Fallbacks for non-variant products or when variant values are empty/zero
             if ($baseWholesale === null || $baseWholesale <= 0) {
-                if (isset($product_warehouse['product']->wholesale_price) && $product_warehouse['product']->wholesale_price > 0) {
-                    $baseWholesale = $product_warehouse['product']->wholesale_price;
+                if (isset($prodRow->wholesale_price) && $prodRow->wholesale_price > 0) {
+                    $baseWholesale = $prodRow->wholesale_price;
                 } else {
                     // If no explicit wholesale is configured, use the regular product price
                     $baseWholesale = $product_price;
@@ -1878,31 +2427,35 @@ class PosController extends BaseController
             }
 
             if ($baseMinPrice === null || $baseMinPrice <= 0) {
-                $baseMinPrice = $product_warehouse['product']->min_price ?? 0;
+                $baseMinPrice = $prodRow->min_price ?? 0;
             }
+
+            // Different prices per store: wholesale / minimum of this warehouse.
+            $baseWholesale = WarehousePrices::pick($storeRow, 'wholesale_price', $baseWholesale);
+            $baseMinPrice = WarehousePrices::pick($storeRow, 'min_price', $baseMinPrice);
 
             $wholesale_product_price = $baseWholesale;
 
-            if ($product_warehouse['product']['unitSale']) {
-                if ($product_warehouse['product']['unitSale']->operator == '/') {
-                    $wholesale_unit_price = $wholesale_product_price / $product_warehouse['product']['unitSale']->operator_value;
+            if ($unitSale) {
+                if ($unitSale->operator == '/') {
+                    $wholesale_unit_price = $wholesale_product_price / $unitSale->operator_value;
                 } else {
-                    $wholesale_unit_price = $wholesale_product_price * $product_warehouse['product']['unitSale']->operator_value;
+                    $wholesale_unit_price = $wholesale_product_price * $unitSale->operator_value;
                 }
             } else {
                 $wholesale_unit_price = $wholesale_product_price;
             }
 
             // ---------------- Discount for base (retail) price ----------------
-            if ($product_warehouse['product']->discount !== 0.0) {
+            if ($prodRow->discount !== 0.0) {
                 // percent %
-                if ($product_warehouse['product']->discount_method == '1') {
-                    $discount_price = $price * $product_warehouse['product']->discount / 100;
+                if ($prodRow->discount_method == '1') {
+                    $discount_price = $price * $prodRow->discount / 100;
                     $price_discounted = $price - $discount_price;
                 } else {
                     // fixed
-                    $discount_price = $product_warehouse['product']->discount;
-                    $price_discounted = $price - $product_warehouse['product']->discount;
+                    $discount_price = $prodRow->discount;
+                    $price_discounted = $price - $prodRow->discount;
                 }
             } else {
                 $discount_price = 0;
@@ -1913,17 +2466,17 @@ class PosController extends BaseController
             $item['DiscountNet'] = $discount_price;
 
             // ---------------- Tax & Net/Total price (base / retail) ----------------
-            if ($product_warehouse['product']->TaxNet !== 0.0) {
+            if ($prodRow->TaxNet !== 0.0) {
                 // Exclusive
-                if ($product_warehouse['product']->tax_method == '1') {
-                    $tax_price = $price_discounted * $product_warehouse['product']->TaxNet / 100;
+                if ($prodRow->tax_method == '1') {
+                    $tax_price = $price_discounted * $prodRow->TaxNet / 100;
                     $item['Net_price'] = $price_discounted;
                     $item['tax_price'] = $tax_price;
                     $item['Total_price'] = $price_discounted + $tax_price;
 
                     // Inclusive
                 } else {
-                    $tax_price = $price_discounted * $product_warehouse['product']->TaxNet / 100;
+                    $tax_price = $price_discounted * $prodRow->TaxNet / 100;
                     $item['Total_price'] = $price_discounted;
                     $item['Net_price'] = $price_discounted - $tax_price;
                     $item['tax_price'] = $tax_price;
@@ -1936,12 +2489,12 @@ class PosController extends BaseController
             }
 
             // ---------------- Wholesale discount/tax/net ----------------
-            if ($product_warehouse['product']->discount !== 0.0) {
-                if ($product_warehouse['product']->discount_method == '1') {
-                    $wholesale_discount = $wholesale_unit_price * $product_warehouse['product']->discount / 100;
+            if ($prodRow->discount !== 0.0) {
+                if ($prodRow->discount_method == '1') {
+                    $wholesale_discount = $wholesale_unit_price * $prodRow->discount / 100;
                     $wholesale_price_discounted = $wholesale_unit_price - $wholesale_discount;
                 } else {
-                    $wholesale_discount = $product_warehouse['product']->discount;
+                    $wholesale_discount = $prodRow->discount;
                     $wholesale_price_discounted = $wholesale_unit_price - $wholesale_discount;
                 }
             } else {
@@ -1949,12 +2502,12 @@ class PosController extends BaseController
                 $wholesale_price_discounted = $wholesale_unit_price;
             }
 
-            if ($product_warehouse['product']->TaxNet !== 0.0) {
-                if ($product_warehouse['product']->tax_method == '1') {
-                    $wholesale_tax_price = $wholesale_price_discounted * $product_warehouse['product']->TaxNet / 100;
+            if ($prodRow->TaxNet !== 0.0) {
+                if ($prodRow->tax_method == '1') {
+                    $wholesale_tax_price = $wholesale_price_discounted * $prodRow->TaxNet / 100;
                     $wholesale_net_price = $wholesale_price_discounted + $wholesale_tax_price;
                 } else {
-                    $wholesale_tax_price = $wholesale_price_discounted * $product_warehouse['product']->TaxNet / 100;
+                    $wholesale_tax_price = $wholesale_price_discounted * $prodRow->TaxNet / 100;
                     $wholesale_net_price = $wholesale_price_discounted;
                 }
             } else {
@@ -1972,8 +2525,84 @@ class PosController extends BaseController
 
         return response()->json([
             'products' => $data,
-            'totalRows' => $totalRows,
+            'totalRows' => count($data),
             'server_time' => now()->toIso8601String(),
+            'favorites' => $this->posFavoriteKeys($request->user('api')->id),
+        ]);
+    }
+
+    // ---------------- POS favourite products (per cashier) ----------------\\
+
+    /** pos_favorite_products exists (its migration may not have run yet); checked once per request. */
+    protected function posFavoritesSupported(): bool
+    {
+        static $supported = null;
+
+        if ($supported === null) {
+            try {
+                $supported = \Schema::hasTable('pos_favorite_products');
+            } catch (\Throwable $e) {
+                $supported = false;
+            }
+        }
+
+        return $supported;
+    }
+
+    /** The cashier's favourites as "productId:variantId" keys (0 = no variant). */
+    protected function posFavoriteKeys($userId)
+    {
+        // Never let a missing table (migration not run yet) break the grid —
+        // and do not run a query known to fail on every grid load.
+        if (! $this->posFavoritesSupported()) {
+            return [];
+        }
+        try {
+            return \DB::table('pos_favorite_products')
+                ->where('user_id', $userId)
+                ->get(['product_id', 'product_variant_id'])
+                ->map(fn ($f) => $f->product_id.':'.$f->product_variant_id)
+                ->values()
+                ->all();
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    public function toggleFavorite(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'Sales_pos', Sale::class);
+
+        $request->validate([
+            'product_id' => 'required|integer',
+            'product_variant_id' => 'nullable|integer',
+        ]);
+
+        if (! $this->posFavoritesSupported()) {
+            return response()->json([
+                'message' => 'Favourites are not available until the database update has been run.',
+            ], 409);
+        }
+
+        $userId = $request->user('api')->id;
+        $key = [
+            'user_id' => $userId,
+            'product_id' => (int) $request->product_id,
+            'product_variant_id' => (int) ($request->product_variant_id ?? 0),
+        ];
+
+        $existing = \DB::table('pos_favorite_products')->where($key);
+        if ($existing->exists()) {
+            $existing->delete();
+            $favorite = false;
+        } else {
+            \DB::table('pos_favorite_products')->insertOrIgnore($key + ['created_at' => now(), 'updated_at' => now()]);
+            $favorite = true;
+        }
+
+        return response()->json([
+            'favorite' => $favorite,
+            'favorites' => $this->posFavoriteKeys($userId),
         ]);
     }
 
@@ -2012,7 +2641,8 @@ class PosController extends BaseController
             }
         }
 
-        $rows = $query->get();
+        $rows = $this->withVirtualComboRows($query->get(), $warehouseId);
+
         $data = [];
         foreach ($rows as $pw) {
             $formatted = $this->formatStockRow($pw);
@@ -2025,6 +2655,39 @@ class PosController extends BaseController
             'products' => $data,
             'server_time' => $serverTime,
         ]);
+    }
+
+    // Virtual combo stock: a stock change on a combo or a component changes
+    // every combo sharing those components, and none of their own rows moved.
+    // Adds the affected rows (the sold combo's components and every combo
+    // built from a changed product) and overlays the combo availability.
+    private function withVirtualComboRows($rows, $warehouseId)
+    {
+        if (! ComboStockService::enabled() || $rows->isEmpty()) {
+            return $rows;
+        }
+
+        $comboStock = app(ComboStockService::class);
+        $productIds = $rows->pluck('product_id')->map(fn ($v) => (int) $v)->unique()->values()->all();
+
+        $components = [];
+        foreach ($comboStock->recipes($productIds) as $recipe) {
+            $components = array_merge($components, array_keys($recipe));
+        }
+        $affected = array_merge($components, $comboStock->combosUsing(array_merge($productIds, $components)));
+        $missing = array_values(array_diff(array_unique($affected), $productIds));
+
+        if ($missing) {
+            $rows = $rows->concat(product_warehouse::where('warehouse_id', $warehouseId)
+                ->whereNull('deleted_at')
+                ->whereNull('product_variant_id')
+                ->whereIn('product_id', $missing)
+                ->with('product.unitSale')
+                ->get());
+        }
+        $comboStock->overlayRows($rows);
+
+        return $rows;
     }
 
     // Shared helper: format a product_warehouse row for stock-only responses.
@@ -2068,7 +2731,7 @@ class PosController extends BaseController
         // get warehouses assigned to user
         $user_auth = auth()->user();
         if ($user_auth->is_all_warehouses) {
-            $warehouses = Warehouse::where('deleted_at', '=', null)->get(['id', 'name']);
+            $warehouses = Warehouse::where('deleted_at', '=', null)->get(['id', 'name', 'address', 'mobile', 'email', 'zip', 'country', 'logo', 'invoice_footer']);
 
             if ($settings->warehouse_id) {
                 if (Warehouse::where('id', $settings->warehouse_id)->where('deleted_at', '=', null)->first()) {
@@ -2082,7 +2745,7 @@ class PosController extends BaseController
 
         } else {
             $warehouses_id = UserWarehouse::where('user_id', $user_auth->id)->pluck('warehouse_id')->toArray();
-            $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name']);
+            $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name', 'address', 'mobile', 'email', 'zip', 'country', 'logo', 'invoice_footer']);
 
             if ($settings->warehouse_id) {
                 if (Warehouse::where('id', $settings->warehouse_id)->whereIn('id', $warehouses_id)->where('deleted_at', '=', null)->first()) {
@@ -2131,14 +2794,37 @@ class PosController extends BaseController
             $pos_setting->allow_overselling = (bool) ($settings->allow_overselling ?? false);
         }
 
+        // Change Salesperson During Checkout (Settings → Features): when on,
+        // ship the active-user list so the POS can attribute the sale to the
+        // right employee without switching the logged-in session.
+        $salesperson_switch_enabled = (bool) ($settings->enable_pos_salesperson_switch ?? false);
+        $salespeople = $salesperson_switch_enabled
+            ? User::where('deleted_at', '=', null)
+                ->where('statut', 1)
+                ->orderBy('username')
+                ->get(['id', 'username', 'firstname', 'lastname'])
+                ->map(fn ($u) => [
+                    'id' => $u->id,
+                    'name' => trim(($u->firstname ?? '').' '.($u->lastname ?? '')) ?: $u->username,
+                    'username' => $u->username,
+                ])
+                ->values()
+            : collect();
+        // Commissions: active sales agents for the POS agent picker (same
+        // choice as the Sales Agent field on Create Sale).
+        $sales_agents = SalesAgent::where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name', 'code', 'user_id']);
         $products_per_page = $pos_setting ? $pos_setting->products_per_page : 12;
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name', 'is_cash']);
         $languages_available = Language::where('is_active', true)->get(['name', 'locale', 'flag']);
 
         return response()->json([
             // Company / receipt header info (used for POS receipt + offline printing fallback)
             'setting' => [
-                'logo' => $settings ? $settings->logo : null,
+                // Resolved to an existing file (or the default logo) so the
+                // cached offline receipt never prints a broken-image box.
+                'logo' => $settings ? receipt_logo_url($settings->logo) : null,
                 'CompanyName' => $settings ? $settings->CompanyName : null,
                 'CompanyAdress' => $settings ? $settings->CompanyAdress : null,
                 'email' => $settings ? $settings->email : null,
@@ -2152,6 +2838,9 @@ class PosController extends BaseController
                     : 'thermal',
                 // Offline sync toggle: when false, POS requires online and disables offline queueing
                 'offline_sync_enabled' => $settings ? (bool) ($settings->offline_sync_enabled ?? true) : true,
+                // Warehouse Letterhead: lets the POS rebuild the issuing branch's
+                // header for offline receipts (the warehouse rows below carry it).
+                'enable_warehouse_letterhead' => \App\Services\InvoiceIssuerService::enabled($settings),
             ],
             'stripe_key' => $stripe_key,
             'brands' => $brands,
@@ -2172,6 +2861,9 @@ class PosController extends BaseController
             'default_account_id' => $settings->default_account_id ?? null,
             'default_payment_method_id' => $settings->default_payment_method_id ?? null,
             'pos_settings' => $pos_setting,
+            'enable_pos_salesperson_switch' => $salesperson_switch_enabled,
+            'salespeople' => $salespeople,
+            'sales_agents' => $sales_agents,
         ]);
     }
 

@@ -10,6 +10,12 @@ class CreateCentralSmsSettingsTable extends Migration
 {
     public function up(): void
     {
+        // A prior half-completed update run can leave the table in place with
+        // no record in the migrations table; re-running must not abort.
+        if (Schema::connection('central')->hasTable('sms_settings')) {
+            return;
+        }
+
         Schema::connection('central')->create('sms_settings', function (Blueprint $table) {
             $table->id();
             $table->string('sms_gateway')->nullable();

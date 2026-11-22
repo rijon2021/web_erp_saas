@@ -244,7 +244,9 @@ class ElectronicsTheme
             return $v;
         }
 
-        return asset($v);
+        // Uploads live under public/images/tenants/<id>/…; tenant-aware asset()
+        // would rewrite this to /tenancy/assets/… (tenant storage) and 404.
+        return global_asset($v);
     }
 
     /**

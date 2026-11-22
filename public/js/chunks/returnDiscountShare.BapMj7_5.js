@@ -1,0 +1,1 @@
+function c(o,r,t=2){const u=Number(r==null?void 0:r.sale_lines_total)||0,e=Number(r==null?void 0:r.sale_order_discount)||0;if(u<=0||e<=0)return 0;const i=(o||[]).reduce((s,n)=>s+(Number(n.quantity)||0)*((Number(n.Net_price)||0)+(Number(n.taxe)||0)),0);return Number(Math.min(e,e*i/u).toFixed(t))}export{c as r};

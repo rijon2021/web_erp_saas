@@ -124,6 +124,38 @@
               <a-input v-model:value="form.zip" />
             </a-form-item>
           </a-col>
+          <a-col :span="24">
+            <a-form-item :label="$t('Adress')" name="address" :help="$t('Warehouse_Invoice_Address_Help')">
+              <a-textarea v-model:value="form.address" :rows="2" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="24">
+            <a-form-item :label="$t('Logo')" :help="$t('Warehouse_Logo_Help')">
+              <a-space align="start" :size="16" wrap>
+                <a-upload
+                  :file-list="logoFileList"
+                  :before-upload="onLogoPicked"
+                  :max-count="1"
+                  list-type="picture"
+                  accept="image/*"
+                  @remove="clearPickedLogo"
+                >
+                  <a-button><UploadOutlined /> {{ $t('Logo') }}</a-button>
+                </a-upload>
+                <a-space v-if="currentLogo && !logoFile" align="center">
+                  <img :src="uploadUrl('settings', currentLogo)" alt="" style="max-height: 48px; max-width: 120px" @error="onLogoPreviewError" />
+                  <a-button type="text" size="small" danger @click="removeCurrentLogo">
+                    <template #icon><DeleteOutlined /></template>
+                  </a-button>
+                </a-space>
+              </a-space>
+            </a-form-item>
+          </a-col>
+          <a-col :span="24">
+            <a-form-item :label="$t('invoice_footer')" name="invoice_footer" :help="$t('Warehouse_Invoice_Footer_Help')">
+              <a-textarea v-model:value="form.invoice_footer" :rows="2" />
+            </a-form-item>
+          </a-col>
         </a-row>
       </a-form>
     </a-modal>
@@ -168,12 +200,13 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+import { PlusOutlined, EditOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../components/PageHeader.vue';
 import DataTable from '../components/DataTable.vue';
 import { useCrudTable } from '../composables/useCrudTable';
 import { useAuthStore } from '../stores/auth';
 import http from '../lib/http';
+import { uploadUrl } from '../lib/uploadUrl';
 
 const { t } = useI18n();
 const auth = useAuthStore();
@@ -196,8 +229,47 @@ const modalOpen = ref(false);
 const editMode = ref(false);
 const submitting = ref(false);
 const formRef = ref();
-const emptyForm = () => ({ id: null, name: '', mobile: '', email: '', zip: '', country: '', city: '' });
+const emptyForm = () => ({
+  id: null, name: '', mobile: '', email: '', zip: '', country: '', city: '',
+  address: '', invoice_footer: '',
+});
 const form = ref(emptyForm());
+
+/**
+ * Branch letterhead. Invoices (PDF + POS) print the warehouse that issued the
+ * document, so each warehouse carries its own address, logo and footer note.
+ * Anything left empty falls back to the global company settings at print time.
+ */
+const logoFile = ref(null);
+const logoFileList = ref([]);
+const currentLogo = ref('');
+const logoRemoved = ref(false);
+
+// Branch logos saved before they moved into the tenant "settings" upload
+// folder still live at the shared /images root — fall back once.
+function onLogoPreviewError(e) {
+  const img = e && e.target;
+  if (!img || img.dataset.legacyTried) return;
+  img.dataset.legacyTried = '1';
+  img.src = `/images/${currentLogo.value}`;
+}
+
+function onLogoPicked(file) {
+  logoFile.value = file;
+  logoFileList.value = [file];
+  logoRemoved.value = false;
+  return false;
+}
+
+function clearPickedLogo() {
+  logoFile.value = null;
+  logoFileList.value = [];
+}
+
+function removeCurrentLogo() {
+  currentLogo.value = '';
+  logoRemoved.value = true;
+}
 
 const rules = computed(() => ({
   name: [{ required: true, message: t('Field_is_required') }],
@@ -207,7 +279,15 @@ const rules = computed(() => ({
 function openCreate() {
   editMode.value = false;
   form.value = emptyForm();
+  resetLogoState('');
   modalOpen.value = true;
+}
+
+function resetLogoState(logo) {
+  logoFile.value = null;
+  logoFileList.value = [];
+  logoRemoved.value = false;
+  currentLogo.value = logo || '';
 }
 
 function openEdit(record) {
@@ -220,7 +300,10 @@ function openEdit(record) {
     zip: record.zip || '',
     country: record.country || '',
     city: record.city || '',
+    address: record.address || '',
+    invoice_footer: record.invoice_footer || '',
   };
+  resetLogoState(record.logo);
   modalOpen.value = true;
 }
 
@@ -231,20 +314,26 @@ async function submit() {
     return;
   }
   submitting.value = true;
-  const body = {
-    name: form.value.name,
-    mobile: form.value.mobile,
-    email: form.value.email,
-    zip: form.value.zip,
-    country: form.value.country,
-    city: form.value.city,
-  };
+  // Multipart, because the branch logo rides along with the text fields.
+  // Laravel cannot parse a multipart PUT, so edits POST with _method=put.
+  const body = new FormData();
+  body.append('name', form.value.name || '');
+  body.append('mobile', form.value.mobile || '');
+  body.append('email', form.value.email || '');
+  body.append('zip', form.value.zip || '');
+  body.append('country', form.value.country || '');
+  body.append('city', form.value.city || '');
+  body.append('address', form.value.address || '');
+  body.append('invoice_footer', form.value.invoice_footer || '');
+  if (logoFile.value) body.append('logo', logoFile.value);
+  if (logoRemoved.value && !logoFile.value) body.append('remove_logo', '1');
   try {
     if (editMode.value) {
-      await http.put(`warehouses/${form.value.id}`, body);
+      body.append('_method', 'put');
+      await http.postForm(`warehouses/${form.value.id}`, body);
       message.success(t('Successfully_Updated'));
     } else {
-      await http.post('warehouses', body);
+      await http.postForm('warehouses', body);
       message.success(t('Successfully_Created'));
     }
     modalOpen.value = false;
@@ -280,7 +369,7 @@ const warehouseOptions = computed(() =>
 );
 
 const locColumns = computed(() => [
-  { title: t('Warehouse'), dataIndex: 'warehouse_name', key: 'warehouse_name' },
+  { title: t('Warehouse'), dataIndex: 'warehouse', key: 'warehouse' },
   { title: t('Rack_Location_Code'), dataIndex: 'code', key: 'code', sorter: true },
   { title: t('Location_Name'), dataIndex: 'name', key: 'name', sorter: true },
   { title: t('Status'), dataIndex: 'is_active', key: 'is_active' },

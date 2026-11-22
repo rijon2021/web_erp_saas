@@ -12,7 +12,7 @@
         @change="onChange"
       />
       <div class="muted" style="margin-top: 4px">
-        {{ (line.serial_numbers || []).length }} / {{ Math.round(Number(line.quantity) || 0) }}
+        {{ (line.serial_numbers || []).length }} / {{ lineSerialUnits(line) }}
         <span v-if="!loading && !available.length" style="color: #faad14; margin-left: 8px">
           {{ $t('No_Serials_Available') }}
         </span>
@@ -31,11 +31,14 @@
  * Which serials are candidates depends on the document:
  *   sale            → serial_numbers/available   (in stock, the default)
  *   purchase return → serial_numbers/for_purchase (issued by that purchase)
+ *   transfer        → serials_for_transfer        (at the source warehouse)
  * so the endpoint and its params are overridable. The candidate list refetches
  * whenever those params change, since the line's product can differ per row.
  */
 import { ref, computed, watch, onMounted } from 'vue';
 import http from '../lib/http';
+// Required count = base units (quantity × pack × unit factor).
+import { lineSerialUnits, loadUnitFactors } from '../lib/serialUnits';
 
 const props = defineProps({
   line: { type: Object, required: true },
@@ -77,8 +80,13 @@ async function load() {
   }
 }
 
-watch(params, load, { deep: true });
-onMounted(load);
+// Keyed on the serialized params: an inline fetchParams object is a new
+// reference on every parent render, which must not refetch by itself.
+watch(() => JSON.stringify(params.value), load);
+onMounted(() => {
+  loadUnitFactors();
+  load();
+});
 </script>
 
 <style scoped>

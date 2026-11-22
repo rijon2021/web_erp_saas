@@ -9,23 +9,8 @@
         // Price formatting helper function
         $priceFormat = $setting['price_format'] ?? null;
         function formatPrice($number, $decimals = 2, $priceFormat = null) {
-            $number = (float) $number;
-            $decimals = (int) $decimals;
-            
-            if (empty($priceFormat)) {
-                return number_format($number, $decimals, '.', ',');
-            }
-            
-            switch ($priceFormat) {
-                case 'comma_dot':
-                    return number_format($number, $decimals, '.', ',');
-                case 'dot_comma':
-                    return number_format($number, $decimals, ',', '.');
-                case 'space_comma':
-                    return number_format($number, $decimals, ',', ' ');
-                default:
-                    return number_format($number, $decimals, '.', ',');
-            }
+            // Shared formatter: Price Format separators + the Hide Zero Decimals setting (100.00 => 100).
+            return \App\utils\helpers::format_price($number, $decimals, $priceFormat === null ? '' : $priceFormat);
         }
     @endphp
     <style>
@@ -174,7 +159,7 @@
                 <td style="padding: 8px 10px; font-weight: 600; font-size: 8.5pt; color: #1f2937;">{{ __('pdf.price') }}</td>
                 <td style="padding: 8px 10px; text-align: right; font-size: 9pt; font-weight: bold; color: #1a56db;">
                     @if($booking['price'] && $booking['price'] > 0)
-                        {{$symbol}} {{formatPrice((float)$booking['price'], 2, $priceFormat)}}
+                        {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$booking['price'], 2, $priceFormat)) }}
                     @else
                         -
                     @endif

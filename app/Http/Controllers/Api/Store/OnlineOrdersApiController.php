@@ -4,12 +4,9 @@ namespace App\Http\Controllers\Api\Store;
 
 use App\Http\Controllers\Controller;
 use App\Models\OnlineOrder;
-use App\Models\Product;
-use App\Models\product_warehouse;
 use App\Models\Sale;
-use App\Models\SaleDetail;
 use App\Models\StoreSetting;
-use App\Models\Unit;
+use App\Services\OnlineOrderConfirmer;
 use Auth;
 use DB;
 use Illuminate\Http\Request;
@@ -67,7 +64,9 @@ class OnlineOrdersApiController extends Controller
             return [
                 'id' => $o->id,
                 'code' => $o->ref,
-                'customer_name' => optional($o->client)->name,
+                // A guest order shows the name typed at checkout, not the matched customer's.
+                'customer_name' => ($o->is_guest ? $o->customer_name : null) ?: optional($o->client)->name,
+                'is_guest' => (bool) $o->is_guest,
                 'status' => $o->status,
                 'has_preorder_items' => (bool) $o->has_preorder_items,
                 'total' => (float) $o->total,
@@ -75,6 +74,8 @@ class OnlineOrdersApiController extends Controller
                 'payment_status' => $o->payment_status ?? 'pending',
                 'delivery_method' => $o->delivery_method ?? 'ship',
                 'has_pending_proof' => (int) ($o->pending_proofs_count ?? 0) > 0,
+                // Paid online but auto-confirm could not run (e.g. stock ran out)
+                'auto_confirm_error' => $o->status === 'pending' ? ($o->auto_confirm_error ?? null) : null,
                 'created_at' => optional($o->created_at)->toDateTimeString() ?? (string) $o->date,
             ];
         });
@@ -110,6 +111,7 @@ class OnlineOrdersApiController extends Controller
             'has_preorder_items' => (bool) $order->has_preorder_items,
             'shipping_status' => null,
             'customer_name' => $order->customer_name ?: optional($order->client)->name,
+            'is_guest' => (bool) $order->is_guest,
             'customer_email' => $order->customer_email ?: optional($order->client)->email,
             'customer_phone' => $order->customer_phone ?: optional($order->client)->phone,
             'customer_address' => $order->shipping_address
@@ -136,6 +138,8 @@ class OnlineOrdersApiController extends Controller
 
             'payment_method' => $order->payment_method ?? 'cod',
             'payment_status' => $order->payment_status ?? 'pending',
+            'auto_confirm_error' => $order->status === 'pending' ? ($order->auto_confirm_error ?? null) : null,
+            'sale' => $this->linkedSale($order),
 
             // Pickup (collected at a branch) vs shipped
             'delivery_method' => $order->delivery_method ?? 'ship',
@@ -165,7 +169,7 @@ class OnlineOrdersApiController extends Controller
                     'id' => $d->id,
                     'product_id' => $d->product_id,
                     'product_variant_id' => $d->product_variant_id,
-                    'name' => $variant ? ($name.' - '.$variant) : $name,
+                    'name' => ($variant ? ($name.' - '.$variant) : $name).(! empty($d->options_label) ? ' ('.$d->options_label.')' : ''),
                     'qty' => (float) $d->qty,
                     'price' => (float) $d->price,
                     'line_total' => (float) $d->line_total,
@@ -173,6 +177,23 @@ class OnlineOrdersApiController extends Controller
                 ];
             })->values(),
         ]);
+    }
+
+    /** The Sale confirming this order created, for the details page. */
+    protected function linkedSale(OnlineOrder $order): ?array
+    {
+        $sale = $order->sale_id ? Sale::whereNull('deleted_at')->find($order->sale_id) : null;
+        if (! $sale) {
+            return null;
+        }
+
+        return [
+            'id' => $sale->id,
+            'ref' => $sale->Ref,
+            'payment_status' => $sale->payment_statut,
+            'paid' => (float) $sale->paid_amount,
+            'due' => max(0, round((float) $sale->GrandTotal - (float) $sale->paid_amount, 2)),
+        ];
     }
 
     /**
@@ -267,60 +288,43 @@ class OnlineOrdersApiController extends Controller
             if ($order->status !== 'pending') {
                 return response()->json(['error' => 'Only pending orders can be cancelled.'], 422);
             }
-            $order->status = 'cancelled';
-            $order->save();
+            DB::transaction(function () use ($order) {
+                $order->status = 'cancelled';
+                $order->save();
+
+                // Paid from the customer wallet: the money goes back to it
+                // (capped at what was charged, so a later approved request
+                // for the same order refunds nothing twice).
+                if ($order->payment_method === 'wallet' && ($order->payment_status ?? '') === 'paid') {
+                    $tx = app(\App\Services\CustomerWallet\CustomerWalletService::class)
+                        ->refundOrder($order, (float) $order->total, optional(Auth::user())->id);
+                    if ($tx) {
+                        $order->payment_status = 'refunded';
+                        $order->save();
+                    }
+                }
+            });
 
             return response()->json(['ok' => true, 'status' => 'cancelled']);
         }
 
         // ---- CONFIRM (only from pending) → create Sale, decrement stock ----
+        // The work lives in OnlineOrderConfirmer, shared with auto-confirm
+        // after an online payment (Store > Payment Gateway switch).
         if ($newStatus === 'confirmed') {
             if ($order->status !== 'pending') {
                 return response()->json(['error' => 'Only pending orders can be confirmed.'], 422);
             }
 
-            // Resolve warehouse: order → settings.default_warehouse_id → first warehouse
-            $warehouseId = (int) ($order->warehouse_id ?: (DB::table('store_settings')->value('default_warehouse_id') ?: 0));
-            if (! $warehouseId) {
-                $warehouseId = (int) Warehouse::value('id');
-            }
+            $confirmer = app(OnlineOrderConfirmer::class);
+            $warehouseId = $confirmer->resolveWarehouseId($order);
             if (! $warehouseId) {
                 return response()->json(['error' => 'No warehouse configured.'], 422);
             }
 
             // Pre-check stock (outside tx just to compile the list; final check in tx w/ locks)
             // Pre-order items are exempt from stock validation
-            $insufficient = [];
-            foreach ($order->items as $it) {
-                if ($it->is_preorder) {
-                    continue;
-                }
-
-                $product = Product::find($it->product_id);
-                $unit = $this->saleUnitForProduct($product); // may be null
-                $need = $this->requiredBaseQty($it->qty, $unit);
-
-                $pw = product_warehouse::where('deleted_at', '=', null)
-                    ->where('warehouse_id', $warehouseId)
-                    ->where('product_id', $it->product_id)
-                    ->when($it->product_variant_id, function ($q) use ($it) {
-                        $q->where('product_variant_id', $it->product_variant_id);
-                    })
-                    ->first();
-
-                $have = $pw ? (float) $pw->qte : 0.0;
-                if ($have < $need) {
-                    $name = $product ? $product->name : ('#'.$it->product_id);
-                    $insufficient[] = [
-                        'product_id' => $it->product_id,
-                        'product_variant_id' => $it->product_variant_id,
-                        'name' => $name,
-                        'required' => $need,
-                        'available' => $have,
-                    ];
-                }
-            }
-
+            $insufficient = $confirmer->insufficientStock($order, $warehouseId);
             if (! empty($insufficient)) {
                 return response()->json([
                     'error' => 'Insufficient stock for one or more items.',
@@ -328,141 +332,11 @@ class OnlineOrdersApiController extends Controller
                 ], 422);
             }
 
-            // Transaction: final check WITH LOCKS, create Sale, details, decrement stock
-            $sale = DB::transaction(function () use ($order, $warehouseId) {
-
-                // Final stock check with row locks (skip pre-order items)
-                foreach ($order->items as $it) {
-                    if ($it->is_preorder) {
-                        continue;
-                    }
-
-                    $product = Product::find($it->product_id);
-                    $unit = $this->saleUnitForProduct($product);
-                    $need = $this->requiredBaseQty($it->qty, $unit);
-
-                    $pw = product_warehouse::where('deleted_at', '=', null)
-                        ->where('warehouse_id', $warehouseId)
-                        ->where('product_id', $it->product_id)
-                        ->when($it->product_variant_id, function ($q) use ($it) {
-                            $q->where('product_variant_id', $it->product_variant_id);
-                        })
-                        ->lockForUpdate()
-                        ->first();
-
-                    $have = $pw ? (float) $pw->qte : 0.0;
-                    if ($have < $need) {
-                        $name = $product ? $product->name : ('#'.$it->product_id);
-                        throw new \RuntimeException("Insufficient stock for {$name} (need {$need}, have {$have}).");
-                    }
-                }
-
-                $alreadyPaid = ($order->payment_status ?? '') === 'paid';
-                $grandTotal  = (float) $order->total;
-
-                // Create Sale header
-                $sale = Sale::create([
-                    'date' => $order->date ?: now()->toDateString(),
-                    'time' => $order->time ?: now()->format('H:i:s'),
-                    'Ref' => $this->getNumberOrder(),
-                    'is_pos' => 0,
-                    'client_id' => $order->client_id,
-                    'warehouse_id' => $warehouseId,
-                    'statut' => 'completed',
-                    'shipping_status' => null,
-
-                    'discount' => 0,
-                    'shipping' => 0,
-                    'TaxNet' => 0,
-                    'tax_rate' => 0,
-                    'GrandTotal' => $grandTotal,
-
-                    'paid_amount' => $alreadyPaid ? $grandTotal : 0,
-                    'payment_statut' => $alreadyPaid ? 'paid' : 'unpaid',
-                    'notes' => null,
-                    'user_id' => optional(Auth::user())->id,
-                    // Multi-Currency: inherit the order's snapshot so the
-                    // admin invoice prints in the customer's checkout currency
-                    'currency_id' => $order->currency_id,
-                    'exchange_rate' => $order->exchange_rate,
-                ]);
-
-                // If the online order was already paid, create a payment_sales record
-                if ($alreadyPaid) {
-                    $paymentMethodId = $this->resolvePaymentMethodId($order->payment_method ?? 'cod');
-
-                    $paymentRef = $this->generatePaymentRef();
-
-                    DB::table('payment_sales')->insert([
-                        'user_id'           => optional(Auth::user())->id ?? 0,
-                        'date'              => $sale->date,
-                        'Ref'               => $paymentRef,
-                        'sale_id'           => $sale->id,
-                        'account_id'        => null,
-                        'montant'           => $grandTotal,
-                        'change'            => 0,
-                        'payment_method_id' => $paymentMethodId,
-                        'notes'             => 'Auto-created from online order ' . ($order->ref ?? '#' . $order->id),
-                        'created_at'        => now(),
-                        'updated_at'        => now(),
-                    ]);
-                }
-
-                // Create details + decrement stock (skip decrement for pre-order items)
-                foreach ($order->items as $it) {
-                    $product = Product::find($it->product_id);
-                    $unit = $this->saleUnitForProduct($product);
-                    $need = $this->requiredBaseQty($it->qty, $unit);
-
-                    $taxNet = isset($it->TaxNet) ? (float) $it->TaxNet : (float) ($product->TaxNet ?? 0);
-                    $taxMethod = $it->tax_method ?? ($product->tax_method ?? null);
-                    $discount = isset($it->discount) ? (float) $it->discount : (float) ($product->discount ?? 0);
-                    $discountMethod = $it->discount_method ?? ($product->discount_method ?? null);
-
-                    $unitPrice = (float) $it->price;
-                    $qty = (float) $it->qty;
-
-                    SaleDetail::create([
-                        'date' => $sale->date,
-                        'sale_id' => $sale->id,
-                        'sale_unit_id' => $unit ? $unit->id : null,
-                        'quantity' => $qty,
-                        'price' => $unitPrice,
-                        'TaxNet' => $taxNet,
-                        'tax_method' => $taxMethod,
-                        'discount' => $discount,
-                        'discount_method' => $discountMethod,
-                        'product_id' => (int) $it->product_id,
-                        'product_variant_id' => $it->product_variant_id ?: null,
-                        'total' => round($unitPrice * $qty, 2),
-                    ]);
-
-                    // Pre-order items: no stock to decrement
-                    if ($it->is_preorder) {
-                        continue;
-                    }
-
-                    $pw = product_warehouse::where('deleted_at', '=', null)
-                        ->where('warehouse_id', $warehouseId)
-                        ->where('product_id', $it->product_id)
-                        ->when($it->product_variant_id, function ($q) use ($it) {
-                            $q->where('product_variant_id', $it->product_variant_id);
-                        })
-                        ->lockForUpdate()
-                        ->first();
-
-                    if ($pw) {
-                        $pw->qte = max(0, (float) $pw->qte - $need);
-                        $pw->save();
-                    }
-                }
-
-                // Flip online order status
-                $order->status = 'confirmed';
-                $order->save();
-
-                return $sale;
-            });
+            try {
+                $sale = $confirmer->confirm($order, optional(Auth::user())->id);
+            } catch (\App\Exceptions\OnlineOrderConfirmException $e) {
+                return response()->json(['error' => $e->getMessage()], 422);
+            }
 
             return response()->json([
                 'ok' => true,
@@ -474,126 +348,5 @@ class OnlineOrdersApiController extends Controller
 
         // Fallback (shouldn’t hit)
         return response()->json(['error' => 'Unsupported transition.'], 422);
-    }
-
-    /**
-     * Convert a sold quantity into "base" stock quantity by applying the sale unit operator.
-     * Mirrors your normal sale logic:
-     * - if unit.operator == '/' → qty / unit.operator_value
-     * - else                   → qty * unit.operator_value
-     */
-    protected function requiredBaseQty($qty, ?Unit $unit): float
-    {
-        $q = (float) $qty;
-        if (! $unit) {
-            return $q;
-        }
-        $op = $unit->operator ?? '*';
-        $v = (float) ($unit->operator_value ?: 1);
-        if ($v <= 0) {
-            $v = 1;
-        }
-
-        return $op === '/' ? ($q / $v) : ($q * $v);
-    }
-
-    /**
-     * Best-effort: pick a sale unit from the product if present.
-     * Tries common attribute names safely; returns null if none.
-     */
-    protected function saleUnitForProduct(?Product $p): ?Unit
-    {
-        if (! $p) {
-            return null;
-        }
-        $unitId = $p->sale_unit_id ?? $p->unit_sale_id ?? $p->unit_id ?? null;
-
-        return $unitId ? Unit::find($unitId) : null;
-    }
-
-    /**
-     * Map the online order payment_method string to a payment_methods.id.
-     * Credit Card is always id=1 (seeded). For others, look up by name or create on the fly.
-     */
-    protected function resolvePaymentMethodId(string $method): int
-    {
-        $nameMap = [
-            'credit_card'  => 'Credit Card',
-            'mobile_money' => 'Mobile Money',
-            'cod'          => 'Cash on Delivery',
-        ];
-
-        $name = $nameMap[$method] ?? $nameMap['cod'];
-
-        // Credit Card is guaranteed id=1 from the original seed
-        if ($method === 'credit_card') {
-            return 1;
-        }
-
-        // Look up existing row (case-insensitive) or create it
-        $row = DB::table('payment_methods')
-            ->whereNull('deleted_at')
-            ->whereRaw('LOWER(name) = ?', [strtolower($name)])
-            ->first();
-
-        if ($row) {
-            return (int) $row->id;
-        }
-
-        return (int) DB::table('payment_methods')->insertGetId([
-            'name'       => $name,
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
-    }
-
-    protected function generatePaymentRef(): string
-    {
-        $prefix = 'INV/SL';
-
-        $last = DB::table('payment_sales')
-            ->where('Ref', 'like', $prefix . '_%')
-            ->where('deleted_at', null)
-            ->orderByDesc('id')
-            ->first();
-
-        if ($last) {
-            $parts = explode('_', $last->Ref);
-            $seq = isset($parts[1]) && is_numeric($parts[1]) ? ((int) $parts[1] + 1) : 1;
-        } else {
-            $seq = 1;
-        }
-
-        return $prefix . '_' . str_pad((string) $seq, 4, '0', STR_PAD_LEFT);
-    }
-
-    public function getNumberOrder()
-    {
-        // Get prefix from settings, fallback to 'SL' if not set
-        $setting = \App\Models\Setting::where('deleted_at', '=', null)->first();
-        $prefix = !empty($setting->sale_prefix) ? $setting->sale_prefix : 'SL';
-        
-        // Get the last sale with a reference that starts with the prefix
-        $last = DB::table('sales')
-            ->where('Ref', 'like', $prefix.'_%')
-            ->latest('id')
-            ->first();
-
-        if ($last) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-
-            // Ensure valid structure before processing
-            if (isset($nwMsg[1]) && is_numeric($nwMsg[1])) {
-                $inMsg = $nwMsg[1] + 1;
-                $code = $nwMsg[0].'_'.str_pad($inMsg, 4, '0', STR_PAD_LEFT);
-            } else {
-                $code = $prefix.'_0001'; // Fallback if reference is corrupted
-            }
-        } else {
-            $code = $prefix.'_0001';
-        }
-
-        return $code;
     }
 }

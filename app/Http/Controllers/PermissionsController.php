@@ -59,6 +59,7 @@ class PermissionsController extends BaseController
         try {
             request()->validate([
                 'role.name' => 'required',
+                'role.max_discount_percent' => 'nullable|numeric|min:0|max:100',
             ]);
 
             // A role may only hold permissions the tenant's plan includes.
@@ -72,6 +73,9 @@ class PermissionsController extends BaseController
                 $Role->label = $request['role']['name'];
                 $Role->status = 0;
                 $Role->description = $request['role']['description'];
+                if (\App\Services\PosDiscountLimit::enabled()) {
+                    $Role->max_discount_percent = $this->discountLimitInput($request);
+                }
                 $Role->save();
 
                 $role = Role::findOrFail($Role->id);
@@ -117,6 +121,7 @@ class PermissionsController extends BaseController
         try {
             request()->validate([
                 'role.name' => 'required',
+                'role.max_discount_percent' => 'nullable|numeric|min:0|max:100',
             ]);
 
             // A role may only hold permissions the tenant's plan includes.
@@ -124,7 +129,17 @@ class PermissionsController extends BaseController
 
             \DB::transaction(function () use ($request, $id) {
 
-                Role::whereId($id)->update($request['role']);
+                // Named fields only: the whole payload used to go straight
+                // into UPDATE, so an unknown key (or a column whose migration
+                // has not run) failed the save.
+                $roleFields = [
+                    'name' => $request['role']['name'],
+                    'description' => $request['role']['description'] ?? null,
+                ];
+                if (\App\Services\PosDiscountLimit::enabled()) {
+                    $roleFields['max_discount_percent'] = $this->discountLimitInput($request);
+                }
+                Role::whereId($id)->update($roleFields);
 
                 $role = Role::findOrFail($id);
                 $role->permissions()->detach();
@@ -183,6 +198,14 @@ class PermissionsController extends BaseController
         return response()->json(['success' => true]);
     }
 
+    /** The role form's discount limit: blank means no limit. */
+    private function discountLimitInput(Request $request): ?float
+    {
+        $value = $request['role']['max_discount_percent'] ?? null;
+
+        return $value === null || $value === '' ? null : min(max((float) $value, 0), 100);
+    }
+
     // ----------- GET ALL Roles without paginate --------------\\
 
     public function getRoleswithoutpaginate()
@@ -204,6 +227,7 @@ class PermissionsController extends BaseController
             if ($Role) {
                 $item['name'] = $Role->name;
                 $item['description'] = $Role->description;
+                $item['max_discount_percent'] = $Role->max_discount_percent;
                 $data = [];
                 if ($Role) {
                     foreach ($Role->permissions as $permission) {

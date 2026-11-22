@@ -1,7 +1,7 @@
 import { computed } from 'vue';
 import dayjs from 'dayjs';
 import { useAuthStore } from '../stores/auth';
-import { formatPriceDisplay, resolvePriceDecimals, roundAmount } from '../lib/priceFormat';
+import { formatPriceDisplay, resolveHideZeroDecimals, resolvePriceDecimals, roundAmount, withCurrency } from '../lib/priceFormat';
 import { viewIsBase, viewRate, viewSymbol } from '../lib/viewCurrencyState';
 
 /**
@@ -19,14 +19,19 @@ export function useFormat() {
     const formatKey = computed(() => auth.user?.price_format || null);
     const currency = computed(() => auth.currency);
     const dateFormat = computed(() => auth.user?.date_format || 'YYYY-MM-DD');
+    // System Settings → Currency Position: symbol before or after the amount.
+    const currencyPosition = computed(() => auth.user?.currency_position || 'before');
+    // System Settings -> Hide Zero Decimals: 100.00 shown as 100 (100.50 unchanged).
+    const hideZeroDecimals = computed(() => resolveHideZeroDecimals(auth.user?.hide_zero_decimals));
 
     /** Number with the configured separators/precision, no currency symbol. */
     function number(value, dec) {
-        return formatPriceDisplay(value, dec ?? decimals.value, formatKey.value);
+        return formatPriceDisplay(value, dec ?? decimals.value, formatKey.value, hideZeroDecimals.value);
     }
 
     /**
-     * Number prefixed with the user's currency symbol.
+     * Number with the user's currency symbol, placed before or after it per
+     * the Currency Position setting.
      *
      * Multi-Currency: when a display currency is selected (ViewCurrencySelect
      * on reports/dashboard), the BASE amount is re-expressed as base × rate
@@ -35,10 +40,9 @@ export function useFormat() {
     function money(value, dec) {
         if (!viewIsBase.value) {
             const converted = number((Number(value) || 0) * viewRate.value, dec);
-            return viewSymbol.value ? `${viewSymbol.value} ${converted}` : converted;
+            return withSymbol(viewSymbol.value, converted);
         }
-        const formatted = number(value, dec);
-        return currency.value ? `${currency.value} ${formatted}` : formatted;
+        return withSymbol(currency.value, number(value, dec));
     }
 
     /**
@@ -47,8 +51,16 @@ export function useFormat() {
      * not follow the view switch.
      */
     function moneyBase(value, dec) {
-        const formatted = number(value, dec);
-        return currency.value ? `${currency.value} ${formatted}` : formatted;
+        return withSymbol(currency.value, number(value, dec));
+    }
+
+    /**
+     * Attach any currency symbol to an already-formatted amount, honouring the
+     * Currency Position setting — for callers that format with their own
+     * symbol (document / POS-selected currency).
+     */
+    function withSymbol(symbol, formatted) {
+        return withCurrency(symbol, formatted, currencyPosition.value);
     }
 
     /**
@@ -71,5 +83,5 @@ export function useFormat() {
         return date(value, `${dateFormat.value} HH:mm`);
     }
 
-    return { money, moneyBase, number, roundMoney, date, dateTime, currency, decimals, dateFormat };
+    return { money, moneyBase, number, withSymbol, roundMoney, date, dateTime, currency, currencyPosition, decimals, hideZeroDecimals, dateFormat };
 }

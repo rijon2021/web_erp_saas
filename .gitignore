@@ -11,6 +11,10 @@
 /vendor
 .env
 .env.backup
+# Any env variant (.env.production, .env.bak, ...) may hold real secrets;
+# only the sanitized example is tracked.
+.env.*
+!.env.example
 composer.lock
 .phpunit.result.cache
 docker-compose.override.yml
@@ -19,3 +23,6 @@ Homestead.yaml
 npm-debug.log
 yarn-error.log
 .claude
+
+# Per-tenant uploads (upload_path()) — runtime data, never committed
+/public/images/tenants/*

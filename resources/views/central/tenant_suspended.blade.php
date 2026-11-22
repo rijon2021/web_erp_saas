@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ __('central.Workspace') }} {{ ucfirst($status) }}</title>
-    <link rel="icon" href="{{ asset('images/super/settings/favicon.ico') }}">
+    <link rel="icon" href="{{ \App\Models\Central\GeneralSetting::instance()->getPublicFaviconUrl() }}">
     <link href="{{ asset('assets_super/css/plus-jakarta-sans.css') }}" rel="stylesheet">
     <link href="{{ asset('assets_super/css/status-pages.css') }}" rel="stylesheet">
 </head>

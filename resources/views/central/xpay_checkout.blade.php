@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{{ __('central.XpayPayTitle') }} — {{ $appName }}</title>
-    <link rel="icon" href="{{ asset('images/super/settings/favicon.ico') }}">
+    <link rel="icon" href="{{ \App\Models\Central\GeneralSetting::instance()->getPublicFaviconUrl() }}">
     <link href="{{ asset('assets_super/css/plus-jakarta-sans.css') }}" rel="stylesheet">
     <link href="{{ asset('assets_super/css/bootstrap.min.css') }}" rel="stylesheet">
     <link href="{{ asset('assets_super/css/bootstrap-icons.min.css') }}" rel="stylesheet">

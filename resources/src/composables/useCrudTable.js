@@ -1,8 +1,9 @@
-import { ref, computed, createVNode } from 'vue';
+import { ref, computed, createVNode, getCurrentInstance, onBeforeUnmount } from 'vue';
 import { message, Modal } from 'ant-design-vue';
 import { ExclamationCircleOutlined } from '@ant-design/icons-vue';
 import http from '../lib/http';
-import { t } from '../i18n';
+import { i18n, t } from '../i18n';
+import { BIG_LIST_ROWS, noteListTotal, forgetList, onBigExportRefused } from '../lib/rowLimit';
 
 /**
  * The server-side list pattern every legacy CRUD page repeats, in one place.
@@ -26,9 +27,29 @@ import { t } from '../i18n';
  */
 export const ALL_PAGE_SIZE = 100000;
 export const PAGE_SIZE_OPTIONS = ['10', '25', '50', '100', String(ALL_PAGE_SIZE)];
+const FALLBACK_PAGE_SIZE = 100;
+/** The page sizes to offer: no "All" once a list is too big to load at once. */
+export const pageSizesFor = (total, options = PAGE_SIZE_OPTIONS) =>
+    (Number(total) > BIG_LIST_ROWS ? options.filter(o => Number(o) < ALL_PAGE_SIZE) : options);
 /** Labels the ALL_PAGE_SIZE sentinel "All" in the size-changer select. */
 export const buildPageSizeOptionText = ({ value }) =>
     (Number(value) >= ALL_PAGE_SIZE ? t('All', 'All') : `${value}`);
+
+function tooBigText(key, fallback) {
+    const count = BIG_LIST_ROWS.toLocaleString();
+    const out = i18n.global.t(key, { count });
+    return out === key ? fallback.replace('{count}', count) : out;
+}
+
+// Export buttons turn any failure into a generic error toast in their catch,
+// which runs before this timer: replace it with the reason.
+onBigExportRefused(() => setTimeout(() => {
+    message.destroy();
+    message.warning({
+        content: tooBigText('List_Too_Big_Export', 'This list has more than {count} rows, which is too many to export at once. Use search or filters to narrow it down.'),
+        duration: 8,
+    });
+}, 0));
 
 /**
  * A 422 is the server deliberately explaining why an action is not allowed
@@ -57,6 +78,8 @@ export function useCrudTable(endpoint, options = {}) {
         // The documents use flat routes (e.g. sales_delete_by_selection)
         // instead of the usual `${endpoint}/delete/by_selection`.
         bulkDeleteEndpoint = null,
+        // Endpoints with a server-side page cap pass their own sizes (no "All").
+        pageSizeOptions = PAGE_SIZE_OPTIONS,
     } = options;
 
     const rows = ref([]);
@@ -79,17 +102,60 @@ export function useCrudTable(endpoint, options = {}) {
         return firstArray || [];
     }
 
+    const queryParams = () => ({
+        page: page.value,
+        SortField: sortField.value,
+        SortType: sortType.value,
+        search: search.value,
+        limit: limit.value,
+        ...(params ? params() : {}),
+    });
+
+    /**
+     * "All" picked on a filtered list stays selected when the filter is
+     * cleared, so the next load could ask for far too many rows. Count first
+     * with a one-row request and fall back to normal paging. Endpoints that
+     * report no total are left alone.
+     */
+    // Endpoint + filters (page/limit aside) of the last probe. The same list
+    // reloaded or re-sorted is not counted again when it already fit: the
+    // probe exists for a changed filter, not for every fetch.
+    let probedSig = null;
+    function listSig() {
+        const { page: _page, limit: _limit, ...rest } = queryParams() || {};
+        return resolveEndpoint() + JSON.stringify(rest);
+    }
+    async function leaveAllIfTooBig() {
+        const sig = listSig();
+        if (sig === probedSig && Number(total.value) <= BIG_LIST_ROWS) return;
+        const probe = await http.get(resolveEndpoint(), { ...queryParams(), page: 1, limit: 1 });
+        const count = Number(select ? select(probe)?.total : probe?.totalRows);
+        probedSig = sig;
+        if (!(count > BIG_LIST_ROWS)) return;
+        limit.value = FALLBACK_PAGE_SIZE;
+        page.value = 1;
+        message.warning({
+            content: tooBigText('List_Too_Big_All', 'This list has more than {count} rows, so the All option is off. Showing 100 rows per page. Use search or filters to narrow it down.'),
+            duration: 8,
+        });
+    }
+
+    let notedEndpoint = null;
+    function noteTotal() {
+        const endpoint = resolveEndpoint();
+        if (notedEndpoint !== null && notedEndpoint !== endpoint) forgetList(notedEndpoint);
+        notedEndpoint = endpoint;
+        noteListTotal(endpoint, total.value);
+    }
+    if (getCurrentInstance()) {
+        onBeforeUnmount(() => { if (notedEndpoint !== null) forgetList(notedEndpoint); });
+    }
+
     async function fetchRows() {
         loading.value = true;
         try {
-            const data = await http.get(resolveEndpoint(), {
-                page: page.value,
-                SortField: sortField.value,
-                SortType: sortType.value,
-                search: search.value,
-                limit: limit.value,
-                ...(params ? params() : {}),
-            });
+            if (limit.value >= ALL_PAGE_SIZE) await leaveAllIfTooBig();
+            const data = await http.get(resolveEndpoint(), queryParams());
             payload.value = data;
             if (select) {
                 const picked = select(data) || {};
@@ -100,6 +166,7 @@ export function useCrudTable(endpoint, options = {}) {
                 total.value = Number(data?.totalRows) || rows.value.length;
             }
             selectedIds.value = [];
+            noteTotal();
         } catch (e) {
             if (onError) onError(e);
             else message.error(t('InvalidData', 'Could not load data'));
@@ -114,21 +181,31 @@ export function useCrudTable(endpoint, options = {}) {
         return fetchRows();
     }
 
+    const pageSizeChoices = computed(() => pageSizesFor(total.value, pageSizeOptions));
+
     const pagination = computed(() => ({
         current: page.value,
         pageSize: limit.value,
         total: total.value,
         showSizeChanger: true,
-        pageSizeOptions: PAGE_SIZE_OPTIONS,
+        pageSizeOptions: pageSizeChoices.value,
         buildOptionText: buildPageSizeOptionText,
         showTotal: n => `${n}`,
     }));
 
     /** Wire to <a-table @change>. */
     function onChange(pag, _filters, sorter) {
+        const pageChanged = !!pag && (pag.current !== page.value || pag.pageSize !== limit.value);
         if (pag) {
             page.value = pag.current;
             limit.value = pag.pageSize;
+        }
+        // A function sorter is applied to the loaded rows by a-table itself.
+        // Refetching for it only re-downloads the same page — with "All"
+        // selected on a big catalogue, that is thousands of rows per header
+        // click — so a sort-only change stops here.
+        if (!pageChanged && sorter && sorter.column && typeof sorter.column.sorter === 'function') {
+            return Promise.resolve();
         }
         // Only columns declaring `sorter: true` sort server-side. Function
         // sorters (auto-injected by DataTable) are handled by a-table on the
@@ -145,16 +222,20 @@ export function useCrudTable(endpoint, options = {}) {
 
     /**
      * Delete with the standard confirmation. `label` names the record in the
-     * dialog; `deleteEndpoint` overrides the default `${endpoint}/${id}`.
+     * dialog; `detail` adds a line saying what the delete will change;
+     * `deleteEndpoint` overrides the default `${endpoint}/${id}`.
      */
-    function remove(record, { label = null, deleteEndpoint = null } = {}) {
+    function remove(record, { label = null, detail = null, deleteEndpoint = null } = {}) {
         const name = label || record?.name || '';
+        const text = name
+            ? `${t('Delete_Text', "You won't be able to revert this!")} — ${name}`
+            : t('Delete_Text', "You won't be able to revert this!");
         Modal.confirm({
             title: t('Delete_Title', 'Are you sure?'),
             icon: createVNode(ExclamationCircleOutlined),
-            content: name
-                ? `${t('Delete_Text', "You won't be able to revert this!")} — ${name}`
-                : t('Delete_Text', "You won't be able to revert this!"),
+            content: detail
+                ? createVNode('div', null, [createVNode('p', null, text), createVNode('p', { style: 'font-weight: 600' }, detail)])
+                : text,
             okText: t('Delete_confirmButtonText', 'Yes, delete it!'),
             okType: 'danger',
             cancelText: t('Delete_cancelButtonText', 'Cancel'),
@@ -211,7 +292,7 @@ export function useCrudTable(endpoint, options = {}) {
 
     return {
         rows, total, loading, page, limit, search, sortField, sortType, payload,
-        selectedIds, rowSelection, pagination,
+        selectedIds, rowSelection, pagination, pageSizeChoices,
         fetchRows, reload, onChange, remove, removeSelected, getRecord,
     };
 }

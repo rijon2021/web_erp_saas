@@ -21,7 +21,7 @@ class ClientsEcommerceController extends BaseController
 
     public function index(request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', Client::class);
+        $this->authorizeForUser($request->user('api'), 'store_customers_without_login', \App\Models\StoreSetting::class);
         // How many items do you want to display.
         $perPage = $request->limit;
         $pageStart = \Request::get('page', 1);
@@ -86,7 +86,7 @@ class ClientsEcommerceController extends BaseController
 
     public function accounts(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', Client::class);
+        $this->authorizeForUser($request->user('api'), 'store_customers_with_login', \App\Models\StoreSetting::class);
 
         $perPage   = $request->limit;
         $pageStart = \Request::get('page', 1);
@@ -144,6 +144,7 @@ class ClientsEcommerceController extends BaseController
 
     public function updateAccount(Request $request, $id)
     {
+        $this->authorizeForUser($request->user('api'), 'store_customers_with_login', \App\Models\StoreSetting::class);
         $this->authorizeForUser($request->user('api'), 'update', Client::class);
 
         /** @var EcommerceClient $account */
@@ -196,6 +197,7 @@ class ClientsEcommerceController extends BaseController
 
     public function destroyAccount(Request $request, $id)
     {
+        $this->authorizeForUser($request->user('api'), 'store_customers_with_login', \App\Models\StoreSetting::class);
         $this->authorizeForUser($request->user('api'), 'delete', Client::class);
 
         $account = EcommerceClient::whereNull('deleted_at')->findOrFail($id);

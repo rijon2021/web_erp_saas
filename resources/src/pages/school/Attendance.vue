@@ -1,16 +1,16 @@
 <template>
   <div class="page">
-    <PageHeader title="Attendance" subtitle="Take the register, or review a month." :breadcrumb="['School', 'Attendance']" />
+    <PageHeader :title="$t('Sc_Attendance')" :subtitle="$t('Sc_Attendance_Subtitle')" :breadcrumb="[$t('Sc_School'), $t('Sc_Attendance')]" />
 
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-select
           v-model:value="picker.class_id" class="tb-item" show-search option-filter-prop="label"
-          placeholder="Class" :options="classOptions" @change="onClassChange"
+          :placeholder="$t('Sc_Class')" :options="classOptions" @change="onClassChange"
         />
         <a-select
           v-model:value="picker.section_id" class="tb-item-sm" allow-clear show-search
-          option-filter-prop="label" placeholder="All sections"
+          option-filter-prop="label" :placeholder="$t('Sc_All_Sections')"
           :options="sectionOptions" @change="loadRegister"
         />
         <a-date-picker
@@ -19,25 +19,25 @@
         />
         <a-select
           v-model:value="picker.subject_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="Whole day" :options="subjectOptions"
+          option-filter-prop="label" :placeholder="$t('Sc_Whole_Day')" :options="subjectOptions"
           @change="loadRegister"
         />
         <a-button :disabled="!picker.class_id" :loading="loading" @click="loadRegister">
           <template #icon><ReloadOutlined /></template>
-          Load
+          {{ $t('Sc_Load') }}
         </a-button>
       </div>
     </a-card>
 
     <a-card v-if="!picker.class_id">
-      <a-empty description="Pick a class to take its register" />
+      <a-empty :description="$t('Sc_Pick_A_Class_Register')" />
     </a-card>
 
     <template v-else>
       <a-spin :spinning="loading">
         <div class="summary">
           <div class="sum">
-            <span class="sum-label">On roll</span>
+            <span class="sum-label">{{ $t('Sc_On_Roll') }}</span>
             <span class="sum-value">{{ students.length }}</span>
           </div>
           <div v-for="s in ATTENDANCE_STATUSES" :key="s.value" class="sum">
@@ -45,21 +45,21 @@
             <span class="sum-value" :class="`tone-${s.value}`">{{ counts[s.value] || 0 }}</span>
           </div>
           <div class="sum">
-            <span class="sum-label">Rate</span>
+            <span class="sum-label">{{ $t('Sc_Rate') }}</span>
             <span class="sum-value">{{ rate }}%</span>
           </div>
         </div>
 
         <a-card size="small">
           <template #title>
-            <span>Register — {{ date(picker.date) }}</span>
-            <a-tag v-if="alreadyMarked" color="processing" class="tag-tight">Already taken</a-tag>
-            <a-tag v-else color="warning" class="tag-tight">Not taken yet</a-tag>
+            <span>{{ $t('Sc_Register_On_Date', { date: date(picker.date) }) }}</span>
+            <a-tag v-if="alreadyMarked" color="processing" class="tag-tight">{{ $t('Sc_Already_Taken') }}</a-tag>
+            <a-tag v-else color="warning" class="tag-tight">{{ $t('Sc_Not_Taken_Yet') }}</a-tag>
           </template>
           <template #extra>
             <a-space wrap>
-              <a-button size="small" @click="markAll('present')">All present</a-button>
-              <a-button size="small" @click="markAll('absent')">All absent</a-button>
+              <a-button size="small" @click="markAll('present')">{{ $t('Sc_All_Present') }}</a-button>
+              <a-button size="small" @click="markAll('absent')">{{ $t('Sc_All_Absent') }}</a-button>
               <a-button type="primary" :loading="saving" :disabled="!students.length" @click="save">
                 {{ $t('submit') }}
               </a-button>
@@ -74,7 +74,7 @@
               <div class="row-id">
                 <div class="row-name">{{ student.name }}</div>
                 <div class="row-sub">
-                  {{ student.roll_number ? `Roll ${student.roll_number} · ` : '' }}{{ student.admission_number }}
+                  {{ student.roll_number ? `${$t('Sc_Roll_N', { n: student.roll_number })} · ` : '' }}{{ student.admission_number }}
                 </div>
               </div>
               <a-radio-group
@@ -88,19 +88,19 @@
                 </a-radio-button>
               </a-radio-group>
               <a-input
-                v-model:value="student.remarks" size="small" placeholder="Remarks"
+                v-model:value="student.remarks" size="small" :placeholder="$t('Sc_Remarks')"
                 class="row-remarks" allow-clear
               />
             </div>
           </div>
-          <a-empty v-else description="No students enrolled in that class for the current year" />
+          <a-empty v-else :description="$t('Sc_No_Students_In_Class_Year')" />
         </a-card>
       </a-spin>
 
-      <a-card size="small" title="This month" style="margin-top: 16px">
+      <a-card size="small" :title="$t('Sc_This_Month')" style="margin-top: 16px">
         <ReportChart
           :data="summaryDays"
-          :fields="[{ key: 'rate', label: 'Attendance %' }]"
+          :fields="[{ key: 'rate', label: $t('Sc_Attendance_Percent') }]"
           type="area"
           :height="220"
         />
@@ -128,8 +128,9 @@ import ReportChart from '../../components/ReportChart.vue';
 import { useFormat } from '../../composables/useFormat';
 import { ATTENDANCE_STATUSES } from './schoolOptions';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const { date } = useFormat();
 
 const picker = reactive({
@@ -221,7 +222,7 @@ async function save() {
         remarks: s.remarks || null,
       })),
     });
-    message.success(`Register saved — ${data.saved} student(s).`);
+    message.success(t('Sc_Register_Saved_N', { n: data.saved }));
     alreadyMarked.value = true;
     loadSummary();
   } catch (e) {

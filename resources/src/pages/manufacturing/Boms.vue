@@ -1,18 +1,18 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Bills of Materials"
-      subtitle="What each product is made of, and how it is made."
-      :breadcrumb="['Manufacturing', 'Bills of Materials']"
+      :title="$t('Mrp_Bills_Of_Materials')"
+      :subtitle="$t('Mrp_Boms_Subtitle')"
+      :breadcrumb="[$t('Manufacturing'), $t('Mrp_Bills_Of_Materials')]"
     >
       <template #actions>
         <a-button @click="$router.push('/mrp/work-centers')">
           <template #icon><SettingOutlined /></template>
-          Work centres
+          {{ $t('Mrp_Work_Centres') }}
         </a-button>
         <a-button type="primary" @click="$router.push('/mrp/boms/create')">
           <template #icon><PlusOutlined /></template>
-          New BOM
+          {{ $t('Mrp_New_Bom') }}
         </a-button>
       </template>
     </PageHeader>
@@ -20,12 +20,12 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search name, code or product…"
+          v-model:value="crud.search.value" :placeholder="$t('Mrp_Search_Bom_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item" allow-clear
-          placeholder="All statuses" :options="BOM_STATUSES" @change="crud.reload"
+          :placeholder="$t('Mrp_All_Statuses')" :options="BOM_STATUSES" @change="crud.reload"
         />
       </div>
     </a-card>
@@ -42,28 +42,28 @@
         </template>
         <template v-else-if="column.key === 'output_qty'">
           {{ number(record.output_qty, 2) }}
-          <div class="sub">per run</div>
+          <div class="sub">{{ $t('Mrp_Per_Run') }}</div>
         </template>
         <template v-else-if="column.key === 'status'">
           <a-space :size="4">
             <a-tag :color="optionOf(BOM_STATUSES, record.status).color">
               {{ labelOf(BOM_STATUSES, record.status) }}
             </a-tag>
-            <a-tag v-if="record.is_default" color="purple">Default</a-tag>
+            <a-tag v-if="record.is_default" color="purple">{{ $t('Mrp_Default') }}</a-tag>
           </a-space>
         </template>
         <template v-else-if="column.key === 'structure'">
-          {{ record.component_count }} component{{ record.component_count === 1 ? '' : 's' }}
-          <div class="sub">{{ record.operation_count }} operation{{ record.operation_count === 1 ? '' : 's' }}</div>
+          {{ record.component_count }} {{ $t('Mrp_Components') }}
+          <div class="sub">{{ record.operation_count }} {{ $t('Mrp_Operations') }}</div>
         </template>
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
-            <a-tooltip title="Explode">
+            <a-tooltip :title="$t('Mrp_Explode')">
               <a-button type="text" size="small" @click="openExplode(record)">
                 <template #icon><PartitionOutlined style="color: #6d28d9" /></template>
               </a-button>
             </a-tooltip>
-            <a-tooltip title="New version">
+            <a-tooltip :title="$t('Mrp_New_Version')">
               <a-button type="text" size="small" @click="duplicate(record)">
                 <template #icon><CopyOutlined /></template>
               </a-button>
@@ -84,19 +84,19 @@
     </DataTable>
 
     <a-drawer
-      :open="explodeOpen" :title="`Full structure — ${exploding?.name || ''}`"
+      :open="explodeOpen" :title="`${$t('Mrp_Full_Structure')} — ${exploding?.name || ''}`"
       placement="right" :width="720" @close="explodeOpen = false"
     >
       <div class="explode-head">
         <a-input-number v-model:value="explodeQty" :min="0.0001" style="width: 160px" @change="loadExplode" />
-        <span class="sub">units to build</span>
-        <a-tag color="purple" class="explode-total">Material: {{ money(explodeTotal) }}</a-tag>
+        <span class="sub">{{ $t('Mrp_Units_To_Build') }}</span>
+        <a-tag color="purple" class="explode-total">{{ $t('Mrp_Material') }}: {{ money(explodeTotal) }}</a-tag>
       </div>
 
       <a-alert
         v-if="loops.length" type="error" show-icon style="margin-bottom: 12px"
-        message="Circular structure detected"
-        :description="loops.map(l => l.product_name || ('#' + l.product_id)).join(', ') + ' — the branch was stopped rather than followed.'"
+        :message="$t('Mrp_Circular_Structure')"
+        :description="loops.map(l => l.product_name || ('#' + l.product_id)).join(', ') + ' — ' + $t('Mrp_Branch_Stopped')"
       />
 
       <a-table
@@ -108,8 +108,8 @@
             <span :style="{ paddingInlineStart: (record.level - 1) * 16 + 'px' }">
               <span class="tree-mark">{{ record.level > 1 ? '└' : '' }}</span>
               {{ record.product_name }}
-              <a-tag v-if="record.has_bom" class="mini">sub-assembly</a-tag>
-              <a-tag v-if="record.is_optional" class="mini">optional</a-tag>
+              <a-tag v-if="record.has_bom" class="mini">{{ $t('Mrp_Sub_Assembly') }}</a-tag>
+              <a-tag v-if="record.is_optional" class="mini">{{ $t('Mrp_Optional') }}</a-tag>
             </span>
             <div class="sub" :style="{ paddingInlineStart: (record.level - 1) * 16 + 14 + 'px' }">
               {{ record.product_code }}
@@ -145,7 +145,9 @@ import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { BOM_STATUSES, labelOf, optionOf } from './mrpOptions';
 import http from '../../lib/http';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const router = useRouter();
 const { money, number } = useFormat();
 
@@ -157,12 +159,12 @@ const crud = useCrudTable('mrp/boms', {
 });
 
 const columns = computed(() => [
-  { title: 'Bill of materials', key: 'name', dataIndex: 'name', sorter: true },
-  { title: 'Builds', key: 'product', dataIndex: 'product_name', sorter: true },
-  { title: 'Output', key: 'output_qty', dataIndex: 'output_qty', width: 110, align: 'right' },
-  { title: 'Structure', key: 'structure', width: 150 },
-  { title: 'Version', dataIndex: 'version', key: 'version', width: 90, align: 'center' },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 160 },
+  { title: t('Mrp_Bill_Of_Materials'), key: 'name', dataIndex: 'name', sorter: true },
+  { title: t('Mrp_Builds'), key: 'product', dataIndex: 'product_name', sorter: true },
+  { title: t('Mrp_Output'), key: 'output_qty', dataIndex: 'output_qty', width: 110, align: 'right' },
+  { title: t('Mrp_Structure'), key: 'structure', width: 150 },
+  { title: t('Version'), dataIndex: 'version', key: 'version', width: 90, align: 'center' },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 160 },
   { title: '', key: 'actions', width: 150, align: 'center' },
 ]);
 
@@ -177,10 +179,10 @@ const loops = ref([]);
 const loadingExplode = ref(false);
 
 const explodeColumns = [
-  { title: 'Component', key: 'product', dataIndex: 'product_name' },
-  { title: 'Qty', dataIndex: 'qty', key: 'qty', width: 100, align: 'right' },
-  { title: 'Unit cost', key: 'unit_cost', dataIndex: 'unit_cost', width: 110, align: 'right' },
-  { title: 'Total', key: 'total_cost', dataIndex: 'total_cost', width: 120, align: 'right' },
+  { title: t('Mrp_Component'), key: 'product', dataIndex: 'product_name' },
+  { title: t('Mrp_Qty'), dataIndex: 'qty', key: 'qty', width: 100, align: 'right' },
+  { title: t('Mrp_Unit_Cost'), key: 'unit_cost', dataIndex: 'unit_cost', width: 110, align: 'right' },
+  { title: t('Mrp_Total'), key: 'total_cost', dataIndex: 'total_cost', width: 120, align: 'right' },
 ];
 
 function openExplode(record) {
@@ -211,12 +213,12 @@ async function loadExplode() {
 async function duplicate(record) {
   try {
     const res = await http.post(`mrp/boms/${record.id}/duplicate`);
-    message.success('New draft version created');
+    message.success(t('Mrp_New_Draft_Version_Created'));
     // Open the copy straight away — the point of duplicating is to change it.
     if (res?.id) router.push(`/mrp/boms/${res.id}/edit`);
     else crud.fetchRows();
   } catch (e) {
-    message.error(e?.data?.message || 'Could not duplicate that BOM');
+    message.error(e?.data?.message || t('Mrp_Could_Not_Duplicate_Bom'));
   }
 }
 

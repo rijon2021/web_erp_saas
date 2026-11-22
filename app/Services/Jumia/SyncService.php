@@ -12,6 +12,7 @@ use App\Models\Sale;
 use App\Models\SaleDetail;
 use App\Models\Warehouse;
 use App\Models\product_warehouse;
+use App\Services\ChannelSales;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -174,6 +175,7 @@ class SyncService
 
         $orders = Client::listOf($body, 'Orders', 'Order');
         $imported = 0;
+        $updated = 0;
         $skipped = 0;
         $failed = 0;
         $errors = [];
@@ -186,7 +188,13 @@ class SyncService
             }
             try {
                 $result = $this->importOrder($order, $userId, $warehouseId);
-                $result === 'imported' ? $imported++ : $skipped++;
+                if ($result === 'imported') {
+                    $imported++;
+                } elseif (in_array($result, ['updated', 'reversed', 'review'], true)) {
+                    $updated++;
+                } else {
+                    $skipped++;
+                }
             } catch (\Throwable $e) {
                 $failed++;
                 $errors[] = ['jumia_order_id' => $jumiaOrderId, 'error' => $e->getMessage()];
@@ -195,13 +203,14 @@ class SyncService
 
         $hasMore = count($orders) === $perPage;
 
-        $this->log('orders.pull', $failed ? 'warning' : 'info', 'Orders pull page '.$page.": {$imported} imported, {$skipped} skipped, {$failed} failed", [
+        $this->log('orders.pull', $failed ? 'warning' : 'info', 'Orders pull page '.$page.": {$imported} imported, {$updated} updated, {$skipped} skipped, {$failed} failed", [
             'errors' => array_slice($errors, 0, 10),
         ]);
 
         return [
             'ok' => true,
             'imported' => $imported,
+            'updated' => $updated,
             'skipped' => $skipped,
             'failed' => $failed,
             'errors' => $errors,
@@ -210,18 +219,40 @@ class SyncService
         ];
     }
 
-    /** @return string 'imported' | 'skipped' */
+    /** Item statuses that mean the goods are not sold (or came back). */
+    private const CANCEL_STATUSES = ['canceled', 'cancelled', 'returned', 'failed'];
+
+    /**
+     * The marketplace sold the goods and took its stock when the order came
+     * in, and a pull only revisits an order while it is on a recent page, so
+     * every imported order is a completed sale: that is what lets deleting or
+     * editing it put the stock back. Money is recorded once delivered.
+     *
+     * @return string 'imported' | 'updated' | 'reversed' | 'review' | 'skipped'
+     */
     private function importOrder(array $order, int $userId, ?int $warehouseId): string
     {
         $jumiaOrderId = (int) ($order['OrderId'] ?? 0);
-        if (JumiaMapping::localId(JumiaMapping::TYPE_ORDER, $jumiaOrderId)) {
-            return 'skipped';
-        }
 
         $statuses = array_map('strtolower', array_map('strval',
             Client::listOf((array) $order, 'Statuses', 'Status') ?: [(string) ($order['Statuses']['Status'] ?? '')]
         ));
-        if (array_intersect($statuses, ['canceled', 'cancelled', 'returned', 'failed'])) {
+
+        $saleId = JumiaMapping::localId(JumiaMapping::TYPE_ORDER, $jumiaOrderId);
+        if ($saleId) {
+            $sale = Sale::whereNull('deleted_at')->find($saleId);
+            if ($sale) {
+                return $this->revisit($sale, $order, $statuses);
+            }
+
+            // The sale was deleted here on purpose while the shop order lives
+            // on. Keep the link and leave the order alone: importing it again
+            // as new would take the stock a second time and book the money
+            // twice. (A sale reversed by this importer drops its link itself.)
+            return 'skipped';
+        }
+
+        if (array_intersect($statuses, self::CANCEL_STATUSES)) {
             return 'skipped';
         }
 
@@ -257,11 +288,8 @@ class SyncService
         }
 
         $grandTotal = (float) ($order['Price'] ?? 0);
-        $delivered = in_array('delivered', $statuses, true);
-        $orderStatut = $delivered ? 'completed'
-            : (array_intersect($statuses, ['shipped', 'ready_to_ship']) ? 'pending' : 'ordered');
         // COD-dominant marketplace: money is only certain once delivered.
-        $paymentStatut = $delivered ? 'paid' : 'unpaid';
+        $delivered = in_array('delivered', $statuses, true);
 
         $createdAt = now();
         try {
@@ -277,7 +305,7 @@ class SyncService
 
         DB::transaction(function () use (
             $order, $jumiaOrderId, $orderNumber, $createdAt, $clientId, $warehouseId, $userId,
-            $grandTotal, $paymentStatut, $orderStatut, $resolved, $unresolved
+            $grandTotal, $delivered, $resolved, $unresolved
         ) {
             $sale = Sale::create([
                 'date' => $createdAt->format('Y-m-d'),
@@ -292,9 +320,9 @@ class SyncService
                 'discount' => 0,
                 'shipping' => 0,
                 'GrandTotal' => $grandTotal,
-                'paid_amount' => $paymentStatut === 'paid' ? $grandTotal : 0,
-                'payment_statut' => $paymentStatut,
-                'statut' => $orderStatut,
+                'paid_amount' => 0,
+                'payment_statut' => Sale::paymentStatusFor($grandTotal, 0),
+                'statut' => 'completed',
                 'notes' => 'Imported from Jumia — order '.$orderNumber
                     .(! empty($order['PaymentMethod']) ? ' ('.$order['PaymentMethod'].')' : '')
                     .(empty($unresolved) ? '' : ' — unmatched items: '.json_encode($unresolved, JSON_UNESCAPED_UNICODE)),
@@ -310,6 +338,7 @@ class SyncService
                     'sale_id' => $sale->id,
                     'product_id' => $entry['product_id'],
                     'product_variant_id' => $entry['variant_id'],
+                    'sale_unit_id' => Product::whereKey($entry['product_id'])->value('unit_sale_id'),
                     'quantity' => $qty,
                     'price' => $price,
                     'TaxNet' => 0,
@@ -319,20 +348,13 @@ class SyncService
                     'total' => round($price * $qty, 2),
                 ]);
 
-                // Decrement stock in the receiving warehouse
-                $stockQuery = product_warehouse::where('product_id', $entry['product_id'])
-                    ->where('warehouse_id', $warehouseId)
-                    ->whereNull('deleted_at');
-                if ($entry['variant_id']) {
-                    $stockQuery->where('product_variant_id', $entry['variant_id']);
-                } else {
-                    $stockQuery->whereNull('product_variant_id');
-                }
-                $stock = $stockQuery->first();
-                if ($stock) {
-                    $stock->qte = (float) $stock->qte - $qty;
-                    $stock->save();
-                }
+            }
+
+            ChannelSales::moveStock($sale, -1);
+
+            if ($delivered) {
+                ChannelSales::recordPayment($sale, $grandTotal, 'JM-'.$orderNumber, (string) ($order['PaymentMethod'] ?? ''), 'Jumia order '.$orderNumber, $createdAt->format('Y-m-d'));
+                ChannelSales::markDelivered($sale);
             }
 
             JumiaMapping::put(JumiaMapping::TYPE_ORDER, (int) $sale->id, $jumiaOrderId, [
@@ -341,6 +363,65 @@ class SyncService
         }, 3);
 
         return 'imported';
+    }
+
+    /**
+     * An order seen again on a later pull. Jumia keeps a status per item, so
+     * the sale is only reversed when every item was cancelled or returned; a
+     * partly cancelled order is logged for a person. Delivery records the money.
+     */
+    private function revisit(Sale $sale, array $order, array $statuses): string
+    {
+        $orderNumber = trim((string) ($order['OrderNumber'] ?? '')) ?: (string) ($order['OrderId'] ?? '');
+        $cancelled = array_intersect($statuses, self::CANCEL_STATUSES);
+
+        if ($cancelled && count($cancelled) === count($statuses)) {
+            if (! ChannelSales::reverse($sale)) {
+                $this->log('orders.review', 'warning', 'Sale '.$sale->Ref.' needs review: cancelled or returned on Jumia after delivery or return', [
+                    'sale_id' => $sale->id,
+                    'jumia_order_id' => $order['OrderId'] ?? null,
+                ]);
+
+                return 'review';
+            }
+
+            JumiaMapping::where('entity_type', JumiaMapping::TYPE_ORDER)->where('local_id', $sale->id)->delete();
+            $this->log('orders.reverse', 'info', 'Sale '.$sale->Ref.' reversed: the Jumia order was cancelled or returned', [
+                'sale_id' => $sale->id,
+                'jumia_order_id' => $order['OrderId'] ?? null,
+            ]);
+
+            return 'reversed';
+        }
+
+        if ($cancelled) {
+            $flag = 'Some items of this Jumia order were cancelled or returned: review this sale.';
+            if (! str_contains((string) $sale->notes, $flag)) {
+                $sale->notes = trim($flag."\n".(string) $sale->notes);
+                $sale->save();
+                $this->log('orders.review', 'warning', 'Sale '.$sale->Ref.' needs review: part of the Jumia order was cancelled or returned', [
+                    'sale_id' => $sale->id,
+                    'jumia_order_id' => $order['OrderId'] ?? null,
+                    'statuses' => array_values($statuses),
+                ]);
+            }
+
+            return 'review';
+        }
+
+        if (in_array('delivered', $statuses, true)) {
+            $wasDelivered = $sale->shipping_status === 'delivered';
+            ChannelSales::markDelivered($sale);
+            if (ChannelSales::due($sale) > 0) {
+                ChannelSales::recordPayment($sale, ChannelSales::due($sale), 'JM-'.$orderNumber, (string) ($order['PaymentMethod'] ?? ''), 'Jumia order '.$orderNumber);
+
+                return 'updated';
+            }
+
+            return $wasDelivered ? 'skipped' : 'updated';
+        }
+
+        return 'skipped';
     }
 
     /** @return array{product_id:int, variant_id:?int}|null */

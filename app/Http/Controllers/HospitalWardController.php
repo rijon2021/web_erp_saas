@@ -159,7 +159,7 @@ class HospitalWardController extends Controller
                             'admission_id' => $admission ? $admission->id : null,
                             'patient_id' => $admission ? $admission->patient_id : null,
                             'patient_name' => $admission && $admission->patient ? $admission->patient->name : null,
-                            'admitted_at' => $admission ? optional($admission->admitted_at)->toIso8601String() : null,
+                            'admitted_at' => $admission ? optional($admission->admitted_at)->toDateTimeLocalString() : null,
                         ];
                     })->values(),
                 ];

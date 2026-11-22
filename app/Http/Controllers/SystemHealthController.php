@@ -146,34 +146,20 @@ class SystemHealthController extends Controller
 
     protected function getLastBackupDate(): ?array
     {
-        $dir = storage_path('app/public/backup');
-        if (! is_dir($dir)) {
-            return ['date' => null, 'human' => null, 'message' => 'Backup directory not found'];
-        }
+        // Manual and plan-scheduled backups, newest first (private storage —
+        // they no longer live in app/public/backup).
+        $latest = (new \App\Services\Backup\TenantBackupStore)->list()[0] ?? null;
 
-        $latestMtime = 0;
-        $latestName = null;
-        foreach (glob($dir.'/*.sql') ?: [] as $file) {
-            if (! is_file($file)) {
-                continue;
-            }
-            $mtime = @filemtime($file) ?: 0;
-            if ($mtime >= $latestMtime) {
-                $latestMtime = $mtime;
-                $latestName = basename($file);
-            }
-        }
-
-        if ($latestMtime === 0) {
+        if ($latest === null) {
             return ['date' => null, 'human' => null, 'message' => 'No backups found'];
         }
 
-        $dt = \Carbon\Carbon::createFromTimestamp($latestMtime);
+        $dt = \Carbon\Carbon::parse($latest['created_at'], config('app.timezone'));
 
         return [
             'date' => $dt->toIso8601String(),
             'human' => $dt->format('Y-m-d H:i:s'),
-            'filename' => $latestName,
+            'filename' => $latest['name'],
         ];
     }
 

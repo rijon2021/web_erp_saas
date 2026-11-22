@@ -26,7 +26,7 @@
 
     <a-alert
       v-if="lastSyncResult" type="info" show-icon style="margin-bottom: 16px" closable
-      :message="`Created ${lastSyncResult.created} · Updated ${lastSyncResult.updated} · Linked by email ${lastSyncResult.linked_by_email} · Linked by phone ${lastSyncResult.linked_by_phone} · Skipped ${lastSyncResult.skipped} · Errors ${lastSyncResult.errors}`"
+      :message="$t('Woo_Customers_Sync_Summary', lastSyncResult)"
       @close="lastSyncResult = null"
     />
 
@@ -96,7 +96,7 @@
       </a-tab-pane>
 
       <!-- ============================== Sync issues ============================== -->
-      <a-tab-pane key="issues" :tab="'Issues (' + issuesTotalRows + ')'">
+      <a-tab-pane key="issues" :tab="$t('Woo_Issues_Count', { n: issuesTotalRows })">
         <a-input-search
           v-model:value="issuesSearch" :placeholder="$t('Search')" style="max-width: 280px; margin-bottom: 12px"
           @search="() => { issuesPage = 1; loadSyncIssues(); }"
@@ -312,12 +312,12 @@ async function manualSync(mode) {
         skipped: Math.max(0, parseInt(result.skipped, 10) || 0),
       };
       const direction = mode === 'push' ? 'POS → WooCommerce' : 'WooCommerce → POS';
-      message.success(`${direction}: Created ${lastSyncResult.value.created}, Updated ${lastSyncResult.value.updated}`);
+      message.success(t('Woo_Direction_Created_Updated', { direction, created: lastSyncResult.value.created, updated: lastSyncResult.value.updated }));
     } else {
-      message.error(t('Sync_Failed') + ': ' + (data.error || 'Unknown error'));
+      message.error(t('Sync_Failed') + ': ' + (data.error || t('Woo_Unknown_Error')));
     }
   } catch (e) {
-    message.error(t('Sync_Failed') + ': ' + (e.message || 'Network error'));
+    message.error(t('Sync_Failed') + ': ' + (e.message || t('Network_error')));
   } finally {
     syncing.value = false;
     syncMode.value = null;
@@ -328,7 +328,7 @@ async function manualSync(mode) {
 
 async function syncOne(customer, mode) {
   if (!customer.email) {
-    message.warning('Customer must have an email to sync');
+    message.warning(t('Woo_Customer_Needs_Email'));
     return;
   }
   if (syncingCustomerId.value) return;
@@ -336,18 +336,17 @@ async function syncOne(customer, mode) {
   try {
     const data = await http.post(`woocommerce/sync/customers?mode=${mode}&customer_id=${customer.id}`);
     if (data.ok) {
-      const action = data.created > 0 ? 'created' : 'updated';
-      message.success(`Customer "${customer.name}" synced successfully (${action})`);
+      message.success(t(data.created > 0 ? 'Woo_Customer_Synced_Created' : 'Woo_Customer_Synced_Updated', { name: customer.name }));
       loadStockyCustomers();
       loadStats();
       if (mode === 'pull') loadWooCustomers();
       loadSyncIssues();
     } else {
-      message.error(`Sync failed: ${data.error || 'Unknown error'}`);
+      message.error(t('Woo_Sync_Failed_Error', { error: data.error || t('Woo_Unknown_Error') }));
       loadSyncIssues();
     }
   } catch (e) {
-    message.error(`Sync failed: ${e.message || 'Network error'}`);
+    message.error(t('Woo_Sync_Failed_Error', { error: e.message || t('Network_error') }));
     loadSyncIssues();
   } finally {
     syncingCustomerId.value = null;

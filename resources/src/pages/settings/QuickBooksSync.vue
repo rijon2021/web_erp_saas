@@ -162,7 +162,7 @@
         </a-tab-pane>
 
         <!-- ============================== Audit log ============================== -->
-        <a-tab-pane key="audits" :tab="'Audit Log'">
+        <a-tab-pane key="audits" :tab="$t('Audit_Log')">
           <div style="display: flex; gap: 8px; margin-bottom: 12px">
             <a-select
               v-model:value="level" style="width: 160px"
@@ -263,7 +263,7 @@ const auditColumns = computed(() => [
   { title: t('Level'), key: 'level', width: 100 },
   { title: t('Sale'), dataIndex: 'sale_id', key: 'sale_id', width: 80 },
   { title: t('Realm_ID'), dataIndex: 'realm_id', key: 'realm_id' },
-  { title: 'Env', dataIndex: 'env', key: 'env', width: 110 },
+  { title: t('Env'), dataIndex: 'env', key: 'env', width: 110 },
   { title: t('Message'), dataIndex: 'message', key: 'message', ellipsis: true },
   { title: 'HTTP', dataIndex: 'http_status', key: 'http_status', width: 70 },
 ]);

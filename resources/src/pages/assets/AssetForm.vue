@@ -53,12 +53,20 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Supplier" name="supplier">
+            <a-form-item :label="$t('Asset_Paid_From')" name="account_id" :extra="$t('Asset_Paid_From_Hint')">
+              <a-select
+                v-model:value="form.account_id" :options="accountOptions" :placeholder="$t('Choose_Account')"
+                allow-clear show-search option-filter-prop="label"
+              />
+            </a-form-item>
+          </a-col>
+          <a-col :xs="24" :md="12">
+            <a-form-item :label="$t('Supplier')" name="supplier">
               <a-input v-model:value="form.supplier" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Warranty expiry" name="warranty_expiry">
+            <a-form-item :label="$t('Asset_Warranty_Expiry')" name="warranty_expiry">
               <a-date-picker v-model:value="form.warranty_expiry" value-format="YYYY-MM-DD" style="width: 100%" />
             </a-form-item>
           </a-col>
@@ -74,17 +82,17 @@
           </a-col>
 
           <a-col :span="24">
-            <a-divider orientation="left" style="margin: 4px 0 12px">Depreciation</a-divider>
+            <a-divider orientation="left" style="margin: 4px 0 12px">{{ $t('Depreciation') }}</a-divider>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Method" name="depreciation_method" :extra="methodHint">
+            <a-form-item :label="$t('Method')" name="depreciation_method" :extra="methodHint">
               <a-select v-model:value="form.depreciation_method" :options="methodOptions" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
             <a-form-item
-              label="Useful life (months)" name="useful_life_months"
-              :extra="depreciates ? 'e.g. 36 for a three-year life' : 'Not used with this method'"
+              :label="$t('Asset_Useful_Life_Months')" name="useful_life_months"
+              :extra="depreciates ? $t('Asset_Useful_Life_Hint') : $t('Asset_Not_Used_With_Method')"
             >
               <a-input-number
                 v-model:value="form.useful_life_months" :min="1" :max="1200"
@@ -94,8 +102,8 @@
           </a-col>
           <a-col :xs="24" :md="8">
             <a-form-item
-              label="Salvage value" name="salvage_value"
-              extra="What it is expected to be worth at the end"
+              :label="$t('Asset_Salvage_Value')" name="salvage_value"
+              :extra="$t('Asset_Salvage_Value_Hint')"
             >
               <a-input-number
                 v-model:value="form.salvage_value" :min="0" style="width: 100%"
@@ -135,7 +143,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
-import { DEPRECIATION_METHODS } from './assetOptions';
+import { DEPRECIATION_METHODS, tr, tp } from './assetOptions';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -150,27 +158,29 @@ const submitting = ref(false);
 const formRef = ref();
 const categories = ref([]);
 const warehouses = ref([]);
+const accounts = ref([]);
 
 const form = ref({
   tag: '', name: '', asset_category_id: undefined, warehouse_id: undefined,
   serial_number: '', status: 'in_use', purchase_date: null, purchase_cost: 0,
-  supplier: '', warranty_expiry: null,
+  supplier: '', warranty_expiry: null, account_id: undefined,
   depreciation_method: 'none', useful_life_months: null, salvage_value: 0,
   last_verification: null, next_validation: null, description: '',
 });
 
 const categoryOptions = computed(() => categories.value.map(c => ({ value: c.id, label: c.name })));
 const warehouseOptions = computed(() => warehouses.value.map(w => ({ value: w.id, label: w.name })));
+const accountOptions = computed(() => accounts.value.map(a => ({ value: a.id, label: a.account_name })));
 const statusOptions = computed(() => [
   { value: 'in_use', label: t('In_Use') },
   { value: 'maintenance', label: t('Maintenance') },
   { value: 'retired', label: t('Retired') },
 ]);
 
-const methodOptions = DEPRECIATION_METHODS.map(m => ({ value: m.value, label: m.label }));
+const methodOptions = computed(() => tr(DEPRECIATION_METHODS).map(m => ({ value: m.value, label: m.label })));
 const depreciates = computed(() => form.value.depreciation_method && form.value.depreciation_method !== 'none');
 const methodHint = computed(
-  () => DEPRECIATION_METHODS.find(m => m.value === form.value.depreciation_method)?.hint || '',
+  () => tr(DEPRECIATION_METHODS).find(m => m.value === form.value.depreciation_method)?.hint || '',
 );
 
 /**
@@ -185,9 +195,17 @@ const depreciationPreview = computed(() => {
   const base = Math.max(0, cost - salvage);
   const years = (months / 12).toFixed(months % 12 === 0 ? 0 : 1);
   if (form.value.depreciation_method === 'declining_balance') {
-    return `Declining balance over ${years} year(s): roughly ${((2 / months) * 100).toFixed(2)}% of the remaining value each month, never below the salvage value.`;
+    return tp(
+      'Asset_Preview_Declining',
+      'Declining balance over {years} year(s): roughly {pct}% of the remaining value each month, never below the salvage value.',
+      { years, pct: ((2 / months) * 100).toFixed(2) },
+    );
   }
-  return `Straight line over ${years} year(s): ${(base / months).toFixed(2)} a month until it reaches its salvage value.`;
+  return tp(
+    'Asset_Preview_Straight',
+    'Straight line over {years} year(s): {amount} a month until it reaches its salvage value.',
+    { years, amount: (base / months).toFixed(2) },
+  );
 });
 
 const rules = computed(() => ({
@@ -196,7 +214,7 @@ const rules = computed(() => ({
   warehouse_id: [{ required: true, message: t('Field_is_required') }],
   salvage_value: [{
     validator: (_rule, value) => (Number(value || 0) > Number(form.value.purchase_cost || 0)
-      ? Promise.reject(new Error('Salvage value cannot exceed the purchase cost'))
+      ? Promise.reject(new Error(t('Asset_Salvage_Exceeds_Cost', 'Salvage value cannot exceed the purchase cost')))
       : Promise.resolve()),
   }],
 }));
@@ -230,6 +248,7 @@ async function bootstrap() {
     const data = await http.get(isEdit.value ? `assets/${id.value}/edit` : 'assets/create');
     categories.value = data.asset_categories || [];
     warehouses.value = data.warehouses || [];
+    accounts.value = data.accounts || [];
     if (isEdit.value && data.asset) {
       for (const k of Object.keys(form.value)) {
         if (data.asset[k] !== undefined && data.asset[k] !== null) form.value[k] = data.asset[k];

@@ -143,7 +143,7 @@ class HospitalPatientController extends Controller
             'paid' => round((float) ($invoiceTotals->paid ?? 0), 2),
             'due' => round((float) ($invoiceTotals->billed ?? 0) - (float) ($invoiceTotals->paid ?? 0), 2),
             'last_visit' => optional(PatientVisit::whereNull('deleted_at')->where('patient_id', $patient->id)
-                ->orderBy('visit_date', 'desc')->first())->visit_date?->toIso8601String(),
+                ->orderBy('visit_date', 'desc')->first())->visit_date?->toDateTimeLocalString(),
         ];
 
         $data['current_admission'] = $current ? [
@@ -152,7 +152,7 @@ class HospitalPatientController extends Controller
             'ward_name' => $current->ward ? $current->ward->name : null,
             'bed_number' => $current->bed ? $current->bed->bed_number : null,
             'doctor_name' => $current->doctor ? $current->doctor->name : null,
-            'admitted_at' => optional($current->admitted_at)->toIso8601String(),
+            'admitted_at' => optional($current->admitted_at)->toDateTimeLocalString(),
             'nights' => $current->nights,
         ] : null;
 
@@ -231,7 +231,7 @@ class HospitalPatientController extends Controller
                 ->map(fn ($v) => [
                     'id' => $v->id,
                     'reference' => $v->reference,
-                    'visit_date' => optional($v->visit_date)->toIso8601String(),
+                    'visit_date' => optional($v->visit_date)->toDateTimeLocalString(),
                     'type' => $v->type,
                     'doctor_name' => $v->doctor ? $v->doctor->name : null,
                     'diagnosis' => $v->diagnosis,
@@ -244,7 +244,7 @@ class HospitalPatientController extends Controller
                 ->map(fn ($a) => [
                     'id' => $a->id,
                     'reference' => $a->reference,
-                    'scheduled_at' => optional($a->scheduled_at)->toIso8601String(),
+                    'scheduled_at' => optional($a->scheduled_at)->toDateTimeLocalString(),
                     'doctor_name' => $a->doctor ? $a->doctor->name : null,
                     'type' => $a->type,
                     'status' => $a->status,
@@ -254,8 +254,8 @@ class HospitalPatientController extends Controller
                 ->map(fn ($a) => [
                     'id' => $a->id,
                     'reference' => $a->reference,
-                    'admitted_at' => optional($a->admitted_at)->toIso8601String(),
-                    'discharged_at' => optional($a->discharged_at)->toIso8601String(),
+                    'admitted_at' => optional($a->admitted_at)->toDateTimeLocalString(),
+                    'discharged_at' => optional($a->discharged_at)->toDateTimeLocalString(),
                     'ward_name' => $a->ward ? $a->ward->name : null,
                     'bed_number' => $a->bed ? $a->bed->bed_number : null,
                     'doctor_name' => $a->doctor ? $a->doctor->name : null,
@@ -267,7 +267,7 @@ class HospitalPatientController extends Controller
                 ->map(fn ($o) => [
                     'id' => $o->id,
                     'reference' => $o->reference,
-                    'ordered_at' => optional($o->ordered_at)->toIso8601String(),
+                    'ordered_at' => optional($o->ordered_at)->toDateTimeLocalString(),
                     'status' => $o->status,
                     'priority' => $o->priority,
                     'tests' => $o->items->pluck('test_name')->all(),
@@ -324,7 +324,7 @@ class HospitalPatientController extends Controller
             'image' => $patient->image,
             'image_url' => $patient->image ? url(upload_path(self::IMAGE_DIR) . '/' . $patient->image) : null,
             'is_admitted' => $isAdmitted === null ? null : (bool) $isAdmitted,
-            'created_at' => optional($patient->created_at)->toIso8601String(),
+            'created_at' => optional($patient->created_at)->toDateTimeLocalString(),
         ];
     }
 
@@ -383,7 +383,7 @@ class HospitalPatientController extends Controller
             mkdir($path, 0755, true);
         }
 
-        $extension = strtolower($file->getClientOriginalExtension()) ?: 'jpg';
+        $extension = \App\Support\SafeUpload::imageExtension($file, 'image');
         $filename = time() . '_' . Str::random(10) . '.' . $extension;
         $file->move($path, $filename);
 

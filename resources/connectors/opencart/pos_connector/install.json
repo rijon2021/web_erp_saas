@@ -1,0 +1,7 @@
+{
+  "name": "__COMPANY_NAME__ Connector",
+  "version": "1.2.0",
+  "author": "__COMPANY_NAME__",
+  "link": "__CONNECTOR_LINK__",
+  "description": "Connects this OpenCart store to __COMPANY_NAME__: products, stock and orders."
+}

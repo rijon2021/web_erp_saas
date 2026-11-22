@@ -83,7 +83,7 @@ class WooCommerceStockSyncJob implements ShouldQueue
             return;
         }
 
-        $batchSize = (int) env('WOO_STOCK_PRODUCTS_PER_JOB', 1);
+        $batchSize = (int) WooCommerceSetting::tuning($settings)['stock_products_per_job'];
         $batchSize = max(1, min(100, $batchSize));
         $startAfterId = (int) ($state['last_product_id'] ?? 0);
         $state['processed_this_run'] = 0;
@@ -208,7 +208,7 @@ class WooCommerceStockSyncJob implements ShouldQueue
                                         $body = $res->body();
                                     }
                                 } else {
-                                    $createPayload = $payloadVar + ['sku' => $sku, 'attributes' => [['name' => 'Variant', 'option' => $name !== '' ? $name : ('Variant '.$var->id)]]];
+                                    $createPayload = $payloadVar + ['sku' => $sku, 'attributes' => app(\App\Services\ProductOptionService::class)->wooVariationAttributes((int) $product->id, (int) $var->id, $name !== '' ? $name : ('Variant '.$var->id))];
                                     $res = $client->post('products/'.(int) $product->woocommerce_id.'/variations', $createPayload);
                                     $ok = $ok && $res->successful();
                                     if (! $ok) {
@@ -485,9 +485,9 @@ class WooCommerceStockSyncJob implements ShouldQueue
                 };
 
                 $trySearch = function (string $term) use ($baseUrl, $username, $appPass, $matches): ?array {
-                    $searchTimeout = (int) env('WOO_WP_MEDIA_SEARCH_TIMEOUT', 15);
-                    $retries = (int) env('WOO_WP_MEDIA_RETRIES', 2);
-                    $sleepMs = (int) env('WOO_WP_MEDIA_RETRY_SLEEP_MS', 500);
+                    $searchTimeout = (int) config('woocommerce.wp_media.search_timeout');
+                    $retries = (int) config('woocommerce.wp_media.retries');
+                    $sleepMs = (int) config('woocommerce.wp_media.retry_sleep_ms');
                     $searchTimeout = max(1, min(60, $searchTimeout));
                     $retries = max(0, min(5, $retries));
                     $sleepMs = max(0, min(5000, $sleepMs));
@@ -522,9 +522,9 @@ class WooCommerceStockSyncJob implements ShouldQueue
                 };
 
                 $trySlug = function (string $slug) use ($baseUrl, $username, $appPass, $matches): ?array {
-                    $searchTimeout = (int) env('WOO_WP_MEDIA_SEARCH_TIMEOUT', 15);
-                    $retries = (int) env('WOO_WP_MEDIA_RETRIES', 2);
-                    $sleepMs = (int) env('WOO_WP_MEDIA_RETRY_SLEEP_MS', 500);
+                    $searchTimeout = (int) config('woocommerce.wp_media.search_timeout');
+                    $retries = (int) config('woocommerce.wp_media.retries');
+                    $sleepMs = (int) config('woocommerce.wp_media.retry_sleep_ms');
                     $searchTimeout = max(1, min(60, $searchTimeout));
                     $retries = max(0, min(5, $retries));
                     $sleepMs = max(0, min(5000, $sleepMs));
@@ -587,9 +587,9 @@ class WooCommerceStockSyncJob implements ShouldQueue
                 }
             }
 
-            $uploadTimeout = (int) env('WOO_WP_MEDIA_UPLOAD_TIMEOUT', 120);
-            $retries = (int) env('WOO_WP_MEDIA_RETRIES', 2);
-            $sleepMs = (int) env('WOO_WP_MEDIA_RETRY_SLEEP_MS', 800);
+            $uploadTimeout = (int) config('woocommerce.wp_media.upload_timeout');
+            $retries = (int) config('woocommerce.wp_media.retries');
+            $sleepMs = (int) config('woocommerce.wp_media.retry_sleep_ms');
             $uploadTimeout = max(1, min(300, $uploadTimeout));
             $retries = max(0, min(5, $retries));
             $sleepMs = max(0, min(5000, $sleepMs));

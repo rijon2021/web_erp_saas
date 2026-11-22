@@ -88,10 +88,10 @@
       <template v-if="column.key === 'date'">{{ date(record.date) }}</template>
       <template v-else-if="MONEY_KEYS.includes(column.key)">{{ money(record[column.key]) }}</template>
       <template v-else-if="column.key === 'statut'">
-        <a-tag :color="docStatusColor(record.statut)">{{ record.statut }}</a-tag>
+        <a-tag :color="docStatusColor(record.statut)">{{ optLabel(statusOptions, record.statut) }}</a-tag>
       </template>
       <template v-else-if="column.key === 'payment_status'">
-        <a-tag :color="payStatusColor(record.payment_status)">{{ record.payment_status }}</a-tag>
+        <a-tag :color="payStatusColor(record.payment_status)">{{ optLabel(paymentOptions, record.payment_status) }}</a-tag>
       </template>
     </template>
   </ReportPage>
@@ -211,17 +211,19 @@ const paymentOptions = computed(() => [
   { value: 'partial', label: t('partial') },
   { value: 'unpaid', label: t('Unpaid') },
 ]);
+// Display label for a raw status value (falls back to the value itself).
+const optLabel = (options, v) => options.find(o => o.value === v)?.label ?? v;
 
 const columns = computed(() => [
   { title: t('date'), key: 'date', dataIndex: 'date', sorter: true, exportValue: r => date(r.date) },
   { title: t('Reference'), dataIndex: 'Ref', key: 'Ref', sorter: true },
   { title: t('Supplier'), dataIndex: 'provider_name', key: 'provider_name' },
   { title: t('warehouse'), dataIndex: 'warehouse_name', key: 'warehouse_name' },
-  { title: t('Status'), key: 'statut', dataIndex: 'statut', exportValue: r => r.statut },
+  { title: t('Status'), key: 'statut', dataIndex: 'statut', exportValue: r => optLabel(statusOptions.value, r.statut) },
   { title: t('Total'), key: 'GrandTotal', dataIndex: 'GrandTotal', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.GrandTotal) },
   { title: t('Paid'), key: 'paid_amount', dataIndex: 'paid_amount', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.paid_amount) },
   { title: t('Due'), key: 'due', dataIndex: 'due', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.due) },
-  { title: t('PaymentStatus'), key: 'payment_status', dataIndex: 'payment_status', exportValue: r => r.payment_status },
+  { title: t('PaymentStatus'), key: 'payment_status', dataIndex: 'payment_status', exportValue: r => optLabel(paymentOptions.value, r.payment_status) },
   { title: t('AddedBy'), dataIndex: 'user_name', key: 'user_name' },
 ]);
 

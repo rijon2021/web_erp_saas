@@ -11,7 +11,7 @@
           <template #icon><ArrowLeftOutlined /></template>
           {{ tf('back', 'Back') }}
         </a-button>
-        <a-button @click="print">
+        <a-button v-if="auth.canExportProducts" @click="print">
           <template #icon><PrinterOutlined /></template>
           {{ $t('print') }}
         </a-button>
@@ -126,7 +126,8 @@
                 <b style="color: #ff4d4f">-{{ num(filteredTotals.out) }}</b>
               </a-table-summary-cell>
               <a-table-summary-cell :index="6" />
-              <a-table-summary-cell :index="7" />
+              <!-- Unit Value (at cost) is dropped for !canSeeCost -->
+              <a-table-summary-cell v-if="auth.canSeeCost" :index="7" />
             </a-table-summary-row>
           </template>
           <template #emptyText>
@@ -190,9 +191,11 @@ import { useFormat } from '../../composables/useFormat';
 import { t as tf } from '../../i18n';
 import { printRows } from '../../lib/exporters';
 import http from '../../lib/http';
+import { useAuthStore } from '../../stores/auth';
 
 const { t } = useI18n();
 const { money } = useFormat();
+const auth = useAuthStore();
 const route = useRoute();
 
 const loading = ref(true);
@@ -208,7 +211,7 @@ const EXPIRY_COLOR = { expired: 'error', near: 'warning', valid: 'success' };
 const TYPE_COLOR = {
   purchase: 'success', sale_return: 'processing', sale: 'error', purchase_return: 'warning',
   adjustment: 'blue', transfer_in: 'processing', transfer_out: 'default', damage: 'default',
-  quotation: 'default',
+  quotation: 'default', production: 'success', production_consumption: 'error',
 };
 const TYPE_LABEL = {
   purchase: ['Purchase', 'Purchase'],
@@ -220,6 +223,8 @@ const TYPE_LABEL = {
   transfer_out: ['Transfer_Out', 'Transfer Out'],
   damage: ['Damage', 'Damage'],
   quotation: ['Quotation', 'Quotation'],
+  production: ['Production', 'Production'],
+  production_consumption: ['Used_In_Production', 'Used in production'],
 };
 
 function typeLabel(type) {
@@ -257,6 +262,7 @@ const filterOptions = computed(() => [
   ...Object.keys(TYPE_LABEL).map(k => ({ value: k, label: typeLabel(k) })),
 ]);
 
+// Unit Value is the batch unit cost on every non-sale movement.
 const columns = computed(() => [
   { title: tf('Type', 'Type'), dataIndex: 'type', key: 'type', exportValue: r => typeLabel(r.type) },
   { title: t('Date'), dataIndex: 'date', key: 'date', exportValue: r => r.date || '—' },
@@ -266,7 +272,7 @@ const columns = computed(() => [
   { title: tf('Out', 'Out'), dataIndex: 'qty_out', key: 'qty_out', align: 'right', exportValue: r => (r.qty_out ? `-${num(r.qty_out)}` : '—') },
   { title: tf('Unit_Value', 'Unit Value'), dataIndex: 'unit_value', key: 'unit_value', align: 'right', exportValue: r => (r.unit_value !== null ? money(r.unit_value) : '—') },
   { title: tf('Balance', 'Balance'), dataIndex: 'running_balance', key: 'running_balance', align: 'right', exportValue: r => num(r.running_balance) },
-]);
+].filter(c => auth.canSeeCost || c.key !== 'unit_value'));
 
 /** Where a movement's reference points, by document type. */
 function sourceLink(row) {
@@ -281,11 +287,14 @@ function sourceLink(row) {
     transfer_out: `/transfers/${row.ref_id}`,
     damage: `/damages/${row.ref_id}/edit`,
     quotation: `/quotations/${row.ref_id}`,
+    production: `/mrp/production-orders/${row.ref_id}`,
+    production_consumption: `/mrp/production-orders/${row.ref_id}`,
   };
   return map[row.type] || null;
 }
 
 function print() {
+  if (!auth.canExportProducts) return;
   printRows(
     `${t('Reports')} / ${tf('Batch_History', 'Batch History')} — ${batch.value.batch_no || ''}`,
     columns.value,

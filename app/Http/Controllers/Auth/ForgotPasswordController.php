@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\BaseController;
+use App\Support\Security\LoginGuard;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Password;
 
@@ -24,7 +25,11 @@ class ForgotPasswordController extends BaseController
      */
     public function showLinkRequestForm()
     {
-        return view('auth.passwords.email');
+        $guard = LoginGuard::tenant();
+
+        return view('auth.passwords.email', [
+            'captcha' => $guard->captchaOnForgotPassword() ? $guard->captcha()->widget() : null,
+        ]);
     }
 
     /**
@@ -34,13 +39,25 @@ class ForgotPasswordController extends BaseController
     {
         $request->validate(['email' => 'required|email']);
 
+        // System Settings > Security: CAPTCHA on this form stops it being used
+        // to flood a mailbox with reset emails.
+        $guard = LoginGuard::tenant();
+        if ($guard->captchaOnForgotPassword()) {
+            $guard->verifyCaptcha($request);
+        }
+
         // Set mail configuration from database before sending email
         $this->Set_config_mail();
 
         $status = Password::sendResetLink($request->only('email'));
 
-        return $status === Password::RESET_LINK_SENT
-            ? back()->with(['status' => __($status)])
-            : back()->withErrors(['email' => __($status)]);
+        // Same answer whether or not the e-mail belongs to an account (and
+        // whether a link was already sent recently): the form must not reveal
+        // which addresses exist.
+        if (in_array($status, [Password::RESET_LINK_SENT, Password::INVALID_USER, Password::RESET_THROTTLED], true)) {
+            return back()->with(['status' => __(Password::RESET_LINK_SENT)]);
+        }
+
+        return back()->withErrors(['email' => __($status)]);
     }
 }

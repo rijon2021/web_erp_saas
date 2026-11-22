@@ -55,7 +55,8 @@ class MeetingController extends Controller
         if (! is_dir($destination)) {
             mkdir($destination, 0755, true);
         }
-        $filename = Str::random(20) . '.' . $file->getClientOriginalExtension();
+        // Random name + allow-listed extension; the client name never reaches disk.
+        $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::documentExtension($file));
         $file->move($destination, $filename);
 
         return 'images/meetings/' . $filename;
@@ -455,13 +456,12 @@ class MeetingController extends Controller
 
         $request->validate([
             'meeting_id' => 'required|exists:meetings,id',
-            'file'       => 'required|file|max:10240',
+            'file'       => 'required|file|mimes:jpg,jpeg,png,webp,pdf,doc,docx,xls,xlsx,ppt,pptx,csv,txt|max:10240',
         ]);
 
         $file = $request->file('file');
         // Capture metadata BEFORE storeUpload() moves it — the temp file is gone afterwards.
-        $originalName = $file->getClientOriginalName();
-        $extension    = $file->getClientOriginalExtension();
+        $originalName = \App\Support\SafeUpload::displayName($file);
         $size         = $file->getSize();
         $path = $this->storeUpload($file);
 
@@ -469,7 +469,7 @@ class MeetingController extends Controller
             'meeting_id'  => $request->meeting_id,
             'file_name'   => $originalName,
             'file_path'   => $path,
-            'file_type'   => $extension,
+            'file_type'   => pathinfo($path, PATHINFO_EXTENSION),
             'file_size'   => $size,
             'uploaded_by' => $request->user('api') ? $request->user('api')->id : null,
         ]);

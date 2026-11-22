@@ -58,13 +58,19 @@ class ServiceJobPhotoController extends BaseController
             mkdir($uploadPath, 0755, true);
         }
 
+        // Extension from each photo's content, checked for the whole batch before anything is written
+        $extensions = [];
+        foreach ($request->file('photos') as $i => $file) {
+            $extensions[$i] = \App\Support\SafeUpload::imageExtension($file, 'photos');
+        }
+
         $created = [];
-        foreach ($request->file('photos') as $file) {
-            $originalName = $file->getClientOriginalName();
+        foreach ($request->file('photos') as $i => $file) {
+            $originalName = \App\Support\SafeUpload::displayName($file);
             $size = $file->getSize();
             $mimeType = $file->getMimeType();
 
-            $filename = time().'_'.Str::random(10).'_'.$originalName;
+            $filename = \App\Support\SafeUpload::name($extensions[$i], time().'_');
             $file->move($uploadPath, $filename);
 
             $relativePath = 'images/service_photos/'.$job->id.'/'.$filename;

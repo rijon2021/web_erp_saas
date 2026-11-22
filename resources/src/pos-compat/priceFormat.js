@@ -1,86 +1,17 @@
 // Price formatting helper for frontend display (e.g., POS)
 // This helper is purely presentational and does NOT affect calculations or stored values.
 
-// Internal map of supported formats:
-// - 'comma_dot'   => 1,234.56 (thousand ',', decimal '.')
-// - 'dot_comma'   => 1.234,56 (thousand '.', decimal ',')
-// - 'space_comma' => 1 234,56 (thousand ' ', decimal ',')
-export const PRICE_FORMATS = {
-  comma_dot: { thousands: ',', decimal: '.' },
-  dot_comma: { thousands: '.', decimal: ',' },
-  space_comma: { thousands: ' ', decimal: ',' },
-};
-
-// Normalize a stored value/label into one of our internal keys
-export function normalizePriceFormatKey(input) {
-  if (!input) return null;
-  const raw = String(input).trim();
-
-  // Direct key
-  if (PRICE_FORMATS[raw]) {
-    return raw;
-  }
-
-  // Allow matching by exact label text (for safety if something stored the label)
-  const labelMap = {
-    "1,234.56 (thousand , decimal .)": "comma_dot",
-    "1.234,56 (thousand . decimal ,)": "dot_comma",
-    "1 234,56 (thousand space, decimal ,)": "space_comma",
-  };
-
-  if (labelMap[raw]) {
-    return labelMap[raw];
-  }
-
-  return null;
-}
-
-// Format a numeric value according to the selected price format.
-// - value: number or numeric-like
-// - decimals: integer number of decimal places
-// - formatKey: one of PRICE_FORMATS keys or label text; if falsy/unknown, falls back to legacy formatting
-export function formatPriceDisplay(value, decimals = 2, formatKey = null) {
-  const d = Number.isInteger(decimals) ? decimals : 0;
-  const n = Number(value);
-  const safe = Number.isFinite(n) ? n : 0;
-
-  const key = normalizePriceFormatKey(formatKey);
-
-  // Fallback: keep current/default behavior (en-US locale style)
-  if (!key) {
-    try {
-      return safe.toLocaleString('en-US', {
-        minimumFractionDigits: d,
-        maximumFractionDigits: d,
-      });
-    } catch (e) {
-      const fixed = safe.toFixed(d);
-      const parts = fixed.split('.');
-      const intPart = parts[0];
-      const fracPart = parts[1] || '';
-      const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-      return d > 0 ? `${withCommas}.${fracPart}` : withCommas;
-    }
-  }
-
-  const cfg = PRICE_FORMATS[key];
-  const fixed = safe.toFixed(d);
-  let [intPart, fracPart = ''] = fixed.split('.');
-
-  // Thousands grouping
-  const re = /\B(?=(\d{3})+(?!\d))/g;
-  intPart = intPart.replace(re, cfg.thousands);
-
-  if (d <= 0) {
-    return intPart;
-  }
-
-  if (fracPart.length < d) {
-    fracPart = fracPart.padEnd(d, '0');
-  }
-
-  return `${intPart}${cfg.decimal}${fracPart}`;
-}
+// Separators, key normalisation and the formatter itself are the shared Vue 3
+// admin implementation (resources/src/lib/priceFormat.js), so the POS, its
+// receipts and the rest of the app render an amount identically, including
+// the "Hide Zero Decimals" setting (formatPriceDisplay's 4th argument).
+export {
+  PRICE_FORMATS,
+  normalizePriceFormatKey,
+  formatPriceDisplay,
+  stripZeroFraction,
+  resolveHideZeroDecimals,
+} from '../lib/priceFormat';
 
 // Get the selected price format from:
 // - explicit settings object (preferred)
@@ -173,3 +104,7 @@ export function cachePriceFormat(formatKey) {
   }
 }
 
+
+// Currency symbol placement (System Settings → Currency Position) — shared
+// with the Vue 3 admin so the POS, its receipts and the rest of the app agree.
+export { withCurrency, normalizeCurrencyPosition, isCurrencyAfter, currencySpace, CURRENCY_POSITIONS } from '../lib/priceFormat';

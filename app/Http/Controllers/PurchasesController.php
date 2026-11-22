@@ -25,7 +25,10 @@ use App\Models\User;
 use App\Models\UserWarehouse;
 use App\Models\Warehouse;
 use App\Services\BatchService;
+use App\Services\ImportFingerprint;
+use App\Services\Opencart\AutoSync as OpencartAutoSync;
 use App\Services\SerialNumberService;
+use App\Services\WooCommerce\AutoSync as WooAutoSync;
 use App\utils\helpers;
 use ArPHP\I18N\Arabic;
 use Carbon\Carbon;
@@ -37,6 +40,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Infobip\Api\SendSmsApi;
 use Infobip\Configuration;
 use Infobip\Model\SmsAdvancedTextualRequest;
@@ -92,7 +96,7 @@ class PurchasesController extends BaseController
         $total = 0;
 
         // Check If User Has Permission View  All Records
-        $Purchases = Purchase::with('facture', 'provider', 'warehouse', 'currency')
+        $Purchases = Purchase::with('provider', 'warehouse', 'currency')
             ->where('deleted_at', '=', null)
             ->where(function ($query) use ($view_records) {
                 if (! $view_records) {
@@ -109,6 +113,7 @@ class PurchasesController extends BaseController
             ->where(function ($query) use ($request) {
                 return $query->when($request->filled('search'), function ($query) use ($request) {
                     return $query->where('Ref', 'LIKE', "%{$request->search}%")
+                        ->orWhere('order_reference', 'LIKE', "%{$request->search}%")
                         ->orWhere('statut', 'LIKE', "%{$request->search}%")
                         ->orWhere('GrandTotal', $request->search)
                         ->orWhere('payment_statut', 'like', "$request->search")
@@ -145,11 +150,30 @@ class PurchasesController extends BaseController
             ->orderBy($order, $dir)
             ->get();
 
+        // Returns and document counts for the whole page in two queries, not
+        // up to three per purchase: the "All" page size and the list exports
+        // load every row. Raw integers because a big page would otherwise
+        // pass MySQL's 65,535 placeholder limit.
+        $purchaseIds = $Purchases->pluck('id')->all();
+        $returnIdByPurchase = PurchaseReturn::whereIntegerInRaw('purchase_id', $purchaseIds)
+            ->whereNull('deleted_at')
+            ->groupBy('purchase_id')
+            ->selectRaw('purchase_id, MIN(id) as return_id')
+            ->pluck('return_id', 'purchase_id');
+        $documentCounts = DB::table('purchase_documents')
+            ->whereIntegerInRaw('purchase_id', $purchaseIds)
+            ->whereNull('deleted_at')
+            ->groupBy('purchase_id')
+            ->selectRaw('purchase_id, COUNT(*) as total')
+            ->pluck('total', 'purchase_id');
+
         foreach ($Purchases as $Purchase) {
 
+            $item = [];
             $item['id'] = $Purchase->id;
             $item['date'] = $Purchase['date'].' '.$Purchase['time'];
             $item['Ref'] = $Purchase->Ref;
+            $item['order_reference'] = $Purchase->order_reference;
             $item['warehouse_name'] = $Purchase['warehouse']->name;
             $item['discount'] = $Purchase->discount;
             $item['shipping'] = $Purchase->shipping;
@@ -168,19 +192,15 @@ class PurchasesController extends BaseController
             // base-currency documents (amounts in this list are always base).
             $item['currency_code'] = optional($Purchase['currency'])->code ? strtoupper($Purchase['currency']->code) : null;
 
-            if (PurchaseReturn::where('purchase_id', $Purchase['id'])->where('deleted_at', '=', null)->exists()) {
-                $PurchaseReturn = PurchaseReturn::where('purchase_id', $Purchase['id'])->where('deleted_at', '=', null)->first();
-                $item['purchasereturn_id'] = $PurchaseReturn->id;
+            if (isset($returnIdByPurchase[$Purchase['id']])) {
+                $item['purchasereturn_id'] = $returnIdByPurchase[$Purchase['id']];
                 $item['purchase_has_return'] = 'yes';
             } else {
                 $item['purchase_has_return'] = 'no';
             }
 
             // Get documents count
-            $item['documents_count'] = DB::table('purchase_documents')
-                ->where('purchase_id', $Purchase['id'])
-                ->whereNull('deleted_at')
-                ->count();
+            $item['documents_count'] = (int) ($documentCounts[$Purchase['id']] ?? 0);
 
             $data[] = $item;
         }
@@ -197,7 +217,7 @@ class PurchasesController extends BaseController
             $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name']);
         }
 
-        $payment_methods = PaymentMethod::active()->whereNull('deleted_at')->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->exceptCustomerWallet()->whereNull('deleted_at')->get(['id', 'name']);
 
         return response()->json([
             'totalRows' => $totalRows,
@@ -219,9 +239,14 @@ class PurchasesController extends BaseController
         request()->validate([
             'supplier_id' => 'required',
             'warehouse_id' => 'required',
+            'order_reference' => 'nullable|string|max:100',
         ]);
+        $this->assertBatchCostsMatchLines($request);
 
-        \DB::transaction(function () use ($request) {
+        $createdId = null;
+        $sellingPriceOn = $this->sellingPriceOnPurchaseEnabled();
+        $productCostOn = $this->productCostOnPurchaseEnabled();
+        \DB::transaction(function () use ($request, &$createdId, $sellingPriceOn, $productCostOn) {
             $order = new Purchase;
 
             $order->date = $request->date;
@@ -237,6 +262,7 @@ class PurchasesController extends BaseController
             $order->statut = $request->statut;
             $order->payment_statut = 'unpaid';
             $order->notes = $request->notes;
+            $order->order_reference = $this->orderReference($request);
             $order->user_id = Auth::user()->id;
             // Multi-Currency snapshot (NULL/NULL = base currency); amounts on
             // the purchase are always stored in the base currency.
@@ -245,6 +271,7 @@ class PurchasesController extends BaseController
             $order->exchange_rate = $docCurrency['exchange_rate'];
 
             $order->save();
+            $createdId = $order->id;
 
             $this->syncExtraChargesAndCustomFields($order->id, $request);
 
@@ -265,6 +292,9 @@ class PurchasesController extends BaseController
                     'total' => $value['subtotal'],
                     'imei_number' => $this->resolveImeiString($value),
                 ];
+                if ($sellingPriceOn) {
+                    $orderDetails[count($orderDetails) - 1]['price'] = $this->sellingPriceInput($value);
+                }
 
                 if ($order->statut == 'received') {
                     if ($value['product_variant_id'] !== null) {
@@ -272,7 +302,7 @@ class PurchasesController extends BaseController
                             ->where('warehouse_id', $order->warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse) {
                             if ($unit->operator == '/') {
@@ -287,7 +317,7 @@ class PurchasesController extends BaseController
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $order->warehouse_id)
                             ->where('product_id', $value['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse) {
                             if ($unit->operator == '/') {
@@ -301,6 +331,13 @@ class PurchasesController extends BaseController
                 }
             }
             PurchaseDetail::insert($orderDetails);
+
+            if ($sellingPriceOn) {
+                $this->applySellingPrices($data);
+            }
+            if ($productCostOn && $order->statut == 'received') {
+                $this->applyProductCosts($data);
+            }
 
             // Pharmacy: link captured batches to the freshly inserted PurchaseDetail rows.
             // Re-fetch in id order so position matches the input array order.
@@ -328,7 +365,155 @@ class PurchasesController extends BaseController
             }
         }, 10);
 
-        return response()->json(['success' => true, 'message' => 'Purchase Created !!']);
+        // id: the purchase form attaches a scanned supplier invoice right after saving.
+        return response()->json(['success' => true, 'message' => 'Purchase Created !!', 'id' => $createdId]);
+    }
+
+    /** Settings > Features > Update Product Cost on Purchase (column must exist too). */
+    private function productCostOnPurchaseEnabled(): bool
+    {
+        $setting = Setting::current();
+
+        return (bool) ($setting->purchase_update_product_cost ?? false)
+            && \Schema::hasColumn('settings', 'purchase_update_product_cost');
+    }
+
+    /**
+     * Base units per purchase unit, as the stock update works it out: a
+     * "box of 12" (operator *, value 12) receives 12 base units per line unit.
+     */
+    private function purchaseUnitFactor($unitId): float
+    {
+        $unit = $unitId ? Unit::find($unitId) : null;
+        if (! $unit) {
+            return 1.0;
+        }
+        $value = (float) ($unit->operator_value ?? 1) ?: 1.0;
+
+        return ($unit->operator ?? '*') === '/' ? 1 / $value : $value;
+    }
+
+    /**
+     * Last-cost write-back for a RECEIVED purchase: each line's product (or
+     * variant) cost becomes the line's net unit cost - after the line
+     * discount, without the tax when the cost was entered tax-inclusive -
+     * converted to the BASE unit, since the card cost is per base unit. Same
+     * rule as stocky's landed-cost "update the products' cost" checkbox.
+     * Batch-tracked lines already carry the weighted average of their batch
+     * costs (assertBatchCostsMatchLines). Zero-cost lines are skipped and an
+     * unchanged figure is not rewritten, so the audit log only shows real
+     * moves. Never reverted when the purchase is edited or deleted.
+     */
+    private function applyProductCosts(array $rows): void
+    {
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $productId = (int) ($row['product_id'] ?? 0);
+            $variantId = (int) ($row['product_variant_id'] ?? 0);
+            $qty = (float) ($row['quantity'] ?? 0);
+            $unitCost = (float) ($row['Unit_cost'] ?? 0);
+            if ($productId <= 0 || $qty <= 0 || $unitCost <= 0) {
+                continue;
+            }
+
+            $product = Product::where('id', $productId)->where('deleted_at', '=', null)->first();
+            if (! $product) {
+                continue;
+            }
+
+            $discount = (float) ($row['discount'] ?? 0);
+            $discountNet = (string) ($row['discount_Method'] ?? '2') === '2' ? $discount : $unitCost * $discount / 100;
+            $net = $unitCost - $discountNet;
+            if ((string) ($row['tax_method'] ?? '1') === '2') {
+                $net -= $net * (float) ($row['tax_percent'] ?? 0) / 100;
+            }
+            $unitId = $row['purchase_unit_id'] ?? null;
+            $unitId = $unitId ?: ($product->unit_purchase_id ?: $product->unit_id);
+            $baseCost = round($net / $this->purchaseUnitFactor($unitId), 4);
+            if ($baseCost <= 0) {
+                continue;
+            }
+
+            if ($variantId > 0) {
+                $variant = ProductVariant::where('product_id', $productId)->where('id', $variantId)->first();
+                if ($variant && abs((float) $variant->cost - $baseCost) > 0.00001) {
+                    $variant->update(['cost' => $baseCost]);
+                }
+                continue;
+            }
+            if ($product->type !== 'is_variant' && abs((float) $product->cost - $baseCost) > 0.00001) {
+                $product->update(['cost' => $baseCost]);
+            }
+        }
+    }
+
+    /**
+     * Settings > Features > Edit Selling Price on Purchase, and the tenant has
+     * run the migration that adds purchase_details.price.
+     */
+    private function sellingPriceOnPurchaseEnabled(): bool
+    {
+        $setting = Setting::current();
+
+        return (bool) ($setting->purchase_update_selling_price ?? false)
+            && \Schema::hasColumn('purchase_details', 'price');
+    }
+
+    /** The selling price typed on a purchase line, or null when left blank / invalid. */
+    private function sellingPriceInput($row): ?float
+    {
+        $v = is_array($row) ? ($row['price'] ?? null) : null;
+        if ($v === null || $v === '' || ! is_numeric($v) || (float) $v < 0) {
+            return null;
+        }
+
+        return round((float) $v, 4);
+    }
+
+    /**
+     * Write the selling prices typed on purchase lines back to the products
+     * (variant rows for variant lines). Only lines with a price are touched,
+     * and only when the figure differs, so untouched products keep their
+     * audit history clean and no needless channel push is queued. Goes
+     * through Eloquent so the audit observer and the Woo/OpenCart auto-sync
+     * see the change like a product-form edit.
+     */
+    private function applySellingPrices(array $rows): void
+    {
+        $changed = [];
+        foreach ($rows as $row) {
+            $price = $this->sellingPriceInput($row);
+            if ($price === null) {
+                continue;
+            }
+            $productId = (int) ($row['product_id'] ?? 0);
+            $variantId = (int) ($row['product_variant_id'] ?? 0);
+            if ($productId <= 0) {
+                continue;
+            }
+
+            if ($variantId > 0) {
+                $variant = ProductVariant::where('product_id', $productId)->where('id', $variantId)->first();
+                if ($variant && abs((float) $variant->price - $price) > 0.00001) {
+                    $variant->update(['price' => $price]);
+                    $changed[$productId] = true;
+                }
+                continue;
+            }
+
+            $product = Product::where('id', $productId)->where('deleted_at', '=', null)->first();
+            if ($product && $product->type !== 'is_variant' && abs((float) $product->price - $price) > 0.00001) {
+                $product->update(['price' => $price]);
+                $changed[$productId] = true;
+            }
+        }
+
+        foreach (array_keys($changed) as $pid) {
+            WooAutoSync::productSaved($pid);
+            OpencartAutoSync::productSaved($pid);
+        }
     }
 
     /**
@@ -391,6 +576,45 @@ class PurchasesController extends BaseController
 
     // --------- Update Purchase  -------------\\
 
+    /**
+     * A batch-tracked line is costed at the quantity-weighted average of its
+     * batch unit costs, and the purchase form derives Unit_cost that way. Any
+     * client that posts a line cost disagreeing with its own batch rows would
+     * store a purchase whose subtotal, COGS and stock value contradict the
+     * batches, so it is refused up front with a 422 the form surfaces as-is.
+     */
+    protected function assertBatchCostsMatchLines(Request $request): void
+    {
+        $batchService = app(BatchService::class);
+        if (! $batchService->isSupported()) {
+            return;
+        }
+
+        $errors = [];
+        foreach ((array) $request->input('details', []) as $i => $row) {
+            if (! is_array($row) || ! $batchService->productIsTracked($row['product_id'] ?? null)) {
+                continue;
+            }
+            $avg = $batchService->weightedAverageCostForRow($row);
+            if ($avg === null) {
+                continue;
+            }
+            $lineCost = (float) ($row['Unit_cost'] ?? 0);
+            if (abs($lineCost - $avg) > 0.01) {
+                $label = trim((string) ($row['name'] ?? $row['code'] ?? ('#'.($i + 1))));
+                $errors["details.$i.Unit_cost"] = __('messages.BatchCostMismatch', [
+                    'product' => $label,
+                    'cost' => number_format($lineCost, helpers::price_decimals(), '.', ''),
+                    'avg' => number_format($avg, helpers::price_decimals(), '.', ''),
+                ]);
+            }
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+    }
+
     public function update(Request $request, $id)
     {
         $this->authorizeForUser($request->user('api'), 'update', Purchase::class);
@@ -398,9 +622,13 @@ class PurchasesController extends BaseController
         request()->validate([
             'warehouse_id' => 'required',
             'supplier_id' => 'required',
+            'order_reference' => 'nullable|string|max:100',
         ]);
+        $this->assertBatchCostsMatchLines($request);
+        $sellingPriceOn = $this->sellingPriceOnPurchaseEnabled();
+        $productCostOn = $this->productCostOnPurchaseEnabled();
 
-        \DB::transaction(function () use ($request, $id) {
+        \DB::transaction(function () use ($request, $id, $sellingPriceOn, $productCostOn) {
             $user = Auth::user();
             // New way: Check user's record_view field (user-level boolean)
             // Backward compatibility: If record_view is null, fall back to role permission check
@@ -491,7 +719,7 @@ class PurchasesController extends BaseController
                                     ->where('warehouse_id', $current_Purchase->warehouse_id)
                                     ->where('product_id', $value['product_id'])
                                     ->where('product_variant_id', $value['product_variant_id'])
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($unit && $product_warehouse) {
                                     if ($unit->operator == '/') {
@@ -507,7 +735,7 @@ class PurchasesController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $current_Purchase->warehouse_id)
                                     ->where('product_id', $value['product_id'])
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($unit && $product_warehouse) {
                                     if ($unit->operator == '/') {
@@ -543,7 +771,7 @@ class PurchasesController extends BaseController
                                     ->where('warehouse_id', $request->warehouse_id)
                                     ->where('product_id', $prod_detail['product_id'])
                                     ->where('product_variant_id', $prod_detail['product_variant_id'])
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($unit_prod && $product_warehouse) {
                                     if ($unit_prod->operator == '/') {
@@ -559,7 +787,7 @@ class PurchasesController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $request->warehouse_id)
                                     ->where('product_id', $prod_detail['product_id'])
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($unit_prod && $product_warehouse) {
                                     if ($unit_prod->operator == '/') {
@@ -586,6 +814,9 @@ class PurchasesController extends BaseController
                         $orderDetails['product_variant_id'] = $prod_detail['product_variant_id'];
                         $orderDetails['total'] = $prod_detail['subtotal'];
                         $orderDetails['imei_number'] = $this->resolveImeiString($prod_detail);
+                        if ($sellingPriceOn) {
+                            $orderDetails['price'] = $this->sellingPriceInput($prod_detail);
+                        }
 
                         if (! in_array($prod_detail['id'], $old_products_id)) {
                             PurchaseDetail::Create($orderDetails);
@@ -593,6 +824,13 @@ class PurchasesController extends BaseController
                             PurchaseDetail::where('id', $prod_detail['id'])->update($orderDetails);
                         }
                     }
+                }
+
+                if ($sellingPriceOn) {
+                    $this->applySellingPrices($new_purchase_details);
+                }
+                if ($productCostOn && $request['statut'] == 'received') {
+                    $this->applyProductCosts($new_purchase_details);
                 }
 
                 $due = $request['GrandTotal'] - $current_Purchase->paid_amount;
@@ -609,6 +847,8 @@ class PurchasesController extends BaseController
                     'provider_id' => $request['supplier_id'],
                     'warehouse_id' => $request['warehouse_id'],
                     'notes' => $request['notes'],
+                    // Only forms that carry the field may change it.
+                    'order_reference' => $request->has('order_reference') ? $this->orderReference($request) : $current_Purchase->order_reference,
                     'tax_rate' => $request['tax_rate'],
                     'TaxNet' => $request['TaxNet'],
                     'discount' => $request['discount'],
@@ -746,7 +986,7 @@ class PurchasesController extends BaseController
                                 ->where('warehouse_id', $current_Purchase->warehouse_id)
                                 ->where('product_id', $value['product_id'])
                                 ->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse) {
                                 if ($unit->operator == '/') {
@@ -762,7 +1002,7 @@ class PurchasesController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_Purchase->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse) {
                                 if ($unit->operator == '/') {
@@ -796,15 +1036,13 @@ class PurchasesController extends BaseController
 
                 $Payment_purchase_data = PaymentPurchase::where('purchase_id', $id)->get();
                 foreach ($Payment_purchase_data as $Payment_purchase) {
-                    $account = Account::find($Payment_purchase->account_id);
-
-                    if ($account) {
-                        $account->update([
-                            'balance' => $account->balance + $Payment_purchase->montant,
-                        ]);
-                    }
+                    // Wallet-funded rows go back to the supplier wallet (their account_id is null).
+                    app(\App\Services\SupplierWallet\SupplierWalletService::class)->reversePaymentPurchase($Payment_purchase, ['user_id' => Auth::id()]);
+                    Account::adjustBalance($Payment_purchase->account_id, $Payment_purchase->montant);
 
                     $Payment_purchase->delete();
+                    // Soft delete fires no `updated` hook: post the Accounting V2 reversal explicitly.
+                    event(new \App\Events\PaymentPurchaseDeleted($Payment_purchase));
                 }
 
             }
@@ -894,7 +1132,7 @@ class PurchasesController extends BaseController
                                     ->where('warehouse_id', $current_Purchase->warehouse_id)
                                     ->where('product_id', $value['product_id'])
                                     ->where('product_variant_id', $value['product_variant_id'])
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($unit && $product_warehouse) {
                                     if ($unit->operator == '/') {
@@ -910,7 +1148,7 @@ class PurchasesController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $current_Purchase->warehouse_id)
                                     ->where('product_id', $value['product_id'])
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($unit && $product_warehouse) {
                                     if ($unit->operator == '/') {
@@ -932,15 +1170,13 @@ class PurchasesController extends BaseController
 
                     $Payment_purchase_data = PaymentPurchase::where('purchase_id', $purchase_id)->get();
                     foreach ($Payment_purchase_data as $Payment_purchase) {
-                        $account = Account::find($Payment_purchase->account_id);
-
-                        if ($account) {
-                            $account->update([
-                                'balance' => $account->balance + $Payment_purchase->montant,
-                            ]);
-                        }
+                        // Wallet-funded rows go back to the supplier wallet (their account_id is null).
+                        app(\App\Services\SupplierWallet\SupplierWalletService::class)->reversePaymentPurchase($Payment_purchase, ['user_id' => Auth::id()]);
+                        Account::adjustBalance($Payment_purchase->account_id, $Payment_purchase->montant);
 
                         $Payment_purchase->delete();
+                        // Soft delete fires no `updated` hook: post the Accounting V2 reversal explicitly.
+                        event(new \App\Events\PaymentPurchaseDeleted($Payment_purchase));
                     }
 
                 }
@@ -981,7 +1217,9 @@ class PurchasesController extends BaseController
             $this->authorizeForUser($request->user('api'), 'check_record', $purchase);
         }
 
+        $purchase_data['id'] = $purchase->id;
         $purchase_data['Ref'] = $purchase->Ref;
+        $purchase_data['order_reference'] = $purchase->order_reference;
         // Multi-Currency: amounts in this payload are converted into the
         // document currency — the page must render them with THIS symbol.
         $purchase_data['currency_symbol'] = $docCurrency['symbol'];
@@ -1105,6 +1343,8 @@ class PurchasesController extends BaseController
             'details' => $details,
             'purchase' => $purchase_data,
             'company' => $company,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($purchase->warehouse_id, $company),
         ]);
 
     }
@@ -1187,6 +1427,8 @@ class PurchasesController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $Purchase_data);
+
         // Document currency: stored amounts are base currency, display = stored * rate.
         $docCurrency = helpers::Get_Document_Currency($Purchase_data);
 
@@ -1203,6 +1445,7 @@ class PurchasesController extends BaseController
         $purchase['shipping'] = number_format($Purchase_data->shipping * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $purchase['statut'] = $Purchase_data->statut;
         $purchase['Ref'] = $Purchase_data->Ref;
+        $purchase['order_reference'] = $Purchase_data->order_reference;
         $purchase['date'] = $Purchase_data->date.' '.$Purchase_data->time;
         $purchase['GrandTotal'] = number_format($Purchase_data->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $purchase['paid_amount'] = number_format($Purchase_data->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
@@ -1292,6 +1535,8 @@ class PurchasesController extends BaseController
         $Html = view('pdf.purchase_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Purchase_data->warehouse_id, $settings),
             'purchase' => $purchase,
             'details' => $details,
         ])->render();
@@ -1324,6 +1569,8 @@ class PurchasesController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $Purchase_data);
+
         // Document currency: stored amounts are base currency, display = stored * rate.
         $docCurrency = helpers::Get_Document_Currency($Purchase_data);
 
@@ -1340,6 +1587,7 @@ class PurchasesController extends BaseController
         $purchase['shipping'] = number_format($Purchase_data->shipping * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $purchase['statut'] = $Purchase_data->statut;
         $purchase['Ref'] = $Purchase_data->Ref;
+        $purchase['order_reference'] = $Purchase_data->order_reference;
         $purchase['date'] = $Purchase_data->date.' '.$Purchase_data->time;
         $purchase['GrandTotal'] = number_format($Purchase_data->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $purchase['paid_amount'] = number_format($Purchase_data->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
@@ -1429,6 +1677,8 @@ class PurchasesController extends BaseController
         $Html = view('pdf.purchase_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Purchase_data->warehouse_id, $settings),
             'purchase' => $purchase,
             'details' => $details,
         ])->render();
@@ -1460,6 +1710,14 @@ class PurchasesController extends BaseController
 
     // ---------------- Show Form Create Purchase ---------------\\
 
+    /** The customer's / supplier's own order number (e.g. a CS-Cart order), trimmed; blank = none. */
+    private function orderReference(Request $request): ?string
+    {
+        $ref = trim((string) $request->input('order_reference', ''));
+
+        return $ref === '' ? null : mb_substr($ref, 0, 100);
+    }
+
     public function create(Request $request)
     {
 
@@ -1483,6 +1741,7 @@ class PurchasesController extends BaseController
             'suppliers' => $suppliers,
             'purchase_extra_charges_enabled' => (bool) ($setting->purchase_extra_charges_enabled ?? false),
             'purchase_custom_fields_enabled' => (bool) ($setting->purchase_custom_fields_enabled ?? false),
+            'purchase_update_selling_price' => $this->sellingPriceOnPurchaseEnabled(),
         ]);
     }
 
@@ -1562,6 +1821,7 @@ class PurchasesController extends BaseController
             $purchase['shipping'] = $Purchase_data->shipping;
             $purchase['statut'] = $Purchase_data->statut;
             $purchase['notes'] = $Purchase_data->notes;
+            $purchase['order_reference'] = $Purchase_data->order_reference;
             // Multi-Currency snapshot (null = base currency)
             $purchase['currency_id'] = $Purchase_data->currency_id;
             $purchase['exchange_rate'] = $Purchase_data->exchange_rate;
@@ -1671,6 +1931,13 @@ class PurchasesController extends BaseController
                 $data['is_batch_tracked'] = (bool) ($detail['product']['is_batch_tracked'] ?? false);
                 $data['batches'] = $batchesByDetail[(int) $detail->id] ?? [];
 
+                // Selling price typed on this line when it was saved (NULL = none)
+                // and the product's price as it stands now, for the form's hint.
+                $data['price'] = isset($detail->price) ? (float) $detail->price : null;
+                $data['current_price'] = (float) ($detail->product_variant_id && isset($productsVariants)
+                    ? ($productsVariants->price ?? 0)
+                    : ($detail['product']['price'] ?? 0));
+
                 $details[] = $data;
             }
 
@@ -1694,6 +1961,7 @@ class PurchasesController extends BaseController
                 'warehouses' => $warehouses,
                 'purchase_extra_charges_enabled' => (bool) ($setting->purchase_extra_charges_enabled ?? false),
                 'purchase_custom_fields_enabled' => (bool) ($setting->purchase_custom_fields_enabled ?? false),
+                'purchase_update_selling_price' => $this->sellingPriceOnPurchaseEnabled(),
             ]);
         }
     }
@@ -1863,6 +2131,9 @@ class PurchasesController extends BaseController
         }
 
         $products = [];
+        $storePriceMap = \App\Services\WarehousePrices::map(
+            $purchase->warehouse_id, $purchase->details->pluck('product_id')->all()
+        );
 
         foreach ($purchase->details as $detail) {
             $product = $detail->product;
@@ -1895,6 +2166,13 @@ class PurchasesController extends BaseController
                 $item['name'] = $product->name;
                 $barcodeValue = $product->code;
             }
+
+            // Different prices per store: labels for goods received into a
+            // store carry that store's price.
+            $product_price = \App\Services\WarehousePrices::pick(
+                $storePriceMap[\App\Services\WarehousePrices::key($detail->product_id, $detail->product_variant_id)] ?? null,
+                'price', $product_price
+            );
 
             // Apply discount
             $price_discounted = $product_price;
@@ -1959,14 +2237,14 @@ class PurchasesController extends BaseController
             $message_subject = '';
         }
         // Tags
-        $random_number = Str::random(10);
-        $invoice_url = url('/api/purchase_pdf/'.$request->id.'?'.$random_number);
+        $this->authorizeDocumentView($request, $purchase);
+        $invoice_url = $purchase->shareUrl();
 
         $invoice_number = $purchase->Ref;
 
-        $total_amount = $currency.' '.number_format($purchase->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $paid_amount = $currency.' '.number_format($purchase->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $due_amount = $currency.' '.number_format(($purchase->GrandTotal - $purchase->paid_amount) * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
+        $total_amount = helpers::with_currency($currency, helpers::format_price($purchase->GrandTotal * $docCurrency['rate'], null, 'comma_dot'));
+        $paid_amount = helpers::with_currency($currency, helpers::format_price($purchase->paid_amount * $docCurrency['rate'], null, 'comma_dot'));
+        $due_amount = helpers::with_currency($currency, helpers::format_price(($purchase->GrandTotal - $purchase->paid_amount) * $docCurrency['rate'], null, 'comma_dot'));
 
         $contact_name = $purchase['provider']->name;
         $business_name = $settings->CompanyName;
@@ -1975,8 +2253,8 @@ class PurchasesController extends BaseController
         $receiver_email = $purchase['provider']->email;
 
         // replace the text with tags
-        $message_body = str_replace('{contact_name}', $contact_name, $message_body);
-        $message_body = str_replace('{business_name}', $business_name, $message_body);
+        $message_body = str_replace('{contact_name}', e((string) $contact_name), $message_body);
+        $message_body = str_replace('{business_name}', e((string) $business_name), $message_body);
         $message_body = str_replace('{invoice_url}', $invoice_url, $message_body);
         $message_body = str_replace('{invoice_number}', $invoice_number, $message_body);
 
@@ -2024,13 +2302,13 @@ class PurchasesController extends BaseController
         }
 
         // Tags
-        $random_number = Str::random(10);
-        $invoice_url = url('/api/purchase_pdf/'.$request->id.'?'.$random_number);
+        $this->authorizeDocumentView($request, $purchase);
+        $invoice_url = $purchase->shareUrl();
         $invoice_number = $purchase->Ref;
 
-        $total_amount = $currency.' '.number_format($purchase->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $paid_amount = $currency.' '.number_format($purchase->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $due_amount = $currency.' '.number_format(($purchase->GrandTotal - $purchase->paid_amount) * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
+        $total_amount = helpers::with_currency($currency, helpers::format_price($purchase->GrandTotal * $docCurrency['rate'], null, 'comma_dot'));
+        $paid_amount = helpers::with_currency($currency, helpers::format_price($purchase->paid_amount * $docCurrency['rate'], null, 'comma_dot'));
+        $due_amount = helpers::with_currency($currency, helpers::format_price(($purchase->GrandTotal - $purchase->paid_amount) * $docCurrency['rate'], null, 'comma_dot'));
 
         $contact_name = $purchase['provider']->name;
         $business_name = $settings->CompanyName;
@@ -2088,13 +2366,13 @@ class PurchasesController extends BaseController
         }
 
         // Tags
-        $random_number = Str::random(10);
-        $invoice_url = url('/api/purchase_pdf/'.$request->id.'?'.$random_number);
+        $this->authorizeDocumentView($request, $purchase);
+        $invoice_url = $purchase->shareUrl();
         $invoice_number = $purchase->Ref;
 
-        $total_amount = $currency.' '.number_format($purchase->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $paid_amount = $currency.' '.number_format($purchase->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $due_amount = $currency.' '.number_format(($purchase->GrandTotal - $purchase->paid_amount) * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
+        $total_amount = helpers::with_currency($currency, helpers::format_price($purchase->GrandTotal * $docCurrency['rate'], null, 'comma_dot'));
+        $paid_amount = helpers::with_currency($currency, helpers::format_price($purchase->paid_amount * $docCurrency['rate'], null, 'comma_dot'));
+        $due_amount = helpers::with_currency($currency, helpers::format_price(($purchase->GrandTotal - $purchase->paid_amount) * $docCurrency['rate'], null, 'comma_dot'));
 
         $contact_name = $purchase['provider']->name;
         $business_name = $settings->CompanyName;
@@ -2179,7 +2457,7 @@ class PurchasesController extends BaseController
             }
 
             $qty = (float) ($row['qty'] ?? 0);
-            $cost = (float) $product->cost;
+            $cost = self::importLineCost($row, $product);
             $total = $qty * $cost;
             $subtotal += $total;
 
@@ -2188,6 +2466,7 @@ class PurchasesController extends BaseController
                 'name' => $product->name,
                 'qty' => $qty,
                 'cost' => $cost,
+                'cost_from_file' => self::hasImportCost($row),
                 'total' => $total,
                 'unit' => optional($product->unitPurchase)->ShortName,
                 'is_batch_tracked' => (bool) ($product->is_batch_tracked ?? false),
@@ -2211,10 +2490,30 @@ class PurchasesController extends BaseController
 
         $data = $this->request_products_csv($request);
 
+        // A parse / validation failure comes back as its error response.
+        if ($data instanceof \Illuminate\Http\JsonResponse) {
+            return $data;
+        }
+        if (! is_array($data) || ! $data) {
+            return response()->json(['status' => false, 'msg' => 'Invalid CSV file']);
+        }
+
         request()->validate([
             'supplier_id' => 'required',
             'warehouse_id' => 'required',
+            'supplier_invoice' => 'nullable|string|max:100',
         ]);
+
+        // The same lines into the same warehouse from the same supplier, still
+        // standing as a purchase → ask before receiving them twice.
+        $fingerprint = ImportFingerprint::hash(
+            'purchase_import:'.(int) $request->supplier_id,
+            (int) $request->warehouse_id,
+            array_map(fn ($r) => [$r['productcode'] ?? '', $r['qty'] ?? '', $r['cost'] ?? ''], $data)
+        );
+        if (! $request->boolean('confirm_duplicate') && ($previous = ImportFingerprint::previous('purchase_import:'.(int) $request->supplier_id, $fingerprint))) {
+            return ImportFingerprint::duplicateResponse($previous);
+        }
 
         // Pharmacy: decode batches payload (map of productcode → batches[]).
         $batchesByCode = [];
@@ -2226,7 +2525,7 @@ class PurchasesController extends BaseController
             }
         }
 
-        \DB::transaction(function () use ($request, $data, $batchesByCode) {
+        \DB::transaction(function () use ($request, $data, $batchesByCode, $fingerprint) {
             $order = new Purchase;
 
             $order->date = $request->date;
@@ -2241,7 +2540,12 @@ class PurchasesController extends BaseController
             $order->shipping = $request->shipping;
             $order->statut = $request->statut;
             $order->payment_statut = 'unpaid';
-            $order->notes = $request->notes;
+            // The supplier's invoice number heads the notes, the way the AI
+            // invoice scan records it on hand-made purchases.
+            $supplierInvoice = trim((string) $request->input('supplier_invoice', ''));
+            $order->notes = $supplierInvoice !== ''
+                ? trim('Supplier invoice: '.$supplierInvoice."\n".(string) $request->notes)
+                : $request->notes;
             $order->user_id = Auth::user()->id;
 
             $order->save();
@@ -2252,13 +2556,14 @@ class PurchasesController extends BaseController
 
                 $product = Product::where('deleted_at', '=', null)->where('code', $value['productcode'])->first();
                 $unit = Unit::where('id', $product->unit_purchase_id)->first();
+                $lineCost = self::importLineCost($value, $product);
 
-                $total += $value['qty'] * $product->cost;
+                $total += $value['qty'] * $lineCost;
 
                 $orderDetails[] = [
                     'purchase_id' => $order->id,
                     'quantity' => $value['qty'],
-                    'cost' => $product->cost,
+                    'cost' => $lineCost,
                     'purchase_unit_id' => $product->unit_purchase_id,
                     'TaxNet' => 0,
                     'tax_method' => 1,
@@ -2266,7 +2571,7 @@ class PurchasesController extends BaseController
                     'discount_method' => 2,
                     'product_id' => $product->id,
                     'product_variant_id' => null,
-                    'total' => $value['qty'] * $product->cost,
+                    'total' => $value['qty'] * $lineCost,
                     'imei_number' => null,
                 ];
 
@@ -2280,7 +2585,7 @@ class PurchasesController extends BaseController
                     $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                         ->where('warehouse_id', $order->warehouse_id)
                         ->where('product_id', $product->id)
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($unit && $product_warehouse) {
                         if ($unit->operator == '/') {
@@ -2315,9 +2620,21 @@ class PurchasesController extends BaseController
             $purchase_data->GrandTotal = $total_without_discount + $TaxNet + $purchase_data->shipping;
             $purchase_data->save();
 
+            ImportFingerprint::record('purchase_import:'.(int) $request->supplier_id, $fingerprint, (int) $request->warehouse_id, 'purchase', $order->id, $request->file('products')->getClientOriginalName());
         }, 10);
 
         return response()->json(['success' => true, 'message' => 'Purchase Created !!']);
+    }
+
+    /** A CSV line's cost column, when filled in; otherwise the product's cost. */
+    private static function hasImportCost(array $row): bool
+    {
+        return isset($row['cost']) && $row['cost'] !== '' && is_numeric($row['cost']);
+    }
+
+    private static function importLineCost(array $row, Product $product): float
+    {
+        return self::hasImportCost($row) ? (float) $row['cost'] : (float) $product->cost;
     }
 
     // import Products
@@ -2373,6 +2690,13 @@ class PurchasesController extends BaseController
                     $cleanedKey = trim($key);
                     $cleanedRow[$cleanedKey] = $value;
                 }
+                // Optional line cost: "cost" or "Unit Cost"; blank = product cost.
+                if (! array_key_exists('cost', $cleanedRow) && array_key_exists('unitcost', $cleanedRow)) {
+                    $cleanedRow['cost'] = $cleanedRow['unitcost'];
+                }
+                if (array_key_exists('cost', $cleanedRow)) {
+                    $cleanedRow['cost'] = trim((string) $cleanedRow['cost']);
+                }
                 $cleanedData[] = $cleanedRow;
             }
 
@@ -2388,7 +2712,8 @@ class PurchasesController extends BaseController
             // Validate productcode existence in the database
             $missingProductCodes = [];
             foreach ($productCodes as $code) {
-                if (! Product::where('code', $code)->exists()) {
+                // Live products only: the save step looks codes up the same way.
+                if (! Product::whereNull('deleted_at')->where('code', $code)->exists()) {
                     $missingProductCodes[] = $code;
                 }
             }
@@ -2405,6 +2730,7 @@ class PurchasesController extends BaseController
             foreach ($cleanedData as $index => $row) {
                 $rules[$index.'.productcode'] = 'required';
                 $rules[$index.'.qty'] = 'required|numeric';
+                $rules[$index.'.cost'] = 'nullable|numeric|min:0';
             }
 
             // Validate the data
@@ -2451,7 +2777,7 @@ class PurchasesController extends BaseController
         $purchase = Purchase::findOrFail($purchaseId);
 
         $request->validate([
-            'documents.*' => 'required|file|max:10240', // Max 10MB per file
+            'documents.*' => 'required|file|mimes:jpg,jpeg,png,webp,pdf,doc,docx,xls,xlsx,csv,txt|max:10240', // Max 10MB per file
         ]);
 
         $uploadedDocuments = [];
@@ -2463,14 +2789,21 @@ class PurchasesController extends BaseController
                 mkdir($uploadPath, 0755, true);
             }
 
-            foreach ($request->file('documents') as $file) {
+            // Refuse the whole batch before writing anything if one file is not an allowed type
+            $extensions = [];
+            foreach ($request->file('documents') as $i => $file) {
+                $extensions[$i] = \App\Support\SafeUpload::documentExtension($file, 'documents');
+            }
+
+            foreach ($request->file('documents') as $i => $file) {
                 // Capture metadata BEFORE moving the file (tmp file is still readable)
-                $originalName = $file->getClientOriginalName();
+                $originalName = \App\Support\SafeUpload::displayName($file);
                 $size = $file->getSize();
                 $mimeType = $file->getMimeType();
 
-                $filename = time() . '_' . Str::random(10) . '_' . $originalName;
-                
+                // Never reuse the client name on disk: it decides how public/ serves the file
+                $filename = \App\Support\SafeUpload::name($extensions[$i], time() . '_');
+
                 // Move file to public/images/purchase_documents
                 $file->move($uploadPath, $filename);
                 
@@ -2550,8 +2883,11 @@ class PurchasesController extends BaseController
             ->update(['deleted_at' => Carbon::now()]);
 
         // Optionally delete the physical file
-        $filePath = public_path($document->path);
-        if (file_exists($filePath)) {
+        // Only delete files that really live under public/images — the stored
+        // path is server-written, but keep the unlink() contained regardless.
+        $filePath = realpath(public_path($document->path));
+        $imagesRoot = realpath(public_path('images'));
+        if ($filePath && $imagesRoot && str_starts_with($filePath, $imagesRoot . DIRECTORY_SEPARATOR) && is_file($filePath)) {
             unlink($filePath);
         }
 

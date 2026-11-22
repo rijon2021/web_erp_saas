@@ -63,6 +63,9 @@ $requirements['bcmath_enabled'] = extension_loaded("bcmath");
 // ZipArchive PHP Extension (auto-updater / module installer)
 $requirements['zip_enabled'] = class_exists('ZipArchive');
 
+// Sodium PHP Extension (verifies the licence server's signed answers)
+$requirements['sodium_enabled'] = extension_loaded("sodium") && function_exists('sodium_crypto_sign_verify_detached');
+
 $allValuesAreTrue = (count(array_unique($requirements)) === 1);
 
 $checks = array(
@@ -79,6 +82,7 @@ $checks = array(
     array('name' => 'JSON',      'note' => 'PHP extension', 'ok' => $requirements['json_enabled']),
     array('name' => 'BCMath',    'note' => 'PHP extension', 'ok' => $requirements['bcmath_enabled']),
     array('name' => 'ZipArchive','note' => 'PHP class (auto-updater)', 'ok' => $requirements['zip_enabled']),
+    array('name' => 'Sodium',    'note' => 'PHP extension (licence verification)', 'ok' => $requirements['sodium_enabled']),
 );
 
 ?>
@@ -86,7 +90,7 @@ $checks = array(
 @extends('setup.main')
 @section('content')
 
-    <p class="eyebrow">Step 1 of 4</p>
+    <p class="eyebrow">Step 1 of 5</p>
     <h1>Server requirements</h1>
     <p class="lead-text">Stocky SaaS checks that your server can run the central application before anything is installed.</p>
 

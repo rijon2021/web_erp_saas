@@ -3,6 +3,8 @@
  * Create_permission.vue template (extracted, not hand-written), so the Vue 3
  * role editor offers exactly the same 239 permissions in the same order.
  * l = i18n key, f = fallback label used when the key is missing.
+ * r = restriction: ticking it TAKES AWAY access (hide cost, block export),
+ *     so bulk select-all / group toggles skip it.
  */
 export const PERMISSION_GROUPS = [
     {
@@ -88,6 +90,18 @@ export const PERMISSION_GROUPS = [
                 "l": "import_products"
             },
             {
+                "v": "hide_product_cost",
+                "l": "Perm_hide_product_cost",
+                "f": "Hide Cost Price",
+                "r": true
+            },
+            {
+                "v": "disable_product_export",
+                "l": "Perm_disable_product_export",
+                "f": "Disable Product Export",
+                "r": true
+            },
+            {
                 "v": "category",
                 "l": "Categories"
             },
@@ -105,7 +119,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "count_stock",
-                "l": "count_stock",
+                "l": "CountStock",
                 "f": "Count Stock"
             },
             {
@@ -115,7 +129,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "opening_stock_import",
-                "l": "opening_stock_import",
+                "l": "Perm_opening_stock_import",
                 "f": "Opening Stock Import"
             },
             {
@@ -159,6 +173,31 @@ export const PERMISSION_GROUPS = [
         ]
     },
     {
+        "label": "LicK_Perm_Group",
+        "items": [
+            {
+                "v": "license_keys_view",
+                "l": "LicK_Perm_View",
+                "f": "License keys: view keys & licenses"
+            },
+            {
+                "v": "license_keys_manage",
+                "l": "LicK_Perm_Manage",
+                "f": "License keys: add/import, write off, issue, resend, settings"
+            },
+            {
+                "v": "license_keys_control",
+                "l": "LicK_Perm_Control",
+                "f": "Licenses: extend, suspend, revoke, reset activations"
+            },
+            {
+                "v": "license_keys_reveal",
+                "l": "LicK_Perm_Reveal",
+                "f": "License keys: reveal & export full keys"
+            }
+        ]
+    },
+    {
         "label": "StockAdjustement",
         "items": [
             {
@@ -185,7 +224,7 @@ export const PERMISSION_GROUPS = [
         "items": [
             {
                 "v": "damage_view",
-                "l": "damage_view",
+                "l": "Damages",
                 "f": "Damages"
             }
         ]
@@ -216,38 +255,43 @@ export const PERMISSION_GROUPS = [
         "items": [
             {
                 "v": "accounting_dashboard",
-                "l": "accounting_dashboard",
+                "l": "Perm_accounting_dashboard",
                 "f": "Accounting dashboard"
             },
             {
                 "v": "chart_of_accounts",
-                "l": "chart_of_accounts",
+                "l": "Perm_chart_of_accounts",
                 "f": "Chart of accounts"
             },
             {
                 "v": "journal_entries",
-                "l": "journal_entries",
+                "l": "Perm_journal_entries",
                 "f": "journal entries"
             },
             {
                 "v": "trial_balance",
-                "l": "trial_balance",
+                "l": "Perm_trial_balance",
                 "f": "Trial balance"
             },
             {
                 "v": "accounting_profit_loss",
-                "l": "accounting_profit_loss",
+                "l": "Perm_accounting_profit_loss",
                 "f": "Accounting profit & loss"
             },
             {
                 "v": "balance_sheet",
-                "l": "balance_sheet",
+                "l": "Perm_balance_sheet",
                 "f": "Balance sheet"
             },
             {
                 "v": "accounting_tax_report",
-                "l": "accounting_tax_report",
+                "l": "Perm_accounting_tax_report",
                 "f": "Accounting tax report"
+            },
+            {
+                "v": "accounting_reconciliation",
+                "l": "Perm_accounting_reconciliation",
+                "f": "Accounting reconciliation"
             },
             {
                 "v": "account",
@@ -255,7 +299,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "transfer_money",
-                "l": "transfer_money",
+                "l": "Perm_transfer_money",
                 "f": "Transfer money"
             },
             {
@@ -355,6 +399,26 @@ export const PERMISSION_GROUPS = [
                 "l": "pointofsales"
             },
             {
+                "v": "pos_offline_sales",
+                "l": "Perm_Offline_Sales",
+                "f": "Offline sales (review, retry, discard)"
+            },
+            {
+                "v": "pos_void_items",
+                "l": "Perm_Pos_Void_Items",
+                "f": "Remove POS items without approval (approve with PIN, voided items report)"
+            },
+            {
+                "v": "pos_terminals_manage",
+                "l": "Perm_Pos_Terminals_Manage",
+                "f": "POS devices: add, test, refund & void card payments"
+            },
+            {
+                "v": "pos_terminals_transactions",
+                "l": "Perm_Pos_Terminals_Transactions",
+                "f": "POS devices: view card transactions"
+            },
+            {
                 "v": "promotion",
                 "l": "Promotions",
                 "f": "Promotions"
@@ -379,7 +443,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "customer_display_screen_setup",
-                "l": "customer_display_screen_setup",
+                "l": "Perm_customer_display_screen_setup",
                 "f": "customer display screen setup"
             },
             {
@@ -634,6 +698,36 @@ export const PERMISSION_GROUPS = [
             {
                 "v": "pay_sale_return_due",
                 "l": "pay_all_sell_return_due_at_a_time"
+            },
+            {
+                "v": "customer_wallet_view",
+                "l": "CW_Perm_View",
+                "f": "Customer wallet: balances, ledger & withdrawals"
+            },
+            {
+                "v": "customer_wallet_manage",
+                "l": "CW_Perm_Manage",
+                "f": "Customer wallet: top-up, refund, adjust, freeze, settings, withdrawals"
+            },
+            {
+                "v": "gift_cards_manage",
+                "l": "CW_Perm_Gift_Cards",
+                "f": "Gift cards: issue, edit, redeem"
+            }
+        ]
+    },
+    {
+        "label": "Client_Portal",
+        "items": [
+            {
+                "v": "portal_accounts",
+                "l": "Portal_Perm_Accounts",
+                "f": "Portal dashboard, accounts & invitations"
+            },
+            {
+                "v": "portal_settings",
+                "l": "Portal_Perm_Settings",
+                "f": "Portal settings & languages"
             }
         ]
     },
@@ -667,6 +761,16 @@ export const PERMISSION_GROUPS = [
             {
                 "v": "pay_purchase_return_due",
                 "l": "pay_all_purchase_return_due_at_a_time"
+            },
+            {
+                "v": "supplier_wallet_view",
+                "l": "SW_Perm_View",
+                "f": "Supplier wallet: balances & ledger"
+            },
+            {
+                "v": "supplier_wallet_manage",
+                "l": "SW_Perm_Manage",
+                "f": "Supplier wallet: top-up, refund, adjust, freeze"
             }
         ]
     },
@@ -706,7 +810,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "report_attendance_summary",
-                "l": "report_attendance_summary",
+                "l": "Perm_report_attendance_summary",
                 "f": "Report attendance summary"
             },
             {
@@ -716,12 +820,12 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "report_sales_by_category",
-                "l": "report_sales_by_category",
+                "l": "Sales_by_Category",
                 "f": "Sales by Category"
             },
             {
                 "v": "report_sales_by_brand",
-                "l": "report_sales_by_brand",
+                "l": "Sales_by_Brand",
                 "f": "Sales by Brand"
             },
             {
@@ -731,7 +835,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "expenses_report",
-                "l": "expenses_report",
+                "l": "Page_Expenses_Report",
                 "f": "Expenses Report"
             },
             {
@@ -815,12 +919,12 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "report_warranty",
-                "l": "report_warranty",
+                "l": "Warranty_Guarantee_Report",
                 "f": "Warranty / Guarantee Report"
             },
             {
                 "v": "zeroSalesProducts",
-                "l": "zeroSalesProducts",
+                "l": "Zero_Sales_Products_Report",
                 "f": "zero Sales Products Report"
             },
             {
@@ -859,6 +963,16 @@ export const PERMISSION_GROUPS = [
                 "f": "Discount Summary Report"
             },
             {
+                "v": "due_collection_report",
+                "l": "due_collection_report",
+                "f": "Due Collection Report"
+            },
+            {
+                "v": "pos_sales_report",
+                "l": "pos_sales_report",
+                "f": "POS Sales Report"
+            },
+            {
                 "v": "tax_summary_report",
                 "l": "tax_summary_report",
                 "f": "Tax Summary Report"
@@ -891,7 +1005,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "report_error_logs",
-                "l": "report_error_logs",
+                "l": "Perm_report_error_logs",
                 "f": "Report error logs"
             },
             {
@@ -910,7 +1024,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "serial_numbers_report",
-                "l": "serial_numbers_report",
+                "l": "Perm_serial_numbers_report",
                 "f": "Serial Numbers Report"
             }
         ]
@@ -981,6 +1095,26 @@ export const PERMISSION_GROUPS = [
                 "v": "trays",
                 "l": "trays",
                 "f": "Trays"
+            },
+            {
+                "v": "bookings_settings",
+                "l": "Bkm_Perm_Settings",
+                "f": "Booking settings"
+            },
+            {
+                "v": "bookings_services",
+                "l": "Bkm_Perm_Services",
+                "f": "Booking services: durations, staff, website"
+            },
+            {
+                "v": "bookings_staff",
+                "l": "Bkm_Perm_Staff",
+                "f": "Bookable staff and working hours"
+            },
+            {
+                "v": "bookings_reports",
+                "l": "Bkm_Perm_Reports",
+                "f": "Booking dashboard and reports"
             }
         ]
     },
@@ -1046,7 +1180,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "school_academics",
-                "l": "Academics",
+                "l": "Perm_school_academics",
                 "f": "Academic setup"
             },
             {
@@ -1061,7 +1195,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "school_exams",
-                "l": "Exams",
+                "l": "Perm_school_exams",
                 "f": "Exams & results"
             },
             {
@@ -1132,7 +1266,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "hms_wards",
-                "l": "Wards",
+                "l": "Hm_Wards_And_Beds",
                 "f": "Wards & Beds"
             },
             {
@@ -1179,7 +1313,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "fleet_fuel",
-                "l": "Fuel_Logs",
+                "l": "Fl_Fuel_Logs",
                 "f": "Fuel Logs"
             },
             {
@@ -1340,53 +1474,73 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "quickbooks_settings",
-                "l": "quickbooks_settings",
+                "l": "Perm_quickbooks_settings",
                 "f": "Quickbooks settings"
             },
             {
                 "v": "zapier_settings",
-                "l": "Zapier",
+                "l": "Perm_zapier_settings",
                 "f": "Zapier integration"
             },
             {
+                "v": "api_keys",
+                "l": "Perm_Api_Keys",
+                "f": "REST API keys (Settings > API)"
+            },
+            {
+                "v": "custom_domains",
+                "l": "Perm_custom_domains",
+                "f": "Custom domain (Settings > Custom Domain)"
+            },
+            {
                 "v": "slack_settings",
-                "l": "Slack",
+                "l": "Perm_slack_settings",
                 "f": "Slack integration"
             },
             {
                 "v": "telegram_settings",
-                "l": "Telegram",
+                "l": "Perm_telegram_settings",
                 "f": "Telegram integration"
             },
             {
                 "v": "salla_settings",
-                "l": "Salla",
+                "l": "Perm_salla_settings",
                 "f": "Salla integration"
             },
             {
                 "v": "xero_settings",
-                "l": "Xero",
+                "l": "Perm_xero_settings",
                 "f": "Xero integration"
             },
             {
                 "v": "prestashop_settings",
-                "l": "PrestaShop",
+                "l": "Perm_prestashop_settings",
                 "f": "PrestaShop integration"
             },
             {
+                "v": "opencart_settings",
+                "l": "Perm_opencart_settings",
+                "f": "OpenCart integration"
+            },
+            {
                 "v": "google_sheets_settings",
-                "l": "Google Sheets",
+                "l": "Perm_google_sheets_settings",
                 "f": "Google Sheets integration"
             },
             {
                 "v": "mailchimp_settings",
-                "l": "Mailchimp",
+                "l": "Perm_mailchimp_settings",
                 "f": "Mailchimp integration"
             },
             {
                 "v": "jumia_settings",
-                "l": "Jumia",
+                "l": "Perm_jumia_settings",
                 "f": "Jumia integration"
+            },
+            {
+                "v": "printful_settings",
+                "l": "Perm_printful_settings",
+                "f": "Printful integration"
             },
             {
                 "v": "zatca_settings",
@@ -1439,13 +1593,27 @@ export const PERMISSION_GROUPS = [
                 "l": "System_Health"
             },
             {
+                "v": "audit_log",
+                "l": "Audit_Log"
+            },
+            {
+                "v": "ai_assistant",
+                "l": "AI_Assistant",
+                "f": "AI Assistant (chat & dashboard insights)"
+            },
+            {
+                "v": "ai_settings",
+                "l": "AI_Settings",
+                "f": "AI Assistant settings (API key, model)"
+            },
+            {
                 "v": "appearance_settings",
                 "l": "appearance_settings",
                 "f": "Dynamic Appearance"
             },
             {
                 "v": "translations_settings",
-                "l": "translations_settings",
+                "l": "Translations",
                 "f": "Translations"
             },
             {
@@ -1457,6 +1625,16 @@ export const PERMISSION_GROUPS = [
                 "v": "fbr_settings",
                 "l": "fbr_settings",
                 "f": "FBR Digital Invoicing"
+            },
+            {
+                "v": "agt_settings",
+                "l": "agt_settings",
+                "f": "AGT E-Invoicing (Angola)"
+            },
+            {
+                "v": "dgi_settings",
+                "l": "dgi_settings",
+                "f": "DGI Facture Normalisée (DR Congo)"
             }
         ]
     },
@@ -1466,17 +1644,17 @@ export const PERMISSION_GROUPS = [
         "items": [
             {
                 "v": "mrp_boms",
-                "l": "Bills of materials",
+                "l": "Perm_mrp_boms",
                 "f": "Bills of materials and work centres"
             },
             {
                 "v": "mrp_production",
-                "l": "Production orders",
+                "l": "Perm_mrp_production",
                 "f": "Production orders and shop floor"
             },
             {
                 "v": "mrp_quality",
-                "l": "Quality control",
+                "l": "Perm_mrp_quality",
                 "f": "Quality control"
             },
             {
@@ -1502,7 +1680,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "shopify_sync",
-                "l": "Run syncs",
+                "l": "Perm_shopify_sync",
                 "f": "Run syncs"
             },
             {
@@ -1533,7 +1711,7 @@ export const PERMISSION_GROUPS = [
             },
             {
                 "v": "whatsapp_logs",
-                "l": "Message Logs",
+                "l": "Perm_whatsapp_logs",
                 "f": "WhatsApp message logs"
             }
         ]
@@ -1544,7 +1722,7 @@ export const PERMISSION_GROUPS = [
         "items": [
             {
                 "v": "support",
-                "l": "Support Tickets",
+                "l": "Perm_support",
                 "f": "Manage support tickets"
             }
         ]
@@ -1555,38 +1733,118 @@ export const PERMISSION_GROUPS = [
         "items": [
             {
                 "v": "Store_settings_view",
-                "l": "Store_settings_view",
+                "l": "Page_Store_Settings",
                 "f": "Store Settings"
             },
             {
                 "v": "ewallet",
-                "l": "ewallet",
+                "l": "E_Wallet",
                 "f": "E-Wallet"
             },
             {
                 "v": "Orders_view",
-                "l": "Orders_view",
+                "l": "Orders",
                 "f": "Orders"
             },
             {
                 "v": "Collections_view",
-                "l": "Collections_view",
+                "l": "Collections",
                 "f": "Collections"
             },
             {
                 "v": "Banners_view",
-                "l": "Banners_view",
+                "l": "Banners",
                 "f": "Banners"
             },
             {
                 "v": "Subscribers_view",
-                "l": "Subscribers_view",
+                "l": "Subscribers",
                 "f": "Subscribers"
             },
             {
                 "v": "Messages_view",
-                "l": "Messages_view",
+                "l": "Messages",
                 "f": "Messages"
+            },
+            {
+                "v": "store_visit",
+                "l": "Visit_Online_Store",
+                "f": "Visit Online Store"
+            },
+            {
+                "v": "store_invite_codes",
+                "l": "Invite_Codes",
+                "f": "Invite Codes"
+            },
+            {
+                "v": "store_pending_customers",
+                "l": "Pending_Customers",
+                "f": "Pending Customers"
+            },
+            {
+                "v": "store_customers_without_login",
+                "l": "Customers_without_Login",
+                "f": "Customers without Login"
+            },
+            {
+                "v": "store_customers_with_login",
+                "l": "Customers_with_Login",
+                "f": "Customers with Login"
+            },
+            {
+                "v": "store_shipping_methods",
+                "l": "Shipping_Methods",
+                "f": "Shipping Methods"
+            },
+            {
+                "v": "store_tax_rates",
+                "l": "Tax_Rates",
+                "f": "Tax Rates"
+            },
+            {
+                "v": "store_coupons",
+                "l": "Coupons",
+                "f": "Coupons"
+            },
+            {
+                "v": "store_flash_sales",
+                "l": "Flash_Sales",
+                "f": "Flash Sales"
+            },
+            {
+                "v": "store_reviews",
+                "l": "Product_Reviews",
+                "f": "Product Reviews"
+            },
+            {
+                "v": "store_popups",
+                "l": "Popup_Messages",
+                "f": "Popup Messages"
+            },
+            {
+                "v": "store_quote_requests",
+                "l": "Quote_Requests",
+                "f": "Quote Requests"
+            },
+            {
+                "v": "store_returns",
+                "l": "Returns_Requests",
+                "f": "Returns Requests"
+            },
+            {
+                "v": "store_pages",
+                "l": "Pages",
+                "f": "Pages"
+            },
+            {
+                "v": "store_menus",
+                "l": "Menus",
+                "f": "Menus"
+            },
+            {
+                "v": "store_vehicle_leads",
+                "l": "Vehicle_Leads",
+                "f": "Vehicle Leads"
             }
         ]
     },
@@ -1595,7 +1853,7 @@ export const PERMISSION_GROUPS = [
         "items": [
             {
                 "v": "billing_view",
-                "l": "billing_view",
+                "l": "Billing",
                 "f": "Billing"
             }
         ]
@@ -1622,6 +1880,363 @@ export const PERMISSION_GROUPS = [
                 "v": "protocol_manage",
                 "l": "Pt_Perm_Manage",
                 "f": "Manage desks & all requests"
+            }
+        ]
+    },
+    {
+        "label": "Cr_Couriers",
+        "items": [
+            {
+                "v": "courier_settings",
+                "l": "Cr_Perm_Settings",
+                "f": "Manage courier accounts & settings"
+            },
+            {
+                "v": "courier_book",
+                "l": "Cr_Perm_Book",
+                "f": "Book, cancel & print courier shipments"
+            },
+            {
+                "v": "courier_shipments",
+                "l": "Cr_Perm_Shipments",
+                "f": "View courier shipments, COD & returns"
+            },
+            {
+                "v": "courier_reports",
+                "l": "Cr_Perm_Reports",
+                "f": "Courier report: delivery & return rates, COD"
+            }
+        ]
+    },
+    {
+        "label": "Perm_Group_Restaurant_Management",
+        "items": [
+            {
+                "v": "rst_dashboard",
+                "l": "Rst_Perm_Dashboard",
+                "f": "Restaurant dashboard"
+            },
+            {
+                "v": "rst_floor",
+                "l": "Rst_Perm_Floor",
+                "f": "Floor plan: see tables and open orders"
+            },
+            {
+                "v": "rst_orders_take",
+                "l": "Rst_Perm_Orders_Take",
+                "f": "Take orders and send them to the kitchen"
+            },
+            {
+                "v": "rst_orders_void",
+                "l": "Rst_Perm_Orders_Void",
+                "f": "Void items and cancel orders"
+            },
+            {
+                "v": "rst_discounts",
+                "l": "Rst_Perm_Discounts",
+                "f": "Give discounts on bills"
+            },
+            {
+                "v": "rst_billing",
+                "l": "Rst_Perm_Billing",
+                "f": "Print bills and take payments"
+            },
+            {
+                "v": "rst_menu",
+                "l": "Rst_Perm_Menu",
+                "f": "Menu: add-ons, dish details, sold-out"
+            },
+            {
+                "v": "rst_reservations",
+                "l": "Rst_Perm_Reservations",
+                "f": "Table reservations"
+            },
+            {
+                "v": "rst_reports",
+                "l": "Rst_Perm_Reports",
+                "f": "Restaurant reports"
+            },
+            {
+                "v": "rst_setup",
+                "l": "Rst_Perm_Setup",
+                "f": "Floor setup: areas, tables, stations"
+            },
+            {
+                "v": "rst_settings",
+                "l": "Rst_Perm_Settings",
+                "f": "Restaurant settings"
+            },
+            {
+                "v": "rst_kitchen",
+                "l": "Rst_Perm_Kitchen",
+                "f": "Kitchen display: prepare, bump and recall tickets"
+            }
+        ]
+    },
+    {
+        "label": "Perm_Group_Rental_Management",
+        "items": [
+            {
+                "v": "rnt_dashboard",
+                "l": "Dashboard",
+                "f": "Dashboard"
+            },
+            {
+                "v": "rnt_items_view",
+                "l": "View"
+            },
+            {
+                "v": "rnt_items_add",
+                "l": "Add"
+            },
+            {
+                "v": "rnt_items_edit",
+                "l": "Edit"
+            },
+            {
+                "v": "rnt_items_delete",
+                "l": "Del"
+            },
+            {
+                "v": "rnt_customers_view",
+                "l": "Rental_Customers_View",
+                "f": "Customers: view"
+            },
+            {
+                "v": "rnt_customers_add",
+                "l": "Rental_Customers_Add",
+                "f": "Customers: add"
+            },
+            {
+                "v": "rnt_customers_edit",
+                "l": "Rental_Customers_Edit",
+                "f": "Customers: edit"
+            },
+            {
+                "v": "rnt_customers_delete",
+                "l": "Rental_Customers_Delete",
+                "f": "Customers: delete"
+            },
+            {
+                "v": "rnt_contracts_view",
+                "l": "Rental_Contracts_View",
+                "f": "Contracts: view"
+            },
+            {
+                "v": "rnt_contracts_add",
+                "l": "Rental_Contracts_Add",
+                "f": "Contracts: add"
+            },
+            {
+                "v": "rnt_contracts_edit",
+                "l": "Rental_Contracts_Edit",
+                "f": "Contracts: edit & manage"
+            },
+            {
+                "v": "rnt_contracts_delete",
+                "l": "Rental_Contracts_Delete",
+                "f": "Contracts: delete"
+            },
+            {
+                "v": "rnt_availability",
+                "l": "Rental_Availability_Perm",
+                "f": "Availability timeline & calendar"
+            },
+            {
+                "v": "rnt_reservations_view",
+                "l": "Rental_Reservations_View",
+                "f": "Reservations: view"
+            },
+            {
+                "v": "rnt_reservations_add",
+                "l": "Rental_Reservations_Add",
+                "f": "Reservations: add"
+            },
+            {
+                "v": "rnt_reservations_edit",
+                "l": "Rental_Reservations_Edit",
+                "f": "Reservations: edit & manage"
+            },
+            {
+                "v": "rnt_reservations_delete",
+                "l": "Rental_Reservations_Delete",
+                "f": "Reservations: delete"
+            },
+            {
+                "v": "rnt_billing_view",
+                "l": "Rental_Billing_View",
+                "f": "Invoices & payments: view"
+            },
+            {
+                "v": "rnt_payments_add",
+                "l": "Rental_Payments_Add",
+                "f": "Record payments"
+            },
+            {
+                "v": "rnt_billing_manage",
+                "l": "Rental_Billing_Manage",
+                "f": "Charges, voids & late-fee waivers"
+            },
+            {
+                "v": "rnt_payments_delete",
+                "l": "Rental_Payments_Delete",
+                "f": "Delete payments"
+            },
+            {
+                "v": "rnt_handover",
+                "l": "Rental_Handover_Perm",
+                "f": "Hand over & return items"
+            },
+            {
+                "v": "rnt_deposits",
+                "l": "Rental_Deposits_Perm",
+                "f": "Manage deposits"
+            },
+            {
+                "v": "rnt_maintenance",
+                "l": "Rental_Maintenance_Perm",
+                "f": "Maintenance jobs & schedules"
+            },
+            {
+                "v": "rnt_expenses",
+                "l": "Rental_Expenses_Perm",
+                "f": "Rental expenses"
+            },
+            {
+                "v": "rnt_reports",
+                "l": "Rental_Reports_Perm",
+                "f": "Reports & statements"
+            },
+            {
+                "v": "rnt_reminders",
+                "l": "Rental_Reminders_Perm",
+                "f": "Send reminders"
+            },
+            {
+                "v": "rnt_categories",
+                "l": "Rental_Categories",
+                "f": "Rental Categories"
+            },
+            {
+                "v": "rnt_settings",
+                "l": "Rental_Settings",
+                "f": "Rental Settings"
+            }
+        ]
+    },
+    {
+        "label": "CRM",
+        "raw": true,
+        "items": [
+            {
+                "v": "crm_dashboard",
+                "l": "Dashboard",
+                "f": "Dashboard"
+            },
+            {
+                "v": "crm_leads_view",
+                "l": "Crm_Perm_Leads_View",
+                "f": "View leads"
+            },
+            {
+                "v": "crm_leads_add",
+                "l": "Crm_Perm_Leads_Add",
+                "f": "Add leads"
+            },
+            {
+                "v": "crm_leads_edit",
+                "l": "Crm_Perm_Leads_Edit",
+                "f": "Edit leads"
+            },
+            {
+                "v": "crm_leads_delete",
+                "l": "Crm_Perm_Leads_Delete",
+                "f": "Delete leads"
+            },
+            {
+                "v": "crm_deals_view",
+                "l": "Crm_Perm_Deals_View",
+                "f": "View deals"
+            },
+            {
+                "v": "crm_deals_add",
+                "l": "Crm_Perm_Deals_Add",
+                "f": "Add deals"
+            },
+            {
+                "v": "crm_deals_edit",
+                "l": "Crm_Perm_Deals_Edit",
+                "f": "Edit & move deals"
+            },
+            {
+                "v": "crm_deals_delete",
+                "l": "Crm_Perm_Deals_Delete",
+                "f": "Delete deals"
+            },
+            {
+                "v": "crm_activities_view",
+                "l": "Crm_Perm_Activities_View",
+                "f": "View activities & tasks"
+            },
+            {
+                "v": "crm_activities_add",
+                "l": "Crm_Perm_Activities_Add",
+                "f": "Log & plan activities"
+            },
+            {
+                "v": "crm_activities_edit",
+                "l": "Crm_Perm_Activities_Edit",
+                "f": "Edit & complete activities"
+            },
+            {
+                "v": "crm_activities_delete",
+                "l": "Crm_Perm_Activities_Delete",
+                "f": "Delete activities"
+            },
+            {
+                "v": "crm_customers_view",
+                "l": "Crm_Perm_Customers_View",
+                "f": "Customers & Customer 360"
+            },
+            {
+                "v": "crm_contacts_manage",
+                "l": "Crm_Perm_Contacts_Manage",
+                "f": "Manage contact people"
+            },
+            {
+                "v": "crm_messages",
+                "l": "Crm_Perm_Messages",
+                "f": "Conversations: email, SMS & WhatsApp"
+            },
+            {
+                "v": "crm_web_forms",
+                "l": "Crm_Perm_Web_Forms",
+                "f": "Web forms (lead capture)"
+            },
+            {
+                "v": "crm_reports",
+                "l": "Crm_Perm_Reports",
+                "f": "Reports"
+            },
+            {
+                "v": "crm_targets",
+                "l": "Crm_Perm_Targets",
+                "f": "Set sales targets"
+            },
+            {
+                "v": "crm_view_all",
+                "l": "Crm_Perm_View_All",
+                "f": "See every rep's records"
+            },
+            {
+                "v": "crm_import_export",
+                "l": "Crm_Perm_Import_Export",
+                "f": "Import & export"
+            },
+            {
+                "v": "crm_settings",
+                "l": "Crm_Settings",
+                "f": "CRM Settings"
             }
         ]
     }

@@ -11,7 +11,7 @@ class TaxRatesController extends Controller
 {
     public function index(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_tax_rates', StoreSetting::class);
 
         $query = TaxRate::orderBy('country')->orderBy('state');
 
@@ -43,7 +43,7 @@ class TaxRatesController extends Controller
 
     public function store(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_tax_rates', StoreSetting::class);
 
         $data = $this->validateData($request);
         $rate = TaxRate::create($data);
@@ -53,7 +53,7 @@ class TaxRatesController extends Controller
 
     public function update(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_tax_rates', StoreSetting::class);
 
         $rate = TaxRate::findOrFail($id);
         $rate->update($this->validateData($request));
@@ -63,7 +63,7 @@ class TaxRatesController extends Controller
 
     public function destroy(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_tax_rates', StoreSetting::class);
 
         TaxRate::findOrFail($id)->delete();
 

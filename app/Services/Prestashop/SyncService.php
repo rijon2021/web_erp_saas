@@ -12,6 +12,7 @@ use App\Models\Sale;
 use App\Models\SaleDetail;
 use App\Models\Warehouse;
 use App\Models\product_warehouse;
+use App\Services\ChannelSales;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -27,7 +28,10 @@ use Illuminate\Support\Str;
  *  - PrestaShop combinations (variants) are not pushed and are imported as
  *    their parent product; order rows still match variants by reference;
  *  - PrestaShop has no webhooks, so orders come in through the pull button
- *    (idempotent — already-imported orders are skipped).
+ *    (idempotent — already-imported orders are skipped);
+ *  - PrestaShop takes stock when an order is placed and a pull never revisits
+ *    an order, so every imported order is a completed sale, which is what
+ *    lets deleting or editing it put the stock back.
  */
 class SyncService
 {
@@ -383,6 +387,7 @@ class SyncService
 
         $remotes = (array) ($res->json()['orders'] ?? []);
         $imported = 0;
+        $updated = 0;
         $skipped = 0;
         $failed = 0;
         $errors = [];
@@ -395,7 +400,13 @@ class SyncService
             }
             try {
                 $result = $this->importOrderPayload($order, $userId, $warehouseId);
-                $result === 'imported' ? $imported++ : $skipped++;
+                if ($result === 'imported') {
+                    $imported++;
+                } elseif (in_array($result, ['updated', 'reversed', 'review'], true)) {
+                    $updated++;
+                } else {
+                    $skipped++;
+                }
             } catch (\Throwable $e) {
                 $failed++;
                 $errors[] = ['prestashop_order_id' => $remoteOrderId, 'error' => $e->getMessage()];
@@ -404,13 +415,14 @@ class SyncService
 
         $hasMore = count($remotes) === $perPage;
 
-        $this->log('orders.pull', $failed ? 'warning' : 'info', 'Orders pull page '.$page.": {$imported} imported, {$skipped} skipped, {$failed} failed", [
+        $this->log('orders.pull', $failed ? 'warning' : 'info', 'Orders pull page '.$page.": {$imported} imported, {$updated} updated, {$skipped} skipped, {$failed} failed", [
             'errors' => array_slice($errors, 0, 10),
         ]);
 
         return [
             'ok' => true,
             'imported' => $imported,
+            'updated' => $updated,
             'skipped' => $skipped,
             'failed' => $failed,
             'errors' => $errors,
@@ -419,17 +431,37 @@ class SyncService
         ];
     }
 
-    /** @return string 'imported' | 'skipped' */
+    /** Default PrestaShop order states that undo the order: 6 canceled, 7 refunded, 8 payment error. */
+    private const CANCEL_STATES = [6, 7, 8];
+
+    /** PrestaShop's stock "Delivered" order state (ChannelSales::markDelivered). */
+    private const DELIVERED_STATES = [5];
+
+    /** @return string 'imported' | 'updated' | 'reversed' | 'review' | 'skipped' */
     public function importOrderPayload(array $order, int $userId, ?int $warehouseId): string
     {
         $remoteOrderId = (int) ($order['id'] ?? 0);
-        if (! $remoteOrderId || PrestashopMapping::localId(PrestashopMapping::TYPE_ORDER, $remoteOrderId)) {
+        if (! $remoteOrderId) {
             return 'skipped';
         }
 
-        // Order states: 6 = canceled, 7 = refunded, 8 = payment error.
         $stateId = (int) ($order['current_state'] ?? 0);
-        if (in_array($stateId, [6, 7, 8], true)) {
+
+        $saleId = PrestashopMapping::localId(PrestashopMapping::TYPE_ORDER, $remoteOrderId);
+        if ($saleId) {
+            $sale = Sale::whereNull('deleted_at')->find($saleId);
+            if ($sale) {
+                return $this->revisit($sale, $order, $stateId);
+            }
+
+            // The sale was deleted here on purpose while the shop order lives
+            // on. Keep the link and leave the order alone: importing it again
+            // as new would take the stock a second time and book the money
+            // twice. (A sale reversed by this importer drops its link itself.)
+            return 'skipped';
+        }
+
+        if (in_array($stateId, self::CANCEL_STATES, true)) {
             return 'skipped';
         }
 
@@ -467,8 +499,7 @@ class SyncService
         $shipping = (float) ($order['total_shipping_tax_incl'] ?? ($order['total_shipping'] ?? 0));
         $discount = (float) ($order['total_discounts_tax_incl'] ?? ($order['total_discounts'] ?? 0));
         $tax = max(0.0, (float) ($order['total_paid_tax_incl'] ?? 0) - (float) ($order['total_paid_tax_excl'] ?? 0));
-        $paidReal = (float) ($order['total_paid_real'] ?? 0);
-        $paymentStatut = $paidReal >= $grandTotal && $grandTotal > 0 ? 'paid' : ($paidReal > 0 ? 'partial' : 'unpaid');
+        $paid = round(min((float) ($order['total_paid_real'] ?? 0), $grandTotal), 2);
 
         $createdAt = now();
         try {
@@ -480,11 +511,10 @@ class SyncService
         }
 
         $reference = trim((string) ($order['reference'] ?? '')) ?: (string) $remoteOrderId;
-        $orderStatut = $this->mapOrderState($stateId);
 
         DB::transaction(function () use (
             $order, $remoteOrderId, $reference, $createdAt, $clientId, $warehouseId, $userId,
-            $tax, $discount, $shipping, $grandTotal, $paidReal, $paymentStatut, $orderStatut, $resolved, $unresolved
+            $tax, $discount, $shipping, $grandTotal, $paid, $resolved, $unresolved, $stateId
         ) {
             $sale = Sale::create([
                 'date' => $createdAt->format('Y-m-d'),
@@ -499,9 +529,10 @@ class SyncService
                 'discount' => $discount,
                 'shipping' => $shipping,
                 'GrandTotal' => $grandTotal,
-                'paid_amount' => $paymentStatut === 'paid' ? $grandTotal : $paidReal,
-                'payment_statut' => $paymentStatut,
-                'statut' => $orderStatut,
+                // Money is recorded below, which also sets these figures.
+                'paid_amount' => 0,
+                'payment_statut' => Sale::paymentStatusFor($grandTotal, 0),
+                'statut' => 'completed',
                 'notes' => 'Imported from PrestaShop — order '.$reference
                     .(empty($unresolved) ? '' : ' — unmatched items: '.json_encode($unresolved, JSON_UNESCAPED_UNICODE)),
             ]);
@@ -516,6 +547,7 @@ class SyncService
                     'sale_id' => $sale->id,
                     'product_id' => $entry['product_id'],
                     'product_variant_id' => $entry['variant_id'],
+                    'sale_unit_id' => Product::whereKey($entry['product_id'])->value('unit_sale_id'),
                     'quantity' => $qty,
                     'price' => $price,
                     'TaxNet' => 0,
@@ -525,20 +557,16 @@ class SyncService
                     'total' => round($price * $qty, 2),
                 ]);
 
-                // Decrement stock in the receiving warehouse
-                $stockQuery = product_warehouse::where('product_id', $entry['product_id'])
-                    ->where('warehouse_id', $warehouseId)
-                    ->whereNull('deleted_at');
-                if ($entry['variant_id']) {
-                    $stockQuery->where('product_variant_id', $entry['variant_id']);
-                } else {
-                    $stockQuery->whereNull('product_variant_id');
-                }
-                $stock = $stockQuery->first();
-                if ($stock) {
-                    $stock->qte = (float) $stock->qte - $qty;
-                    $stock->save();
-                }
+            }
+
+            ChannelSales::moveStock($sale, -1);
+
+            if ($paid > 0) {
+                ChannelSales::recordPayment($sale, $paid, 'PS-'.$reference, trim((string) ($order['payment'] ?? '')), 'PrestaShop order '.$reference, $createdAt->format('Y-m-d'));
+            }
+
+            if (in_array($stateId, self::DELIVERED_STATES, true)) {
+                ChannelSales::markDelivered($sale);
             }
 
             PrestashopMapping::put(PrestashopMapping::TYPE_ORDER, (int) $sale->id, $remoteOrderId, [
@@ -547,6 +575,50 @@ class SyncService
         }, 3);
 
         return 'imported';
+    }
+
+    /**
+     * An order seen again on a later pull: cancelled in the shop reverses the
+     * sale, money that arrived since is recorded. Nothing else changes.
+     */
+    private function revisit(Sale $sale, array $order, int $stateId): string
+    {
+        $reference = trim((string) ($order['reference'] ?? '')) ?: (string) ($order['id'] ?? '');
+
+        if (in_array($stateId, self::CANCEL_STATES, true)) {
+            if (! ChannelSales::reverse($sale)) {
+                $this->log('orders.review', 'warning', 'Sale '.$sale->Ref.' needs review: cancelled in PrestaShop after delivery or return', [
+                    'sale_id' => $sale->id,
+                    'prestashop_order_id' => $order['id'] ?? null,
+                ]);
+
+                return 'review';
+            }
+
+            PrestashopMapping::where('entity_type', PrestashopMapping::TYPE_ORDER)->where('local_id', $sale->id)->delete();
+            $this->log('orders.reverse', 'info', 'Sale '.$sale->Ref.' reversed: the PrestaShop order was cancelled', [
+                'sale_id' => $sale->id,
+                'prestashop_order_id' => $order['id'] ?? null,
+            ]);
+
+            return 'reversed';
+        }
+
+        $changed = false;
+        if (in_array($stateId, self::DELIVERED_STATES, true) && $sale->shipping_status !== 'delivered') {
+            ChannelSales::markDelivered($sale);
+            $changed = true;
+        }
+
+        $paid = round(min((float) ($order['total_paid_real'] ?? 0), (float) $sale->GrandTotal), 2);
+        $newMoney = round(min($paid - (float) $sale->paid_amount, ChannelSales::due($sale)), 2);
+        if ($newMoney > 0) {
+            ChannelSales::recordPayment($sale, $newMoney, 'PS-'.$reference, trim((string) ($order['payment'] ?? '')), 'PrestaShop order '.$reference);
+
+            return 'updated';
+        }
+
+        return $changed ? 'updated' : 'skipped';
     }
 
     /** @return array{product_id:int, variant_id:?int}|null */
@@ -578,17 +650,6 @@ class SyncService
         }
 
         return null;
-    }
-
-    /** Default PrestaShop order-state ids -> Stocky sale statuses. */
-    private function mapOrderState(int $stateId): string
-    {
-        // 5 = delivered; 4 = shipped, 3 = processing in progress.
-        return match ($stateId) {
-            5 => 'completed',
-            3, 4 => 'pending',
-            default => 'ordered',
-        };
     }
 
     // -----------------------------------------------------------------

@@ -189,7 +189,7 @@ class WooCommerceSync extends Command
      */
     private function processQueueUntilFinished(string $queue, string $token, string $label, int $maxWaitSeconds): int
     {
-        $timeout = (int) env('QUEUE_WORKER_TIMEOUT', 1200);
+        $timeout = (int) config('queue.worker_timeout');
         $timeout = max(60, min(3600, $timeout));
 
         $deadline = time() + $maxWaitSeconds;

@@ -31,10 +31,10 @@ class CentralForgotPasswordController extends Controller
 
         $user = CentralUser::where('email', $request->email)->first();
 
+        // Same answer whether or not the address exists: the form must not
+        // reveal which super-admin e-mails are valid.
         if (! $user) {
-            return back()->withErrors([
-                'email' => 'No account found with that email address.',
-            ])->withInput();
+            return back()->with('status', 'If an account exists for that e-mail address, we\'ve sent a password reset link to it.');
         }
 
         // Delete any existing tokens for this email
@@ -59,7 +59,7 @@ class CentralForgotPasswordController extends Controller
                 ->html($this->resetEmailHtml($user->name ?? 'Admin', $resetUrl));
         });
 
-        return back()->with('status', 'We\'ve sent a password reset link to your email address.');
+        return back()->with('status', 'If an account exists for that e-mail address, we\'ve sent a password reset link to it.');
     }
 
     /**
@@ -81,7 +81,8 @@ class CentralForgotPasswordController extends Controller
         $request->validate([
             'token'    => ['required', 'string'],
             'email'    => ['required', 'email'],
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            // Same password policy as staff accounts (installer, user forms, resets).
+            'password' => ['required', 'string', 'confirmed', \Illuminate\Validation\Rules\Password::min(8)->mixedCase()->numbers()->symbols()],
         ]);
 
         $record = DB::connection('central')
@@ -110,12 +111,15 @@ class CentralForgotPasswordController extends Controller
         $user = CentralUser::where('email', $request->email)->first();
 
         if (! $user) {
-            return back()->withErrors(['email' => 'No account found with that email address.'])->withInput();
+            return back()->withErrors(['email' => 'Invalid reset token.'])->withInput();
         }
 
-        $user->update([
+        // New password + new remember token: "remember me" logins made with the
+        // old password stop working.
+        $user->forceFill([
             'password' => Hash::make($request->password),
-        ]);
+            'remember_token' => Str::random(60),
+        ])->save();
 
         // Clean up used token
         DB::connection('central')

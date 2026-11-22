@@ -14,7 +14,7 @@
           <div class="filter-label">{{ $t('Question') }}</div>
           <a-select
             v-model:value="selectedQuestionId" :placeholder="$t('Select_a_question')"
-            :options="questions.map(q => ({ label: q.title, value: q.id }))"
+            :options="questions.map(q => ({ label: questionTitle(q), value: q.id }))"
             show-search option-filter-prop="label" style="width: 100%"
           />
         </a-col>
@@ -65,15 +65,15 @@
 
       <!-- AI insights -->
       <a-alert
-        v-if="reportResult.insights"
+        v-if="insights"
         type="info" show-icon style="margin-bottom: 16px"
         :message="$t('AI_Analysis_And_Insights')"
       >
         <template #description>
-          <p style="margin-bottom: 8px">{{ reportResult.insights }}</p>
+          <p style="margin-bottom: 8px">{{ insights }}</p>
           <template v-if="aiSuggestions.length">
             <strong style="font-size: 12px">{{ $t('Key_Recommendations') }}:</strong>
-            <ul style="margin: 4px 0 0; padding-left: 18px; font-size: 12px">
+            <ul style="margin: 4px 0 0; padding-inline-start: 18px; font-size: 12px">
               <li v-for="(s, i) in aiSuggestions" :key="i">{{ s }}</li>
             </ul>
           </template>
@@ -84,10 +84,10 @@
       <a-card size="small" style="margin-bottom: 16px">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px">
           <div>
-            <div style="font-size: 16px; font-weight: 600">{{ reportResult.question.title }}</div>
+            <div style="font-size: 16px; font-weight: 600">{{ questionTitle(reportResult.question) }}</div>
             <div style="font-size: 12px; color: rgba(var(--ink-rgb), 0.45)">{{ questionUi.subtitle }}</div>
           </div>
-          <a-space>
+          <a-space v-if="canExport">
             <a-button size="small" @click="exportToPDF(reportKind)">
               <template #icon><FilePdfOutlined /></template>
               {{ $t('PDF') }}
@@ -164,13 +164,16 @@
                 <a-table-summary-cell :index="2" align="right">
                   <b style="color: #3f8600">{{ money(productTotals.revenue) }}</b>
                 </a-table-summary-cell>
-                <a-table-summary-cell :index="3" align="right">
-                  <b style="color: #cf1322">{{ money(productTotals.cost) }}</b>
-                </a-table-summary-cell>
-                <a-table-summary-cell :index="4" align="right">
-                  <b style="color: #1677ff">{{ money(productTotals.profit) }}</b>
-                </a-table-summary-cell>
-                <a-table-summary-cell :index="5" />
+                <!-- Cost / Profit / Margin columns exist only for canSeeCost -->
+                <template v-if="auth.canSeeCost">
+                  <a-table-summary-cell :index="3" align="right">
+                    <b style="color: #cf1322">{{ money(productTotals.cost) }}</b>
+                  </a-table-summary-cell>
+                  <a-table-summary-cell :index="4" align="right">
+                    <b style="color: #1677ff">{{ money(productTotals.profit) }}</b>
+                  </a-table-summary-cell>
+                  <a-table-summary-cell :index="5" />
+                </template>
               </a-table-summary-row>
             </template>
           </a-table>
@@ -261,10 +264,14 @@ import autoTable from 'jspdf-autotable';
 import PageHeader from '../../components/PageHeader.vue';
 import ViewCurrencySelect from '../../components/ViewCurrencySelect.vue';
 import { useFormat } from '../../composables/useFormat';
+import { stripBidiIsolates } from '../../lib/priceFormat';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { t, i18n } from '../../i18n';
+import { useAuthStore } from '../../stores/auth';
+import { usePdfFont, isRtlUi } from '../../lib/exporters';
 
-const { number, currency } = useFormat();
+const { number, currency, withSymbol } = useFormat();
+const auth = useAuthStore();
 
 const isLoading = ref(false);
 const loadingStep = ref(1);
@@ -281,12 +288,48 @@ function num(v) {
   return Number.isNaN(n) ? 0 : n;
 }
 function money(v) {
-  return `${currency.value || 'USD'} ${number(num(v), 2)}`;
+  return withSymbol(currency.value || 'USD', number(num(v), 2));
+}
+// jsPDF does no bidi processing: drop the currency isolate marks.
+function pdfMoney(v) {
+  return stripBidiIsolates(money(v));
 }
 function getCurrentTime() {
   return new Date().toLocaleString(undefined, {
     month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
   });
+}
+/*
+ * Question titles are seeded English rows (ReportQuestionsSeeder, a fixed set
+ * with no admin UI), so each known title maps to a translation key; anything
+ * else (a renamed or extra row) shows as stored.
+ */
+const QUESTION_TITLE_KEYS = {
+  'Yesterday Sales Summary': 'Ai_Q_Yesterday_Sales_Summary',
+  'Why did profit drop yesterday?': 'Ai_Q_Why_Profit_Drop_Yesterday',
+  "Today's Sales Summary": 'Ai_Q_Today_Sales_Summary',
+  'This Week Sales Summary': 'Ai_Q_This_Week_Sales_Summary',
+  'Last Week Sales Summary': 'Ai_Q_Last_Week_Sales_Summary',
+  'This Week vs Last Week (Insights)': 'Ai_Q_This_Week_vs_Last_Week',
+  'This Month Sales Summary': 'Ai_Q_This_Month_Sales_Summary',
+  'Last Month Sales Summary': 'Ai_Q_Last_Month_Sales_Summary',
+  'Top 10 Products by Profit (This Week)': 'Ai_Q_Top10_Profit_This_Week',
+  'Top 20 Products by Profit (This Month)': 'Ai_Q_Top20_Profit_This_Month',
+  'Top 15 Products by Revenue (This Week)': 'Ai_Q_Top15_Revenue_This_Week',
+  'Top 10 Products by Quantity Sold (This Week)': 'Ai_Q_Top10_Qty_This_Week',
+  'Top 10 Products by Profit (Last Month)': 'Ai_Q_Top10_Profit_Last_Month',
+  'Customers with Late Payments > 30 Days': 'Ai_Q_Late_Payments_30',
+  'Customers with Late Payments > 60 Days': 'Ai_Q_Late_Payments_60',
+  'Customers with Late Payments > 90 Days': 'Ai_Q_Late_Payments_90',
+  'Overdue Invoices (7+ Days)': 'Ai_Q_Overdue_Invoices_7',
+  'Overdue Invoices (14+ Days)': 'Ai_Q_Overdue_Invoices_14',
+  'Top 25 Products by Profit (This Month)': 'Ai_Q_Top25_Profit_This_Month',
+  'Yesterday vs Day Before (Profit Insights)': 'Ai_Q_Yesterday_vs_Day_Before',
+};
+function questionTitle(q) {
+  const title = q?.title || '';
+  const key = QUESTION_TITLE_KEYS[title];
+  return key ? t(key, title) : title;
 }
 function productDisplayName(row) {
   if (!row) return '';
@@ -299,6 +342,49 @@ const reportKind = computed(() => {
   if (reportKey.value === 'late_payments') return 'late_payments';
   return 'daily_sales';
 });
+
+/*
+ * hide_product_cost: profit (and cost / margin) is derived from product cost,
+ * so it drops from KPIs, charts, tables and every export. The backend insights
+ * text quotes profit figures, so it is hidden as a whole.
+ * disable_product_export: the per-product report is product data -> no export.
+ */
+const insights = computed(() => (auth.canSeeCost ? insightText(reportResult.value) : null));
+
+/*
+ * The backend sends the changes as data (insight_items) next to its English
+ * sentence; word them through translation keys so they follow the UI
+ * language. Older backends without insight_items fall back to the sentence.
+ */
+const INSIGHT_KEYS = {
+  profit_increased: 'Ai_Insight_Profit_Increased',
+  profit_decreased: 'Ai_Insight_Profit_Decreased',
+  revenue: 'Ai_Insight_Revenue_Changed',
+  discount: 'Ai_Insight_Discount_Changed',
+};
+function insightText(rr) {
+  if (!rr) return null;
+  const items = rr.insight_items;
+  if (!Array.isArray(items)) return rr.insights || null;
+  if (!items.length) return i18n.global.t('Ai_Insight_No_Changes');
+  return items.map(item => {
+    const key = item.metric === 'profit'
+      ? INSIGHT_KEYS[`profit_${item.direction}`]
+      : INSIGHT_KEYS[item.metric];
+    if (!key) return '';
+    // i18n.global.t, not the module's t(): only it interpolates {params}.
+    return i18n.global.t(key, {
+      from: number(item.from, 2),
+      to: number(item.to, 2),
+      delta: number(item.delta, 2),
+      pct: number(item.pct, 1),
+    });
+  }).filter(Boolean).join(' ');
+}
+const canExport = computed(() => reportKind.value !== 'products' || auth.canExportProducts);
+const keepProfit = k => auth.canSeeCost || k !== 'profit';
+// Cost, Profit and Margin % are the last three product columns in every output.
+const productCells = cells => (auth.canSeeCost ? cells : cells.slice(0, 3));
 const rows = computed(() =>
   Array.isArray(reportResult.value?.data) ? reportResult.value.data : []);
 const filteredRows = computed(() => {
@@ -317,7 +403,7 @@ const activeFilters = computed(() => {
   if (!reportResult.value || !reportResult.value.filters) return [];
   const filters = [];
   if (reportResult.value.question?.title) {
-    filters.push({ label: t('Question', 'Question'), value: reportResult.value.question.title });
+    filters.push({ label: t('Question', 'Question'), value: questionTitle(reportResult.value.question) });
   }
   if (reportResult.value.filters.warehouse_id) {
     const w = warehouses.value.find(x => x.id === reportResult.value.filters.warehouse_id);
@@ -351,6 +437,14 @@ const aiSuggestions = computed(() =>
 
 /* ---------- Per-question UI config (legacy verbatim, IDs 1..20) ---------- */
 const questionUi = computed(() => {
+  const cfg = legacyQuestionUi.value;
+  // Profit-ranked product questions fall back to a revenue ranking without cost access.
+  if (!auth.canSeeCost && reportKey.value === 'sales_by_product' && !['qty', 'revenue'].includes(cfg.chart.metric)) {
+    return { ...cfg, chartTitle: t('Top_Revenue_Products', 'Top Revenue Products'), chart: { ...cfg.chart, metric: 'revenue', stacked: false } };
+  }
+  return cfg;
+});
+const legacyQuestionUi = computed(() => {
   const q = reportResult.value?.question || {};
   const id = Number(q.id || 0);
   const key = String(q.report_key || '');
@@ -418,6 +512,20 @@ const questionUi = computed(() => {
 });
 
 /* ---------- Daily sales chart ---------- */
+// Metric order per chart variant (legacy); 'profit' is filtered by keepProfit.
+const COMPARE_KEYS = ['revenue', 'profit', 'transactions'];
+const METRIC_KEYS = ['revenue', 'profit', 'tax', 'discount', 'transactions'];
+const METRIC_COLORS = { revenue: '#28a745', profit: '#17a2b8', tax: '#ffc107', discount: '#6f42c1', transactions: '#667eea' };
+const DONUT_KEYS = ['revenue', 'tax', 'discount', 'profit'];
+const DONUT_COLORS = { revenue: '#28a745', tax: '#ffc107', discount: '#6f42c1', profit: '#17a2b8' };
+const metricLabel = k => ({
+  revenue: t('Revenue', 'Revenue'),
+  profit: t('Profit', 'Profit'),
+  tax: t('Tax', 'Tax'),
+  discount: t('Discount', 'Discount'),
+  transactions: t('Transactions', 'Transactions'),
+}[k]);
+
 const dailySalesStats = computed(() => {
   const data = reportResult.value?.data;
   if (!data) return [];
@@ -426,8 +534,8 @@ const dailySalesStats = computed(() => {
     { label: t('Revenue', 'Revenue'), value: money(data.revenue), color: '#3f8600' },
     { label: t('Tax', 'Tax'), value: money(data.tax), color: '#d48806' },
     { label: t('Discount', 'Discount'), value: money(data.discount), color: '#722ed1' },
-    { label: t('Profit', 'Profit'), value: money(data.profit), color: '#08979c' },
-  ];
+    auth.canSeeCost && { label: t('Profit', 'Profit'), value: money(data.profit), color: '#08979c' },
+  ].filter(Boolean);
 });
 const dailySalesChartOptions = computed(() => {
   const data = reportResult.value?.data;
@@ -435,16 +543,17 @@ const dailySalesChartOptions = computed(() => {
   const variant = questionUi.value.chart.variant || 'breakdown_donut';
 
   if (variant === 'compare_bar') {
+    const keys = COMPARE_KEYS.filter(keepProfit);
     return {
       chart: { type: 'bar', toolbar: { show: true } },
       plotOptions: { bar: { horizontal: false, columnWidth: '55%', endingShape: 'rounded' } },
       dataLabels: { enabled: false },
-      xaxis: { categories: [t('Revenue', 'Revenue'), t('Profit', 'Profit'), t('Transactions', 'Transactions')] },
+      xaxis: { categories: keys.map(metricLabel) },
       tooltip: {
         y: {
           formatter: (val, opts) => {
             const idx = opts && typeof opts.dataPointIndex === 'number' ? opts.dataPointIndex : -1;
-            if (idx === 2) return `${Math.round(num(val))}`;
+            if (keys[idx] === 'transactions') return `${Math.round(num(val))}`;
             return money(val);
           },
         },
@@ -459,12 +568,13 @@ const dailySalesChartOptions = computed(() => {
       if (label === t('Transactions', 'Transactions')) return `${Math.round(num(val))}`;
       return money(val);
     };
+    const keys = METRIC_KEYS.filter(keepProfit);
     return {
       chart: { type: 'bar', toolbar: { show: true } },
       plotOptions: { bar: { horizontal: true, barHeight: '55%', distributed: true } },
       dataLabels: { enabled: true, formatter: fmt },
-      xaxis: { categories: [t('Revenue', 'Revenue'), t('Profit', 'Profit'), t('Tax', 'Tax'), t('Discount', 'Discount'), t('Transactions', 'Transactions')] },
-      colors: ['#28a745', '#17a2b8', '#ffc107', '#6f42c1', '#667eea'],
+      xaxis: { categories: keys.map(metricLabel) },
+      colors: keys.map(k => METRIC_COLORS[k]),
       tooltip: { y: { formatter: fmt } },
     };
   }
@@ -480,18 +590,23 @@ const dailySalesChartOptions = computed(() => {
           dataLabels: {
             name: { fontSize: '14px' },
             value: { formatter: v => `${Number(v || 0).toFixed(1)}%` },
-            total: { show: true, label: t('Profit_Margin', 'Profit Margin'), formatter: () => `${pct(profit).toFixed(1)}%` },
+            total: auth.canSeeCost
+              ? { show: true, label: t('Profit_Margin', 'Profit Margin'), formatter: () => `${pct(profit).toFixed(1)}%` }
+              : { show: false },
           },
         },
       },
-      labels: [t('Profit_Percent', 'Profit %'), t('Tax_Percent', 'Tax %'), t('Discount_Percent', 'Discount %')],
-      colors: ['#17a2b8', '#ffc107', '#6f42c1'],
+      labels: [
+        ...(auth.canSeeCost ? [t('Profit_Percent', 'Profit %')] : []),
+        t('Tax_Percent', 'Tax %'), t('Discount_Percent', 'Discount %'),
+      ],
+      colors: [...(auth.canSeeCost ? ['#17a2b8'] : []), '#ffc107', '#6f42c1'],
     };
   }
   return {
     chart: { type: 'donut', toolbar: { show: true } },
-    labels: [t('Revenue', 'Revenue'), t('Tax', 'Tax'), t('Discount', 'Discount'), t('Profit', 'Profit')],
-    colors: ['#28a745', '#ffc107', '#6f42c1', '#17a2b8'],
+    labels: DONUT_KEYS.filter(keepProfit).map(metricLabel),
+    colors: DONUT_KEYS.filter(keepProfit).map(k => DONUT_COLORS[k]),
     legend: { position: 'bottom', fontSize: '14px' },
     dataLabels: { enabled: true, formatter: val => `${val.toFixed(1)}%` },
     tooltip: { y: { formatter: val => money(val) } },
@@ -515,39 +630,41 @@ const dailySalesChartSeries = computed(() => {
   if (!data) return [];
   const variant = questionUi.value.chart.variant || 'breakdown_donut';
 
+  const pick = (src, keys) => keys.filter(keepProfit).map(k => num(src[k] || 0));
+
   if (variant === 'compare_bar') {
     const prev = reportResult.value?.compare || null;
-    const cur = [num(data.revenue || 0), num(data.profit || 0), num(data.transactions || 0)];
+    const cur = pick(data, COMPARE_KEYS);
     return prev
       ? [
           { name: t('Current', 'Current'), data: cur },
-          { name: t('Previous', 'Previous'), data: [num(prev.revenue || 0), num(prev.profit || 0), num(prev.transactions || 0)] },
+          { name: t('Previous', 'Previous'), data: pick(prev, COMPARE_KEYS) },
         ]
       : [{ name: t('Current', 'Current'), data: cur }];
   }
   if (variant === 'metrics_bar') {
     return [{
       name: t('Metrics', 'Metrics'),
-      data: [num(data.revenue || 0), num(data.profit || 0), num(data.tax || 0), num(data.discount || 0), num(data.transactions || 0)],
+      data: pick(data, METRIC_KEYS),
     }];
   }
   if (variant === 'margin_radial') {
     const revenue = num(data.revenue || 0);
     const pct = n => (revenue > 0 ? Math.max(0, Math.min(100, (n / revenue) * 100)) : 0);
-    return [pct(num(data.profit || 0)), pct(num(data.tax || 0)), pct(num(data.discount || 0))];
+    return pick(data, ['profit', 'tax', 'discount']).map(pct);
   }
-  return [num(data.revenue || 0), num(data.tax || 0), num(data.discount || 0), num(data.profit || 0)];
+  return pick(data, DONUT_KEYS);
 });
 
 /* ---------- Products chart + table ---------- */
-const productColumns = [
+const productColumns = computed(() => productCells([
   { title: t('Product', 'Product'), key: 'name' },
   { title: t('Quantity', 'Quantity'), dataIndex: 'qty', key: 'qty', align: 'right' },
   { title: t('Revenue', 'Revenue'), key: 'revenue', align: 'right' },
   { title: t('Cost', 'Cost'), key: 'cost', align: 'right' },
   { title: t('Profit', 'Profit'), key: 'profit', align: 'right' },
   { title: t('Margin_Percent', 'Margin %'), key: 'margin_percent', align: 'right' },
-];
+]));
 const productTotals = computed(() => ({
   qty: filteredRows.value.reduce((s, item) => s + num(item.qty || 0), 0),
   revenue: filteredRows.value.reduce((s, item) => s + num(item.revenue || 0), 0),
@@ -731,83 +848,91 @@ function todayStamp() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 function exportToPDF(reportType) {
+  if (!canExport.value) return;
   try {
     const rr = reportResult.value;
     const pdf = new jsPDF('p', 'pt', 'a4');
     const pageWidth = pdf.internal.pageSize.getWidth();
+    // Same embedded face as the shared exporter: jsPDF's helvetica has no
+    // Arabic glyphs, so translated labels would print as garbage without it.
+    const font = usePdfFont(pdf);
+    const rtl = isRtlUi();
+    const lineX = rtl ? pageWidth - 40 : 40;
+    const lineOpts = rtl ? { align: 'right' } : undefined;
+    const tableStyles = size => ({ fontSize: size, font, halign: rtl ? 'right' : 'left' });
     let yPos = 40;
 
     pdf.setFontSize(18);
-    pdf.setFont('helvetica', 'bold');
-    pdf.text(rr.question.title || 'AI Report', pageWidth / 2, yPos, { align: 'center' });
+    pdf.setFont(font, 'bold');
+    pdf.text(questionTitle(rr.question) || t('AI_Report', 'AI Report'), pageWidth / 2, yPos, { align: 'center' });
     yPos += 30;
 
     pdf.setFontSize(10);
-    pdf.setFont('helvetica', 'normal');
-    pdf.text(`Generated: ${getCurrentTime()}`, 40, yPos);
+    pdf.setFont(font, 'normal');
+    pdf.text(`${t('Generated', 'Generated')}: ${getCurrentTime()}`, lineX, yPos, lineOpts);
     yPos += 20;
 
     if (rr.filters.date_from && rr.filters.date_to) {
-      pdf.text(`Date Range: ${rr.filters.date_from} - ${rr.filters.date_to}`, 40, yPos);
+      pdf.text(`${t('DateRange', 'Date Range')}: ${rr.filters.date_from} - ${rr.filters.date_to}`, lineX, yPos, lineOpts);
       yPos += 20;
     }
-    if (rr.insights) {
+    if (insights.value) {
       yPos += 10;
-      pdf.setFont('helvetica', 'bold');
+      pdf.setFont(font, 'bold');
       pdf.setFontSize(12);
-      pdf.text('AI Insights:', 40, yPos);
+      pdf.text(`${t('AI_Insights', 'AI Insights')}:`, lineX, yPos, lineOpts);
       yPos += 20;
-      pdf.setFont('helvetica', 'normal');
+      pdf.setFont(font, 'normal');
       pdf.setFontSize(10);
-      const insightsLines = pdf.splitTextToSize(rr.insights, pageWidth - 80);
-      pdf.text(insightsLines, 40, yPos);
+      const insightsLines = pdf.splitTextToSize(insights.value, pageWidth - 80);
+      pdf.text(insightsLines, lineX, yPos, lineOpts);
       yPos += insightsLines.length * 15 + 20;
     }
 
     if (rr.data && Array.isArray(rr.data)) {
       if (reportType === 'products') {
         autoTable(pdf, {
-          head: [['Product', 'Quantity', 'Revenue', 'Cost', 'Profit', 'Margin %']],
-          body: rr.data.map(item => [
+          head: [productCells([t('Product', 'Product'), t('Quantity', 'Quantity'), t('Revenue', 'Revenue'), t('Cost', 'Cost'), t('Profit', 'Profit'), t('Margin_Percent', 'Margin %')])],
+          body: rr.data.map(item => productCells([
             String(productDisplayName(item)).substring(0, 30),
             String(num(item.qty || 0)),
-            money(item.revenue || 0),
-            money(item.cost || 0),
-            money(item.profit || 0),
+            pdfMoney(item.revenue || 0),
+            pdfMoney(item.cost || 0),
+            pdfMoney(item.profit || 0),
             `${num(item.margin_percent || 0)}%`,
-          ]),
+          ])),
           startY: yPos,
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [102, 126, 234] },
+          styles: tableStyles(8),
+          headStyles: { fillColor: [102, 126, 234], font, fontStyle: 'bold' },
         });
       } else if (reportType === 'late_payments') {
         autoTable(pdf, {
-          head: [['Customer', 'Invoices', 'Outstanding', 'Days Overdue']],
+          head: [[t('Customer', 'Customer'), t('Invoices_Count', 'Invoices Count'), t('Outstanding_Amount', 'Outstanding Amount'), t('Max_Days_Overdue', 'Max Days Overdue')]],
           body: rr.data.map(item => [
             String(item.name || '').substring(0, 30),
             String(num(item.invoices_count || 0)),
-            money(item.outstanding_amount || 0),
-            `${num(item.max_days_overdue || 0)} days`,
+            pdfMoney(item.outstanding_amount || 0),
+            `${num(item.max_days_overdue || 0)} ${t('days', 'days')}`,
           ]),
           startY: yPos,
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [220, 53, 69] },
+          styles: tableStyles(8),
+          headStyles: { fillColor: [220, 53, 69], font, fontStyle: 'bold' },
         });
       }
     } else if (reportType === 'daily_sales' && rr.data) {
       const data = rr.data;
       autoTable(pdf, {
         body: [
-          ['Metric', 'Value'],
-          ['Transactions', String(num(data.transactions || 0))],
-          ['Revenue', money(data.revenue || 0)],
-          ['Tax', money(data.tax || 0)],
-          ['Discount', money(data.discount || 0)],
-          ['Profit', money(data.profit || 0)],
+          [t('Metric', 'Metric'), t('Value', 'Value')],
+          [t('Transactions', 'Transactions'), String(num(data.transactions || 0))],
+          [t('Revenue', 'Revenue'), pdfMoney(data.revenue || 0)],
+          [t('Tax', 'Tax'), pdfMoney(data.tax || 0)],
+          [t('Discount', 'Discount'), pdfMoney(data.discount || 0)],
+          ...(auth.canSeeCost ? [[t('Profit', 'Profit'), pdfMoney(data.profit || 0)]] : []),
         ],
         startY: yPos,
-        styles: { fontSize: 10 },
-        headStyles: { fillColor: [102, 126, 234] },
+        styles: tableStyles(10),
+        headStyles: { fillColor: [102, 126, 234], font, fontStyle: 'bold' },
       });
     }
 
@@ -818,10 +943,11 @@ function exportToPDF(reportType) {
   }
 }
 function exportToExcel(reportType) {
+  if (!canExport.value) return;
   try {
     const rr = reportResult.value;
     let csvContent = '';
-    csvContent += `${rr.question.title || t('AI_Report', 'AI Report')}\n`;
+    csvContent += `${questionTitle(rr.question) || t('AI_Report', 'AI Report')}\n`;
     csvContent += `${t('Generated', 'Generated')}: ${getCurrentTime()}\n`;
     if (rr.filters.date_from && rr.filters.date_to) {
       csvContent += `${t('DateRange', 'Date Range')}: ${rr.filters.date_from} - ${rr.filters.date_to}\n`;
@@ -829,9 +955,9 @@ function exportToExcel(reportType) {
     csvContent += '\n';
     if (rr.data && Array.isArray(rr.data)) {
       if (reportType === 'products') {
-        csvContent += `${[t('Product', 'Product'), t('Quantity', 'Quantity'), t('Revenue', 'Revenue'), t('Cost', 'Cost'), t('Profit', 'Profit'), t('Margin_Percent', 'Margin %')].join(',')}\n`;
+        csvContent += `${productCells([t('Product', 'Product'), t('Quantity', 'Quantity'), t('Revenue', 'Revenue'), t('Cost', 'Cost'), t('Profit', 'Profit'), t('Margin_Percent', 'Margin %')]).join(',')}\n`;
         rr.data.forEach(item => {
-          csvContent += `"${productDisplayName(item)}",${num(item.qty || 0)},${num(item.revenue || 0)},${num(item.cost || 0)},${num(item.profit || 0)},${num(item.margin_percent || 0)}\n`;
+          csvContent += `${productCells([`"${productDisplayName(item)}"`, num(item.qty || 0), num(item.revenue || 0), num(item.cost || 0), num(item.profit || 0), num(item.margin_percent || 0)]).join(',')}\n`;
         });
       } else if (reportType === 'late_payments') {
         csvContent += `${[t('Customer', 'Customer'), t('Invoices_Count', 'Invoices Count'), t('Outstanding_Amount', 'Outstanding Amount'), t('Max_Days_Overdue', 'Max Days Overdue')].join(',')}\n`;
@@ -846,7 +972,7 @@ function exportToExcel(reportType) {
       csvContent += `${t('Revenue', 'Revenue')},${num(data.revenue || 0)}\n`;
       csvContent += `${t('Tax', 'Tax')},${num(data.tax || 0)}\n`;
       csvContent += `${t('Discount', 'Discount')},${num(data.discount || 0)}\n`;
-      csvContent += `${t('Profit', 'Profit')},${num(data.profit || 0)}\n`;
+      if (auth.canSeeCost) csvContent += `${t('Profit', 'Profit')},${num(data.profit || 0)}\n`;
     }
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
@@ -863,9 +989,11 @@ function generatePrintTable(reportType) {
   const rr = reportResult.value;
   if (!rr.data) return '';
   if (reportType === 'products') {
-    let table = `<table><thead><tr><th>${t('Product', 'Product')}</th><th>${t('Quantity', 'Quantity')}</th><th>${t('Revenue', 'Revenue')}</th><th>${t('Cost', 'Cost')}</th><th>${t('Profit', 'Profit')}</th><th>${t('Margin_Percent', 'Margin %')}</th></tr></thead><tbody>`;
+    const head = productCells([t('Product', 'Product'), t('Quantity', 'Quantity'), t('Revenue', 'Revenue'), t('Cost', 'Cost'), t('Profit', 'Profit'), t('Margin_Percent', 'Margin %')]);
+    let table = `<table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>`;
     rr.data.forEach(item => {
-      table += `<tr><td>${productDisplayName(item)}</td><td>${num(item.qty || 0)}</td><td>${money(item.revenue || 0)}</td><td>${money(item.cost || 0)}</td><td>${money(item.profit || 0)}</td><td>${num(item.margin_percent || 0)}%</td></tr>`;
+      const cells = productCells([productDisplayName(item), num(item.qty || 0), money(item.revenue || 0), money(item.cost || 0), money(item.profit || 0), `${num(item.margin_percent || 0)}%`]);
+      table += `<tr>${cells.map(c => `<td>${c}</td>`).join('')}</tr>`;
     });
     return table + '</tbody></table>';
   }
@@ -878,27 +1006,28 @@ function generatePrintTable(reportType) {
   }
   if (reportType === 'daily_sales') {
     const data = rr.data;
-    return `<table><tr><th>${t('Metric', 'Metric')}</th><th>${t('Value', 'Value')}</th></tr><tr><td>${t('Transactions', 'Transactions')}</td><td>${num(data.transactions || 0)}</td></tr><tr><td>${t('Revenue', 'Revenue')}</td><td>${money(data.revenue || 0)}</td></tr><tr><td>${t('Tax', 'Tax')}</td><td>${money(data.tax || 0)}</td></tr><tr><td>${t('Discount', 'Discount')}</td><td>${money(data.discount || 0)}</td></tr><tr><td>${t('Profit', 'Profit')}</td><td>${money(data.profit || 0)}</td></tr></table>`;
+    return `<table><tr><th>${t('Metric', 'Metric')}</th><th>${t('Value', 'Value')}</th></tr><tr><td>${t('Transactions', 'Transactions')}</td><td>${num(data.transactions || 0)}</td></tr><tr><td>${t('Revenue', 'Revenue')}</td><td>${money(data.revenue || 0)}</td></tr><tr><td>${t('Tax', 'Tax')}</td><td>${money(data.tax || 0)}</td></tr><tr><td>${t('Discount', 'Discount')}</td><td>${money(data.discount || 0)}</td></tr>${auth.canSeeCost ? `<tr><td>${t('Profit', 'Profit')}</td><td>${money(data.profit || 0)}</td></tr>` : ''}</table>`;
   }
   return '';
 }
 function printReport(reportType) {
+  if (!canExport.value) return;
   try {
     const rr = reportResult.value;
     const printWindow = window.open('', '_blank');
-    const reportTitle = rr.question.title || t('AI_Report', 'AI Report');
+    const reportTitle = questionTitle(rr.question) || t('AI_Report', 'AI Report');
     printWindow.document.write(`
       <!DOCTYPE html>
-      <html>
+      <html dir="${isRtlUi() ? 'rtl' : 'ltr'}">
       <head>
         <title>${reportTitle}</title>
         <style>
           body { font-family: Arial, sans-serif; padding: 20px; }
           h1 { color: #333; border-bottom: 2px solid #667eea; padding-bottom: 10px; }
           .header-info { margin: 20px 0; color: #666; }
-          .insights { background: #f8f9fa; padding: 15px; border-left: 4px solid #667eea; margin: 20px 0; }
+          .insights { background: #f8f9fa; padding: 15px; border-inline-start: 4px solid #667eea; margin: 20px 0; }
           table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+          th, td { border: 1px solid #ddd; padding: 8px; text-align: start; }
           th { background-color: #667eea; color: white; }
           tr:nth-child(even) { background-color: #f2f2f2; }
           @media print { body { padding: 0; } }
@@ -911,7 +1040,7 @@ function printReport(reportType) {
           ${rr.filters.date_from && rr.filters.date_to
             ? `<p><strong>${t('DateRange', 'Date Range')}:</strong> ${rr.filters.date_from} - ${rr.filters.date_to}</p>` : ''}
         </div>
-        ${rr.insights ? `<div class="insights"><h3>${t('AI_Insights', 'AI Insights')}</h3><p>${rr.insights}</p></div>` : ''}
+        ${insights.value ? `<div class="insights"><h3>${t('AI_Insights', 'AI Insights')}</h3><p>${insights.value}</p></div>` : ''}
         ${generatePrintTable(reportType)}
       </body>
       </html>

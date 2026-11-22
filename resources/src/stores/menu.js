@@ -3,6 +3,36 @@ import { MENU } from '../config/menu';
 import { MENU_EXTRA } from '../config/menuExtra';
 import { applyMenuOrder } from '../lib/menuOrder';
 import { useAuthStore } from './auth';
+import { usePlanStore } from './plan';
+
+// Where a locked module points: Billing → Add-ons, opened on that add-on.
+const ADDONS_PATH = '/app/billing/addons';
+
+/**
+ * A module the plan lacks but the tenant may buy as an add-on: the entry (a
+ * whole group or a single link) collapses into one link with a lock icon to
+ * Billing → Add-ons, instead of disappearing. It carries no `feature`, so the
+ * sidebars' plan filter lets it through; shown only to people who may buy.
+ */
+function lockedEntry(entry) {
+    const { children, feature, permissions, ...rest } = entry;
+    return {
+        ...rest,
+        icon: 'lock',
+        to: `${ADDONS_PATH}?feature=${encodeURIComponent(feature)}`,
+        permissions: [],
+        locked: true,
+    };
+}
+
+function lockPurchasable(entries, plan) {
+    return entries.map((entry) => {
+        if (entry.feature && !plan.featureEnabled(entry.feature) && plan.featurePurchasable(entry.feature)) {
+            return lockedEntry(entry);
+        }
+        return entry.children ? { ...entry, children: lockPurchasable(entry.children, plan) } : entry;
+    });
+}
 
 /**
  * The navigation actually rendered by the sidebars: the default MENU arranged
@@ -30,12 +60,21 @@ export const useMenuStore = defineStore('menu', {
             // now live nested under the Integrations sections but keep a
             // `key` matching config/modules.js. Entries without a key are
             // never toggleable and always pass.
+            // Billing → Add-ons only while the marketplace is on (Super admin →
+            // Settings → Features); an older summary without the flag keeps it.
+            const plan = usePlanStore();
+            const addonsOn = !(plan.summary && plan.summary.addons_enabled === false);
             const dropDisabled = entries => entries
                 .filter(entry => auth.moduleEnabled(entry.key))
+                .filter(entry => addonsOn || entry.key !== 'billing_addons')
                 .map(entry => (entry.children
                     ? { ...entry, children: dropDisabled(entry.children) }
                     : entry));
-            return dropDisabled(arranged);
+            const visible = dropDisabled(arranged);
+            // Locked-but-buyable modules, for the owner and billing users only
+            // (the same people the Add-ons page lets in).
+            const mayBuy = auth.user && (Number(auth.user.id) === 1 || auth.can('billing_view'));
+            return mayBuy ? lockPurchasable(visible, usePlanStore()) : visible;
         },
     },
 });

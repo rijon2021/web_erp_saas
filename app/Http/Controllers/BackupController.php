@@ -2,71 +2,72 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Central\Plan;
 use App\Models\Setting;
-use App\Services\CloudBackupUploader;
 use App\Models\User;
+use App\Services\Backup\TenantBackupStore;
+use App\Services\CloudBackupUploader;
+use App\Services\TenantLimitsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 
+/**
+ * The tenant's Backup page: on-demand backups (database:backup), the
+ * plan-scheduled ones (tenants:backup), and the plan's retention policy.
+ *
+ * Backups live in the tenant's private storage (TenantBackupStore) and are
+ * only reachable through download_backup, behind the `backup` permission.
+ */
 class BackupController extends Controller
 {
-    // -------------------- Backup Databse -------------\\
+    // -------------------- List backups -------------\\
 
-    public function Get_Backup(Request $request)
+    public function Get_Backup(Request $request, TenantBackupStore $store)
     {
-
         $this->authorizeForUser($request->user('api'), 'backup', User::class);
 
         $data = [];
-        $id = 0;
-        foreach (glob(storage_path().'/app/public/backup/*') as $filename) {
-            $item['id'] = $id += 1;
-            $item['date'] = basename($filename);
-            $size = $this->formatSizeUnits(filesize($filename));
-            $item['size'] = $size;
-
-            $data[] = $item;
+        foreach ($store->list() as $i => $row) {
+            $data[] = [
+                'id' => $i + 1,
+                // `date` has always carried the file name; the page keys rows by it.
+                'date' => $row['name'],
+                'type' => $row['type'],
+                'size' => $this->formatSizeUnits($row['size']),
+                'created_at' => $row['created_at'],
+            ];
         }
-        $totalRows = count($data);
 
         return response()->json([
             'backups' => $data,
-            'totalRows' => $totalRows,
+            'totalRows' => count($data),
+            'policy' => $this->policy(),
         ]);
-
     }
 
-    // -------------------- Generate Databse -------------\\
+    // -------------------- Generate backup -------------\\
 
-    public function Generate_Backup(Request $request)
+    public function Generate_Backup(Request $request, TenantBackupStore $store)
     {
-
         $this->authorizeForUser($request->user('api'), 'backup', User::class);
 
-        // Run backup command
+        // A large tenant's dump outlasts the default 30 s web time limit.
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(0);
+        }
+
         $exitCode = Artisan::call('database:backup');
         $output = Artisan::output();
-        
-        // Check if backup command failed
+
         if ($exitCode !== 0) {
-            // Extract error details from output
             $errorMsg = trim($output);
-            
-            // Try to extract ERROR_DETAILS if present
             if (preg_match('/ERROR_DETAILS:\s*(.+)/s', $output, $matches)) {
                 $errorMsg = trim($matches[1]);
             }
-            
-            // If no specific error, provide helpful message
             if (empty($errorMsg) || strlen($errorMsg) < 10) {
-                $errorMsg = 'Database backup command failed. Common issues:'."\n";
-                $errorMsg .= '1. DUMP_PATH in .env is incorrect or mysqldump not found'."\n";
-                $errorMsg .= '2. Database credentials (DB_USERNAME, DB_PASSWORD, DB_HOST) are incorrect'."\n";
-                $errorMsg .= '3. MySQL server is not running'."\n";
-                $errorMsg .= '4. Database user does not have backup permissions'."\n";
-                $errorMsg .= '5. Database name (DB_DATABASE) is incorrect';
+                $errorMsg = 'Database backup command failed. Check that the database server is running and that mysqldump (DUMP_PATH) or PHP has access to it.';
             }
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Backup generation failed',
@@ -75,84 +76,27 @@ class BackupController extends Controller
             ], 500);
         }
 
-        // Wait a moment for file to be fully written (especially on Windows)
-        usleep(500000); // 0.5 seconds
-
-        // Local backup remains the primary destination; cloud upload is optional and additive.
-        $cloud = null;
-        try {
-            $dir = storage_path().'/app/public/backup';
-            
-            // Ensure directory exists
-            if (!is_dir($dir)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Backup directory does not exist',
-                    'error' => 'Backup directory not found: '.$dir,
-                    'cloud' => null,
-                ], 500);
-            }
-
-            $latest = null;
-            $latestMtime = 0;
-            $files = glob($dir.'/*.sql');
-            
-            if (empty($files)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No backup file found after generation',
-                    'error' => 'Backup command completed but no .sql file was created. Check database credentials and mysqldump path.',
-                    'cloud' => null,
-                ], 500);
-            }
-
-            foreach ($files as $filename) {
-                if (!is_file($filename)) {
-                    continue;
-                }
-                $mt = @filemtime($filename) ?: 0;
-                if ($mt >= $latestMtime) {
-                    $latestMtime = $mt;
-                    $latest = $filename;
-                }
-            }
-
-            if ($latest && file_exists($latest)) {
-                // Verify file has content
-                $fileSize = filesize($latest);
-                if ($fileSize === 0) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Backup file is empty',
-                        'error' => 'Backup file was created but is empty (0 bytes). Check database credentials and mysqldump path.',
-                        'cloud' => null,
-                    ], 500);
-                }
-
-                $setting = Setting::whereNull('deleted_at')->first();
-                $uploader = new CloudBackupUploader();
-                $cloud = $uploader->uploadIfConfigured($latest, basename($latest), $setting);
-
-                // Cloud upload is additive; we always keep the local backup file.
-            } else {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No backup file found after generation',
-                    'error' => 'Backup command completed but no valid backup file was found.',
-                    'cloud' => null,
-                ], 500);
-            }
-        } catch (\Throwable $e) {
+        $file = preg_match('/BACKUP_FILE:\s*(\S+)/', $output, $m) ? $store->find($m[1]) : null;
+        if (! $file || filesize($file) === 0) {
             return response()->json([
                 'success' => false,
-                'message' => 'Backup generation error',
-                'error' => $e->getMessage(),
+                'message' => 'No backup file found after generation',
+                'error' => 'Backup command completed but no backup file was written.',
                 'cloud' => null,
             ], 500);
         }
 
+        // Local backup is the primary copy; the cloud upload is optional and additive.
+        $cloud = null;
+        try {
+            $setting = Setting::whereNull('deleted_at')->first();
+            $cloud = (new CloudBackupUploader)->uploadIfConfigured($file, basename($file), $setting);
+        } catch (\Throwable $e) {
+            $cloud = ['success' => false, 'error' => $e->getMessage()];
+        }
+
         $message = 'Backup generated successfully';
-        if ($cloud && isset($cloud['success']) && $cloud['success']) {
+        if ($cloud && ! empty($cloud['success']) && empty($cloud['skipped'])) {
             $message .= ' and uploaded to '.ucfirst($cloud['provider']);
         } elseif ($cloud && isset($cloud['error'])) {
             $message .= ' (cloud upload failed: '.$cloud['error'].')';
@@ -165,22 +109,54 @@ class BackupController extends Controller
         ]);
     }
 
-    // -------------------- Delete Databse -------------\\
+    // -------------------- Download backup -------------\\
 
-    public function Delete_Backup(Request $request, $name)
+    public function Download_Backup(Request $request, TenantBackupStore $store, $name)
     {
-
         $this->authorizeForUser($request->user('api'), 'backup', User::class);
 
-        foreach (glob(storage_path().'/app/public/backup/*') as $filename) {
-            $path = storage_path().'/app/public/backup/'.basename($name);
-            if (file_exists($path)) {
-                @unlink($path);
-            }
-        }
+        $path = $store->find((string) $name);
+        abort_if($path === null, 404);
+
+        return response()->download($path, basename($path), [
+            'Content-Type' => str_ends_with($path, '.gz') ? 'application/gzip' : 'application/sql',
+        ]);
     }
 
-    // -------------------- Fomrmat units -------------\\
+    // -------------------- Delete backup -------------\\
+
+    public function Delete_Backup(Request $request, TenantBackupStore $store, $name)
+    {
+        $this->authorizeForUser($request->user('api'), 'backup', User::class);
+
+        $path = $store->find((string) $name);
+        if ($path !== null) {
+            @unlink($path);
+        }
+
+        return response()->json(['success' => true]);
+    }
+
+    /**
+     * The tenant's plan policy, shown read-only on the Backup page (null when
+     * no subscription grants access).
+     */
+    private function policy(): ?array
+    {
+        $plan = app(TenantLimitsService::class)->getActivePlan();
+        if (! $plan) {
+            return null;
+        }
+
+        $policy = [];
+        foreach (array_keys(Plan::RETENTION_FIELDS) as $key) {
+            $policy[$key] = $plan->retentionSetting($key);
+        }
+
+        return $policy;
+    }
+
+    // -------------------- Format units -------------\\
 
     public function formatSizeUnits($bytes)
     {

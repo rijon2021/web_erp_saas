@@ -4,7 +4,7 @@
       type="info"
       show-icon
       :message="$t('Features')"
-      description="Turn optional capabilities on or off for the whole system — the same switches as System Settings → Features."
+      :description="$t('Feature_Toggles_Intro')"
       style="margin-bottom: 16px"
     />
 
@@ -59,6 +59,13 @@
     </div>
     <div class="setting-row">
       <div>
+        <div class="setting-label">{{ $t('Enable_Warehouse_Letterhead') }}</div>
+        <div class="setting-help">{{ $t('Enable_Warehouse_Letterhead_Hint') }}</div>
+      </div>
+      <a-switch v-model:checked="features.enable_warehouse_letterhead" @change="dirty = true" />
+    </div>
+    <div class="setting-row">
+      <div>
         <div class="setting-label">{{ $t('Auto_Journal_Entries') }}</div>
         <div class="setting-help">{{ $t('Auto_Journal_Entries_Hint') }}</div>
       </div>
@@ -66,10 +73,59 @@
     </div>
     <div class="setting-row">
       <div>
+        <div class="setting-label">{{ $t('Require_Payment_Account') }}</div>
+        <div class="setting-help">{{ $t('Require_Payment_Account_Hint') }}</div>
+      </div>
+      <a-switch v-model:checked="features.require_payment_account" @change="dirty = true" />
+    </div>
+    <div class="setting-row">
+      <div>
         <div class="setting-label">{{ $t('Allow_Overselling') }}</div>
-        <div class="setting-help">{{ $t('Allow_Overselling_Help') }}</div>
+        <div class="setting-help">{{ $t('Sys_Allow_Overselling_Help') }}</div>
       </div>
       <a-switch v-model:checked="features.allow_overselling" @change="dirty = true" />
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">{{ $t('Restrict_Master_Data_By_Warehouse') }}</div>
+        <div class="setting-help">{{ $t('Restrict_Master_Data_By_Warehouse_Help') }}</div>
+      </div>
+      <a-switch v-model:checked="features.restrict_master_data_by_warehouse" @change="dirty = true" />
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">{{ $t('Restrict_Products_By_Warehouse') }}</div>
+        <div class="setting-help">{{ $t('Restrict_Products_By_Warehouse_Help') }}</div>
+      </div>
+      <a-switch v-model:checked="features.restrict_products_by_warehouse" @change="dirty = true" />
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">{{ $t('Virtual_Combo_Stock') }}</div>
+        <div class="setting-help">{{ $t('Virtual_Combo_Stock_Help') }}</div>
+        <a-alert
+          type="warning"
+          show-icon
+          :message="$t('Virtual_Combo_Stock_Warning')"
+          style="margin-top: 8px; max-width: 520px"
+        />
+      </div>
+      <a-switch v-model:checked="features.virtual_combo_stock" @change="onVirtualComboChange" />
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">{{ $t('Customer_Performance') }}</div>
+        <div class="setting-help">{{ $t('Customer_Performance_Help') }}</div>
+      </div>
+      <a-switch v-model:checked="features.customer_performance_enabled" @change="dirty = true" />
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">{{ $t('Product_Supplier') }}</div>
+        <div class="setting-help">{{ $t('Product_Supplier_Help') }}</div>
+      </div>
+      <a-switch v-model:checked="features.product_supplier_enabled" @change="dirty = true" />
     </div>
   </a-card>
 </template>
@@ -89,12 +145,34 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import { SaveOutlined } from '@ant-design/icons-vue';
 import http from '../../lib/http';
+import { confirmVirtualComboSwitch } from './virtualComboConfirm';
 
 const { t } = useI18n();
 
 const loading = ref(true);
 const saving = ref(false);
 const dirty = ref(false);
+// Virtual combo stock: saved value + the server's warning about leaving it.
+const savedVirtualCombo = ref(false);
+const virtualComboWarning = ref(null);
+
+function onVirtualComboChange(checked) {
+  dirty.value = true;
+  confirmVirtualComboSwitch({
+    t,
+    checked,
+    saved: savedVirtualCombo.value,
+    warning: virtualComboWarning.value,
+    revert: () => { features.virtual_combo_stock = !checked; },
+  });
+}
+
+async function load() {
+  const data = await http.get('feature_settings');
+  Object.assign(features, data?.features || {});
+  savedVirtualCombo.value = !!features.virtual_combo_stock;
+  virtualComboWarning.value = data?.warnings?.virtual_combo_stock || null;
+}
 
 const features = reactive({
   enable_3_decimal_pricing: false,
@@ -104,7 +182,14 @@ const features = reactive({
   enable_multi_pack_selling: false,
   enable_multi_currency: false,
   accounting_auto_generate_journals: false,
+  require_payment_account: false,
   allow_overselling: false,
+  enable_warehouse_letterhead: false,
+  restrict_master_data_by_warehouse: false,
+  restrict_products_by_warehouse: false,
+  virtual_combo_stock: false,
+  customer_performance_enabled: true,
+  product_supplier_enabled: false,
 });
 
 async function save() {
@@ -120,8 +205,10 @@ async function save() {
     try {
       localStorage.setItem('app_price_decimals', features.enable_3_decimal_pricing ? '3' : '2');
     } catch (e) { /* storage unavailable */ }
+    // The saved value changed: refresh the warning about leaving it.
+    try { await load(); } catch (e) { /* keep the page as is */ }
   } catch (e) {
-    message.error(e?.message || t('InvalidData'));
+    message.error(e?.data?.message || e?.message || t('InvalidData'));
   } finally {
     saving.value = false;
   }
@@ -129,8 +216,7 @@ async function save() {
 
 onMounted(async () => {
   try {
-    const data = await http.get('feature_settings');
-    Object.assign(features, data?.features || {});
+    await load();
   } catch (e) {
     message.error(t('InvalidData'));
   } finally {

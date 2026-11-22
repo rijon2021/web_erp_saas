@@ -14,7 +14,7 @@ class PaymentOpeningBalance extends Model
     protected $dates = ['deleted_at'];
 
     protected $fillable = [
-        'client_id', 'date', 'montant', 'Ref', 'change', 'payment_method_id', 'user_id', 'notes', 'account_id',
+        'client_id', 'date', 'montant', 'Ref', 'change', 'payment_method_id', 'user_id', 'notes', 'account_id', 'wallet_transaction_id',
     ];
 
     protected $casts = [

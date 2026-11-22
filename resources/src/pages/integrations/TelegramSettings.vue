@@ -1,9 +1,9 @@
 <template>
   <div class="page">
-    <PageHeader title="Telegram" :breadcrumb="['Integrations', 'Telegram']">
+    <PageHeader title="Telegram" :breadcrumb="[$t('Integrations'), 'Telegram']">
       <template #actions>
         <a-tag v-if="!isLoading" :color="state.enabled && state.configured ? 'success' : 'default'" style="font-size: 13px; padding: 4px 12px">
-          {{ state.enabled && state.configured ? $t('Enabled') : state.configured ? $t('Disabled') : 'Not configured' }}
+          {{ state.enabled && state.configured ? $t('Enabled') : state.configured ? $t('Disabled') : $t('Int_Not_Configured') }}
         </a-tag>
       </template>
     </PageHeader>
@@ -18,64 +18,72 @@
           <template #icon><SendOutlined /></template>
         </a-avatar>
         <div>
-          <div class="hero-title">Telegram notifications</div>
+          <div class="hero-title">{{ $t('Int_Notifications_Title', { name: 'Telegram' }) }}</div>
           <div class="muted">
-            Send sales, purchases, payments and stock alerts to a Telegram chat or group via your bot.
+            {{ $t('Tg_Hero_Desc') }}
           </div>
         </div>
       </div>
 
-      <a-form layout="vertical" style="max-width: 640px">
-        <a-form-item label="Bot token">
-          <a-input-password
-            v-model:value="form.bot_token"
-            :placeholder="state.configured ? `Saved (${state.bot_token_hint}) — paste a new token to replace it` : '123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ'"
-            autocomplete="off"
-          />
-          <div class="muted" style="margin-top: 4px">
-            Create a bot with <strong>@BotFather</strong> in Telegram and paste its token here.
-            It is stored write-only and never shown again in full.
-          </div>
-        </a-form-item>
+      <a-tabs v-model:activeKey="tab">
+        <!-- ============================ Settings ============================ -->
+        <a-tab-pane key="settings" :tab="$t('Settings')">
+          <a-form layout="vertical" style="max-width: 640px">
+            <a-form-item :label="$t('Tg_Bot_Token')">
+              <a-input-password
+                v-model:value="form.bot_token"
+                :placeholder="state.configured ? $t('Tg_Saved_Paste_New_Token', { hint: state.bot_token_hint }) : '123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ'"
+                autocomplete="off"
+              />
+              <i18n-t keypath="Tg_Bot_Token_Help" tag="div" class="muted" style="margin-top: 4px">
+                <template #botfather><strong>@BotFather</strong></template>
+              </i18n-t>
+            </a-form-item>
 
-        <a-form-item label="Chat ID">
-          <a-input v-model:value="form.chat_id" placeholder="e.g. -1001234567890 for a group, or a user id" />
-          <div class="muted" style="margin-top: 4px">
-            Add the bot to your group or channel, then get the chat id — for example by
-            forwarding a message to <strong>@userinfobot</strong>, or from the bot's
-            <code>getUpdates</code> API response.
-          </div>
-        </a-form-item>
+            <a-form-item :label="$t('Tg_Chat_ID')">
+              <a-input v-model:value="form.chat_id" :placeholder="$t('Tg_Chat_ID_Placeholder')" />
+              <i18n-t keypath="Tg_Chat_ID_Help" tag="div" class="muted" style="margin-top: 4px">
+                <template #userinfobot><strong>@userinfobot</strong></template>
+                <template #getUpdates><code>getUpdates</code></template>
+              </i18n-t>
+            </a-form-item>
 
-        <a-form-item :label="$t('Events')">
-          <a-radio-group v-model:value="eventMode">
-            <a-radio-button value="all">All events</a-radio-button>
-            <a-radio-button value="selected">Selected events</a-radio-button>
-          </a-radio-group>
-          <a-select
-            v-if="eventMode === 'selected'"
-            v-model:value="form.events"
-            mode="multiple"
-            style="width: 100%; margin-top: 8px"
-            placeholder="Pick the events to send"
-            :options="state.available_events.map(ev => ({ value: ev, label: ev }))"
-          />
-        </a-form-item>
+            <a-form-item :label="$t('Events')">
+              <a-radio-group v-model:value="eventMode">
+                <a-radio-button value="all">{{ $t('Int_All_Events') }}</a-radio-button>
+                <a-radio-button value="selected">{{ $t('Int_Selected_Events') }}</a-radio-button>
+              </a-radio-group>
+              <a-select
+                v-if="eventMode === 'selected'"
+                v-model:value="form.events"
+                mode="multiple"
+                style="width: 100%; margin-top: 8px"
+                :placeholder="$t('Tg_Pick_Events')"
+                :options="state.available_events.map(ev => ({ value: ev, label: ev }))"
+              />
+            </a-form-item>
 
-        <a-form-item>
-          <a-space align="center">
-            <a-switch v-model:checked="form.enabled" />
-            <span>Enable Telegram notifications</span>
-          </a-space>
-        </a-form-item>
+            <a-form-item>
+              <a-space align="center">
+                <a-switch v-model:checked="form.enabled" />
+                <span>{{ $t('Int_Enable_Notifications', { name: 'Telegram' }) }}</span>
+              </a-space>
+            </a-form-item>
 
-        <a-space wrap>
-          <a-button type="primary" :loading="saving" @click="save">{{ $t('Save') }}</a-button>
-          <a-button :loading="testing" :disabled="!state.configured && !(form.bot_token && form.chat_id)" @click="sendTest">
-            Send test message
-          </a-button>
-        </a-space>
-      </a-form>
+            <a-space wrap>
+              <a-button type="primary" :loading="saving" @click="save">{{ $t('Save') }}</a-button>
+              <a-button :loading="testing" :disabled="!state.configured && !(form.bot_token && form.chat_id)" @click="sendTest">
+                {{ $t('Int_Send_Test_Message') }}
+              </a-button>
+            </a-space>
+          </a-form>
+        </a-tab-pane>
+
+        <!-- ============================ Guide ============================ -->
+        <a-tab-pane key="guide" :tab="$t('Guide')">
+          <TelegramGuide :state="state" @open-settings="tab = 'settings'" />
+        </a-tab-pane>
+      </a-tabs>
     </a-card>
   </div>
 </template>
@@ -91,6 +99,7 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import { SendOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import TelegramGuide from './TelegramGuide.vue';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -98,7 +107,8 @@ const { t } = useI18n();
 const isLoading = ref(true);
 const saving = ref(false);
 const testing = ref(false);
-const state = ref({ enabled: false, configured: false, bot_token_hint: null, chat_id: '', available_events: [] });
+const tab = ref('settings');
+const state = ref({ enabled: false, configured: false, bot_token_hint: null, chat_id: '', available_events: [], queue: {}, cron: {} });
 const form = ref({ enabled: false, bot_token: '', chat_id: '', events: [] });
 const eventMode = ref('all');
 
@@ -144,9 +154,9 @@ async function sendTest() {
     // Persist freshly entered credentials first so the test uses them.
     if (form.value.bot_token || form.value.chat_id !== (state.value.chat_id || '')) await save();
     await http.post('telegram/settings/test');
-    message.success('Test message sent — check your Telegram chat.');
+    message.success(t('Tg_Test_Sent'));
   } catch (e) {
-    message.error(e?.data?.error || e?.data?.message || 'Test failed');
+    message.error(e?.data?.error || e?.data?.message || t('Int_Test_Failed'));
   } finally {
     testing.value = false;
   }

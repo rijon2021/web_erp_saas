@@ -57,7 +57,7 @@
     <a-modal v-model:open="modalOpen" :title="editMode ? $t('Edit') : $t('Add')" :confirm-loading="submitting" :ok-text="$t('submit')" :cancel-text="$t('Delete_cancelButtonText')" @ok="submit">
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical" style="margin-top: 8px">
         <a-form-item :label="$t('Name') + ' *'" name="name">
-          <a-input v-model:value="form.name" :maxlength="150" placeholder="Secretary desk" />
+          <a-input v-model:value="form.name" :maxlength="150" :placeholder="$t('Pt_Desk_Name_Example')" />
         </a-form-item>
         <a-form-item :label="$t('Description')">
           <a-textarea v-model:value="form.description" :rows="2" :maxlength="500" />

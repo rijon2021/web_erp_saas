@@ -213,6 +213,29 @@ public function mail_settings(User $user)
         return $user->hasRole($permission->roles);
     }
 
+    // Settings > Audit Log
+    public function audit_log(User $user)
+    {
+        $permission = Permission::where('name', 'audit_log')->first();
+
+        return $permission ? $user->hasRole($permission->roles) : false;
+    }
+
+    // AI Assistant (plan feature `ai_assistant`)
+    public function ai_assistant(User $user)
+    {
+        $permission = Permission::where('name', 'ai_assistant')->first();
+
+        return $permission ? $user->hasRole($permission->roles) : false;
+    }
+
+    public function ai_settings(User $user)
+    {
+        $permission = Permission::where('name', 'ai_settings')->first();
+
+        return $permission ? $user->hasRole($permission->roles) : false;
+    }
+
     public function update_settings(User $user)
     {
         $permission = Permission::where('name', 'update_settings')->first();

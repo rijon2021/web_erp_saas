@@ -72,7 +72,7 @@
         <template #headerCell="{ column }">
           <template v-if="column.key === 'payment_status'">
             {{ column.title }}
-            <a-tooltip :title="$t('Ord_Guide_PaymentStatus_Tip')">
+            <a-tooltip :title="$t('Ord_Guide_PayAuto_Tip')">
               <QuestionCircleOutlined class="head-help" @click.stop="guideOpen = true" />
             </a-tooltip>
           </template>
@@ -80,10 +80,16 @@
         </template>
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'status'">
-            <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
             <a-tag v-if="record.has_preorder_items" color="warning">{{ $t('PreOrder') }}</a-tag>
             <a-tooltip v-if="record.is_flagged" :title="record.flag_reason">
               <a-tag color="error"><FlagOutlined /> {{ $t('Flagged') }}</a-tag>
+            </a-tooltip>
+          </template>
+          <template v-else-if="column.key === 'customer_name'">
+            {{ record.customer_name }}
+            <a-tooltip v-if="record.is_guest" :title="$t('Guest_Order_Help')">
+              <a-tag style="margin-inline-start: 4px">{{ $t('Guest_Order') }}</a-tag>
             </a-tooltip>
           </template>
           <template v-else-if="column.key === 'payment_method'">
@@ -93,10 +99,14 @@
             </a-tag>
           </template>
           <template v-else-if="column.key === 'payment_status'">
-            <a-tag :color="record.payment_status === 'paid' ? 'success' : 'warning'">{{ record.payment_status || 'pending' }}</a-tag>
+            <a-tag :color="onlineOrderPaymentColor(record.payment_status)">{{ statusLabel(record.payment_status || 'pending') }}</a-tag>
             <a-tag v-if="record.has_pending_proof" color="processing" style="margin-inline-start: 4px">
               {{ $t('ProofToVerify') }}
             </a-tag>
+            <!-- Paid online, but auto-confirm could not run (e.g. stock ran out) -->
+            <a-tooltip v-if="record.auto_confirm_error" :title="record.auto_confirm_error">
+              <a-tag color="error" style="margin-inline-start: 4px">{{ $t('Auto_Confirm_Failed_Tag') }}</a-tag>
+            </a-tooltip>
           </template>
           <template v-else-if="column.key === 'total'">
             {{ currency(record.total) }}
@@ -188,7 +198,7 @@
         </div>
         <ul class="guide-list">
           <li v-for="s in lifecycle" :key="s.key">
-            <a-tag :color="statusColor(s.key)" class="guide-tag">{{ s.key }}</a-tag>
+            <a-tag :color="statusColor(s.key)" class="guide-tag">{{ statusLabel(s.key) }}</a-tag>
             <span>{{ $t(s.text) }}</span>
           </li>
         </ul>
@@ -201,18 +211,22 @@
           <CreditCardOutlined :style="{ color: token.colorInfo }" />
           {{ $t('Ord_Guide_Payment_Title') }}
         </div>
-        <p class="guide-intro">{{ $t('Ord_Guide_Payment_Intro') }}</p>
+        <p class="guide-intro">{{ $t('Ord_Guide_PayAuto_Intro') }}</p>
         <ul class="guide-list">
           <li>
-            <a-tag color="success" class="guide-tag">paid</a-tag>
-            <span>{{ $t('Ord_Guide_Payment_Paid') }}</span>
+            <a-tag color="success" class="guide-tag">{{ statusLabel('paid') }}</a-tag>
+            <span>{{ $t('Ord_Guide_PayAuto_Paid') }}</span>
           </li>
           <li>
-            <a-tag color="warning" class="guide-tag">pending</a-tag>
-            <span>{{ $t('Ord_Guide_Payment_Pending') }}</span>
+            <a-tag :color="onlineOrderPaymentColor('partial')" class="guide-tag">{{ statusLabel('partial') }}</a-tag>
+            <span>{{ $t('Ord_Guide_PayAuto_Partial') }}</span>
           </li>
           <li>
-            <a-tag color="error" class="guide-tag">failed</a-tag>
+            <a-tag color="warning" class="guide-tag">{{ statusLabel('pending') }}</a-tag>
+            <span>{{ $t('Ord_Guide_PayAuto_Pending') }}</span>
+          </li>
+          <li>
+            <a-tag color="error" class="guide-tag">{{ statusLabel('failed') }}</a-tag>
             <span>{{ $t('Ord_Guide_Payment_Failed') }}</span>
           </li>
         </ul>
@@ -228,7 +242,7 @@
         <a-steps direction="vertical" size="small" :current="-1" class="guide-steps">
           <a-step v-for="(k, i) in markPaidSteps" :key="i" :title="$t(k)" />
         </a-steps>
-        <a-alert type="info" show-icon :message="$t('Ord_Guide_MarkPaid_Note')" />
+        <a-alert type="info" show-icon :message="$t('Ord_Guide_PayAuto_Note')" />
       </div>
 
       <a-divider class="guide-divider" />
@@ -259,7 +273,8 @@
  * (creates a Sale + deducts stock, hence the stock-shortage errors) or
  * cancelled; confirmed → shipped → delivered.
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useFormat } from '../../composables/useFormat';
 import { useRoute } from 'vue-router';
 import { message, Modal, theme } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
@@ -271,11 +286,13 @@ import {
 import PageHeader from '../../components/PageHeader.vue';
 import { useAuthStore } from '../../stores/auth';
 import http from '../../lib/http';
-import { PAGE_SIZE_OPTIONS, buildPageSizeOptionText } from '../../composables/useCrudTable';
+import { onlineOrderPaymentColor } from '../../lib/statusTags';
+import { pageSizesFor, buildPageSizeOptionText } from '../../composables/useCrudTable';
 
 const { t } = useI18n();
 const { token } = theme.useToken();
 const auth = useAuthStore();
+const { moneyBase } = useFormat();
 
 const isLoading = ref(true);
 const rows = ref([]);
@@ -330,17 +347,18 @@ const pagination = computed(() => ({
   pageSize: perPage.value,
   total: total.value,
   showSizeChanger: true,
-  pageSizeOptions: PAGE_SIZE_OPTIONS,
+  pageSizeOptions: pageSizesFor(total.value),
   buildOptionText: buildPageSizeOptionText,
 }));
 
+// Base-currency amount with the configured price format and Currency Position.
 function currency(n) {
-  const code = auth.currency;
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: code }).format(n || 0);
-  } catch (e) {
-    return `${code} ${Number(n || 0).toFixed(2)}`;
-  }
+  return moneyBase(n || 0);
+}
+// Status values stay raw for the API; only the tag text is translated.
+const STATUS_LABEL_KEYS = { pending: 'pending', confirmed: 'confirmed', cancelled: 'cancelled', shipped: 'Shipped', delivered: 'Delivered', paid: 'paid', partial: 'PartiallyPaid', refunded: 'Refunded', failed: 'Failed' };
+function statusLabel(s) {
+  return STATUS_LABEL_KEYS[s] ? t(STATUS_LABEL_KEYS[s]) : s;
 }
 function statusColor(s) {
   return { pending: 'warning', confirmed: 'success', shipped: 'cyan', delivered: 'blue', cancelled: 'error' }[s] || 'default';
@@ -350,6 +368,7 @@ function paymentMethodLabel(m) {
     credit_card: t('CreditCard'), paypal: 'PayPal', paystack: 'Paystack', flutterwave: 'Flutterwave',
     razorpay: 'Razorpay', mobile_money: t('MobileMoney'), cod: t('CashOnDelivery'),
     gcash: t('GCash'), bank_transfer: t('BankTransfer'), cash_on_pickup: t('CashOnPickup'),
+    wallet: t('CW_Customer_Wallet'),
   }[m] || m || 'N/A';
 }
 function paymentMethodColor(m) {
@@ -385,7 +404,7 @@ function parseItems(items) {
     const name = x?.name || `#${x?.product_id ?? ''}`;
     const need = x?.required !== undefined ? x.required : '-';
     const have = x?.available !== undefined ? x.available : '-';
-    return `${name}: Required ${need} — Available ${have}`;
+    return t('Store_Item_Required_Available', { name, need, have });
   });
 }
 function parsePayload(data) {
@@ -552,11 +571,25 @@ function changeStatus(row, newStatus) {
   patchStatus(row, newStatus, t('Status_updated'));
 }
 
-// The pending-work bell links here as /store/orders?proof=pending.
+// The pending-work bell links here as /store/orders?status=pending or
+// ?proof=pending. Watched, not just read on mount: clicking the bell while
+// already on this page only changes the query, and the component is reused.
 const route = useRoute();
+function applyQueryFilters() {
+  const s = String(route.query.status || '');
+  status.value = ['pending', 'confirmed', 'cancelled'].includes(s) ? s : '';
+  proofFilter.value = route.query.proof === 'pending' ? 'pending' : '';
+}
 onMounted(() => {
-  if (route.query.proof === 'pending') proofFilter.value = 'pending';
+  applyQueryFilters();
   fetch();
+});
+const ownPath = route.path;
+watch(() => [route.query.status, route.query.proof], () => {
+  // Leaving the page also changes the query; don't refetch on the way out.
+  if (route.path !== ownPath) return;
+  applyQueryFilters();
+  reload();
 });
 </script>
 

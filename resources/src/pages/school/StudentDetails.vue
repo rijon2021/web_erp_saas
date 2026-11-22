@@ -1,9 +1,9 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="student ? student.name : 'Student'"
+      :title="student ? student.name : $t('Sc_Student')"
       :subtitle="student ? subtitle : ''"
-      :breadcrumb="['School', 'Students', student ? student.admission_number : '']"
+      :breadcrumb="[$t('Sc_School'), $t('Sc_Students'), student ? student.admission_number : '']"
     >
       <template #actions>
         <a-button @click="$router.push('/school/students')">
@@ -22,11 +22,11 @@
     <template v-else-if="student">
       <a-alert
         v-if="student.medical_notes" type="warning" show-icon class="alert"
-        :message="`Medical: ${student.medical_notes}`"
+        :message="$t('Sc_Medical_Notes_Alert', { notes: student.medical_notes })"
       />
       <a-alert
         v-if="!student.class_name" type="info" show-icon class="alert"
-        message="This student has no class for the current academic year."
+        :message="$t('Sc_No_Class_This_Year')"
       />
 
       <a-row :gutter="16">
@@ -48,31 +48,31 @@
             </div>
 
             <a-descriptions :column="1" size="small" class="id-desc">
-              <a-descriptions-item label="Age">{{ student.age !== null ? student.age : '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Gender">{{ labelOf(GENDERS, student.gender) }}</a-descriptions-item>
-              <a-descriptions-item label="Born">{{ student.date_of_birth ? date(student.date_of_birth) : '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Admitted">{{ student.admission_date ? date(student.admission_date) : '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Roll no.">{{ student.roll_number || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Blood">{{ student.blood_group || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Phone">{{ student.phone || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Address">
+              <a-descriptions-item :label="$t('Sc_Age')">{{ student.age !== null ? student.age : '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Gender')">{{ labelOf(GENDERS, student.gender) }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Born')">{{ student.date_of_birth ? date(student.date_of_birth) : '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Admitted')">{{ student.admission_date ? date(student.admission_date) : '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Roll_No')">{{ student.roll_number || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Blood')">{{ student.blood_group || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Phone')">{{ student.phone || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Address')">
                 {{ [student.address, student.city].filter(Boolean).join(', ') || '—' }}
               </a-descriptions-item>
             </a-descriptions>
           </a-card>
 
-          <a-card size="small" title="Guardian" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Sc_Guardian')" style="margin-bottom: 16px">
             <a-descriptions v-if="student.guardian_name || student.guardian_phone" :column="1" size="small">
-              <a-descriptions-item label="Name">{{ student.guardian_name || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Relation">{{ student.guardian_relation || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Phone">{{ student.guardian_phone || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Email">{{ student.guardian_email || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Occupation">{{ student.guardian_occupation || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Name')">{{ student.guardian_name || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Relation')">{{ student.guardian_relation || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Phone')">{{ student.guardian_phone || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Email')">{{ student.guardian_email || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Occupation')">{{ student.guardian_occupation || '—' }}</a-descriptions-item>
             </a-descriptions>
-            <a-empty v-else :image="simpleEmptyImage" description="No guardian recorded" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Sc_No_Guardian_Recorded')" />
           </a-card>
 
-          <a-card size="small" title="Attendance this year">
+          <a-card size="small" :title="$t('Sc_Attendance_This_Year')">
             <div v-if="summary.rate !== null && summary.rate !== undefined" class="att-rate">
               <a-progress
                 type="dashboard" :percent="summary.rate" :width="120"
@@ -80,10 +80,10 @@
               />
             </div>
             <a-descriptions :column="2" size="small">
-              <a-descriptions-item label="Present">{{ summary.present || 0 }}</a-descriptions-item>
-              <a-descriptions-item label="Absent">{{ summary.absent || 0 }}</a-descriptions-item>
-              <a-descriptions-item label="Late">{{ summary.late || 0 }}</a-descriptions-item>
-              <a-descriptions-item label="Excused">{{ summary.excused || 0 }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Present')">{{ summary.present || 0 }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Absent')">{{ summary.absent || 0 }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Late')">{{ summary.late || 0 }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Sc_Excused')">{{ summary.excused || 0 }}</a-descriptions-item>
             </a-descriptions>
           </a-card>
         </a-col>
@@ -91,33 +91,33 @@
         <a-col :xs="24" :lg="16">
           <div class="stats">
             <div class="stat">
-              <span class="stat-label">Attendance</span>
+              <span class="stat-label">{{ $t('Sc_Attendance') }}</span>
               <span class="stat-value">{{ stats.attendance_rate !== null ? stats.attendance_rate + '%' : '—' }}</span>
             </div>
             <div class="stat">
-              <span class="stat-label">Years enrolled</span>
+              <span class="stat-label">{{ $t('Sc_Years_Enrolled') }}</span>
               <span class="stat-value">{{ stats.enrollments || 0 }}</span>
             </div>
             <div class="stat">
-              <span class="stat-label">Fees billed</span>
+              <span class="stat-label">{{ $t('Sc_Fees_Billed') }}</span>
               <span class="stat-value">{{ money(stats.billed || 0) }}</span>
             </div>
             <div class="stat" :class="{ 'stat--danger': (stats.due || 0) > 0 }">
-              <span class="stat-label">Outstanding</span>
+              <span class="stat-label">{{ $t('Sc_Outstanding') }}</span>
               <span class="stat-value">{{ money(stats.due || 0) }}</span>
             </div>
           </div>
 
           <a-card size="small">
             <a-tabs v-model:activeKey="tab">
-              <a-tab-pane key="results" tab="Results">
+              <a-tab-pane key="results" :tab="$t('Sc_Results')">
                 <a-table
                   :columns="resultColumns" :data-source="timeline.results || []" :loading="tabLoading"
                   :row-key="r => r.id" :pagination="false" :scroll="{ x: 'max-content' }" size="small"
                 >
                   <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'marks'">
-                      <span v-if="record.is_absent" class="muted">Absent</span>
+                      <span v-if="record.is_absent" class="muted">{{ $t('Sc_Absent') }}</span>
                       <span v-else-if="record.marks !== null">{{ record.marks }} / {{ record.max_marks }}</span>
                       <span v-else class="muted">—</span>
                     </template>
@@ -130,19 +130,19 @@
                       <span v-else class="muted">—</span>
                     </template>
                     <template v-else-if="column.key === 'passed'">
-                      <a-tag v-if="record.passed === true" color="success">Pass</a-tag>
-                      <a-tag v-else-if="record.passed === false" color="error">Fail</a-tag>
+                      <a-tag v-if="record.passed === true" color="success">{{ $t('Sc_Pass') }}</a-tag>
+                      <a-tag v-else-if="record.passed === false" color="error">{{ $t('Sc_Fail') }}</a-tag>
                       <span v-else class="muted">—</span>
                     </template>
                     <template v-else-if="column.key === 'exam_date'">
                       {{ record.exam_date ? date(record.exam_date) : '—' }}
                     </template>
                   </template>
-                  <template #emptyText><a-empty :image="simpleEmptyImage" description="No results yet" /></template>
+                  <template #emptyText><a-empty :image="simpleEmptyImage" :description="$t('Sc_No_Results_Yet')" /></template>
                 </a-table>
               </a-tab-pane>
 
-              <a-tab-pane key="attendance" tab="Attendance">
+              <a-tab-pane key="attendance" :tab="$t('Sc_Attendance')">
                 <a-table
                   :columns="attendanceColumns" :data-source="timeline.attendance || []" :loading="tabLoading"
                   :row-key="r => r.id" :pagination="{ pageSize: 15 }" size="small"
@@ -155,11 +155,11 @@
                       </a-tag>
                     </template>
                   </template>
-                  <template #emptyText><a-empty :image="simpleEmptyImage" description="Nothing recorded" /></template>
+                  <template #emptyText><a-empty :image="simpleEmptyImage" :description="$t('Sc_Nothing_Recorded')" /></template>
                 </a-table>
               </a-tab-pane>
 
-              <a-tab-pane key="enrollments" tab="Enrolment history">
+              <a-tab-pane key="enrollments" :tab="$t('Sc_Enrolment_History')">
                 <a-table
                   :columns="enrollmentColumns" :data-source="timeline.enrollments || []" :loading="tabLoading"
                   :row-key="r => r.id" :pagination="false" size="small"
@@ -174,11 +174,11 @@
                       {{ record.enrolled_on ? date(record.enrolled_on) : '—' }}
                     </template>
                   </template>
-                  <template #emptyText><a-empty :image="simpleEmptyImage" description="Never enrolled" /></template>
+                  <template #emptyText><a-empty :image="simpleEmptyImage" :description="$t('Sc_Never_Enrolled')" /></template>
                 </a-table>
               </a-tab-pane>
 
-              <a-tab-pane key="fees" tab="Fees">
+              <a-tab-pane key="fees" :tab="$t('Sc_Fees')">
                 <a-table
                   :columns="invoiceColumns" :data-source="timeline.invoices || []" :loading="tabLoading"
                   :row-key="r => r.id" :pagination="false" :scroll="{ x: 'max-content' }" size="small"
@@ -196,7 +196,7 @@
                       </a-tag>
                     </template>
                   </template>
-                  <template #emptyText><a-empty :image="simpleEmptyImage" description="Nothing billed" /></template>
+                  <template #emptyText><a-empty :image="simpleEmptyImage" :description="$t('Sc_Nothing_Billed')" /></template>
                 </a-table>
               </a-tab-pane>
             </a-tabs>
@@ -205,7 +205,7 @@
       </a-row>
     </template>
 
-    <a-empty v-else description="Student not found" style="padding: 64px 0" />
+    <a-empty v-else :description="$t('Sc_Student_Not_Found')" style="padding: 64px 0" />
   </div>
 </template>
 
@@ -230,8 +230,9 @@ import {
   INVOICE_STATUSES, labelOf, optionOf, gradeColor,
 } from './schoolOptions';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const route = useRoute();
 const auth = useAuthStore();
 const { money, date } = useFormat();
@@ -254,8 +255,8 @@ const subtitle = computed(() => {
   if (!s) return '';
   return [
     s.class_name ? `${s.class_name}${s.section_name ? ' — ' + s.section_name : ''}` : null,
-    s.roll_number ? `Roll ${s.roll_number}` : null,
-    s.age !== null ? `${s.age} yrs` : null,
+    s.roll_number ? t('Sc_Roll_N', { n: s.roll_number }) : null,
+    s.age !== null ? t('Sc_N_Yrs', { n: s.age }) : null,
     s.guardian_phone,
   ].filter(Boolean).join(' · ');
 });
@@ -267,34 +268,34 @@ function rateStroke(rate) {
 }
 
 const resultColumns = [
-  { title: 'Exam', dataIndex: 'exam_name', key: 'exam_name' },
-  { title: 'Subject', dataIndex: 'subject_name', key: 'subject_name' },
-  { title: 'Date', key: 'exam_date', dataIndex: 'exam_date', width: 130 },
-  { title: 'Marks', key: 'marks', dataIndex: 'marks', width: 130 },
+  { title: t('Sc_Exam'), dataIndex: 'exam_name', key: 'exam_name' },
+  { title: t('Sc_Subject'), dataIndex: 'subject_name', key: 'subject_name' },
+  { title: t('Date'), key: 'exam_date', dataIndex: 'exam_date', width: 130 },
+  { title: t('Sc_Marks'), key: 'marks', dataIndex: 'marks', width: 130 },
   { title: '%', key: 'percentage', dataIndex: 'percentage', width: 90 },
-  { title: 'Grade', key: 'grade', dataIndex: 'grade', width: 90 },
-  { title: 'Result', key: 'passed', dataIndex: 'passed', width: 100 },
+  { title: t('Sc_Grade'), key: 'grade', dataIndex: 'grade', width: 90 },
+  { title: t('Sc_Result'), key: 'passed', dataIndex: 'passed', width: 100 },
 ];
 const attendanceColumns = [
-  { title: 'Date', key: 'attendance_date', dataIndex: 'attendance_date', width: 150 },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 130 },
-  { title: 'Remarks', dataIndex: 'remarks', key: 'remarks' },
+  { title: t('Date'), key: 'attendance_date', dataIndex: 'attendance_date', width: 150 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 130 },
+  { title: t('Sc_Remarks'), dataIndex: 'remarks', key: 'remarks' },
 ];
 const enrollmentColumns = [
-  { title: 'Year', dataIndex: 'year_name', key: 'year_name' },
-  { title: 'Class', dataIndex: 'class_name', key: 'class_name' },
-  { title: 'Section', dataIndex: 'section_name', key: 'section_name', width: 110 },
-  { title: 'Roll', dataIndex: 'roll_number', key: 'roll_number', width: 90 },
-  { title: 'Enrolled', key: 'enrolled_on', dataIndex: 'enrolled_on', width: 130 },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 130 },
+  { title: t('Sc_Year'), dataIndex: 'year_name', key: 'year_name' },
+  { title: t('Sc_Class'), dataIndex: 'class_name', key: 'class_name' },
+  { title: t('Sc_Section'), dataIndex: 'section_name', key: 'section_name', width: 110 },
+  { title: t('Sc_Roll'), dataIndex: 'roll_number', key: 'roll_number', width: 90 },
+  { title: t('Sc_Enrolled'), key: 'enrolled_on', dataIndex: 'enrolled_on', width: 130 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 130 },
 ];
 const invoiceColumns = [
-  { title: 'Date', key: 'invoice_date', dataIndex: 'invoice_date', width: 130 },
-  { title: 'Ref', dataIndex: 'reference', key: 'reference', width: 160 },
-  { title: 'Total', key: 'total', dataIndex: 'total', width: 120 },
-  { title: 'Paid', key: 'paid', dataIndex: 'paid', width: 120 },
-  { title: 'Due', key: 'due', dataIndex: 'due', width: 120 },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 130 },
+  { title: t('Date'), key: 'invoice_date', dataIndex: 'invoice_date', width: 130 },
+  { title: t('Sc_Ref'), dataIndex: 'reference', key: 'reference', width: 160 },
+  { title: t('Total'), key: 'total', dataIndex: 'total', width: 120 },
+  { title: t('Paid'), key: 'paid', dataIndex: 'paid', width: 120 },
+  { title: t('Due'), key: 'due', dataIndex: 'due', width: 120 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 130 },
 ];
 
 function initials(name) {

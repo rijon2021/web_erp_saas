@@ -18,6 +18,7 @@ use App\Models\Unit;
 use App\Models\Warehouse;
 use App\Models\WooCommerceLog;
 use App\Models\WooCommerceSetting;
+use App\Services\ChannelSales;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Validator;
@@ -34,9 +35,26 @@ class SyncService
 
     private Client $client;
 
+    /** The tenant's settings row, when built through fromSettings(). */
+    private ?WooCommerceSetting $settings = null;
+
+    /** @var array<string, int|bool>|null resolved once per service instance */
+    private ?array $tuning = null;
+
     public function __construct(Client $client)
     {
         $this->client = $client;
+    }
+
+    /**
+     * Store-specific tuning for this tenant (batch sizes, lookup page caps,
+     * alternate-SKU rule) — see WooCommerceSetting::tuning().
+     */
+    private function tuning(string $key): int|bool
+    {
+        $this->tuning ??= WooCommerceSetting::tuning($this->settings);
+
+        return $this->tuning[$key];
     }
 
     // ---------------------------------------------------------------------
@@ -93,7 +111,7 @@ class SyncService
             $parts[] = "Customer note:\n".$customerNote;
         }
 
-        $max = (int) env('WOO_PULL_ORDER_NOTES_MAX', 25);
+        $max = (int) config('woocommerce.pull_order_notes_max');
         if ($max <= 0) {
             return implode("\n\n", $parts);
         }
@@ -239,65 +257,25 @@ class SyncService
 
     /**
      * Reverse a previously-imported Sale that was created from a Woo order
-     * which has since been cancelled/refunded/failed. Restores stock,
-     * soft-deletes payments and the sale itself.
+     * which has since been cancelled/refunded/failed: stock back, payments
+     * removed, sale soft-deleted. Same steps as SalesController::destroy,
+     * including its rule that a sale with a return is not deleted.
      */
     private function reverseImportedSale(Sale $sale, string $reason, ?string $newWooStatus = null): void
     {
-        DB::transaction(function () use ($sale, $reason, $newWooStatus) {
-            // Restore stock — only if the sale was previously decremented
-            // (i.e. statut was 'completed'). Mirrors SalesController::destroy.
-            if (($sale->statut ?? '') === 'completed') {
-                $details = SaleDetail::where('sale_id', $sale->id)
-                    ->whereNull('deleted_at')
-                    ->get();
-                foreach ($details as $d) {
-                    $unit = $d->sale_unit_id ? Unit::find($d->sale_unit_id) : null;
-                    if (!$unit) {
-                        $product = Product::find($d->product_id);
-                        if ($product && $product->unit_sale_id) {
-                            $unit = Unit::find($product->unit_sale_id);
-                        }
-                    }
+        $extra = $newWooStatus !== null ? ['woocommerce_order_status' => $newWooStatus] : [];
 
-                    $qty = (float) $d->quantity;
-                    $opv = max((float) ($unit->operator_value ?? 1), 1);
-                    $addQ = ($unit && ($unit->operator ?? '') === '/') ? ($qty / $opv) : ($qty * $opv);
+        if (! ChannelSales::reverse($sale, $extra)) {
+            $sale->forceFill($extra)->save();
 
-                    $pwQuery = product_warehouse::whereNull('deleted_at')
-                        ->where('warehouse_id', $sale->warehouse_id)
-                        ->where('product_id', $d->product_id);
-                    if ($d->product_variant_id) {
-                        $pwQuery->where('product_variant_id', $d->product_variant_id);
-                    } else {
-                        $pwQuery->whereNull('product_variant_id');
-                    }
-                    $pw = $pwQuery->first();
-                    if ($pw && $unit) {
-                        $pw->qte = max(0, ((float) $pw->qte) + $addQ);
-                        $pw->save();
-                    }
-                }
-            }
+            $this->log('orders.pull', 'warning', 'Sale not reversed: it was delivered or has a return. Review it by hand.', [
+                'sale_id' => $sale->id,
+                'woocommerce_order_id' => $sale->woocommerce_order_id,
+                'new_woo_status' => $newWooStatus,
+            ]);
 
-            // Soft-delete payments tied to this sale
-            PaymentSale::where('sale_id', $sale->id)
-                ->whereNull('deleted_at')
-                ->get()
-                ->each(fn ($p) => $p->delete());
-
-            // Soft-delete sale details and the sale itself
-            SaleDetail::where('sale_id', $sale->id)
-                ->whereNull('deleted_at')
-                ->get()
-                ->each(fn ($d) => $d->delete());
-
-            if ($newWooStatus !== null) {
-                $sale->woocommerce_order_status = $newWooStatus;
-            }
-            $sale->save();
-            $sale->delete();
-        }, 3);
+            return;
+        }
 
         $this->log('orders.pull', 'info', 'Reversed imported sale due to Woo status change', [
             'sale_id' => $sale->id,
@@ -305,6 +283,19 @@ class SyncService
             'new_woo_status' => $newWooStatus,
             'reason' => $reason,
         ]);
+    }
+
+    /**
+     * Follow a Woo status change on an imported sale. Stock moves only when
+     * the sale crosses `completed`, so the two stay in step in both directions.
+     */
+    private function applyWooStatus(Sale $sale, array $order, string $wooStatus): void
+    {
+        ChannelSales::followStatus($sale, $this->mapWooOrderStatusToStockyStatut($wooStatus));
+
+        $sale->woocommerce_order_status = $wooStatus;
+        $sale->woocommerce_order_number = (string) ($order['number'] ?? $sale->woocommerce_order_number);
+        $sale->save();
     }
 
     /**
@@ -381,7 +372,7 @@ class SyncService
                         $wooStatus = (string) ($order['status'] ?? '');
 
                         // Idempotency:
-                        // - If an active sale exists => update STATUS ONLY (do not re-import lines/payments/stock).
+                        // - If an active sale exists => follow its status (lines and payments are not re-imported; stock moves if it enters or leaves completed).
                         //   If the new Woo status is a reversal (cancelled/refunded/failed),
                         //   reverse the imported sale: restore stock + soft-delete payments + soft-delete sale.
                         // - If a sale exists but is soft-deleted => allow inserting a new sale (do NOT restore).
@@ -392,10 +383,7 @@ class SyncService
                                 $updated++;
                                 continue;
                             }
-                            $existingActiveSale->statut = $this->mapWooOrderStatusToStockyStatut($wooStatus);
-                            $existingActiveSale->woocommerce_order_status = $wooStatus;
-                            $existingActiveSale->woocommerce_order_number = (string) ($order['number'] ?? $existingActiveSale->woocommerce_order_number ?? '');
-                            $existingActiveSale->save();
+                            $this->applyWooStatus($existingActiveSale, $order, $wooStatus);
                             $updated++;
                             continue;
                         }
@@ -515,7 +503,6 @@ class SyncService
 
                         // Build sale detail rows + stock adjustments
                         $detailRows = [];
-                        $stockAdjustments = [];
 
                         foreach ($lineItems as $li) {
                             if (!is_array($li)) {
@@ -549,7 +536,6 @@ class SyncService
                             }
 
                             $unitId = (int) ($product->unit_sale_id ?? 0);
-                            $unit = $unitId > 0 ? Unit::find($unitId) : null;
 
                             $price = (float) ($li['price'] ?? 0);
                             if ($price <= 0) {
@@ -575,13 +561,6 @@ class SyncService
                                 'created_at' => now(),
                                 'updated_at' => now(),
                             ];
-
-                            $stockAdjustments[] = [
-                                'product_id' => (int) $product->id,
-                                'product_variant_id' => $variant ? (int) $variant->id : null,
-                                'unit' => $unit,
-                                'qty' => $qty,
-                            ];
                         }
 
                         DB::transaction(function () use (
@@ -602,7 +581,6 @@ class SyncService
                             $saleStatut,
                             $notes,
                             &$detailRows,
-                            $stockAdjustments,
                             &$created
                         ) {
                             $saleAttrs = [
@@ -700,28 +678,8 @@ class SyncService
                                 }
                             }
 
-                            // Adjust stock only for completed-like orders
-                            // Adjust stock for completed-like orders (treat soft-deleted as new import)
                             if ($saleStatut === 'completed') {
-                                foreach ($stockAdjustments as $adj) {
-                                    $pw = product_warehouse::where('deleted_at', '=', null)
-                                        ->where('warehouse_id', $warehouseId)
-                                        ->where('product_id', $adj['product_id']);
-                                    if ($adj['product_variant_id']) {
-                                        $pw->where('product_variant_id', $adj['product_variant_id']);
-                                    }
-                                    $pw = $pw->first();
-
-                                    $unit = $adj['unit'];
-                                    if ($pw && $unit) {
-                                        if ($unit->operator === '/') {
-                                            $pw->qte -= $adj['qty'] / (float) $unit->operator_value;
-                                        } else {
-                                            $pw->qte -= $adj['qty'] * (float) $unit->operator_value;
-                                        }
-                                        $pw->save();
-                                    }
-                                }
+                                ChannelSales::moveStock($sale, -1);
                             }
 
                             $created++;
@@ -775,7 +733,7 @@ class SyncService
         }
 
         // Idempotency:
-        // - If an active sale exists => update STATUS ONLY (do not re-import lines/payments/stock).
+        // - If an active sale exists => follow its status (lines and payments are not re-imported; stock moves if it enters or leaves completed).
         // - If a sale exists but is soft-deleted => allow inserting a new sale (do NOT restore).
         $existingActiveSale = Sale::whereNull('deleted_at')->where('woocommerce_order_id', $wooOrderId)->first();
 
@@ -805,10 +763,7 @@ class SyncService
                     $this->reverseImportedSale($existingActiveSale, 'woo status changed to '.$wooStatus, $wooStatus);
                     return ['ok' => true, 'created' => 0, 'updated' => 1, 'skipped' => 0, 'errors' => 0, 'processed' => 1, 'reversed' => true];
                 }
-                $existingActiveSale->statut = $this->mapWooOrderStatusToStockyStatut($wooStatus);
-                $existingActiveSale->woocommerce_order_status = $wooStatus;
-                $existingActiveSale->woocommerce_order_number = (string) ($order['number'] ?? $existingActiveSale->woocommerce_order_number ?? '');
-                $existingActiveSale->save();
+                $this->applyWooStatus($existingActiveSale, $order, $wooStatus);
 
                 return ['ok' => true, 'created' => 0, 'updated' => 1, 'skipped' => 0, 'errors' => 0, 'processed' => 1, 'already_imported' => true];
             }
@@ -910,7 +865,6 @@ class SyncService
             }
 
             $detailRows = [];
-            $stockAdjustments = [];
 
             foreach ($lineItems as $li) {
                 if (!is_array($li)) continue;
@@ -930,7 +884,6 @@ class SyncService
                 }
 
                 $unitId = (int) ($product->unit_sale_id ?? 0);
-                $unit = $unitId > 0 ? Unit::find($unitId) : null;
 
                 $price = (float) ($li['price'] ?? 0);
                 if ($price <= 0) {
@@ -956,13 +909,6 @@ class SyncService
                     'created_at' => now(),
                     'updated_at' => now(),
                 ];
-
-                $stockAdjustments[] = [
-                    'product_id' => (int) $product->id,
-                    'product_variant_id' => $variant ? (int) $variant->id : null,
-                    'unit' => $unit,
-                    'qty' => $qty,
-                ];
             }
 
             DB::transaction(function () use (
@@ -982,8 +928,7 @@ class SyncService
                 $paymentStatut,
                 $saleStatut,
                 $notes,
-                &$detailRows,
-                $stockAdjustments
+                &$detailRows
             ) {
                 $saleAttrs = [
                     'date' => $date,
@@ -1074,27 +1019,8 @@ class SyncService
                     }
                 }
 
-                // Adjust stock for completed-like orders (treat soft-deleted as new import)
                 if ($saleStatut === 'completed') {
-                    foreach ($stockAdjustments as $adj) {
-                        $pw = product_warehouse::where('deleted_at', '=', null)
-                            ->where('warehouse_id', $warehouseId)
-                            ->where('product_id', $adj['product_id']);
-                        if ($adj['product_variant_id']) {
-                            $pw->where('product_variant_id', $adj['product_variant_id']);
-                        }
-                        $pw = $pw->first();
-
-                        $unit = $adj['unit'];
-                        if ($pw && $unit) {
-                            if ($unit->operator === '/') {
-                                $pw->qte -= $adj['qty'] / (float) $unit->operator_value;
-                            } else {
-                                $pw->qte -= $adj['qty'] * (float) $unit->operator_value;
-                            }
-                            $pw->save();
-                        }
-                    }
+                    ChannelSales::moveStock($sale, -1);
                 }
             }, 3);
 
@@ -1106,7 +1032,10 @@ class SyncService
 
     public static function fromSettings(WooCommerceSetting $settings): self
     {
-        return new self(new Client($settings->store_url, $settings->consumer_key, $settings->consumer_secret));
+        $service = new self(new Client($settings->store_url, $settings->consumer_key, $settings->consumer_secret));
+        $service->settings = $settings;
+
+        return $service;
     }
 
     // ---------------------------------------------------------------------
@@ -1319,7 +1248,7 @@ class SyncService
         $ids = [];
         $page = 1;
         $per = 100;
-        $pageCap = (int) env('WOO_DELETE_VARIATIONS_PAGE_CAP', 50);
+        $pageCap = (int) config('woocommerce.delete_variations_page_cap');
         $pageCap = max(1, min(500, $pageCap));
 
         try {
@@ -1456,7 +1385,7 @@ class SyncService
         $out = [];
         $page = 1;
         $per = 100;
-        $cap = (int) env('WOO_VARIATIONS_LIST_PAGE_CAP', 100);
+        $cap = (int) config('woocommerce.variations_list_page_cap');
         $cap = max(1, min(500, $cap));
 
         while ($page <= $cap) {
@@ -1786,7 +1715,7 @@ class SyncService
      */
     private function getRemoteIndexCached(?callable $progress = null): array
     {
-        $ttl = (int) env('WOO_REMOTE_INDEX_TTL', 900);
+        $ttl = (int) config('woocommerce.remote_index_ttl');
         if ($ttl <= 0) {
             return $this->buildRemoteIndex($progress);
         }
@@ -1910,13 +1839,13 @@ class SyncService
                     break;
                 }
 
-                // Hard cap to avoid infinite loops (configurable for large stores)
-                $cap = (int) env('WOO_REMOTE_INDEX_PAGE_CAP', 200);
+                // Hard cap to avoid infinite loops (per tenant, for large stores)
+                $cap = (int) $this->tuning('remote_index_page_cap');
                 if ($cap > 0 && $page >= $cap) {
                     $this->log('products.push', 'warning', 'Remote index pagination capped', [
                         'page' => $page,
                         'cap' => $cap,
-                        'note' => 'Increase WOO_REMOTE_INDEX_PAGE_CAP if your store has > '.($cap * $per).' products',
+                        'note' => 'Raise "Remote index page cap" on the WooCommerce settings tab if your store has > '.($cap * $per).' products',
                     ]);
                     break;
                 }
@@ -2583,8 +2512,13 @@ class SyncService
 
         $page = 1;
         $per = 100;
-        $cap = (int) env('WOO_PULL_VARIATIONS_PAGE_CAP', 50);
+        $cap = (int) config('woocommerce.pull_variations_page_cap');
         $cap = max(1, min(500, $cap));
+
+        // Shopify-style options: attribute name => option per pulled variation,
+        // turned into product_options after the loop (a single "Variant"
+        // attribute stays a legacy flat list).
+        $pulledOptionValues = [];
 
         while ($page <= $cap) {
             if ($shouldCancel) {
@@ -2656,7 +2590,7 @@ class SyncService
                 $price = $v['regular_price'] ?? ($v['price'] ?? null);
                 $priceF = ($price !== null && $price !== '' && is_numeric($price)) ? (float) $price : 0.0;
 
-                DB::transaction(function () use ($product, $varWooId, $sku, $variantName, $priceF, $defaultWarehouseId, $v) {
+                DB::transaction(function () use ($product, $varWooId, $sku, $variantName, $priceF, $defaultWarehouseId, $v, &$pulledOptionValues) {
                     // Find existing local variant by Woo variation id, else by code within the product.
                     $pv = ProductVariant::whereNull('deleted_at')
                         ->where('product_id', (int) $product->id)
@@ -2691,6 +2625,20 @@ class SyncService
                         $pv->image = 'no-image.png';
                     }
                     $pv->save();
+
+                    // Remember named attributes (Color => Red) for the options import below.
+                    $named = [];
+                    foreach ((array) ($v['attributes'] ?? []) as $a) {
+                        if (!is_array($a)) continue;
+                        $an = trim((string) ($a['name'] ?? ''));
+                        $ao = trim((string) ($a['option'] ?? ''));
+                        if ($an !== '' && $ao !== '' && mb_strtolower($an) !== 'variant') {
+                            $named[$an] = $ao;
+                        }
+                    }
+                    if ($named) {
+                        $pulledOptionValues[(int) $pv->id] = $named;
+                    }
 
                     // Dimensions fallback (Woo variations -> Stocky product)
                     // Many Woo stores leave parent dimensions empty and set them on variations.
@@ -2765,6 +2713,17 @@ class SyncService
             }
             $page++;
         }
+
+        if (!empty($pulledOptionValues)) {
+            try {
+                app(\App\Services\ProductOptionService::class)->importNamedValues($product, $pulledOptionValues);
+            } catch (\Throwable $e) {
+                $this->log('variants.pull', 'warning', 'Failed importing variant options', [
+                    'product_id' => (int) $product->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
     }
 
     private function downloadWooProductImage(string $url, int $wooId): ?string
@@ -2783,7 +2742,7 @@ class SyncService
             $res = Http::timeout(30)
                 ->connectTimeout(5)
                 ->withHeaders([
-                    'User-Agent' => 'StockyWooSync/1.0',
+                    'User-Agent' => 'POS-WooSync/1.0',
                     'Accept' => '*/*',
                 ])
                 ->get($url);
@@ -3296,18 +3255,27 @@ class SyncService
         ?callable $shouldCancel = null,
         ?int $startAfterId = null,
         ?int $maxProducts = null,
-        array $initial = []
+        array $initial = [],
+        ?array $productIds = null
     ): array
     {
         ini_set('max_execution_time', 2000);
         ini_set('memory_limit', '512M');
+
+        // Targeted push (auto-sync): just these products.
+        if ($productIds !== null) {
+            $productIds = array_values(array_filter(array_map('intval', $productIds)));
+            if (! $productIds) {
+                return ['created' => 0, 'updated' => 0, 'errors' => 0];
+            }
+        }
 
         $created = (int) ($initial['created'] ?? 0);
         $updated = (int) ($initial['updated'] ?? 0);
         $errors  = (int) ($initial['errors'] ?? 0);
         $processed = (int) ($initial['processed'] ?? 0);
         $missingSku = (int) ($initial['missing_sku'] ?? 0);
-        $maxConsecutiveWooFailures = (int) env('WOO_MAX_CONSECUTIVE_FAILURES', 7);
+        $maxConsecutiveWooFailures = (int) config('woocommerce.max_consecutive_failures');
         $maxConsecutiveWooFailures = max(1, min(100, $maxConsecutiveWooFailures));
         $consecutiveWooFailures = 0;
 
@@ -3317,9 +3285,16 @@ class SyncService
         if ($shouldCancel) {
             $shouldCancel();
         }
-        [$remoteBySku, $remoteByExternalId] = $this->getRemoteIndexCached($progress);
+        // A targeted push skips the index: an empty one makes each product fall
+        // back to its own /products?sku= lookup, far cheaper for a few items.
+        [$remoteBySku, $remoteByExternalId] = $productIds !== null
+            ? [[], []]
+            : $this->getRemoteIndexCached($progress);
 
         $query = Product::whereNull('deleted_at');
+        if ($productIds !== null) {
+            $query->whereIn('id', $productIds);
+        }
         if ($onlyUnsynced) {
             $query->whereNull('woocommerce_id');
         }
@@ -3606,12 +3581,7 @@ class SyncService
                                 ->all();
 
                             if (!empty($variantNames)) {
-                                $payload['attributes'] = [[
-                                    'name' => 'Variant',
-                                    'visible' => true,
-                                    'variation' => true,
-                                    'options' => array_values($variantNames),
-                                ]];
+                                $payload['attributes'] = app(\App\Services\ProductOptionService::class)->wooParentAttributes((int) $product->id, $variantNames);
                             }
                         } catch (\Throwable $e) {
                             $this->log('products.push', 'warning', 'Failed preparing variant attributes', ['product_id' => $product->id]);
@@ -3717,12 +3687,7 @@ class SyncService
                                                 ->all();
 
                                             if (!empty($variantNames)) {
-                                                $updatePayload['attributes'] = [[
-                                                    'name' => 'Variant',
-                                                    'visible' => true,
-                                                    'variation' => true,
-                                                    'options' => array_values($variantNames),
-                                                ]];
+                                                $updatePayload['attributes'] = app(\App\Services\ProductOptionService::class)->wooParentAttributes((int) $product->id, $variantNames);
                                             }
                                         } catch (\Throwable $e) {
                                         }
@@ -3958,7 +3923,7 @@ class SyncService
                                 if ($existingId <= 0) {
                                     $page2 = 1;
                                     $per2 = 100;
-                                    $cap2 = (int) env('WOO_SKU_SEARCH_PAGE_CAP', 5);
+                                    $cap2 = (int) $this->tuning('sku_search_page_cap');
                                     $cap2 = max(1, min(50, $cap2));
 
                                     while ($existingId <= 0 && $page2 <= $cap2) {
@@ -4004,7 +3969,7 @@ class SyncService
                                 if ($existingId <= 0) {
                                     $page3 = 1;
                                     $per3 = 100;
-                                    $cap3 = (int) env('WOO_SKU_SEARCH_PAGE_CAP', 5);
+                                    $cap3 = (int) $this->tuning('sku_search_page_cap');
                                     $cap3 = max(1, min(50, $cap3));
 
                                     while ($existingId <= 0 && $page3 <= $cap3) {
@@ -4076,7 +4041,7 @@ class SyncService
 
                                 // SKU is blocked in lookup table but we couldn't find the product (often TRASH or Woo lookup bug).
                                 // Default behavior: DO NOT create. Instead log and skip so user can restore or permanently delete in Woo.
-                                $allowAlt = (bool) env('WOO_ALLOW_ALT_SKU_ON_LOOKUP_CONFLICT', false);
+                                $allowAlt = (bool) $this->tuning('allow_alt_sku_on_lookup_conflict');
                                 if (!$allowAlt) {
                                     $errors++;
                                     $emit(['stage' => 'sku_conflict_blocked', 'sku' => $sku]);
@@ -4228,11 +4193,14 @@ class SyncService
             }
         });
 
-        $this->log('products.push', 'info', 'Products push completed', [
-            'created' => $created,
-            'updated' => $updated,
-            'errors' => $errors,
-        ]);
+        // A targeted push is logged by its caller (auto-sync).
+        if ($productIds === null) {
+            $this->log('products.push', 'info', 'Products push completed', [
+                'created' => $created,
+                'updated' => $updated,
+                'errors' => $errors,
+            ]);
+        }
 
         return ['created' => $created, 'updated' => $updated, 'errors' => $errors];
     }
@@ -4265,12 +4233,7 @@ class SyncService
                 }
                 $res = $this->client->putNoRetry('products/'.$wooProductId, [
                     'type' => 'variable',
-                    'attributes' => [[
-                        'name' => 'Variant',
-                        'visible' => true,
-                        'variation' => true,
-                        'options' => array_values($variantNames),
-                    ]],
+                    'attributes' => app(\App\Services\ProductOptionService::class)->wooParentAttributes((int) $product->id, $variantNames),
                 ], 20, 5);
 
                 if (!$res->successful()) {
@@ -4284,6 +4247,10 @@ class SyncService
                 ->get();
 
             $localVariants = [];
+            // Shopify-style options: one Woo attribute per option (Color / Size),
+            // else the legacy single "Variant" attribute.
+            $optionService = app(\App\Services\ProductOptionService::class);
+            $variantValuesMap = $optionService->variantValuesMap((int) $product->id);
             foreach ($variants as $var) {
                 if ($shouldCancel) {
                     $shouldCancel();
@@ -4304,10 +4271,7 @@ class SyncService
                         'regular_price' => number_format((float) ($var->price ?? 0), 2, '.', ''),
                         // Barcode (GTIN / UPC / EAN / ISBN) -> Woo variation Global Unique ID (WooCommerce 9.2+).
                         'global_unique_id' => trim((string) ($var->gtin ?? '')),
-                        'attributes' => [[
-                            'name' => 'Variant',
-                            'option' => $option,
-                        ]],
+                        'attributes' => $optionService->wooVariationAttributes((int) $product->id, (int) $var->id, $option, $variantValuesMap),
                         'meta_data' => [[
                             'key' => self::WOO_META_EXTERNAL_VARIANT_ID,
                             'value' => (string) $var->id,
@@ -4334,7 +4298,7 @@ class SyncService
             // IMPORTANT: update existing Woo variations to match Stocky (price/sku/attributes/meta).
             // Previous behavior only created missing variations, leaving already-existing ones unchanged.
             try {
-                $batchTimeoutMs = (int) env('WOO_TIMEOUT_MS_BATCH', 30000);
+                $batchTimeoutMs = (int) config('woocommerce.timeout_ms_batch');
                 $batchTimeoutSec = max(1, (int) ceil($batchTimeoutMs / 1000));
 
                 $updates = [];
@@ -4414,7 +4378,7 @@ class SyncService
             $maxAttempts = 5;
             $attempt = 0;
 
-            $batchTimeoutMs = (int) env('WOO_TIMEOUT_MS_BATCH', 30000);
+            $batchTimeoutMs = (int) config('woocommerce.timeout_ms_batch');
             $batchTimeoutSec = max(1, (int) ceil($batchTimeoutMs / 1000));
 
             while (!empty($missing) && $attempt < $maxAttempts) {
@@ -4563,7 +4527,7 @@ class SyncService
 
                 $toDelete = array_values(array_unique(array_map('intval', $toDelete)));
                 if (!empty($toDelete)) {
-                    $batchTimeoutMs = (int) env('WOO_TIMEOUT_MS_BATCH', 30000);
+                    $batchTimeoutMs = (int) config('woocommerce.timeout_ms_batch');
                     $batchTimeoutSec = max(1, (int) ceil($batchTimeoutMs / 1000));
 
                     if ($emit) {
@@ -4824,16 +4788,27 @@ class SyncService
     // ---------------------------------------------------------------------
     // Stock sync (POS -> Woo)
     // ---------------------------------------------------------------------
-    public function syncStock(?callable $progress = null): array
+    public function syncStock(?callable $progress = null, ?array $productIds = null): array
     {
         $updated = 0;
         $errors = 0;
         $processed = 0;
 
+        // Targeted push (auto-sync): just these products, quantities only —
+        // variation images are left to the product push.
+        $targeted = $productIds !== null;
+        if ($targeted) {
+            $productIds = array_values(array_filter(array_map('intval', $productIds)));
+            if (! $productIds) {
+                return ['updated' => 0, 'errors' => 0];
+            }
+        }
+
         Product::whereNull('deleted_at')
             ->whereNotNull('woocommerce_id')
+            ->when($targeted, fn ($q) => $q->whereIn('id', $productIds))
             ->orderBy('id')
-            ->chunk(200, function ($products) use (&$updated, &$errors, &$processed, $progress) {
+            ->chunk(200, function ($products) use (&$updated, &$errors, &$processed, $progress, $targeted) {
                 foreach ($products as $product) {
                     try {
                         // Skip services
@@ -4922,10 +4897,10 @@ class SyncService
                                     'stock_status' => $status,
                                 ];
 
-                                $media = $this->resolveOrUploadWpMedia($product);
+                                $media = $targeted ? null : $this->resolveOrUploadWpMedia($product);
                                 if ($media && isset($media['id'])) {
                                     $payload['image'] = ['id' => (int) $media['id']];
-                                } else {
+                                } elseif (! $targeted) {
                                     $src = $this->productMainImageSrc($product);
                                     if ($src) {
                                         $payload['image'] = ['src' => $src];
@@ -4945,10 +4920,7 @@ class SyncService
                                 } else {
                                     $createPayload = $payload + [
                                         'sku' => $sku,
-                                        'attributes' => [[
-                                            'name' => 'Variant',
-                                            'option' => $variantName !== '' ? $variantName : ('Variant '.$var->id),
-                                        ]],
+                                        'attributes' => app(\App\Services\ProductOptionService::class)->wooVariationAttributes((int) $product->id, (int) $var->id, $variantName !== '' ? $variantName : ('Variant '.$var->id)),
                                     ];
                                     $res = $this->client->postNoRetry(
                                         'products/'.(int) $product->woocommerce_id.'/variations',
@@ -5026,7 +4998,10 @@ class SyncService
                 }
             });
 
-        $this->log('stock.sync', 'info', 'Stock sync completed', ['updated' => $updated, 'errors' => $errors]);
+        // A targeted push is logged by its caller (auto-sync).
+        if (! $targeted) {
+            $this->log('stock.sync', 'info', 'Stock sync completed', ['updated' => $updated, 'errors' => $errors]);
+        }
 
         return ['updated' => $updated, 'errors' => $errors];
     }
@@ -5193,9 +5168,9 @@ class SyncService
             } catch (\Throwable $e) {
             }
 
-            $searchTimeout = (int) env('WOO_WP_MEDIA_SEARCH_TIMEOUT', 10);
+            $searchTimeout = (int) config('woocommerce.wp_media.search_timeout');
             // Shared hosting + large images can be slow: use a higher default, but keep a hard cap.
-            $uploadTimeout = (int) env('WOO_WP_MEDIA_UPLOAD_TIMEOUT', 60);
+            $uploadTimeout = (int) config('woocommerce.wp_media.upload_timeout');
             $searchTimeout = max(1, min(60, $searchTimeout));
             $uploadTimeout = max(1, min(300, $uploadTimeout));
 
@@ -5244,7 +5219,7 @@ class SyncService
                 $trySearch = function (string $term) use ($baseUrl, $username, $appPass, $searchTimeout, $matches): ?array {
                     $mediaList = Http::timeout($searchTimeout)
                         ->connectTimeout(5)
-                        ->retry((int) env('WOO_WP_MEDIA_RETRIES', 1), (int) env('WOO_WP_MEDIA_RETRY_SLEEP_MS', 250))
+                        ->retry((int) config('woocommerce.wp_media.retries'), (int) config('woocommerce.wp_media.retry_sleep_ms'))
                         ->withBasicAuth($username, $appPass)
                         ->get($baseUrl.'/wp-json/wp/v2/media', [
                             'search' => $term,
@@ -5275,7 +5250,7 @@ class SyncService
                 $trySlug = function (string $slug) use ($baseUrl, $username, $appPass, $searchTimeout, $matches): ?array {
                     $mediaList = Http::timeout($searchTimeout)
                         ->connectTimeout(5)
-                        ->retry((int) env('WOO_WP_MEDIA_RETRIES', 1), (int) env('WOO_WP_MEDIA_RETRY_SLEEP_MS', 250))
+                        ->retry((int) config('woocommerce.wp_media.retries'), (int) config('woocommerce.wp_media.retry_sleep_ms'))
                         ->withBasicAuth($username, $appPass)
                         ->get($baseUrl.'/wp-json/wp/v2/media', [
                             'slug' => $slug,
@@ -5339,7 +5314,7 @@ class SyncService
                 }
                 $upload = Http::timeout($uploadTimeout)
                     ->connectTimeout(5)
-                    ->retry((int) env('WOO_WP_MEDIA_RETRIES', 1), (int) env('WOO_WP_MEDIA_RETRY_SLEEP_MS', 250))
+                    ->retry((int) config('woocommerce.wp_media.retries'), (int) config('woocommerce.wp_media.retry_sleep_ms'))
                     ->withBasicAuth($username, $appPass)
                     ->attach('file', fopen($abs, 'r'), $imageName)
                     ->withHeaders([
@@ -5722,11 +5697,11 @@ class SyncService
                 return null;
             }
 
-            $uploadTimeout = max(1, min(300, (int) env('WOO_WP_MEDIA_UPLOAD_TIMEOUT', 60)));
+            $uploadTimeout = max(1, min(300, (int) config('woocommerce.wp_media.upload_timeout')));
 
             $upload = Http::timeout($uploadTimeout)
                 ->connectTimeout(5)
-                ->retry((int) env('WOO_WP_MEDIA_RETRIES', 1), (int) env('WOO_WP_MEDIA_RETRY_SLEEP_MS', 250))
+                ->retry((int) config('woocommerce.wp_media.retries'), (int) config('woocommerce.wp_media.retry_sleep_ms'))
                 ->withBasicAuth($username, $appPass)
                 ->attach('file', fopen($abs, 'r'), $imageName)
                 ->withHeaders([
@@ -6085,10 +6060,10 @@ class SyncService
                     if ($wooCountry !== '') {
                         $billing['country'] = $wooCountry;
                     } else {
-                        $this->setClientSyncIssue($client, 'country_unmapped', 'Could not map Stocky country to a valid WooCommerce country code. Use a supported country name (Woo language) or ISO code.', 'push');
+                        $this->setClientSyncIssue($client, 'country_unmapped', 'Could not map the customer country to a valid WooCommerce country code. Use a supported country name (Woo language) or ISO code.', 'push');
                     }
                     if ($wooState === '' && trim((string) ($client->state ?? '')) !== '') {
-                        $this->setClientSyncIssue($client, 'state_unmapped', 'Could not map Stocky state to a valid WooCommerce state code for the selected country.', 'push');
+                        $this->setClientSyncIssue($client, 'state_unmapped', 'Could not map the customer state to a valid WooCommerce state code for the selected country.', 'push');
                     }
                     if ($email !== '') {
                         $billing['email'] = $email;
@@ -6146,7 +6121,7 @@ class SyncService
                     if ($email === '' && $wooId === null) {
                         $skipped++;
                         $this->log('customers.push', 'info', 'Skipped client without email (requires manual link)', ['client_id' => $client->id]);
-                        $this->setClientSyncIssue($client, 'missing_email', 'Stocky customer has no email. Add an email or manually link to a Woo customer.', 'push');
+                        $this->setClientSyncIssue($client, 'missing_email', 'This customer has no email. Add an email or manually link to a Woo customer.', 'push');
                         $processed++;
                         continue;
                     }
@@ -6198,7 +6173,7 @@ class SyncService
                         if ($email === '') {
                             $skipped++;
                             $this->log('customers.push', 'info', 'Skipped client without email after Woo ID cleared (requires manual link)', ['client_id' => $client->id]);
-                            $this->setClientSyncIssue($client, 'missing_email', 'Stocky customer has no email. Add an email or manually link to a Woo customer.', 'push');
+                            $this->setClientSyncIssue($client, 'missing_email', 'This customer has no email. Add an email or manually link to a Woo customer.', 'push');
                             $processed++;
                             continue;
                         }
@@ -6392,10 +6367,10 @@ class SyncService
             if ($wooCountry !== '') {
                 $billing['country'] = $wooCountry;
             } else {
-                $this->setClientSyncIssue($client, 'country_unmapped', 'Could not map Stocky country to a valid WooCommerce country code. Use a supported country name (Woo language) or ISO code.', 'push');
+                $this->setClientSyncIssue($client, 'country_unmapped', 'Could not map the customer country to a valid WooCommerce country code. Use a supported country name (Woo language) or ISO code.', 'push');
             }
             if ($wooState === '' && trim((string) ($client->state ?? '')) !== '') {
-                $this->setClientSyncIssue($client, 'state_unmapped', 'Could not map Stocky state to a valid WooCommerce state code for the selected country.', 'push');
+                $this->setClientSyncIssue($client, 'state_unmapped', 'Could not map the customer state to a valid WooCommerce state code for the selected country.', 'push');
             }
             if ($email !== '') {
                 $billing['email'] = $email;
@@ -6451,7 +6426,7 @@ class SyncService
 
             // If email is empty and we don't have a Woo ID → can't match/create (manual link required)
             if ($email === '' && $wooId === null) {
-                $this->setClientSyncIssue($client, 'missing_email', 'Stocky customer has no email. Add an email or manually link to a Woo customer.', 'push');
+                $this->setClientSyncIssue($client, 'missing_email', 'This customer has no email. Add an email or manually link to a Woo customer.', 'push');
                 return ['ok' => false, 'error' => 'Customer must have an email to sync (requires manual link)'];
             }
 
@@ -6500,7 +6475,7 @@ class SyncService
             if ($wooId === null) {
                 // If woocommerce_id IS null → Match by email (normalize: trim + lowercase)
                 if ($email === '') {
-                    $this->setClientSyncIssue($client, 'missing_email', 'Stocky customer has no email. Add an email or manually link to a Woo customer.', 'push');
+                    $this->setClientSyncIssue($client, 'missing_email', 'This customer has no email. Add an email or manually link to a Woo customer.', 'push');
                     return ['ok' => false, 'error' => 'Customer must have an email to sync (requires manual link)'];
                 }
 
@@ -6763,7 +6738,7 @@ class SyncService
                                             'email' => $email,
                                         ]);
                                         $hadIssue = true;
-                                        $this->setClientSyncIssue($client, 'email_conflict', 'Woo email conflicts with an existing Stocky client email. Manual review required.', 'pull');
+                                        $this->setClientSyncIssue($client, 'email_conflict', 'Woo email conflicts with an existing POS customer email. Manual review required.', 'pull');
                                     }
                                 } else {
                                     $hadIssue = true;
@@ -7021,7 +6996,7 @@ class SyncService
                             'email' => $email,
                         ]);
                         $hadIssue = true;
-                        $this->setClientSyncIssue($client, 'email_conflict', 'Woo email conflicts with an existing Stocky client email. Manual review required.', 'pull');
+                        $this->setClientSyncIssue($client, 'email_conflict', 'Woo email conflicts with an existing POS customer email. Manual review required.', 'pull');
                     }
                 } else {
                     $hadIssue = true;

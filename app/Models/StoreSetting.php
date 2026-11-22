@@ -7,13 +7,13 @@ use Illuminate\Database\Eloquent\Model;
 class StoreSetting extends Model
 {
     protected $fillable = [
-        'enabled', 'registration_enabled', 'require_invite_code', 'require_admin_approval',
-        'allow_cancellations', 'return_window_days', 'auto_approve_reviews',
+        'enabled', 'registration_enabled', 'require_invite_code', 'require_admin_approval', 'guest_checkout_enabled',
+        'allow_cancellations', 'return_window_days', 'auto_approve_reviews', 'cookie_consent_enabled',
         'store_name', 'theme', 'theme_options', 'logo_path', 'favicon_path',
         'primary_color', 'secondary_color', 'font_family',
         'hero_title', 'hero_subtitle', 'hero_image_path',
         'homepage_lineup', 'homepage_layout', 'social_links', 'menus',
-        'default_warehouse_id', 'allow_overselling', 'hide_out_of_stock', 'hide_prices_for_guests', 'show_stock', 'currency_code', 'language',
+        'default_warehouse_id', 'warehouse_ids', 'allow_overselling', 'hide_out_of_stock', 'hide_prices_for_guests', 'show_stock', 'currency_code', 'language',
         'store_url_path', 'store_use_root_domain', 'payment_stripe_enabled', 'payment_cod_enabled', 'payment_mobile_money_enabled',
         'payment_razorpay_enabled', 'payment_bkash_enabled', 'payment_sslcommerz_enabled',
         'payment_paymob_enabled', 'payment_myfatoorah_enabled', 'payment_moyasar_enabled',
@@ -24,8 +24,12 @@ class StoreSetting extends Model
         'payment_gcash_enabled', 'gcash_account_name', 'gcash_account_number', 'gcash_qr_path', 'gcash_instructions',
         'payment_bank_transfer_enabled', 'bank_name', 'bank_account_name', 'bank_account_number', 'bank_branch', 'bank_instructions',
         'payment_cash_on_pickup_enabled', 'pickup_instructions',
+        // Online gateways whose paid orders confirm themselves
+        'auto_confirm_methods',
         'contact_email', 'contact_phone', 'contact_address',
         'seo_meta_title', 'seo_meta_description',
+        // Tracking & Analytics (IDs only; see App\Support\StoreTracking)
+        'google_tag_id', 'meta_pixel_id',
         'topbar_text_left', 'topbar_text_right', 'footer_text',
     ];
 
@@ -35,9 +39,11 @@ class StoreSetting extends Model
         'registration_enabled' => 'boolean',
         'require_invite_code' => 'boolean',
         'require_admin_approval' => 'boolean',
+        'guest_checkout_enabled' => 'boolean',
         'allow_cancellations' => 'boolean',
         'return_window_days' => 'integer',
         'auto_approve_reviews' => 'boolean',
+        'cookie_consent_enabled' => 'boolean',
         'allow_overselling' => 'boolean',
         'hide_out_of_stock' => 'boolean',
         'hide_prices_for_guests' => 'boolean',
@@ -66,7 +72,37 @@ class StoreSetting extends Model
         'theme_options' => 'array',
         'social_links' => 'array',
         'menus' => 'array',
+        'warehouse_ids' => 'array',
+        'auto_confirm_methods' => 'array',
     ];
+
+    /**
+     * Online gateways (checkout payment_method codes) that can confirm a paid
+     * order on their own: the payment is verified with the gateway before the
+     * order is marked paid. COD, mobile money and the manual methods are not
+     * here — nothing confirms their payment online.
+     */
+    public const AUTO_CONFIRM_METHODS = [
+        'credit_card', 'razorpay', 'bkash', 'sslcommerz', 'paymob', 'myfatoorah',
+        'moyasar', 'xpay', 'payfast', 'ligdicash', 'dodo', 'waafipay',
+        'paypal', 'paystack', 'flutterwave',
+    ];
+
+    /**
+     * Should a paid order from this gateway be confirmed automatically?
+     * Off unless the admin switched it on for that gateway (also off while
+     * the auto_confirm_methods migration has not run).
+     */
+    public static function autoConfirmEnabled(?string $method, ?self $settings = null): bool
+    {
+        if (! in_array((string) $method, self::AUTO_CONFIRM_METHODS, true)) {
+            return false;
+        }
+        $settings = $settings ?: static::first();
+        $methods = $settings?->auto_confirm_methods;
+
+        return is_array($methods) && in_array($method, $methods, true);
+    }
 
     /**
      * Storefront payment-method switches (Online Store -> Payment Gateway),
@@ -105,21 +141,86 @@ class StoreSetting extends Model
     public const MANUAL_METHODS = ['gcash', 'bank_transfer', 'cash_on_pickup'];
 
     /**
-     * The warehouses the online store sells from: the configured default when
-     * it is still live, otherwise every warehouse. Mirrors
-     * CheckoutService::activeWarehouseIds() without its empty-set exception.
+     * The theme the storefront renders. A premium theme the tenant's plan no
+     * longer includes falls back to its free sibling (StoreThemes::PREMIUM);
+     * the stored value is untouched, so upgrading again restores it. Admin
+     * screens that must show or keep the stored choice read storedTheme().
+     */
+    public function getThemeAttribute($value)
+    {
+        return \App\Support\StoreThemes::effective($value);
+    }
+
+    /** The theme exactly as saved (premium even when the plan no longer covers it). */
+    public function storedTheme(): ?string
+    {
+        $raw = $this->getAttributes()['theme'] ?? null;
+
+        return $raw === null ? null : (string) $raw;
+    }
+
+    protected static function booted(): void
+    {
+        // The storefront warehouse rule (Product::storefrontWarehouseIds) is
+        // memoised per request; a save of this row must not leave it stale.
+        static::saved(fn () => Product::forgetStorefrontWarehouses());
+        static::deleted(fn () => Product::forgetStorefrontWarehouses());
+    }
+
+    /**
+     * Warehouses the online store sells from (stock display + checkout).
+     * warehouse_ids = NULL means "all warehouses"; otherwise the stored list
+     * filtered to warehouses that still exist. Falls back to the default
+     * warehouse (also while the warehouse_ids column is not migrated yet),
+     * then to every warehouse.
+     *
+     * @return int[]
+     */
+    public function activeWarehouseIds(): array
+    {
+        $all = Warehouse::whereNull('deleted_at')->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $migrated = array_key_exists('warehouse_ids', $this->getAttributes());
+
+        if ($migrated && $this->warehouse_ids === null) {
+            return $all;
+        }
+
+        $selected = array_values(array_filter(array_map('intval', (array) ($this->warehouse_ids ?? []))));
+        $valid = array_values(array_intersect($selected, $all));
+        if ($valid) {
+            return $valid;
+        }
+
+        $default = (int) ($this->default_warehouse_id ?? 0);
+
+        return ($default && in_array($default, $all, true)) ? [$default] : $all;
+    }
+
+    /**
+     * Static convenience for callers without a loaded settings row.
      *
      * @return int[]
      */
     public static function storeWarehouseIds(): array
     {
-        $all = Warehouse::whereNull('deleted_at')->pluck('id')->map(fn ($id) => (int) $id)->all();
-        $default = (int) (static::query()->value('default_warehouse_id') ?? 0);
+        $s = static::first();
 
-        return ($default && in_array($default, $all, true)) ? [$default] : $all;
+        return $s ? $s->activeWarehouseIds() : Warehouse::whereNull('deleted_at')->pluck('id')->map(fn ($id) => (int) $id)->all();
     }
 
     /** Is this payment method offered at the storefront checkout? */
+    /**
+     * Whether shoppers may check out without signing in (off by default).
+     * Hidden prices mean buying needs an account, so it is off while
+     * "Hide prices for guests" is on.
+     */
+    public static function guestCheckoutEnabled(): bool
+    {
+        $s = static::query()->first(['guest_checkout_enabled', 'hide_prices_for_guests']);
+
+        return $s && $s->guest_checkout_enabled && ! $s->hide_prices_for_guests;
+    }
+
     public static function paymentMethodEnabled(string $method, ?self $settings = null): bool
     {
         $column = self::PAYMENT_METHOD_COLUMNS[$method] ?? null;

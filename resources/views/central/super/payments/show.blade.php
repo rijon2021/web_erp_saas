@@ -23,6 +23,9 @@
             @endphp
             <span class="badge badge-{{ $badgeClass }}">{{ ucfirst($payment->status) }}</span>
             &middot; {{ $payment->created_at->format('M d, Y \a\t h:i A') }}
+            @if($payment->payment_link_id)
+                &middot; <a href="{{ route('super.payment-links.show', $payment->payment_link_id) }}" class="table-link-primary"><i class="bi bi-link-45deg"></i> {{ __('super.payment_links.from_link') }}</a>
+            @endif
         </p>
     </div>
     <div class="d-flex gap-2 flex-wrap">
@@ -50,9 +53,9 @@
                     <div class="pi-amount-row">
                         <div>
                             <div class="pi-amount-label">{{ __('super.common.amount') }}</div>
-                            <div class="pi-amount-value">{{ $payment->currency }} {{ $currencySymbol }}{{ number_format($payment->amount, 2) }}</div>
+                            <div class="pi-amount-value">{{ $payment->formatMoney($payment->amount) }}</div>
                             @if($payment->tax > 0)
-                                <div class="pi-amount-tax">+ {{ $currencySymbol }}{{ number_format($payment->tax, 2) }} {{ __('super.payments.tax') }} = <strong>{{ $currencySymbol }}{{ number_format($payment->total, 2) }}</strong> {{ __('super.payments.total') }}</div>
+                                <div class="pi-amount-tax">+ {{ $payment->formatMoney($payment->tax, false) }} {{ __('super.payments.tax') }} = <strong>{{ $payment->formatMoney($payment->total, false) }}</strong> {{ __('super.payments.total') }}</div>
                             @endif
                             @if($payment->gateway_amount && $payment->gateway_currency && strtoupper($payment->gateway_currency) !== strtoupper($payment->currency ?? ''))
                                 <div class="pi-amount-tax">
@@ -65,7 +68,7 @@
                         </div>
                         <div class="text-end">
                             <div class="pi-invoice-number">{{ $payment->invoice_number }}</div>
-                            <div class="pi-billing-cycle">{{ ucfirst($payment->billing_cycle) }}</div>
+                            <div class="pi-billing-cycle">{{ $payment->payment_link_id ? __('super.payment_links.one_time') : ucfirst($payment->billing_cycle) }}</div>
                         </div>
                     </div>
                 </div>
@@ -86,28 +89,28 @@
                         <div class="pi-cell-icon pi-cell-icon-success"><i class="bi bi-calendar-check"></i></div>
                         <div>
                             <div class="pi-cell-label">{{ __('super.payments.billing_cycle') }}</div>
-                            <div class="pi-cell-value">{{ ucfirst($payment->billing_cycle) }}</div>
+                            <div class="pi-cell-value">{{ $payment->payment_link_id ? __('super.payment_links.one_time') : ucfirst($payment->billing_cycle) }}</div>
                         </div>
                     </div>
                 </div>
 
-                @if($payment->gateway_payment_id || $payment->transaction_id)
+                @if($payment->display_gateway_payment_id || $payment->display_transaction_id)
                 <div class="pi-detail-grid">
-                    @if($payment->gateway_payment_id)
+                    @if($payment->display_gateway_payment_id)
                     <div class="pi-cell">
                         <div class="pi-cell-icon pi-cell-icon-warning"><i class="bi bi-hash"></i></div>
                         <div>
                             <div class="pi-cell-label">{{ __('super.payments.gateway_payment_id') }}</div>
-                            <div class="pi-cell-value"><code class="code-inline">{{ $payment->gateway_payment_id }}</code></div>
+                            <div class="pi-cell-value"><code class="code-inline">{{ $payment->display_gateway_payment_id }}</code></div>
                         </div>
                     </div>
                     @endif
-                    @if($payment->transaction_id)
-                    <div class="pi-cell {{ $payment->gateway_payment_id ? 'pi-cell-border-left' : '' }}">
+                    @if($payment->display_transaction_id)
+                    <div class="pi-cell {{ $payment->display_gateway_payment_id ? 'pi-cell-border-left' : '' }}">
                         <div class="pi-cell-icon pi-cell-icon-info"><i class="bi bi-upc-scan"></i></div>
                         <div>
                             <div class="pi-cell-label">{{ __('super.payments.transaction_id_label') }}</div>
-                            <div class="pi-cell-value"><code class="code-inline">{{ $payment->transaction_id }}</code></div>
+                            <div class="pi-cell-value"><code class="code-inline">{{ $payment->display_transaction_id }}</code></div>
                         </div>
                     </div>
                     @endif
@@ -154,7 +157,7 @@
             <div class="card-header-custom">
                 <h2><i class="bi bi-file-earmark-image me-2 text-muted"></i>{{ __('super.payments.proof_of_payment') }}</h2>
                 @if(in_array($payment->gateway, ['offline', 'manual']) && $payment->status === 'pending')
-                    <span class="badge badge-pending">Awaiting Verification</span>
+                    <span class="badge badge-pending">{{ __('super.payments.awaiting_verification') }}</span>
                 @endif
             </div>
             <div class="card-body-custom">
@@ -164,7 +167,7 @@
                 @endphp
                 @if($isImage)
                     <a href="{{ asset($proofPath) }}" target="_blank">
-                        <img src="{{ asset($proofPath) }}" alt="Payment Proof" class="proof-image">
+                        <img src="{{ asset($proofPath) }}" alt="{{ __('super.payments.payment_proof_alt') }}" class="proof-image">
                     </a>
                 @else
                     <a href="{{ asset($proofPath) }}" target="_blank" class="btn btn-outline btn-sm">
@@ -176,14 +179,14 @@
                 <div class="d-flex gap-2 mt-3 pt-3 border-top">
                     <form method="POST" action="{{ route('super.payments.mark-paid', $payment) }}" class="flex-fill">
                         @csrf
-                        <button type="submit" class="btn btn-primary w-100" data-swal-confirm='{"title": "Approve Payment?", "text": "This will mark the payment as paid and activate the subscription.", "icon": "question", "confirmButtonText": "Approve", "confirmButtonColor": "#10b981"}'>
-                            <i class="bi bi-check-circle me-1"></i> Approve Payment
+                        <button type="submit" class="btn btn-primary w-100" data-swal-confirm="{{ json_encode(['title' => __('super.payments.approve_title'), 'text' => __('super.payments.approve_text'), 'icon' => 'question', 'confirmButtonText' => __('super.payments.approve_btn'), 'confirmButtonColor' => '#10b981']) }}">
+                            <i class="bi bi-check-circle me-1"></i> {{ __('super.payments.approve_payment') }}
                         </button>
                     </form>
                     <form method="POST" action="{{ route('super.payments.mark-failed', $payment) }}" class="flex-fill">
                         @csrf
-                        <button type="submit" class="btn btn-outline-danger w-100" data-swal-confirm='{"title": "Reject Payment?", "text": "This will mark the payment as failed.", "icon": "warning", "confirmButtonText": "Reject", "confirmButtonColor": "#ef4444"}'>
-                            <i class="bi bi-x-circle me-1"></i> Reject
+                        <button type="submit" class="btn btn-outline-danger w-100" data-swal-confirm="{{ json_encode(['title' => __('super.payments.reject_title'), 'text' => __('super.payments.reject_text'), 'icon' => 'warning', 'confirmButtonText' => __('super.payments.reject'), 'confirmButtonColor' => '#ef4444']) }}">
+                            <i class="bi bi-x-circle me-1"></i> {{ __('super.payments.reject') }}
                         </button>
                     </form>
                 </div>
@@ -251,7 +254,7 @@
                 @endif
                 <p class="text-muted mb-1 fs-sm3">{{ ucfirst($payment->subscription->billing_cycle) }} billing</p>
                 @if($payment->subscription->ends_at)
-                    <p class="text-muted mb-2 fs-sm3">Ends {{ $payment->subscription->ends_at->format('M d, Y') }}</p>
+                    <p class="text-muted mb-2 fs-sm3">{{ __('super.payments.ends_on', ['date' => $payment->subscription->ends_at->format('M d, Y')]) }}</p>
                 @endif
                 <a href="{{ route('super.subscriptions.show', $payment->subscription) }}" class="btn btn-outline btn-sm w-100">
                     <i class="bi bi-eye"></i> {{ __('super.common.view') }} {{ __('super.subscriptions.subscription') }}

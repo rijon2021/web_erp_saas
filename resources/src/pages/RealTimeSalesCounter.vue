@@ -5,7 +5,7 @@
         <a-space wrap>
           <a-tag :color="hasError ? 'error' : (paused ? 'default' : 'success')">
             <span class="live-dot" :class="{ paused: paused || hasError }"></span>
-            {{ hasError ? $t('Failed') : (paused ? $t('Pause') : 'LIVE') }}
+            {{ hasError ? $t('Failed') : (paused ? $t('Pause') : $t('Rt_Live_Badge')) }}
           </a-tag>
           <span style="font-variant-numeric: tabular-nums">{{ serverClock }}</span>
         </a-space>

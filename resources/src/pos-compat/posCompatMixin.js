@@ -7,7 +7,7 @@
  */
 import { bvModal, bvToast, swal } from './bv';
 import { useAuthStore } from '../stores/auth';
-import { loadLocale, applyDirection } from '../i18n';
+import { useUiStore } from '../stores/ui';
 import { uploadUrl } from '../lib/uploadUrl';
 
 export default {
@@ -49,8 +49,9 @@ export default {
                             },
                         }).then(done, done);
                     } else if (action === 'setLanguage') {
-                        localStorage.setItem('language', payload);
-                        loadLocale(payload).then(() => applyDirection(payload)).catch(() => {});
+                        // Through the ui store so its locale (and with it Ant's
+                        // direction and <html dir>) follows the POS switch.
+                        useUiStore().setLocale(payload).catch(() => {});
                     }
                 },
             };

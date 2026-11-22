@@ -106,7 +106,7 @@
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'status'">
                 <a-tag :color="record.status === 'success' ? 'success' : record.status === 'failed' ? 'error' : 'processing'">
-                  {{ record.status }}
+                  {{ record.status === 'success' ? $t('Success') : record.status === 'failed' ? $t('Failed') : record.status }}
                 </a-tag>
               </template>
               <template v-else-if="column.key === 'created_at'">

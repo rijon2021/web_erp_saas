@@ -8,6 +8,8 @@
   $s = $s ?? StoreSetting::first();
   $u = auth('store')->user();
   $client = $u ? $u->client : null;
+  // Guest checkout (Store Settings): no login, the shopper types their details.
+  $isGuestCheckout = ! $u && \App\Models\StoreSetting::guestCheckoutEnabled();
   // Country is a dropdown, not free text: shipping zones and tax rates are
   // matched by country, and a typo would read as "no shipping available".
   $countryOptions = \App\Services\CountryService::options();
@@ -53,6 +55,14 @@
     : collect();
   $pickupEnabled = $pickupBranches->isNotEmpty();
   $pickupInstructions = $manualMethods['cash_on_pickup']['instructions'] ?? '';
+
+  // Customer Wallet: signed-in shoppers with a customer record only (never
+  // guests), while the feature and its checkout switch are on. The balance
+  // is BASE currency, like the cart/quote amounts; the JS converts both the
+  // same way for display and compares them in base.
+  $walletService = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+  $walletCheckout = $u && $u->client_id && $methodOn('wallet') && $walletService->checkoutEnabled();
+  $walletInfo = $walletCheckout ? $walletService->summaryFor((int) $u->client_id) : null;
 @endphp
 
 <section class="border-b border-line-subtle bg-bg-surface">
@@ -74,7 +84,19 @@
     {{-- ===== Left column: shipping + payment ===== --}}
     <div class="space-y-6">
 
-      @if ($client)
+      @if ($isGuestCheckout)
+      <div class="rounded-xl border border-line-subtle bg-bg-surface p-4 flex items-center justify-between flex-wrap gap-3">
+        <div class="text-sm">
+          <div class="font-semibold">{{ __('messages.CheckingOutAsGuest') }}</div>
+          <div class="text-fg-muted text-xs">{{ __('messages.GuestCheckoutSignInHint') }}</div>
+        </div>
+        <a href="{{ route('store.login.show') }}" class="btn btn-outline btn-sm">
+          <x-store.icon name="user" class="w-4 h-4" />{{ __('messages.SignIn') }}
+        </a>
+      </div>
+      @endif
+
+      @if ($client || $isGuestCheckout)
       <div class="card">
         <div class="card-body space-y-6">
         <div>
@@ -86,31 +108,38 @@
             {{ __('messages.PickupNoAddressNeeded') }}
           </p>
           <div class="grid md:grid-cols-2 gap-3">
+            @if ($isGuestCheckout)
+            <div class="md:col-span-2">
+              <label class="form-label text-xs" for="ship-email">{{ __('messages.Email') }} *</label>
+              <input type="email" id="ship-email" class="input" autocomplete="email" maxlength="150">
+              <div class="text-[11px] text-fg-muted mt-1">{{ __('messages.GuestEmailHint') }}</div>
+            </div>
+            @endif
             <div>
               <label class="form-label text-xs">{{ __('messages.FullName') }} *</label>
-              <input type="text" id="ship-name" class="input" value="{{ $client->name }}" autocomplete="name">
+              <input type="text" id="ship-name" class="input" value="{{ optional($client)->name }}" autocomplete="name">
             </div>
             <div>
               <label class="form-label text-xs">{{ __('messages.Phone') }}</label>
-              <input type="tel" id="ship-phone" class="input" value="{{ $client->phone }}" autocomplete="tel">
+              <input type="tel" id="ship-phone" class="input" value="{{ optional($client)->phone }}" autocomplete="tel">
             </div>
             <div class="md:col-span-2 js-ship-only">
               <label class="form-label text-xs">{{ __('messages.Address') }}</label>
-              <input type="text" id="ship-address" class="input" value="{{ $client->adresse }}" autocomplete="street-address">
+              <input type="text" id="ship-address" class="input" value="{{ optional($client)->adresse }}" autocomplete="street-address">
             </div>
             <div class="js-ship-only">
               <label class="form-label text-xs">{{ __('messages.City') }}</label>
-              <input type="text" id="ship-city" class="input" value="{{ $client->city }}" autocomplete="address-level2">
+              <input type="text" id="ship-city" class="input" value="{{ optional($client)->city }}" autocomplete="address-level2">
             </div>
             <div class="js-ship-only">
               <label class="form-label text-xs" for="ship-state">{{ __('messages.State') }}</label>
               <input type="text" id="ship-state" class="input" list="ship-state-options"
-                     value="{{ $client->state }}" autocomplete="address-level1">
+                     value="{{ optional($client)->state }}" autocomplete="address-level1">
               <datalist id="ship-state-options"></datalist>
             </div>
             <div class="js-ship-only">
               <label class="form-label text-xs">{{ __('messages.Zip') }}</label>
-              <input type="text" id="ship-zip" class="input" value="{{ $client->zip }}" autocomplete="postal-code">
+              <input type="text" id="ship-zip" class="input" value="{{ optional($client)->zip }}" autocomplete="postal-code">
             </div>
             <div class="js-ship-only">
               <label class="form-label text-xs" for="ship-country">{{ __('messages.Country') }}</label>
@@ -134,6 +163,7 @@
           </h5>
           <div id="shipping-methods" class="space-y-2"></div>
           <div id="shipping-methods-empty" class="text-fg-muted text-sm hidden">{{ __('messages.NoShippingForRegion') }}</div>
+          <div id="shipping-methods-pending" class="text-fg-muted text-sm hidden">{{ __('messages.ShippingAddressForRates') }}</div>
         </div>
         </div>
       </div>
@@ -148,6 +178,32 @@
           </h5>
 
           <div class="pay-methods" id="payment-methods">
+            {{-- Customer Wallet — enabled/disabled live against the order total --}}
+            @if($walletCheckout)
+            <label class="pay-option" data-method="wallet" id="wallet-pay-option">
+              <input type="radio" name="payment_method" value="wallet" class="pay-radio">
+              <div class="pay-inner">
+                <div class="pay-header">
+                  <div class="flex items-center gap-3">
+                    <div class="pay-icon pay-icon-wallet"><x-store.icon name="wallet" class="w-5 h-5" /></div>
+                    <div>
+                      <div class="font-semibold">{{ __('messages.PayWithWallet') }}</div>
+                      <div class="text-xs text-fg-muted" id="wallet-pay-balance"></div>
+                    </div>
+                  </div>
+                  <div class="pay-check"><x-store.icon name="check-circle" class="w-6 h-6" /></div>
+                </div>
+                <div class="pay-body">
+                  <div class="alert alert-info text-xs mb-0 flex items-start gap-2">
+                    <x-store.icon name="info" class="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>{{ __('messages.WalletPayDesc') }}</span>
+                  </div>
+                </div>
+                <div id="wallet-pay-reason" class="text-xs text-danger hidden" style="padding:0 1.25rem 1rem"></div>
+              </div>
+            </label>
+            @endif
+
             {{-- Credit Card (Stripe) — hidden entirely when cards are switched off --}}
             @if($stripeOffered)
             <label class="pay-option {{ $stripeKey ? '' : 'pay-option-disabled' }}" data-method="credit_card">
@@ -733,23 +789,23 @@
         <div class="space-y-2.5 border-t border-line-subtle pt-4" id="payment-divider">
           <div class="flex justify-between text-sm text-fg-muted">
             <span>{{ __('messages.Subtotal') }}</span>
-            <strong id="sum-subtotal" class="price text-fg-primary">{{ $currency }}0.00</strong>
+            <strong id="sum-subtotal" class="price text-fg-primary">{{ store_with_currency($currency, '0.00') }}</strong>
           </div>
           <div class="flex justify-between text-sm text-success" id="sum-discount-row" style="display:none">
             <span>{{ __('messages.Discount') }} <span id="sum-coupon-code" class="text-xs"></span></span>
-            <strong id="sum-discount" class="price text-success">-{{ $currency }}0.00</strong>
+            <strong id="sum-discount" class="price text-success">-{{ store_with_currency($currency, '0.00') }}</strong>
           </div>
           <div class="flex justify-between text-sm text-fg-muted" id="sum-tax-row" style="display:none">
             <span>{{ __('messages.Tax') }} <span id="sum-tax-rate" class="text-xs"></span></span>
-            <strong id="sum-tax" class="price text-fg-primary">{{ $currency }}0.00</strong>
+            <strong id="sum-tax" class="price text-fg-primary">{{ store_with_currency($currency, '0.00') }}</strong>
           </div>
           <div class="flex justify-between text-sm text-fg-muted" id="sum-shipping-row" style="display:none">
             <span>{{ __('messages.Shipping') }}</span>
-            <strong id="sum-shipping" class="price text-fg-primary">{{ $currency }}0.00</strong>
+            <strong id="sum-shipping" class="price text-fg-primary">{{ store_with_currency($currency, '0.00') }}</strong>
           </div>
           <div class="flex justify-between items-baseline border-t border-line-subtle pt-3">
             <span class="font-semibold">{{ __('messages.GrandTotal') }}</span>
-            <strong id="sum-grand" class="price text-xl text-fg-primary">{{ $currency }}0.00</strong>
+            <strong id="sum-grand" class="price text-xl text-fg-primary">{{ store_with_currency($currency, '0.00') }}</strong>
           </div>
         </div>
 
@@ -873,6 +929,7 @@
   .pay-icon-gcash  { background: linear-gradient(135deg, #0075c9, #00b0f0); }
   .pay-icon-bank   { background: linear-gradient(135deg, #1f2a5a, #4c5fd7); }
   .pay-icon-pickup { background: linear-gradient(135deg, #f7971e, #ffd200); }
+  .pay-icon-wallet { background: linear-gradient(135deg, #11998e, #38ef7d); }
 
   /* Branch picker (cash on pickup) */
   .branch-option { display:block; cursor:pointer; margin:0; }
@@ -956,8 +1013,49 @@
   var T_PREORDER   = @json(__('messages.PreOrder'));
   var T_REMOVE     = @json(__('messages.Remove'));
 
-  function fmt(v){ return CURRENCY + (Number(v||0) * CURRENCY_RATE).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function fmt(v){ return storeWithCurrency(CURRENCY, storeFmtNumber(Number(v||0) * CURRENCY_RATE)); }
   function esc(s){ return String(s || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+  // ---- Customer Wallet option: usable only while the balance covers the
+  // current total (both BASE amounts; the server re-checks on submit). ----
+  var WALLET = @json($walletInfo ? ['balance' => (float) $walletInfo['balance'], 'status' => $walletInfo['status']] : null);
+  var T_WALLET_AVAILABLE = @json(__('messages.WalletAvailableBalance'));
+  var T_WALLET_SHORT     = @json(__('messages.WalletNotEnoughForOrder'));
+  var T_WALLET_FROZEN    = @json(__('messages.WalletFrozenNotice'));
+  var walletQuoted = false; // a server quote has set the real total
+  function syncWalletOption(total, provisional){
+    if (!WALLET) return;
+    // The cart sum only stands in until the first quote; after that a cart
+    // change waits for the refreshed quote instead of flickering.
+    if (provisional && walletQuoted) return;
+    if (!provisional) walletQuoted = true;
+    var opt = document.getElementById('wallet-pay-option');
+    if (!opt) return;
+    var radio  = opt.querySelector('input[name="payment_method"]');
+    var balEl  = document.getElementById('wallet-pay-balance');
+    var whyEl  = document.getElementById('wallet-pay-reason');
+    var cents  = function(v){ return Math.round(Number(v || 0) * 100); };
+    var reason = '';
+    if (WALLET.status !== 'active') reason = T_WALLET_FROZEN;
+    else if (cents(WALLET.balance) < cents(total)) reason = T_WALLET_SHORT;
+
+    if (balEl) balEl.textContent = T_WALLET_AVAILABLE.replace(':amount', fmt(WALLET.balance));
+    if (whyEl) { whyEl.textContent = reason; whyEl.classList.toggle('hidden', !reason); }
+    opt.classList.toggle('pay-option-disabled', !!reason);
+    radio.disabled = !!reason;
+
+    // The total outgrew the balance while the wallet was chosen: move to
+    // another method (COD first) so the shopper isn't left on a dead option.
+    if (reason && radio.checked && !provisional) {
+      radio.checked = false;
+      var next = document.querySelector('input[name="payment_method"][value="cod"]:not([disabled])')
+              || document.querySelector('input[name="payment_method"]:not([disabled])');
+      if (next) {
+        next.checked = true;
+        next.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+  }
 
   function getCart(){
     if (window.CartLS && typeof window.CartLS.get === 'function') return window.CartLS.get();
@@ -979,6 +1077,16 @@
       pvid = (pvid != null) ? pvid : (parts[1] ? Number(parts[1]) : null);
     }
     return { product_id: pid, product_variant_id: pvid };
+  }
+
+  // Checkout refused products the store no longer sells (hidden, inactive or
+  // deleted): drop those lines so the shopper is not stuck on them. The
+  // cart:changed event re-renders the page. Returns true when it applied.
+  function dropUnavailableLines(err){
+    var ids = (err && Array.isArray(err.product_ids)) ? err.product_ids.map(String) : [];
+    if (!ids.length || !window.CartLS || typeof CartLS.removeLines !== 'function') return false;
+    CartLS.removeLines(function(i){ return ids.indexOf(String(extractIds(i).product_id)) !== -1; });
+    return true;
   }
 
   var listEl   = document.getElementById('summary-list');
@@ -1075,6 +1183,7 @@
         '<img class="co-thumb" src="'+ esc(it.image || NOIMG) +'" alt="'+ esc(it.name||'') +'">' +
         '<div class="min-w-0">' +
           '<div class="font-semibold truncate" title="'+ esc(it.name||'') +'">'+ esc(it.name||'') +'</div>' +
+          (it.options_label ? '<div class="text-xs opacity-70 truncate">'+ esc(it.options_label) +'</div>' : '') +
           variantBadge +
           preorderBadge +
           '<div class="text-xs text-fg-muted mt-1">'+ fmt(it.price) +'</div>' +
@@ -1095,6 +1204,8 @@
     var sub = cart.items.reduce(function(a,i){ return a + (Number(i.price)||0)*(Number(i.qty)||0); }, 0);
     subEl.textContent   = fmt(sub);
     grandEl.textContent = fmt(sub);
+    // Provisional until the server quote (tax, shipping, coupon) lands.
+    syncWalletOption(sub, true);
   }
 
   listEl.addEventListener('click', function(e){
@@ -1137,7 +1248,9 @@
     var checked = document.querySelector('input[name="payment_method"]:checked');
     if (checked) return checked.value;
     // COD may be switched off: fall back to the first method still offered.
-    var first = document.querySelector('input[name="payment_method"]:not([disabled])');
+    // The wallet is only ever picked on purpose, never as the fallback.
+    var first = document.querySelector('input[name="payment_method"]:not([disabled]):not([value="wallet"])')
+             || document.querySelector('input[name="payment_method"]:not([disabled])');
     if (first) { first.checked = true; return first.value; }
     return 'cod';
   }
@@ -1189,6 +1302,7 @@
 
   // ---- Address + shipping method + server quote state ----
   var addr = {
+    email:   document.getElementById('ship-email'),
     name:    document.getElementById('ship-name'),
     phone:   document.getElementById('ship-phone'),
     address: document.getElementById('ship-address'),
@@ -1200,6 +1314,7 @@
   var shipSection = document.getElementById('shipping-method-section');
   var shipListEl  = document.getElementById('shipping-methods');
   var shipEmptyEl = document.getElementById('shipping-methods-empty');
+  var shipPendingEl = document.getElementById('shipping-methods-pending');
   var addrErrEl   = document.getElementById('address-error');
   var taxRow      = document.getElementById('sum-tax-row');
   var taxEl       = document.getElementById('sum-tax');
@@ -1207,7 +1322,7 @@
   var shipRow     = document.getElementById('sum-shipping-row');
   var shipCostEl  = document.getElementById('sum-shipping');
 
-  var quote = { subtotal: 0, discount: 0, tax: 0, tax_rate: 0, shipping_cost: 0, total: 0, shipping_required: false, shipping_configured: false };
+  var quote = { subtotal: 0, discount: 0, tax: 0, tax_rate: 0, shipping_cost: 0, total: 0, shipping_required: false, shipping_configured: false, shipping_pending: false };
   var selectedShipping = null;
   var quoteTimer = null;
   var appliedCoupon = '';
@@ -1230,6 +1345,7 @@
   var PICKUP_METHODS = ['cash_on_pickup'];
   var PROOF_METHODS  = ['gcash', 'bank_transfer'];
   var PROOF_URL_BASE = @json(url('/'.store_path_to('my/orders')));
+  var IS_GUEST       = @json($isGuestCheckout);
   // Set when the shopper filled the optional proof fields; uploaded once the
   // order exists.
   var pendingProof = null;
@@ -1306,13 +1422,18 @@
    * the thank-you page can confirm it or ask the shopper to upload it again;
    * swallowing it here is what made a rejected upload look like a success.
    */
-  function uploadProof(orderId, proof){
+  function uploadProof(order, proof){
     var fd = new FormData();
     fd.append('reference_number', proof.reference_number);
     fd.append('amount', proof.amount);
     fd.append('file', proof.file);
 
-    return fetch(PROOF_URL_BASE + '/' + orderId + '/payment-proofs', {
+    // Guests have no account pages: their order lives behind its secret link.
+    var url = order.guest_url
+      ? order.guest_url + '/payment-proofs'
+      : PROOF_URL_BASE + '/' + order.id + '/payment-proofs';
+
+    return fetch(url, {
       method: 'POST',
       headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': CSRF },
       body: fd
@@ -1338,15 +1459,27 @@
       return {
         product_id:         Number(ids.product_id || 0),
         product_variant_id: (ids.product_variant_id != null ? Number(ids.product_variant_id) : null),
-        qty:                Number(i.qty||1)
+        qty:                Number(i.qty||1),
+        option_ids:         Array.isArray(i.option_ids) ? i.option_ids : []
       };
     });
     return items.filter(function(x){ return x.product_id > 0 && x.qty > 0; });
   }
 
-  function getSelectedShippingMethod(){
+  // A radio's value is "methodId" for a flat method, "methodId|rateKey" for
+  // one carrier service of a live-rate method.
+  function shippingValue(m){ return m.rate ? (m.id + '|' + m.rate) : String(m.id); }
+  function selectedShippingParts(){
     var checked = document.querySelector('input[name="shipping_method"]:checked');
-    return checked ? Number(checked.value) : null;
+    return checked ? String(checked.value).split('|') : null;
+  }
+  function getSelectedShippingMethod(){
+    var parts = selectedShippingParts();
+    return parts ? Number(parts[0]) : null;
+  }
+  function getSelectedShippingRate(){
+    var parts = selectedShippingParts();
+    return parts && parts.length > 1 ? parts.slice(1).join('|') : null;
   }
 
   // Everything a gateway session (Stripe / Razorpay) needs to be opened for
@@ -1356,36 +1489,48 @@
       amount: fallbackAmount,
       items: buildItems(cart),
       shipping_method_id: getSelectedShippingMethod(),
+      shipping_rate: getSelectedShippingRate(),
       country: addrVal('country'),
       state: addrVal('state'),
+      shipping_address: addrVal('address'),
+      shipping_city: addrVal('city'),
+      shipping_zip: addrVal('zip'),
+      customer_name: addrVal('name'),
       coupon_code: appliedCoupon || null
     };
   }
 
-  function renderShippingMethods(methods){
+  var DAYS_LABEL = @json(__('messages.ShippingDays'));
+  var FREE_LABEL = @json(__('messages.ShippingFree'));
+
+  function renderShippingMethods(methods, pending){
     if (!shipListEl) return;
+    if (shipPendingEl) shipPendingEl.classList.toggle('hidden', !pending);
     if (!methods || !methods.length){
       shipListEl.innerHTML = '';
-      if (shipEmptyEl) shipEmptyEl.classList.remove('hidden');
+      if (shipEmptyEl) shipEmptyEl.classList.toggle('hidden', !!pending);
       selectedShipping = null;
       return;
     }
     if (shipEmptyEl) shipEmptyEl.classList.add('hidden');
 
     // Keep prior selection if still available, else default to first.
-    var ids = methods.map(function(m){ return Number(m.id); });
-    if (selectedShipping == null || ids.indexOf(Number(selectedShipping)) === -1) {
-      selectedShipping = ids[0];
+    var values = methods.map(shippingValue);
+    if (selectedShipping == null || values.indexOf(String(selectedShipping)) === -1) {
+      selectedShipping = values[0];
     }
 
     shipListEl.innerHTML = methods.map(function(m){
-      var checked = Number(m.id) === Number(selectedShipping) ? 'checked' : '';
+      var value = shippingValue(m);
+      var checked = value === String(selectedShipping) ? 'checked' : '';
+      var days = m.days ? '<span class="text-fg-muted text-xs">'+ esc(DAYS_LABEL.replace(':days', m.days)) +'</span>' : '';
+      var price = Number(m.price) > 0 ? fmt(m.price) : esc(FREE_LABEL);
       return '<label class="flex items-center justify-between gap-2 p-3 rounded-lg border border-line-subtle cursor-pointer">' +
         '<span class="flex items-center gap-2">' +
-          '<input type="radio" name="shipping_method" value="'+ m.id +'" '+ checked +'>' +
-          '<span>'+ esc(m.name) +'</span>' +
+          '<input type="radio" name="shipping_method" value="'+ esc(value) +'" '+ checked +'>' +
+          '<span class="flex flex-col"><span>'+ esc(m.name) +'</span>'+ days +'</span>' +
         '</span>' +
-        '<strong>'+ fmt(m.price) +'</strong>' +
+        '<strong>'+ price +'</strong>' +
       '</label>';
     }).join('');
   }
@@ -1404,6 +1549,7 @@
     // Totals come from the server (flash prices, coupon, tax, shipping).
     grandEl.textContent = fmt(q.total);
     if (subEl) subEl.textContent = fmt(q.subtotal);
+    syncWalletOption(q.total);
   }
 
   function refreshQuote(){
@@ -1418,7 +1564,12 @@
         items: items,
         country: addrVal('country'),
         state: addrVal('state'),
+        shipping_address: addrVal('address'),
+        shipping_city: addrVal('city'),
+        shipping_zip: addrVal('zip'),
+        customer_name: addrVal('name'),
         shipping_method_id: getSelectedShippingMethod(),
+        shipping_rate: getSelectedShippingRate(),
         coupon_code: appliedCoupon || null,
         payment_method: getSelectedPaymentMethod(),
         pickup_branch_id: getSelectedPickupBranch()
@@ -1428,10 +1579,13 @@
     .then(function(data){
       // The shipping picker only appears once the store has shipping set up.
       if (shipSection) shipSection.classList.toggle('hidden', !data.shipping_configured || isPickupSelected() || !countryChosen());
-      renderShippingMethods(data.shipping_methods || []);
-      var chosen = getSelectedShippingMethod();
+      renderShippingMethods(data.shipping_methods || [], !!data.shipping_pending);
+      var chosenMethod = getSelectedShippingMethod();
+      var chosenRate = getSelectedShippingRate();
       var cost = 0;
-      (data.shipping_methods || []).forEach(function(m){ if (Number(m.id) === Number(chosen)) cost = Number(m.price); });
+      (data.shipping_methods || []).forEach(function(m){
+        if (Number(m.id) === Number(chosenMethod) && (m.rate || null) === chosenRate) cost = Number(m.price);
+      });
 
       var discount = Number(data.discount || 0);
       applyQuote({
@@ -1443,7 +1597,8 @@
         shipping_cost: cost,
         total: Math.max(0, Number(data.subtotal) - discount) + Number(data.tax) + cost,
         shipping_required: data.shipping_required,
-        shipping_configured: data.shipping_configured
+        shipping_configured: data.shipping_configured,
+        shipping_pending: !!data.shipping_pending
       });
 
       if (couponMsg) {
@@ -1462,7 +1617,11 @@
         }
       }
     })
-    .catch(function(err){ /* keep last known totals on transient errors */ });
+    .catch(function(err){
+      // Unavailable products: tell the shopper and drop them; otherwise keep
+      // the last known totals on transient errors.
+      if (dropUnavailableLines(err)) StoreDialog.alert(err.error, { type: 'danger' });
+    });
   }
 
   if (couponApply) couponApply.addEventListener('click', function(){
@@ -1486,9 +1645,12 @@
     addr[k].addEventListener('input', scheduleQuote);
     addr[k].addEventListener('change', scheduleQuote);
   });
+  ['address','city','zip'].forEach(function(k){
+    if (addr[k]) addr[k].addEventListener('change', scheduleQuote);
+  });
   if (shipListEl) shipListEl.addEventListener('change', function(e){
     if (e.target && e.target.name === 'shipping_method') {
-      selectedShipping = Number(e.target.value);
+      selectedShipping = String(e.target.value);
       refreshQuote();
     }
   });
@@ -1525,6 +1687,13 @@
   function validateAddress(){
     if (!addr.name) return true; // no address form (guest layout) — server validates
 
+    // Guests: the email is how they get back to the order.
+    if (IS_GUEST && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addrVal('email'))) {
+      if (addrErrEl){ addrErrEl.textContent = @json(__('messages.GuestEmailRequired')); addrErrEl.classList.remove('hidden'); addrErrEl.scrollIntoView({behavior:'smooth', block:'center'}); }
+      if (addr.email) addr.email.focus();
+      return false;
+    }
+
     // Collected at a branch: name is enough, but a branch must be chosen.
     var branchErrEl = document.getElementById('pickup-branch-error');
     if (branchErrEl) branchErrEl.classList.add('hidden');
@@ -1552,6 +1721,10 @@
       return false;
     }
     if (addrErrEl) addrErrEl.classList.add('hidden');
+    if (quote.shipping_pending && !getSelectedShippingMethod()){
+      if (addrErrEl){ addrErrEl.textContent = @json(__('messages.ShippingAddressForRates')); addrErrEl.classList.remove('hidden'); addrErrEl.scrollIntoView({behavior:'smooth', block:'center'}); }
+      return false;
+    }
     if (quote.shipping_required && !getSelectedShippingMethod()){
       if (addrErrEl){ addrErrEl.textContent = '{{ __("messages.ShippingMethodRequired") }}'; addrErrEl.classList.remove('hidden'); addrErrEl.scrollIntoView({behavior:'smooth', block:'center'}); }
       return false;
@@ -1571,7 +1744,8 @@
           product_variant_id: (ids.product_variant_id != null ? Number(ids.product_variant_id) : null),
           qty:                Number(i.qty||1),
           price:              Number(i.price||0),
-          name:               i.name || null
+          name:               i.name || null,
+          option_ids:         Array.isArray(i.option_ids) ? i.option_ids : []
         };
       });
 
@@ -1661,6 +1835,7 @@
       console.error(err);
       var msg = (err && (err.message || err.error)) || '{{ __("messages.PaymentFailed") }}';
       StoreDialog.alert(msg, { type: 'danger' });
+      dropUnavailableLines(err);
       setLoading(false);
     });
   }
@@ -1679,6 +1854,7 @@
     var subtotal = cart.items.reduce(function(a,i){ return a + (Number(i.price)||0)*(Number(i.qty)||0); }, 0);
     var payload = gatewayPayload(cart, subtotal);
     payload.customer_name    = addrVal('name');
+    if (IS_GUEST) payload.customer_email = addrVal('email');
     payload.customer_phone   = addrVal('phone');
     payload.shipping_address = addrVal('address');
     payload.shipping_city    = addrVal('city');
@@ -1714,6 +1890,7 @@
       var msg = (err && (err.message || err.error)) || '{{ __("messages.PaymentFailed") }}';
       if (errEl) errEl.textContent = msg;
       StoreDialog.alert(msg, { type: 'danger' });
+      dropUnavailableLines(err);
       setLoading(false);
     });
   }
@@ -1765,6 +1942,7 @@
       console.error(err);
       var msg = (err && (err.message || err.error)) || '{{ __("messages.PaymentFailed") }}';
       StoreDialog.alert(msg, { type: 'danger' });
+      dropUnavailableLines(err);
       setLoading(false);
     });
   }
@@ -1775,8 +1953,10 @@
       payment_method: paymentMethod,
       stripe_payment_intent_id: stripePaymentIntentId,
       shipping_method_id: isPickupSelected() ? null : getSelectedShippingMethod(),
+      shipping_rate: isPickupSelected() ? null : getSelectedShippingRate(),
       pickup_branch_id: isPickupSelected() ? getSelectedPickupBranch() : null,
       coupon_code: appliedCoupon || null,
+      customer_email: IS_GUEST ? addrVal('email') : null,
       customer_name: addrVal('name'),
       customer_phone: addrVal('phone'),
       shipping_address: addrVal('address'),
@@ -1823,6 +2003,7 @@
         items: cart.items,
         payment_method: paymentMethod,
         payment_status: order.payment_status || 'pending',
+        guest_url: order.guest_url || null,
         totals: {
           subtotal: Number(order.subtotal||subtotal).toFixed(2),
           discount: Number(order.discount||0).toFixed(2),
@@ -1842,7 +2023,7 @@
       if (pendingProof && order.id) {
         var proofToSend = pendingProof;
         pendingProof = null;
-        return uploadProof(order.id, proofToSend).then(function(result){
+        return uploadProof(order, proofToSend).then(function(result){
           // Re-save the receipt with the outcome: the thank-you page either
           // confirms the picture or points the shopper back to re-upload it.
           receipt.proof = result.ok
@@ -1863,6 +2044,7 @@
         }).join('\n');
       }
       StoreDialog.alert(msg, { type: 'danger' });
+      dropUnavailableLines(err);
       setLoading(false);
     });
   }

@@ -145,7 +145,7 @@ class WooCommerceProductsSyncJob implements ShouldQueue
             $prevErrors  = 0;
             $lastStageForProduct = null;
 
-            $batchSize = (int) env('WOO_PRODUCTS_PER_JOB', 5);
+            $batchSize = (int) WooCommerceSetting::tuning($settings)['products_per_job'];
             $batchSize = max(1, min(100, $batchSize));
             $startAfterId = (int) ($state['last_product_id'] ?? 0);
 

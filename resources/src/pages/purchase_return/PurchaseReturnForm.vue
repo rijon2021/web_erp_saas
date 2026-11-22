@@ -83,6 +83,7 @@
               fetch-url="serial_numbers/for_purchase"
               :fetch-params="{
                 purchase_id: form.purchase_id,
+                warehouse_id: form.warehouse_id || null,
                 product_id: record.product_id,
                 product_variant_id: record.product_variant_id || null,
               }"
@@ -174,6 +175,7 @@ import SerialPicker from '../../components/SerialPicker.vue';
 import { useFormat } from '../../composables/useFormat';
 import { t as tf } from '../../i18n';
 import http from '../../lib/http';
+import { lineSerialUnits, loadUnitFactors } from '../../lib/serialUnits';
 
 const { t } = useI18n();
 const { money, decimals } = useFormat();
@@ -251,10 +253,12 @@ function recalc() {
   );
 }
 
+// One serial per base unit: quantity × the purchase unit's factor.
+loadUnitFactors();
 function serialCountMismatch(d) {
   if (!d?.is_imei) return false;
   const count = Array.isArray(d.serial_numbers) ? d.serial_numbers.length : 0;
-  return count !== Math.round(Number(d.quantity) || 0);
+  return count !== lineSerialUnits(d);
 }
 
 function validate() {

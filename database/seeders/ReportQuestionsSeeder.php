@@ -9,7 +9,9 @@ class ReportQuestionsSeeder extends Seeder
 {
     public function run()
     {
-        DB::table('report_questions')->insert([
+        // report_questions has no unique key, so idempotence (re-seed on an
+        // already-seeded tenant) is enforced per row on title + report_key.
+        $rows = [
             [
                 'title' => 'Yesterday Sales Summary',
                 'report_key' => 'daily_sales_summary',
@@ -260,6 +262,17 @@ class ReportQuestionsSeeder extends Seeder
                 'created_at' => now(),
                 'updated_at' => now(),
             ],
-        ]);
+        ];
+
+        foreach ($rows as $row) {
+            $exists = DB::table('report_questions')
+                ->where('title', $row['title'])
+                ->where('report_key', $row['report_key'])
+                ->exists();
+
+            if (! $exists) {
+                DB::table('report_questions')->insert($row);
+            }
+        }
     }
 }

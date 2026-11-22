@@ -1,8 +1,8 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Import Suppliers"
-      :breadcrumb="[$t('People'), $t('Suppliers'), 'Import']"
+      :title="$t('Import_Suppliers')"
+      :breadcrumb="[$t('People'), $t('Suppliers'), $t('Imp_Import')]"
     >
       <template #extra>
         <a-button @click="$router.push('/suppliers')">{{ $t('Back') }}</a-button>
@@ -16,24 +16,17 @@
             ref="dz"
             :file="file"
             :accept="accept"
-            title="Click or drop your Excel file here"
-            hint="Allowed formats: XLSX, XLS · Max size: 20MB"
+            :title="$t('Imp_Drop_Excel_File')"
+            :hint="$t('Imp_Allowed_Excel_20MB')"
             :disabled="uploading"
             @file="loadFile"
             @clear="clearFile()"
           />
 
-          <a-alert v-if="errorMessages.length" type="error" style="margin-top: 16px" show-icon>
-            <template #message>Import failed. Fix the issues below:</template>
-            <template #description>
-              <ul style="margin: 0; padding-left: 18px">
-                <li v-for="(err, idx) in errorMessages" :key="'err-' + idx">{{ err }}</li>
-              </ul>
-            </template>
-          </a-alert>
+          <ImportErrorList :errors="errorMessages" filename="supplier_import_errors" />
 
           <a-alert v-if="warningMessages.length" type="warning" style="margin-top: 16px" show-icon>
-            <template #message>Warnings</template>
+            <template #message>{{ $t('Warnings') }}</template>
             <template #description>
               <ul style="margin: 0; padding-left: 18px">
                 <li v-for="(w, idx) in warningMessages" :key="'warn-' + idx">{{ w }}</li>
@@ -45,22 +38,22 @@
 
           <div style="display: flex; justify-content: center; gap: 8px; margin-top: 20px; flex-wrap: wrap">
             <a-button type="primary" :disabled="!canSubmit || uploading" :loading="uploading" @click="submit">
-              Import now
+              {{ $t('Imp_Import_Now') }}
             </a-button>
             <a-button href="/import/exemples/suppliers.xlsx" target="_blank" rel="noopener">
-              <DownloadOutlined /> Download example
+              <DownloadOutlined /> {{ $t('Download_exemple') }}
             </a-button>
-            <a-button :disabled="!file || uploading" @click="clearFile()">Reset</a-button>
+            <a-button :disabled="!file || uploading" @click="clearFile()">{{ $t('Reset') }}</a-button>
           </div>
       </div>
     </a-card>
 
     <!-- Expected file format -->
-    <a-card size="small" :title="'Expected file format'">
+    <a-card size="small" :title="$t('Imp_Expected_File_Format')">
       <template #extra>
         <span style="font-size: 12px; color: rgba(var(--ink-rgb), 0.45)">
-          One row per supplier ·
-          <a-tag color="green" style="margin: 0">green *</a-tag> = required
+          {{ $t('Imp_One_Row_Per_Supplier') }} ·
+          <a-tag color="green" style="margin: 0">{{ $t('Imp_Green_Star') }}</a-tag> {{ $t('Imp_Equals_Required') }}
         </span>
       </template>
       <a-space wrap style="margin-bottom: 12px">
@@ -73,9 +66,9 @@
         size="small" :pagination="false" :scroll="{ x: 'max-content' }" row-key="code"
       />
       <ul style="padding-left: 18px; margin: 12px 0 0 0; font-size: 12px">
-        <li><strong>code</strong> must be an integer and unique (DB column is INT).</li>
-        <li><strong>name</strong> is required.</li>
-        <li><strong>Address</strong> is the address field expected by the backend.</li>
+        <li><i18n-t keypath="Imp_Supp_Help_Code" tag="span"><template #code><strong>code</strong></template></i18n-t></li>
+        <li><i18n-t keypath="Imp_Supp_Help_Name" tag="span"><template #name><strong>name</strong></template></i18n-t></li>
+        <li><i18n-t keypath="Imp_Supp_Help_Address" tag="span"><template #address><strong>Address</strong></template></i18n-t></li>
       </ul>
     </a-card>
   </div>
@@ -88,14 +81,17 @@
  */
 import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { notification } from 'ant-design-vue';
 import { DownloadOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import ImportErrorList from '../../components/ImportErrorList.vue';
 import ImportDropzone from '../../components/ImportDropzone.vue';
 import { uploadForm } from '../../lib/upload';
 import { start as startProgress, done as doneProgress } from '../../lib/progress';
 
 const router = useRouter();
+const { t } = useI18n();
 
 const endpoint = 'suppliers/import';
 const file = ref(null);
@@ -144,10 +140,10 @@ function clearErrors() {
 function loadFile(f) {
   clearErrors();
   const msgs = [];
-  if (f.size > maxSize) msgs.push('File is too large. Please upload a file under the 20MB limit.');
+  if (f.size > maxSize) msgs.push(t('Imp_File_Too_Large_20MB'));
   const name = f.name || '';
   const ext = name.split('.').pop().toLowerCase();
-  if (['xlsx', 'xls'].indexOf(ext) === -1) msgs.push('Unsupported file type. Please upload an .xlsx or .xls file.');
+  if (['xlsx', 'xls'].indexOf(ext) === -1) msgs.push(t('Imp_Unsupported_Excel'));
   if (msgs.length) {
     errorMessages.value = msgs;
     clearFile(false);
@@ -183,7 +179,7 @@ function onlyErrorsArray(data) {
 
 async function submit() {
   if (!file.value) {
-    errorMessages.value = ['Please choose a file to import.'];
+    errorMessages.value = [t('Imp_Choose_File')];
     return;
   }
   clearErrors();
@@ -206,10 +202,10 @@ async function submit() {
         errs = [data.message];
       }
       if (!errs.length) {
-        errs = ['Please fix the highlighted errors in your file and try again.'];
+        errs = [t('Imp_Fix_Highlighted_Errors')];
       }
       errorMessages.value = errs;
-      toast('Check the error list and fix your file.', 'Import failed', 'danger');
+      toast(t('Imp_Check_Error_List'), t('Imp_Import_Failed'), 'danger');
       return;
     }
 
@@ -217,12 +213,12 @@ async function submit() {
       warningMessages.value = data.warnings;
     }
     const count = data.imported || 0;
-    toast(count + ' suppliers imported successfully.', 'Success', 'success');
+    toast(t('Imp_Suppliers_Imported', { count }), t('Success'), 'success');
     router.push('/suppliers');
   } catch (e) {
-    const msg = e && e.message ? String(e.message) : 'Network error. Please try again.';
+    const msg = e && e.message ? String(e.message) : t('Imp_Network_Error_Retry');
     errorMessages.value = [msg];
-    toast('Upload failed due to a network error.', 'Error', 'danger');
+    toast(t('Imp_Upload_Network_Failed'), t('Imp_Error'), 'danger');
   } finally {
     doneProgress();
     uploading.value = false;

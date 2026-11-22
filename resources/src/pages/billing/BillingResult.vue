@@ -13,7 +13,7 @@
       <a-descriptions v-if="payment" size="small" :column="1" bordered style="max-width: 480px; margin: 0 auto 16px">
         <a-descriptions-item :label="tf('Plan', 'Plan')">{{ payment.plan_name }}</a-descriptions-item>
         <a-descriptions-item :label="$t('Amount')">{{ money(payment.amount, payment.currency) }}</a-descriptions-item>
-        <a-descriptions-item :label="tf('Gateway', 'Gateway')">{{ payment.gateway_label }}</a-descriptions-item>
+        <a-descriptions-item :label="tf('Billing_Gateway', 'Gateway')">{{ payment.gateway_label }}</a-descriptions-item>
         <a-descriptions-item :label="$t('Status')"><a-tag color="error">{{ tf('Failed', 'Failed') }}</a-tag></a-descriptions-item>
       </a-descriptions>
       <a-alert type="info" style="max-width: 480px; margin: 0 auto" :message="tf('Common_reasons', 'Common reasons for payment failure:')">
@@ -50,7 +50,7 @@
         <a-descriptions-item :label="tf('Plan', 'Plan')">{{ payment.plan_name }}</a-descriptions-item>
         <a-descriptions-item :label="tf('Billing_Cycle', 'Billing')">{{ capitalize(payment.billing_cycle) }}</a-descriptions-item>
         <a-descriptions-item :label="$t('Amount')">{{ money(payment.amount, payment.currency) }}</a-descriptions-item>
-        <a-descriptions-item :label="tf('Gateway', 'Gateway')">{{ payment.gateway_label }}</a-descriptions-item>
+        <a-descriptions-item :label="tf('Billing_Gateway', 'Gateway')">{{ payment.gateway_label }}</a-descriptions-item>
         <a-descriptions-item :label="$t('Status')"><a-tag color="success">{{ tf('Paid', 'Paid') }}</a-tag></a-descriptions-item>
         <a-descriptions-item v-if="subscription && subscription.ends_at" :label="tf('Valid_Until', 'Valid Until')">{{ fmtDate(subscription.ends_at) }}</a-descriptions-item>
       </a-descriptions>

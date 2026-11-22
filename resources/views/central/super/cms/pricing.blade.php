@@ -27,12 +27,12 @@
 
                     <div class="form-group mb-4">
                         <label class="form-label">{{ __('super.pricing.section_title') }}</label>
-                        <input type="text" name="section_title" class="form-control" value="{{ old('section_title', $pricing->section_title) }}" placeholder="e.g. Simple, transparent pricing">
+                        <input type="text" name="section_title" class="form-control" value="{{ old('section_title', $pricing->section_title) }}" placeholder="{{ __('super.cms.ph_pricing_title') }}">
                     </div>
 
                     <div class="form-group mb-4">
                         <label class="form-label">{{ __('super.pricing.section_subtitle') }}</label>
-                        <textarea name="section_subtitle" class="form-control" rows="2" placeholder="e.g. Start free. Scale when you're ready.">{{ old('section_subtitle', $pricing->section_subtitle) }}</textarea>
+                        <textarea name="section_subtitle" class="form-control" rows="2" placeholder="{{ __('super.cms.ph_pricing_subtitle') }}">{{ old('section_subtitle', $pricing->section_subtitle) }}</textarea>
                     </div>
 
                     <div class="divider"></div>

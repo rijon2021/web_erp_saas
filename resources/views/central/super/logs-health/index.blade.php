@@ -3,7 +3,7 @@
 @section('title', __('super.logs_health.title'))
 
 @push('styles')
-<link href="{{ asset('assets_super/css/logs-health.css') }}?v={{ time() }}" rel="stylesheet">
+<link href="{{ \App\Support\SuperAsset::url('assets_super/css/logs-health.css') }}" rel="stylesheet">
 @endpush
 
 @section('content')
@@ -16,10 +16,33 @@
         <button class="btn btn-outline btn-sm" id="btnRefreshPage">
             <i class="bi bi-arrow-clockwise"></i> {{ __('super.common.refresh') }}
         </button>
-        @if(($stats['resolved'] ?? 0) > 0)
-            <button class="btn btn-outline-danger btn-sm" id="btnClearResolved" data-url="{{ route('super.logs-health.clear-resolved') }}">
-                <i class="bi bi-trash"></i> {{ __('super.logs_health.clear_resolved') }}
-            </button>
+        @if(($stats['total'] ?? 0) > 0)
+            <div class="dropdown" id="clearLogsDropdown" data-url="{{ route('super.logs-health.clear') }}">
+                <button class="btn btn-outline-danger btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-trash"></i> {{ __('super.logs_health.clear_logs') }}
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li>
+                        <button type="button" class="dropdown-item btn-clear-logs" data-scope="resolved" {{ ($stats['resolved'] ?? 0) > 0 ? '' : 'disabled' }}>
+                            <i class="bi bi-check-circle"></i> {{ __('super.logs_health.clear_resolved') }}
+                            <span class="text-muted small ms-1">({{ number_format($stats['resolved']) }})</span>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="dropdown-item btn-clear-logs" data-scope="unresolved" {{ ($stats['unresolved'] ?? 0) > 0 ? '' : 'disabled' }}>
+                            <i class="bi bi-hourglass-split"></i> {{ __('super.logs_health.clear_unresolved') }}
+                            <span class="text-muted small ms-1">({{ number_format($stats['unresolved']) }})</span>
+                        </button>
+                    </li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                        <button type="button" class="dropdown-item text-danger btn-clear-logs" data-scope="all">
+                            <i class="bi bi-trash"></i> {{ __('super.logs_health.clear_all') }}
+                            <span class="text-muted small ms-1">({{ number_format($stats['total']) }})</span>
+                        </button>
+                    </li>
+                </ul>
+            </div>
         @endif
     </div>
 </div>
@@ -204,6 +227,9 @@
                         </td>
                         <td class="log-message-cell">
                             <span class="log-message-text" title="{{ $log->message }}">{{ \Illuminate\Support\Str::limit($log->message, 100) }}</span>
+                            @if($log->occurrences() > 1)
+                                <span class="badge rounded-pill text-bg-danger ms-1" title="{{ __('super.logs_health.occurrences_title', ['count' => number_format($log->occurrences())]) }}">{{ __('super.logs_health.occurrences_badge', ['count' => number_format($log->occurrences())]) }}</span>
+                            @endif
                             @if($log->source)
                                 <span class="log-source">{{ $log->source }}</span>
                             @endif
@@ -243,5 +269,5 @@
 @endsection
 
 @push('scripts')
-<script src="{{ asset('assets_super/js/logs-health.js') }}?v={{ time() }}"></script>
+<script src="{{ \App\Support\SuperAsset::url('assets_super/js/logs-health.js') }}"></script>
 @endpush

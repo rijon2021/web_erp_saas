@@ -145,6 +145,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
 import http from '../../lib/http';
+import { meetingLabel } from './meetingLabels';
 
 const { t } = useI18n();
 
@@ -203,7 +204,7 @@ const trendOptions = computed(() => ({
   legend: { position: 'bottom' },
 }));
 
-function formatLabel(v) { return v ? String(v).replace(/_/g, ' ') : '-'; }
+function formatLabel(v) { return meetingLabel(v); }
 function attPct(a) {
   return attendanceTotal.value
     ? Math.round(((Number(attendance.value[a]) || 0) / attendanceTotal.value) * 100)

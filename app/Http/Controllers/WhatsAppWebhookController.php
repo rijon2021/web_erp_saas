@@ -72,6 +72,7 @@ class WhatsAppWebhookController extends Controller
             }
 
             $this->applyStatuses($request->input('entry', []));
+            $this->applyInbound($request->input('entry', []));
         });
 
         return response()->json(['ok' => true]);
@@ -131,6 +132,62 @@ class WhatsAppWebhookController extends Controller
                     }
 
                     $log->save();
+                }
+            }
+        }
+    }
+
+    /**
+     * Incoming customer messages. Only stored when the CRM can use them (its
+     * tables exist and the tenant's plan / module toggle allow it): the reply
+     * lands on the matching lead / customer conversation in the CRM inbox.
+     * Logged as message_type 'inbound', status 'received', sender in
+     * `recipient`; Meta retries are de-duplicated on the message id.
+     */
+    protected function applyInbound(array $entries): void
+    {
+        if (! \Illuminate\Support\Facades\Schema::hasTable('crm_messages') || ! \App\Services\Crm\CrmCaptureService::enabled()) {
+            return;
+        }
+
+        foreach ($entries as $entry) {
+            foreach (data_get($entry, 'changes', []) as $change) {
+                $names = [];
+                foreach (data_get($change, 'value.contacts', []) as $contact) {
+                    if (! empty($contact['wa_id'])) {
+                        $names[$contact['wa_id']] = data_get($contact, 'profile.name');
+                    }
+                }
+
+                foreach (data_get($change, 'value.messages', []) as $msg) {
+                    $id = $msg['id'] ?? null;
+                    $from = preg_replace('/\D+/', '', (string) ($msg['from'] ?? ''));
+                    if (! $id || $from === '' || WhatsappLog::where('provider_message_id', $id)->exists()) {
+                        continue;
+                    }
+
+                    $type = (string) ($msg['type'] ?? 'text');
+                    $body = match ($type) {
+                        'text' => (string) data_get($msg, 'text.body', ''),
+                        'button' => (string) data_get($msg, 'button.text', ''),
+                        'interactive' => (string) (data_get($msg, 'interactive.button_reply.title') ?? data_get($msg, 'interactive.list_reply.title', '')),
+                        default => (string) (data_get($msg, $type . '.caption') ?: '[' . $type . ']'),
+                    };
+
+                    try {
+                        $log = WhatsappLog::create([
+                            'recipient' => $from,
+                            'message_type' => 'inbound',
+                            'body' => $body,
+                            'status' => 'received',
+                            'provider_message_id' => $id,
+                            'meta' => ['direction' => 'in', 'name' => $names[$from] ?? null, 'type' => $type],
+                            'sent_at' => isset($msg['timestamp']) ? \Carbon\Carbon::createFromTimestamp((int) $msg['timestamp']) : now(),
+                        ]);
+                        app(\App\Services\Crm\CrmMessageService::class)->matchInbound($log);
+                    } catch (\Throwable $e) {
+                        report($e);
+                    }
                 }
             }
         }

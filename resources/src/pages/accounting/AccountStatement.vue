@@ -38,7 +38,7 @@
             style="width: 100%"
             :allow-clear="false"
             allow-all-time
-            :placeholder="[tf('All_Time', 'All time'), tf('All_Time', 'All time')]"
+            :placeholder="[tf('All_time', 'All time'), tf('All_time', 'All time')]"
             @change="crud.reload()"
           />
         </a-col>

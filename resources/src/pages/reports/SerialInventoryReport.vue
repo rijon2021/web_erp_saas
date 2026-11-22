@@ -8,6 +8,7 @@
     export-endpoint="report/serials/inventory"
     :export-params="filterParams"
     export-rows-key="report"
+    product-data
   >
     <template #filters>
       <a-select
@@ -68,6 +69,8 @@ const columns = computed(() => [
   { title: t('Status_returned_supplier'), dataIndex: 'returned_supplier', key: 'returned_supplier', align: 'right', sum: true },
   { title: t('Status_damaged'), key: 'damaged', dataIndex: 'damaged', align: 'right', sum: true, exportValue: r => r.damaged ?? 0 },
   { title: t('Status_reserved'), dataIndex: 'reserved', key: 'reserved', align: 'right', sum: true },
+  { title: t('Status_in_kit'), dataIndex: 'in_kit', key: 'in_kit', align: 'right', sum: true },
+  { title: t('Status_written_off'), dataIndex: 'written_off', key: 'written_off', align: 'right', sum: true },
   { title: t('Total'), dataIndex: 'total', key: 'total', align: 'right', sum: true },
 ]);
 

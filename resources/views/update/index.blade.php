@@ -6,6 +6,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Platform Update</title>
+    @php
+        // This page runs mid-update, so a settings lookup must never break it.
+        try {
+            $updateFavicon = \App\Models\Central\GeneralSetting::instance()->getPublicFaviconUrl();
+        } catch (\Throwable $e) {
+            $updateFavicon = asset('images/super/settings/favicon.ico');
+        }
+    @endphp
+    <link rel="icon" href="{{ $updateFavicon }}">
     <link rel="stylesheet" href="{{ asset('assets_super/css/bootstrap-icons.min.css') }}">
     <link rel="stylesheet" href="{{ asset('assets_super/css/update.css') }}?v={{ time() }}">
 </head>

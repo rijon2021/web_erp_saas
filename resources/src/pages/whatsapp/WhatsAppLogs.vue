@@ -58,7 +58,7 @@ import { t as tf } from '../../i18n';
 const { t } = useI18n();
 const statusFilter = ref('');
 const statusOptions = [
-  { value: '', label: tf('All_statuses', 'All statuses') },
+  { value: '', label: tf('All_Statuses', 'All statuses') },
   { value: 'pending', label: tf('Pending', 'Pending') },
   { value: 'sent', label: tf('Sent', 'Sent') },
   { value: 'delivered', label: tf('Delivered', 'Delivered') },
@@ -81,7 +81,7 @@ const columns = computed(() => [
   { title: tf('Template', 'Template'), dataIndex: 'template_key', key: 'template_key', width: 150 },
   { title: tf('Message', 'Message'), key: 'body' },
   { title: t('Status'), key: 'status', width: 110, align: 'center' },
-  { title: tf('Error', 'Error'), key: 'error', width: 160 },
+  { title: tf('Cr_Log_Error', 'Error'), key: 'error', width: 160 },
   { title: tf('Sent_At', 'Sent At'), dataIndex: 'sent_at', key: 'sent_at', width: 160 },
   { title: t('Action'), key: 'actions', width: 80, align: 'center' },
 ]);

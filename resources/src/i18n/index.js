@@ -1,3 +1,4 @@
+import { toRaw } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { supportMessages } from './support';
 import { fallbackMessages } from './fallback';
@@ -44,12 +45,41 @@ function indexLocale(locale, messages) {
     lowerIndex.set(locale, idx);
 }
 
+// Per-messages-object lowercase index for messageResolver below, rebuilt
+// automatically whenever setLocaleMessage swaps in a new object.
+const resolverIndex = new WeakMap();
+
+// Exact key first, then the same locale's other casing, BEFORE vue-i18n moves
+// on to the fallback locale. The `missing` hook alone can't do this: its value
+// for the active locale is overwritten when the loop goes on to 'en'. The
+// translations table's unique index is case-insensitive, so the seeder keeps
+// one casing per key (POS_Settings vs Pos_Settings) and the other never exists.
+// All messages are flat — dotted keys like 'pos.Cart' are literal keys.
+function messageResolver(obj, path) {
+    if (obj == null) return null;
+    const exact = obj[path];
+    if (exact != null) return exact;
+    const raw = toRaw(obj);
+    let idx = resolverIndex.get(raw);
+    if (!idx) {
+        idx = Object.create(null);
+        for (const k of Object.keys(raw)) {
+            const lk = k.toLowerCase();
+            if (idx[lk] === undefined) idx[lk] = raw[k];
+        }
+        resolverIndex.set(raw, idx);
+    }
+    const v = idx[String(path).toLowerCase()];
+    return v === undefined ? null : v;
+}
+
 export const i18n = createI18n({
     legacy: false,          // Composition API mode
     globalInjection: true,  // keep $t() available in templates
     locale: storedLocale(),
     fallbackLocale: 'en',
     messages: {},
+    messageResolver,
     missingWarn: false,
     fallbackWarn: false,
     // Runs only on a miss; active locale's other casing first, then English's.
@@ -66,7 +96,7 @@ export const i18n = createI18n({
 const loaded = new Set();
 
 // Offline fallback: last successfully fetched messages per locale. The API
-// stays the source of truth (fetched with cache: 'no-store' every boot); this
+// stays the source of truth (revalidated with cache: 'no-cache' every boot); this
 // copy is only read when that fetch fails, so an offline reload of the POS
 // doesn't render raw i18n keys.
 const CACHE_PREFIX = 'stocky_i18n_cache_v1_';
@@ -95,15 +125,32 @@ function writeCachedMessages(locale, messages) {
  * English-ish, e.g. 'Search_this_table').
  */
 export async function loadLocale(locale) {
+    // English is the fallbackLocale: a key a locale's table doesn't carry yet
+    // (new keys land in en.php first) must render its English text, not the
+    // raw key — vue-i18n can only fall back to messages it has loaded.
+    await Promise.all([ensureMessages(locale), locale !== 'en' ? ensureMessages('en') : null]);
+
+    i18n.global.locale.value = locale;
+    // Only lang here: <html dir> follows the ui store's direction (App.vue),
+    // the same value Ant's ConfigProvider uses, so the two can't disagree.
+    document.documentElement.setAttribute('lang', locale);
+    try {
+        window.localStorage.setItem('language', locale);
+    } catch (e) { /* ignore storage errors */ }
+}
+
+async function ensureMessages(locale) {
     if (!loaded.has(locale)) {
         let messages = null;
         try {
             const res = await fetch(`/api/translations/${locale}`, {
                 credentials: 'same-origin',
                 headers: { Accept: 'application/json' },
-                // Translations are edited at runtime (admin UI, seeder); a stale
-                // HTTP cache would keep showing old values after a fix.
-                cache: 'no-store',
+                // Translations are edited at runtime (admin UI, seeder), so the
+                // copy is always revalidated: the server answers 304 (empty
+                // body) via its ETag when nothing changed, and the browser then
+                // hands back its stored copy — never a stale one.
+                cache: 'no-cache',
             });
             if (res.ok) {
                 messages = await res.json();
@@ -122,18 +169,6 @@ export async function loadLocale(locale) {
         indexLocale(locale, merged);
         if (messages) loaded.add(locale);
     }
-
-    i18n.global.locale.value = locale;
-    applyDirection(locale);
-    try {
-        window.localStorage.setItem('language', locale);
-    } catch (e) { /* ignore storage errors */ }
-}
-
-export function applyDirection(locale) {
-    const dir = isRtlLocale(locale) ? 'rtl' : 'ltr';
-    document.documentElement.setAttribute('dir', dir);
-    document.documentElement.setAttribute('lang', locale);
 }
 
 /** Translate with a human-readable fallback when a key is missing. */

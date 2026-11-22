@@ -12,6 +12,7 @@
     <DataTable :crud="crud" :columns="columns">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'next_billing_date'">{{ date(record.next_billing_date) }}</template>
+        <template v-else-if="column.key === 'billing_cycle'">{{ cycleLabel(record.billing_cycle) }}</template>
         <template v-else-if="column.key === 'status'">
           <a-switch
             :checked="record.status === true || record.status === 'active'"
@@ -60,6 +61,9 @@ const { date } = useFormat();
 
 const crud = useCrudTable('subscriptions', { rowsKey: 'subscriptions' });
 crud.fetchRows();
+
+const CYCLE_KEYS = { monthly: 'Monthly', weekly: 'Sbs_Weekly', yearly: 'Yearly' };
+const cycleLabel = v => (CYCLE_KEYS[v] ? t(CYCLE_KEYS[v]) : v);
 
 const columns = computed(() => [
   { title: t('Customer'), dataIndex: 'client_name', key: 'client_name', sorter: true },

@@ -12,23 +12,34 @@ class IncomingWebhookService
      * Log every incoming webhook attempt, verify signature when a secret is
      * configured for the source, and return the persisted log record.
      */
+    /** Stored payload cap — the endpoint is public, the log must not become a dump. */
+    private const MAX_STORED_PAYLOAD = 262144;
+
     public function receive(Request $request, string $source): WebhookIncomingLog
     {
         $rawBody = $request->getContent();
         $headers = $this->sanitizeHeaders($request->headers->all());
         $signatureValid = $this->verifySignature($source, $request, $rawBody);
 
+        $error = null;
+        if (! $signatureValid) {
+            $error = $this->getSourceSecret($source)
+                ? 'Signature verification failed or missing.'
+                : 'No secret configured for source "'.$source.'" — set one in config/webhooks.php (or WEBHOOKS_ALLOW_UNSIGNED=true while integrating).';
+        }
+
         $log = WebhookIncomingLog::create([
-            'source'          => $source,
-            'event'           => $request->header('X-Webhook-Event') ?? $request->input('event'),
+            'source'          => mb_substr($source, 0, 100),
+            'event'           => mb_substr((string) ($request->header('X-Webhook-Event') ?? $request->input('event')), 0, 191) ?: null,
             'ip'              => $request->ip(),
             'headers'         => $headers,
-            'payload'         => $rawBody,
+            // Refused requests keep only a short sample for debugging.
+            'payload'         => mb_strcut($rawBody, 0, $signatureValid ? self::MAX_STORED_PAYLOAD : 8192, 'UTF-8'),
             'signature_valid' => $signatureValid,
             'status'          => $signatureValid
                 ? WebhookIncomingLog::STATUS_RECEIVED
                 : WebhookIncomingLog::STATUS_FAILED,
-            'error_message'   => $signatureValid ? null : 'Signature verification failed or missing.',
+            'error_message'   => $error,
         ]);
 
         if ($signatureValid) {
@@ -56,7 +67,9 @@ class IncomingWebhookService
     {
         $secret = $this->getSourceSecret($source);
         if (!$secret) {
-            return true;
+            // Unsigned requests are only trusted when explicitly allowed
+            // (initial integration); otherwise anyone could post "events".
+            return (bool) config('webhooks.allow_unsigned', false);
         }
 
         $header = $request->header('X-Webhook-Signature');

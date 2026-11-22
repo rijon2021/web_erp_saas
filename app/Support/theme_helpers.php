@@ -318,11 +318,22 @@ if (! function_exists('store_front_patterns')) {
             'collections/*',
             'pages/*',
             'flash-sales',
+            'compare', // Electronics Premium product compare
             'properties', 'properties/*',
             'product/*',
             'products/*/reviews',
             'contact', 'contact/*',
             'quote-request',
+            'cart-availability',
+            'track',
+            // Theme endpoints. Narrow on purpose: the admin's Restaurant
+            // pages are /restaurant/* and its Rental pages /rental/*.
+            'vehicle-lead',
+            'table/*',
+            'restaurant/booking-slots', 'restaurant/book',
+            'rentals', 'rentals/*',
+            // Booking theme (the admin's Booking pages are /bookings/*)
+            'book', 'book/*', 'appointment/*',
             'newsletter/*',
             'lang/*', 'currency/*',
 
@@ -332,6 +343,9 @@ if (! function_exists('store_front_patterns')) {
             'my/*',
             'checkout',
             'thank-you',
+            // Guest order link + its payment-proof upload (POST needs the
+            // store session's CSRF token)
+            'order/*',
 
             // Checkout AJAX endpoints (narrow: the admin owns /store/* pages)
             'store/orders',

@@ -1,14 +1,14 @@
 <template>
   <div class="page">
-    <PageHeader title="Task Board" subtitle="Every task, by stage." :breadcrumb="['Projects Management', 'Task Board']">
+    <PageHeader :title="$t('Pm_Task_Board')" :subtitle="$t('Pm_Task_Board_Subtitle')" :breadcrumb="[$t('Pm_Projects_Management'), $t('Pm_Task_Board')]">
       <template #actions>
         <a-button @click="$router.push('/tasks')">
           <template #icon><UnorderedListOutlined /></template>
-          List view
+          {{ $t('Pm_List_View') }}
         </a-button>
         <a-button type="primary" @click="$router.push('/tasks/create')">
           <template #icon><PlusOutlined /></template>
-          New task
+          {{ $t('Pm_New_Task') }}
         </a-button>
       </template>
     </PageHeader>
@@ -16,20 +16,20 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="filters.search" placeholder="Search task…"
+          v-model:value="filters.search" :placeholder="$t('Pm_Search_Task')"
           allow-clear class="tb-search" @search="load"
         />
         <a-select
           v-model:value="filters.project_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All projects"
+          option-filter-prop="label" :placeholder="$t('Pm_All_Projects')"
           :options="projectOptions" @change="load"
         />
         <a-select
           v-model:value="filters.priority" class="tb-item-sm" allow-clear
-          placeholder="Priority" :options="TASK_PRIORITIES" @change="load"
+          :placeholder="$t('Priority')" :options="TASK_PRIORITIES" @change="load"
         />
-        <a-tag v-if="overdue" color="error" class="tb-flag">{{ overdue }} overdue</a-tag>
-        <a-tag>{{ total }} tasks</a-tag>
+        <a-tag v-if="overdue" color="error" class="tb-flag">{{ $t('Pm_N_Overdue', { n: overdue }) }}</a-tag>
+        <a-tag>{{ $t('Pm_N_Tasks', { n: total }) }}</a-tag>
       </div>
     </a-card>
 
@@ -68,7 +68,7 @@
                 <span v-if="task.end_date" class="card-due" :class="{ late: task.is_overdue }">
                   <CalendarOutlined /> {{ date(task.end_date) }}
                 </span>
-                <span v-else class="card-due muted">No due date</span>
+                <span v-else class="card-due muted">{{ $t('Pm_No_Due_Date') }}</span>
 
                 <a-dropdown :trigger="['click']">
                   <a-button type="text" size="small" class="card-move">
@@ -80,7 +80,7 @@
                         v-for="target in BOARD_COLUMNS.filter(c => c.key !== col.key)"
                         :key="target.key"
                       >
-                        Move to {{ target.label }}
+                        {{ $t('Pm_Move_To') }} {{ target.label }}
                       </a-menu-item>
                     </a-menu>
                   </template>
@@ -88,7 +88,7 @@
               </footer>
             </article>
 
-            <div v-if="!(columns[col.key] || []).length" class="col-empty">Nothing here</div>
+            <div v-if="!(columns[col.key] || []).length" class="col-empty">{{ $t('Pm_Nothing_Here') }}</div>
           </div>
         </section>
       </div>
@@ -153,7 +153,7 @@ async function load() {
 async function move(task, status) {
   try {
     await http.post('task_change_status', { id: task.id, status });
-    message.success('Task moved.');
+    message.success(t('Pm_Task_Moved'));
     load();
   } catch (e) {
     message.error(e?.data?.message || t('InvalidData', 'Could not move this task'));

@@ -8,7 +8,7 @@
 
     <template v-else>
       <!-- Upload module -->
-      <a-card :title="'Upload Module'" style="margin-bottom: 16px">
+      <a-card :title="$t('Upload_Module')" style="margin-bottom: 16px">
         <div style="max-width: 640px; margin: 0 auto">
           <a-upload-dragger
             :file-list="moduleZip ? [{ uid: '-1', name: moduleZip.name + ' (' + formatFileSize(moduleZip.size) + ')', status: 'done' }] : []"
@@ -32,13 +32,13 @@
       <!-- Installed modules -->
       <template v-if="modulesInfo.length > 0">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px">
-          <h4 style="margin: 0">Installed Modules</h4>
+          <h4 style="margin: 0">{{ $t('Installed_Modules') }}</h4>
           <a-segmented
             v-model:value="filter"
             :options="[
-              { value: 'all', label: 'All (' + modulesInfo.length + ')' },
-              { value: 'active', label: 'Active (' + activeCount + ')' },
-              { value: 'inactive', label: 'Inactive (' + inactiveCount + ')' },
+              { value: 'all', label: $t('All') + ' (' + modulesInfo.length + ')' },
+              { value: 'active', label: $t('Active') + ' (' + activeCount + ')' },
+              { value: 'inactive', label: $t('Inactive') + ' (' + inactiveCount + ')' },
             ]"
           />
         </div>
@@ -64,7 +64,7 @@
                     @change="v => toggleModule(m, v)"
                   />
                   <span style="margin-left: 8px; font-size: 12px" :style="{ color: m.status ? '#52c41a' : '#8c8c8c' }">
-                    {{ m.status ? 'Enabled' : 'Disabled' }}
+                    {{ m.status ? $t('Enabled') : $t('Disabled') }}
                   </span>
                 </span>
               </div>
@@ -73,9 +73,9 @@
         </a-row>
       </template>
 
-      <a-empty v-else description="No Modules Installed">
+      <a-empty v-else :description="$t('No_Modules_Installed')">
         <div style="color: rgba(var(--ink-rgb), 0.45); font-size: 12px">
-          Upload a module zip file above to get started.
+          {{ $t('Upload_Module_Zip_Hint') }}
         </div>
       </a-empty>
     </template>
@@ -128,22 +128,22 @@ function formatModuleName(name) {
 }
 function getModuleDescription(name) {
   const descriptions = {
-    ApiDocs: 'Interactive API documentation with code examples and endpoint reference.',
-    WooCommerceSync: 'Sync products and stock with your WooCommerce store.',
-    Ecommerce: 'Full-featured online store with product catalog and checkout.',
-    HRM: 'Human resource management with employees, attendance, and payroll.',
-    Commission: 'Sales agent commission programs, rules, and tracking.',
-    Contracts: 'Contract management with templates, tasks, and attachments.',
-    Bookings: 'Appointment booking and service job management.',
-    Reports: 'Advanced reporting and business analytics.',
-    Recruit: 'Recruitment management with jobs, candidates, applications, interviews and reports.',
+    ApiDocs: t('Module_Desc_ApiDocs'),
+    WooCommerceSync: t('Module_Desc_WooCommerceSync'),
+    Ecommerce: t('Module_Desc_Ecommerce'),
+    HRM: t('Module_Desc_HRM'),
+    Commission: t('Module_Desc_Commission'),
+    Contracts: t('Module_Desc_Contracts'),
+    Bookings: t('Module_Desc_Bookings'),
+    Reports: t('Module_Desc_Reports'),
+    Recruit: t('Module_Desc_Recruit'),
   };
-  return descriptions[name] || 'Extends your Stocky application with additional functionality.';
+  return descriptions[name] || t('Module_Desc_Default');
 }
 
 function onZipPicked(file) {
   if (!file.name.endsWith('.zip')) {
-    message.error('Please upload a .zip file');
+    message.error(t('Please_Upload_Zip_File'));
     return false;
   }
   moduleZip.value = file;

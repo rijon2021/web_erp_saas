@@ -69,11 +69,11 @@
     <div class="d-flex align-items-center gap-2">
         <i class="bi bi-bank alert-offline-pending-icon"></i>
         <span class="alert-offline-pending-text">
-            <strong>{{ $pendingOfflineCount }}</strong> offline {{ Str::plural('payment', $pendingOfflineCount) }} awaiting verification
+            {!! trans_choice('super.payments.offline_awaiting', $pendingOfflineCount, ['count' => '<strong>' . $pendingOfflineCount . '</strong>']) !!}
         </span>
     </div>
     <a href="{{ route('super.payments.pending-registrations') }}" class="btn btn-sm btn-offline-review">
-        Review Now <i class="bi bi-arrow-right ms-1"></i>
+        {{ __('super.payments.review_now') }} <i class="bi bi-arrow-right ms-1"></i>
     </a>
 </div>
 @endif
@@ -151,7 +151,7 @@
                     @foreach($gatewayBreakdown as $gw)
                     <div>
                         <div class="d-flex justify-content-between align-items-center mb-1">
-                            <span class="fw-600 fs-sm3">{{ \App\Models\Central\TenantBillingPayment::GATEWAYS[$gw->gateway] ?? ucfirst($gw->gateway ?? 'Unknown') }}</span>
+                            <span class="fw-600 fs-sm3">{{ \App\Models\Central\TenantBillingPayment::GATEWAYS[$gw->gateway] ?? ucfirst($gw->gateway ?? __('super.common.unknown')) }}</span>
                             <span class="fw-700 fs-sm3">{{ $currencySymbol }}{{ number_format($gw->total, 2) }}</span>
                         </div>
                         @php $pct = $totalRevenue > 0 ? ($gw->total / $totalRevenue * 100) : 0; @endphp

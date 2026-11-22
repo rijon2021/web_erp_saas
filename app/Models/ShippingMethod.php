@@ -10,13 +10,42 @@ class ShippingMethod extends Model
 {
     use SoftDeletes;
 
-    protected $fillable = ['name', 'price', 'active', 'sort_order'];
+    /** Fixed price set by the store. */
+    public const TYPE_FLAT = 'flat';
+
+    /** Real carrier prices quoted by Shippo for each cart + address. */
+    public const TYPE_SHIPPO = 'shippo';
+
+    /** Printful's own rates for the cart's print-on-demand items. */
+    public const TYPE_PRINTFUL = 'printful';
+
+    protected $fillable = ['name', 'price', 'active', 'sort_order', 'type', 'live_settings'];
 
     protected $casts = [
         'price' => 'decimal:2',
         'active' => 'boolean',
         'sort_order' => 'integer',
+        'live_settings' => 'array',
     ];
+
+    /** Quoted live by a carrier (the column is missing until the 2026_10_27 migration runs). */
+    public function isLive(): bool
+    {
+        return in_array($this->type ?? self::TYPE_FLAT, [self::TYPE_SHIPPO, self::TYPE_PRINTFUL], true);
+    }
+
+    public function isPrintful(): bool
+    {
+        return ($this->type ?? self::TYPE_FLAT) === self::TYPE_PRINTFUL;
+    }
+
+    /** One live-rate setting, $default when unset or blank. */
+    public function liveSetting(string $key, $default = null)
+    {
+        $value = ($this->live_settings ?? [])[$key] ?? null;
+
+        return $value === null || $value === '' ? $default : $value;
+    }
 
     public function regions(): HasMany
     {

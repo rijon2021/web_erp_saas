@@ -9,8 +9,8 @@
       </template>
     </PageHeader>
 
-    <!-- Summary cards — real global totals across ALL suppliers (a separate
-         unpaginated fetch), not just the loaded page. -->
+    <!-- Summary cards — totals across every supplier matching the current search
+         (a separate unpaginated fetch), not just the loaded page. -->
     <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
       <a-col :xs="24" :sm="8" :md="8">
         <a-card size="small" class="stat-card">
@@ -69,6 +69,11 @@
             {{ money(record.return_Due) }}
           </strong>
         </template>
+        <template v-else-if="column.key === 'net_balance'">
+          <strong :style="{ color: Number(record.net_balance) > 0 ? '#ff4d4f' : undefined }">
+            {{ money(record.net_balance) }}
+          </strong>
+        </template>
         <template v-else-if="column.key === 'actions'">
           <a-dropdown :trigger="['click']">
             <a-button type="text" size="small">
@@ -76,11 +81,21 @@
             </a-button>
             <template #overlay>
               <a-menu @click="({ key }) => onAction(key, record)">
-                <a-menu-item v-if="Number(record.due) > 0 && auth.can('pay_supplier_due')" key="pay-due">
+                <!-- Opening balance counts: pay_supplier_due allocates to it first. -->
+                <a-menu-item
+                  v-if="(Number(record.due) || 0) + (Number(record.opening_balance) || 0) > 0 && auth.can('pay_supplier_due')"
+                  key="pay-due"
+                >
                   <DollarOutlined /> {{ $t('pay_all_purchase_due_at_a_time') }}
                 </a-menu-item>
                 <a-menu-item v-if="Number(record.return_Due) > 0 && auth.can('pay_purchase_return_due')" key="pay-return">
                   <DollarOutlined /> {{ $t('pay_all_purchase_return_due_at_a_time') }}
+                </a-menu-item>
+                <a-menu-item v-if="walletEnabled && auth.can('supplier_wallet_view')" key="wallet">
+                  <WalletOutlined /> {{ $t('Supplier_Wallet') }}
+                </a-menu-item>
+                <a-menu-item v-if="auth.can('Suppliers_edit')" key="opening-balance">
+                  <CalculatorOutlined /> {{ $t('Adjust_Opening_Balance') }}
                 </a-menu-item>
                 <a-menu-item v-if="auth.can('Suppliers_edit')" key="edit">
                   <EditOutlined /> {{ $t('Edit_Provider') }}
@@ -138,22 +153,71 @@
           <a-input-number v-model:value="payForm.amount" :min="0" :max="totalDue" style="width: 100%" />
           <div class="muted">{{ $t('Maximum_payment') }}: <strong>{{ money(totalDue) }}</strong></div>
         </a-form-item>
-        <a-form-item :label="$t('Paymentchoice') + ' *'">
-          <a-select
-            v-model:value="payForm.payment_method_id" :placeholder="$t('PleaseSelect')"
-            :options="opts('payment_methods')"
-          />
+        <!-- Supplier Wallet tender: settle the due from the prepaid balance. -->
+        <a-form-item v-if="payKind === 'due' && walletEnabled">
+          <a-space align="start">
+            <a-switch v-model:checked="payForm.from_wallet" />
+            <div>
+              <div>{{ $t('SW_Pay_From_Wallet') }}</div>
+              <div class="muted">
+                {{ $t('SW_Pay_From_Wallet_Help') }} — {{ $t('SW_Wallet_Balance') }}:
+                <strong :style="{ color: Number(payTarget?.wallet_balance) < 0 ? '#ff4d4f' : '#52c41a' }">{{ money(payTarget?.wallet_balance) }}</strong>
+              </div>
+            </div>
+          </a-space>
         </a-form-item>
-        <a-form-item :label="$t('Account')">
-          <a-select
-            v-model:value="payForm.account_id" allow-clear :placeholder="$t('Choose_Account')"
-            :options="accountOptions"
-          />
-        </a-form-item>
+        <template v-if="!(payKind === 'due' && payForm.from_wallet)">
+          <a-form-item :label="$t('Paymentchoice') + ' *'">
+            <a-select
+              v-model:value="payForm.payment_method_id" :placeholder="$t('PleaseSelect')"
+              :options="opts('payment_methods')"
+            />
+          </a-form-item>
+          <a-form-item :label="$t('Account')">
+            <a-select
+              v-model:value="payForm.account_id" allow-clear :placeholder="$t('Choose_Account')"
+              :options="accountOptions"
+            />
+          </a-form-item>
+        </template>
         <a-form-item :label="$t('Please_provide_any_details')">
           <a-textarea v-model:value="payForm.notes" :rows="3" />
         </a-form-item>
         <a-button type="primary" :loading="paying" @click="submitPay">{{ $t('submit') }}</a-button>
+      </a-form>
+    </a-modal>
+
+    <!-- Adjust opening balance -->
+    <a-modal
+      v-model:open="obOpen"
+      :title="$t('Adjust_Opening_Balance')"
+      :confirm-loading="obSaving"
+      :ok-text="$t('submit')"
+      :cancel-text="$t('Delete_cancelButtonText')"
+      @ok="submitOpeningBalance"
+    >
+      <a-form layout="vertical" style="margin-top: 8px">
+        <a-form-item :label="$t('Supplier')">
+          <a-input :value="obForm.provider_name" disabled />
+        </a-form-item>
+        <a-form-item :label="$t('Opening_Balance')">
+          <a-input :value="money(obForm.current)" disabled />
+        </a-form-item>
+        <a-form-item :label="$t('Mode') || 'Mode'">
+          <a-radio-group v-model:value="obForm.mode" button-style="solid">
+            <a-radio-button value="add">{{ $t('Add') }}</a-radio-button>
+            <a-radio-button value="subtract">{{ $t('Subtract') || 'Subtract' }}</a-radio-button>
+            <a-radio-button value="set">{{ $t('Set') || 'Set' }}</a-radio-button>
+          </a-radio-group>
+        </a-form-item>
+        <a-form-item :label="$t('Amount')" required>
+          <a-input-number v-model:value="obForm.amount" style="width: 100%" :min="0" />
+        </a-form-item>
+        <a-alert
+          v-if="obForm.amount !== null && obForm.amount !== ''"
+          type="info" show-icon
+          :message="`${$t('Opening_Balance')}: ${money(obForm.current)} → ${money(obPreview)}`"
+        />
       </a-form>
     </a-modal>
   </div>
@@ -173,7 +237,7 @@ import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, DollarOutlined, RollbackOutlined,
-  EyeOutlined, MoreOutlined, ShopOutlined,
+  EyeOutlined, MoreOutlined, ShopOutlined, CalculatorOutlined, WalletOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
@@ -187,7 +251,11 @@ const { money, roundMoney } = useFormat();
 const auth = useAuthStore();
 const router = useRouter();
 
-const MONEY_KEYS = ['credit_limit', 'opening_balance'];
+const MONEY_KEYS = ['credit_limit', 'opening_balance', 'wallet_balance', 'net_after_wallet'];
+
+// Supplier Wallet: the list payload says whether the feature is on; the
+// wallet columns, the ledger action and the "pay from wallet" tender follow it.
+const walletEnabled = computed(() => !!crud.payload.value?.supplier_wallet?.enabled);
 
 // Payload: { providers, totalRows, accounts, payment_methods }
 const crud = useCrudTable('providers', { rowsKey: 'providers' });
@@ -211,11 +279,18 @@ const columns = computed(() => [
   { title: t('Opening_Balance'), key: 'opening_balance', dataIndex: 'opening_balance', align: 'right', exportValue: r => money(r.opening_balance) },
   { title: t('Due'), key: 'due', dataIndex: 'due', sorter: true, align: 'right', exportValue: r => money(r.due) },
   { title: t('Total_Purchase_Return_Due'), key: 'return_Due', dataIndex: 'return_Due', align: 'right', exportValue: r => money(r.return_Due) },
+  // Opening balance + purchase due - return due, as the API computes it.
+  { title: t('Total_Due'), key: 'net_balance', dataIndex: 'net_balance', align: 'right', exportValue: r => money(r.net_balance) },
+  // Prepaid balance held with the supplier, and the due once it is applied.
+  ...(walletEnabled.value ? [
+    { title: t('SW_Wallet_Balance'), key: 'wallet_balance', dataIndex: 'wallet_balance', align: 'right', exportValue: r => money(r.wallet_balance) },
+    { title: t('SW_Net_After_Wallet'), key: 'net_after_wallet', dataIndex: 'net_after_wallet', align: 'right', exportValue: r => money(r.net_after_wallet) },
+  ] : []),
 ]);
 
 /* ------------------------------------------------- summary card totals */
-// Global sums across every supplier (not the current page): one unpaginated
-// fetch that reuses the same list endpoint the exports use.
+// Sums across every supplier matching the current search (not just the current
+// page): one unpaginated fetch that reuses the same list endpoint the exports use.
 const supplierCount = computed(() => crud.total.value);
 const totals = ref({ due: 0, returnDue: 0 });
 const totalsLoading = ref(false);
@@ -224,33 +299,48 @@ const totalsLoading = ref(false);
 const initialLoading = ref(true);
 const cardsLoading = computed(() => initialLoading.value || crud.loading.value || totalsLoading.value);
 
+// Sequence guard: a slow response for an older search must not overwrite the
+// totals of a newer one.
+let totalsSeq = 0;
 async function loadTotals() {
+  const seq = ++totalsSeq;
   totalsLoading.value = true;
   try {
-    const data = await http.get('providers', { page: 1, limit: -1, SortField: 'id', SortType: 'desc' });
+    const data = await http.get('providers', { page: 1, limit: -1, search: crud.search.value, SortField: 'id', SortType: 'desc' });
+    if (seq !== totalsSeq) return;
     const rows = data.providers || [];
     totals.value = {
-      due: rows.reduce((s, r) => s + (Number(r.due) || 0), 0),
+      // Opening balance is owed too — same basis as the pay-due modal's total.
+      due: rows.reduce((s, r) => s + (Number(r.opening_balance) || 0) + (Number(r.due) || 0), 0),
       returnDue: rows.reduce((s, r) => s + (Number(r.return_Due) || 0), 0),
     };
   } catch (e) {
     // Leave the last-known totals in place on a transient failure.
   } finally {
-    totalsLoading.value = false;
+    if (seq === totalsSeq) totalsLoading.value = false;
   }
 }
 
-// Refresh the sums whenever the supplier set changes size (add, delete, bulk
-// delete, filtered search) — pagination alone leaves total intact. The first
-// load is handled explicitly in onMounted, so skip it here (a total that stays
-// 0 would otherwise never trigger and leave the cards stuck loading).
-watch(() => crud.total.value, () => { if (!initialLoading.value) loadTotals(); });
+// Refresh the sums after every row fetch whose search term or row count
+// differs from the last one (typed search, add, delete, bulk delete) —
+// pagination and sorting alone leave both intact. Keyed on the fetched rows so
+// the totals request always carries the search the table actually used. The
+// first load is handled explicitly in onMounted, so skip it here.
+let totalsKey = '';
+watch(() => crud.rows.value, () => {
+  const key = `${crud.search.value}|${crud.total.value}`;
+  if (key === totalsKey) return;
+  totalsKey = key;
+  if (!initialLoading.value) loadTotals();
+});
 
 /* --------------------------------------------------- row action dispatch */
 function onAction(key, record) {
   const go = {
     'pay-due': () => openPay(record, 'due'),
     'pay-return': () => openPay(record, 'return'),
+    'opening-balance': () => openOpeningBalance(record),
+    wallet: () => router.push(`/suppliers/${record.id}/ledger`),
     edit: () => router.push(`/suppliers/${record.id}/edit`),
     delete: () => crud.remove(record),
   };
@@ -280,7 +370,7 @@ const totalDue = computed(() =>
 function openPay(record, kind) {
   payTarget.value = record;
   payKind.value = kind;
-  payForm.value = { amount: totalDue.value, payment_method_id: undefined, account_id: undefined, notes: '' };
+  payForm.value = { amount: totalDue.value, payment_method_id: undefined, account_id: undefined, notes: '', from_wallet: false };
   payOpen.value = true;
 }
 
@@ -289,7 +379,8 @@ async function submitPay() {
     message.warning(t('Amount'));
     return;
   }
-  if (!payForm.value.payment_method_id) {
+  const fromWallet = payKind.value === 'due' && walletEnabled.value && !!payForm.value.from_wallet;
+  if (!fromWallet && !payForm.value.payment_method_id) {
     message.warning(t('Paymentchoice'));
     return;
   }
@@ -300,22 +391,66 @@ async function submitPay() {
       provider_id: payTarget.value.id,
       amount: payForm.value.amount,
       notes: payForm.value.notes,
-      payment_method_id: payForm.value.payment_method_id,
-      account_id: payForm.value.account_id,
+      payment_method_id: fromWallet ? null : payForm.value.payment_method_id,
+      account_id: fromWallet ? null : payForm.value.account_id,
+      from_wallet: fromWallet ? 1 : 0,
     });
     message.success(t('Successfully_Created'));
     payOpen.value = false;
     crud.fetchRows();
     loadTotals(); // dues changed but the supplier count didn't — refresh sums
   } catch (e) {
-    message.error(t('InvalidData'));
+    // Wallet refusals (frozen, insufficient balance) arrive as 422 with a code.
+    const code = e?.data?.code;
+    const key = code ? 'SW_Err_' + code : '';
+    message.error((key && t(key) !== key) ? t(key) : (e?.data?.message || t('InvalidData')));
   } finally {
     paying.value = false;
   }
 }
 
+/* ------------------------------------------- adjust opening balance */
+const obOpen = ref(false);
+const obSaving = ref(false);
+const obForm = ref({ provider_id: null, provider_name: '', current: 0, mode: 'add', amount: null });
+
+const obPreview = computed(() => {
+  const amt = parseFloat(obForm.value.amount) || 0;
+  if (obForm.value.mode === 'add') return obForm.value.current + Math.abs(amt);
+  if (obForm.value.mode === 'subtract') return obForm.value.current - Math.abs(amt);
+  return amt;
+});
+
+function openOpeningBalance(record) {
+  obForm.value = {
+    provider_id: record.id, provider_name: record.name,
+    current: parseFloat(record.opening_balance) || 0, mode: 'add', amount: null,
+  };
+  obOpen.value = true;
+}
+async function submitOpeningBalance() {
+  const amount = parseFloat(obForm.value.amount);
+  if (isNaN(amount)) {
+    message.warning(t('Amount'));
+    return;
+  }
+  obSaving.value = true;
+  try {
+    await http.post(`providers/${obForm.value.provider_id}/adjust-opening-balance`, { mode: obForm.value.mode, amount });
+    message.success(t('Successfully_Updated'));
+    obOpen.value = false;
+    crud.fetchRows();
+    loadTotals();
+  } catch (e) {
+    message.error(e?.data?.message || t('InvalidData'));
+  } finally {
+    obSaving.value = false;
+  }
+}
+
 onMounted(async () => {
   await crud.fetchRows();
+  totalsKey = `${crud.search.value}|${crud.total.value}`;
   await loadTotals();
   initialLoading.value = false;
 });

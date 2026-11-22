@@ -33,7 +33,8 @@ class LandingCmsController extends Controller
             return null;
         }
         $file = $request->file($field);
-        $filename = uniqid() . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $file->getClientOriginalName());
+        // Content-derived extension (favicon may be .ico/.svg; SVG is served with a no-script CSP).
+        $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::contentExtension($file, ['jpg', 'png', 'gif', 'webp', 'bmp', 'ico', 'svg'], $field));
         $uploadDir = public_path('images/' . $folder);
         $file->move($uploadDir, $filename);
 
@@ -43,7 +44,7 @@ class LandingCmsController extends Controller
     /** Move an already-resolved uploaded file into public/images/{folder} and return its relative path. */
     private function moveUpload(\Illuminate\Http\UploadedFile $file, string $folder = 'super'): string
     {
-        $filename = uniqid() . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $file->getClientOriginalName());
+        $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::imageExtension($file));
         $file->move(public_path('images/' . $folder), $filename);
 
         return 'images/' . $folder . '/' . $filename;
@@ -131,7 +132,7 @@ class LandingCmsController extends Controller
         $hero->save();
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.hero')->with('success', 'Hero section updated successfully.');
+        return redirect()->route('super.cms.hero')->with('success', __('super.flash.hero_updated'));
     }
 
     /**
@@ -186,7 +187,7 @@ class LandingCmsController extends Controller
         LandingFeaturesSection::firstOrCreate([])->update($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.features')->with('success', 'Features section updated successfully.');
+        return redirect()->route('super.cms.features')->with('success', __('super.flash.features_updated'));
     }
 
     public function featureCreate(): View
@@ -213,7 +214,7 @@ class LandingCmsController extends Controller
         LandingFeature::create($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.features')->with('success', 'Feature added successfully.');
+        return redirect()->route('super.cms.features')->with('success', __('super.flash.feature_added'));
     }
 
     public function featureEdit(LandingFeature $feature): View
@@ -240,7 +241,7 @@ class LandingCmsController extends Controller
         $feature->update($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.features')->with('success', 'Feature updated successfully.');
+        return redirect()->route('super.cms.features')->with('success', __('super.flash.feature_updated'));
     }
 
     public function featureDestroy(LandingFeature $feature): RedirectResponse
@@ -249,7 +250,7 @@ class LandingCmsController extends Controller
         $feature->delete();
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.features')->with('success', 'Feature deleted successfully.');
+        return redirect()->route('super.cms.features')->with('success', __('super.flash.feature_deleted'));
     }
 
     public function featureReorder(Request $request): RedirectResponse
@@ -261,7 +262,7 @@ class LandingCmsController extends Controller
 
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.features')->with('success', 'Order updated successfully.');
+        return redirect()->route('super.cms.features')->with('success', __('super.flash.order_updated'));
     }
 
     // ── Pricing ────────────────────────────────────────────────────────────
@@ -297,7 +298,7 @@ class LandingCmsController extends Controller
         LandingPricing::firstOrCreate([])->update($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.pricing')->with('success', 'Pricing section updated successfully.');
+        return redirect()->route('super.cms.pricing')->with('success', __('super.flash.pricing_updated'));
     }
 
     // ── Testimonials ──────────────────────────────────────────────────────
@@ -333,7 +334,7 @@ class LandingCmsController extends Controller
         LandingTestimonial::create($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.testimonials')->with('success', 'Testimonial added successfully.');
+        return redirect()->route('super.cms.testimonials')->with('success', __('super.flash.testimonial_added'));
     }
 
     public function testimonialEdit(LandingTestimonial $testimonial): View
@@ -361,7 +362,7 @@ class LandingCmsController extends Controller
         $testimonial->update($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.testimonials')->with('success', 'Testimonial updated successfully.');
+        return redirect()->route('super.cms.testimonials')->with('success', __('super.flash.testimonial_updated'));
     }
 
     public function testimonialDestroy(LandingTestimonial $testimonial): RedirectResponse
@@ -370,7 +371,7 @@ class LandingCmsController extends Controller
         $testimonial->delete();
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.testimonials')->with('success', 'Testimonial deleted successfully.');
+        return redirect()->route('super.cms.testimonials')->with('success', __('super.flash.testimonial_deleted'));
     }
 
     // ── FAQ ───────────────────────────────────────────────────────────────
@@ -400,7 +401,7 @@ class LandingCmsController extends Controller
         LandingFaq::create($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.faqs')->with('success', 'FAQ added successfully.');
+        return redirect()->route('super.cms.faqs')->with('success', __('super.flash.faq_added'));
     }
 
     public function faqEdit(LandingFaq $faq): View
@@ -421,7 +422,7 @@ class LandingCmsController extends Controller
         $faq->update($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.faqs')->with('success', 'FAQ updated successfully.');
+        return redirect()->route('super.cms.faqs')->with('success', __('super.flash.faq_updated'));
     }
 
     public function faqDestroy(LandingFaq $faq): RedirectResponse
@@ -429,7 +430,7 @@ class LandingCmsController extends Controller
         $faq->delete();
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.faqs')->with('success', 'FAQ deleted successfully.');
+        return redirect()->route('super.cms.faqs')->with('success', __('super.flash.faq_deleted'));
     }
 
     // ── Stats (Trust Bar) ──────────────────────────────────────────────────
@@ -460,7 +461,7 @@ class LandingCmsController extends Controller
         LandingStat::create($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.stats')->with('success', 'Stat added successfully.');
+        return redirect()->route('super.cms.stats')->with('success', __('super.flash.stat_added'));
     }
 
     public function statEdit(LandingStat $stat): View
@@ -482,7 +483,7 @@ class LandingCmsController extends Controller
         $stat->update($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.stats')->with('success', 'Stat updated successfully.');
+        return redirect()->route('super.cms.stats')->with('success', __('super.flash.stat_updated'));
     }
 
     public function statDestroy(LandingStat $stat): RedirectResponse
@@ -490,7 +491,7 @@ class LandingCmsController extends Controller
         $stat->delete();
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.stats')->with('success', 'Stat deleted successfully.');
+        return redirect()->route('super.cms.stats')->with('success', __('super.flash.stat_deleted'));
     }
 
     // ── CTA ────────────────────────────────────────────────────────────────
@@ -527,7 +528,7 @@ class LandingCmsController extends Controller
         $cta->update($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.cta')->with('success', 'CTA section updated successfully.');
+        return redirect()->route('super.cms.cta')->with('success', __('super.flash.cta_updated'));
     }
 
     // ── Footer ─────────────────────────────────────────────────────────────
@@ -559,7 +560,7 @@ class LandingCmsController extends Controller
         LandingFooter::firstOrCreate([])->update($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.footer')->with('success', 'Footer updated successfully.');
+        return redirect()->route('super.cms.footer')->with('success', __('super.flash.footer_updated'));
     }
 
     // ── SEO ───────────────────────────────────────────────────────────────
@@ -595,7 +596,7 @@ class LandingCmsController extends Controller
         $seo->update($validated);
         $this->clearLandingCache();
 
-        return redirect()->route('super.cms.seo')->with('success', 'SEO settings updated successfully.');
+        return redirect()->route('super.cms.seo')->with('success', __('super.flash.seo_updated'));
     }
 
     // ── Privacy Policy ────────────────────────────────────────────────────

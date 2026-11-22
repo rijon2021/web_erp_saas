@@ -19,6 +19,9 @@ use Illuminate\Support\Facades\Log;
  */
 class WhatsAppService
 {
+    /** The log row written by the last send() — lets callers link to it. */
+    public ?WhatsappLog $lastLog = null;
+
     public function __construct(protected TenantLimitsService $limits)
     {
     }
@@ -53,7 +56,9 @@ class WhatsAppService
             'message_type' => $opts['message_type'] ?? 'text',
             'body'         => $body,
             'status'       => WhatsappLog::STATUS_PENDING,
+            'meta'         => $opts['meta'] ?? null,
         ]);
+        $this->lastLog = $log;
 
         // Global / connection gate.
         if (! $this->isAvailable()) {

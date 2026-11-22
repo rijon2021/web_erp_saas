@@ -7,6 +7,7 @@ use App\Models\MarketingCampaign;
 use App\Models\MarketingCampaignRecipient;
 use App\Models\MarketingSetting;
 use App\Models\Setting;
+use App\Services\WhatsApp\MetaCloudDriver;
 use Carbon\Carbon;
 use GuzzleHttp\Client as HttpClient;
 use Illuminate\Support\Facades\Config;
@@ -24,6 +25,9 @@ class MarketingDispatcher
 {
     protected $resolver;
 
+    /** Set by configureMail(): the tenant has its own mail server configured. */
+    protected bool $mailReady = false;
+
     public function __construct(SegmentResolver $resolver = null)
     {
         $this->resolver = $resolver ?: new SegmentResolver;
@@ -37,6 +41,7 @@ class MarketingDispatcher
         // Clear any previous recipient rows (e.g. a re-send).
         MarketingCampaignRecipient::where('campaign_id', $campaign->id)->delete();
 
+        $leads = false;
         if ($campaign->all_customers || ! $campaign->segment_id) {
             $clients = $this->resolver->resolve(true, []);
         } else {
@@ -44,14 +49,16 @@ class MarketingDispatcher
             $clients = $segment
                 ? $this->resolver->resolveSegment($segment)
                 : $this->resolver->resolve(true, []);
+            // A CRM lead segment: recipients are leads, not clients.
+            $leads = $segment && $segment->audience === 'crm_leads';
         }
 
         $now = Carbon::now();
         $rows = [];
         foreach ($clients as $client) {
-            $rows[] = [
+            $rows[] = ($leads ? ['crm_lead_id' => $client->id] : []) + [
                 'campaign_id'   => $campaign->id,
-                'client_id'     => $client->id,
+                'client_id'     => $leads ? null : $client->id,
                 'name'          => $this->clientName($client),
                 'phone'         => $client->phone,
                 'email'         => $client->email,
@@ -81,27 +88,36 @@ class MarketingDispatcher
     }
 
     /**
-     * Deliver a campaign to all of its pending recipients.
+     * Build the recipient list when there is nothing left to send: either a
+     * first send (no recipients yet) or a manual re-send (all prior recipients
+     * already processed). buildRecipients() resets the list, so a re-send
+     * re-resolves the audience and retries from scratch, while a stuck campaign
+     * with pending rows keeps them and resumes where it stopped.
      */
-    public function dispatchCampaign(MarketingCampaign $campaign): void
+    public function prepareRecipients(MarketingCampaign $campaign): void
     {
-        $campaign->update(['status' => 'sending']);
-
-        // Build the recipient list when there is nothing left to send: either a
-        // first send (no recipients yet) or a manual re-send (all prior
-        // recipients already processed). buildRecipients() resets the list, so a
-        // re-send re-resolves the audience and retries from scratch.
         $hasPending = MarketingCampaignRecipient::where('campaign_id', $campaign->id)
             ->where('status', 'pending')->exists();
 
         if (! $hasPending) {
             $this->buildRecipients($campaign);
         }
+    }
+
+    /**
+     * Deliver a campaign to all of its pending recipients.
+     */
+    public function dispatchCampaign(MarketingCampaign $campaign): void
+    {
+        $campaign->status = 'sending';
+        $campaign->touch();
+
+        $this->prepareRecipients($campaign);
 
         $settings = MarketingSetting::current();
 
         if ($campaign->type === 'email') {
-            $this->configureMail($settings);
+            $this->mailReady = $this->configureMail($settings);
         }
 
         $sent = 0;
@@ -114,34 +130,53 @@ class MarketingDispatcher
                 foreach ($recipients as $recipient) {
                     $this->sendToRecipient($campaign, $recipient, $settings, $sent, $failed);
                 }
+                // Live progress, and the heartbeat MarketingCampaign::is_stuck reads.
+                $campaign->fill($this->recipientCounts($campaign))->touch();
             });
 
         $campaign->refresh();
+        $counts = $this->recipientCounts($campaign);
+
+        $campaign->update($counts + [
+            'status'  => $counts['failed_count'] > 0 && $counts['sent_count'] === 0 ? 'failed' : 'sent',
+            'sent_at' => Carbon::now(),
+        ]);
+    }
+
+    protected function recipientCounts(MarketingCampaign $campaign): array
+    {
         $delivered = MarketingCampaignRecipient::where('campaign_id', $campaign->id)
             ->whereIn('status', ['sent', 'delivered'])->count();
-        $failedCount = MarketingCampaignRecipient::where('campaign_id', $campaign->id)
-            ->where('status', 'failed')->count();
-        $pending = MarketingCampaignRecipient::where('campaign_id', $campaign->id)
-            ->whereIn('status', ['pending', 'skipped'])->count();
 
-        $campaign->update([
-            'status'          => $failedCount > 0 && $delivered === 0 ? 'failed' : 'sent',
-            'sent_at'         => Carbon::now(),
+        return [
             'sent_count'      => $delivered,
             'delivered_count' => $delivered,
-            'failed_count'    => $failedCount,
-            'pending_count'   => $pending,
-        ]);
+            'failed_count'    => MarketingCampaignRecipient::where('campaign_id', $campaign->id)
+                ->where('status', 'failed')->count(),
+            'pending_count'   => MarketingCampaignRecipient::where('campaign_id', $campaign->id)
+                ->whereIn('status', ['pending', 'skipped'])->count(),
+        ];
     }
 
     protected function sendToRecipient(MarketingCampaign $campaign, MarketingCampaignRecipient $recipient, MarketingSetting $settings, &$sent, &$failed): void
     {
         $message = $this->personalize($campaign->message_content, $recipient);
 
+        // A lead may have unsubscribed after the list was built.
+        if ($recipient->crm_lead_id && \App\Models\CrmLead::whereKey($recipient->crm_lead_id)->where('marketing_opt_out', true)->exists()) {
+            $this->markSkipped($recipient, 'Unsubscribed from marketing');
+            return;
+        }
+
         try {
             if ($campaign->type === 'email') {
                 if (! $settings->email_enabled) {
                     $this->markSkipped($recipient, 'Email channel disabled');
+                    return;
+                }
+                if (! $this->mailReady) {
+                    // Never fall back to the platform's own mailer.
+                    $this->markSkipped($recipient, 'No mail server configured (Settings > Mail Settings)');
                     return;
                 }
                 if (empty($recipient->email)) {
@@ -168,7 +203,16 @@ class MarketingDispatcher
                     $this->markSkipped($recipient, 'No phone number');
                     return;
                 }
-                $this->sendHttp($settings, 'whatsapp', $recipient->phone, $message);
+                if (trim((string) $campaign->wa_template_name) !== '') {
+                    // Meta-approved template: the only kind Meta delivers to
+                    // customers outside their 24-hour messaging window.
+                    if (! $this->isMetaCloud($settings)) {
+                        throw new \RuntimeException('WhatsApp templates need the WhatsApp Cloud API (graph.facebook.com) in Marketing Settings.');
+                    }
+                    $this->sendMetaCloud($settings, $recipient->phone, $this->templateContent($campaign, $recipient));
+                } else {
+                    $this->sendHttp($settings, 'whatsapp', $recipient->phone, $message);
+                }
             }
 
             $recipient->update([
@@ -176,6 +220,9 @@ class MarketingDispatcher
                 'sent_at' => Carbon::now(),
             ]);
             $sent++;
+            if ($recipient->crm_lead_id) {
+                $this->logOnLead($campaign, $recipient);
+            }
         } catch (\Throwable $e) {
             Log::error('Marketing send failed (campaign '.$campaign->id.', recipient '.$recipient->id.'): '.$e->getMessage());
             $recipient->update([
@@ -200,9 +247,17 @@ class MarketingDispatcher
             }
         }
 
+        // Personalised again with HTML-escaped values (the template itself is staff-written HTML).
+        $body = nl2br($this->personalize($campaign->message_content, $recipient, true));
+        // Lead emails always carry an unsubscribe link (customers are handled by the shop's own rules).
+        if ($recipient->crm_lead_id && ! str_contains((string) $campaign->message_content, '{unsubscribe_url}')) {
+            $body .= '<br><br><small style="color:#94a3b8">'.e(__('Don\'t want these emails?')).' <a href="'
+                .e(\App\Services\Crm\CrmLeadSegmentResolver::unsubscribeUrl((int) $recipient->crm_lead_id)).'">'.e(__('Unsubscribe')).'</a></small>';
+        }
+
         Mail::to($recipient->email)->send(new MarketingCampaignEmail([
             'subject'      => $this->personalize($campaign->subject ?: $campaign->title, $recipient),
-            'body'         => nl2br($message),
+            'body'         => $body,
             'company_name' => $businessName,
             'attachment'   => $attachment,
         ]));
@@ -213,9 +268,18 @@ class MarketingDispatcher
      */
     protected function sendHttp(MarketingSetting $settings, string $channel, string $to, string $message): void
     {
+        if ($channel === 'whatsapp' && $this->isMetaCloud($settings)) {
+            $this->sendMetaCloud($settings, $to, [
+                'type' => 'text',
+                'text' => ['preview_url' => false, 'body' => $message],
+            ]);
+
+            return;
+        }
+
         $url       = $channel === 'sms' ? $settings->sms_api_url : $settings->whatsapp_api_url;
         $method    = strtoupper($channel === 'sms' ? ($settings->sms_http_method ?: 'POST') : ($settings->whatsapp_http_method ?: 'POST'));
-        $apiKey    = $channel === 'sms' ? $settings->sms_api_key : $settings->whatsapp_api_key;
+        $apiKey    = $this->cleanToken($channel === 'sms' ? $settings->sms_api_key : $settings->whatsapp_api_key);
         $toField   = ($channel === 'sms' ? $settings->sms_to_field : $settings->whatsapp_to_field) ?: 'to';
         $msgField  = ($channel === 'sms' ? $settings->sms_message_field : $settings->whatsapp_message_field) ?: 'message';
         $extra     = ($channel === 'sms' ? $settings->sms_extra_params : $settings->whatsapp_extra_params) ?: [];
@@ -254,9 +318,127 @@ class MarketingDispatcher
     }
 
     /**
+     * WhatsApp settings that point at Meta's Cloud API (graph.facebook.com),
+     * by URL or by provider name. Those need Meta's own message shape; the
+     * generic {to, message} body is rejected by the Graph API.
+     */
+    protected function isMetaCloud(MarketingSetting $settings): bool
+    {
+        $host = strtolower((string) parse_url((string) $settings->whatsapp_api_url, PHP_URL_HOST));
+        if ($host === 'graph.facebook.com') {
+            return true;
+        }
+
+        $provider = strtolower(trim((string) $settings->whatsapp_provider));
+
+        return in_array($provider, ['meta', 'meta_cloud', 'meta cloud', 'whatsapp cloud', 'cloud api', 'facebook'], true);
+    }
+
+    /**
+     * The `template` part of a Cloud API message for one recipient. Each stored
+     * parameter fills the template's next body placeholder ({{1}}, {{2}}...)
+     * after personalization; Meta rejects empty parameter text, so a blank
+     * value (e.g. a customer with no name) is sent as "-".
+     */
+    protected function templateContent(MarketingCampaign $campaign, MarketingCampaignRecipient $recipient): array
+    {
+        $template = [
+            'name' => trim((string) $campaign->wa_template_name),
+            'language' => ['code' => trim((string) $campaign->wa_template_language) ?: 'en_US'],
+        ];
+
+        $params = is_array($campaign->wa_template_params) ? $campaign->wa_template_params : [];
+        if ($params) {
+            $template['components'] = [[
+                'type' => 'body',
+                'parameters' => array_map(function ($param) use ($recipient) {
+                    $text = trim($this->personalize((string) $param, $recipient));
+
+                    return ['type' => 'text', 'text' => $text !== '' ? $text : '-'];
+                }, array_values($params)),
+            ]];
+        }
+
+        return ['type' => 'template', 'template' => $template];
+    }
+
+    /**
+     * Send one message through the WhatsApp Cloud API. $content is the
+     * type-specific part: ['type' => 'text', 'text' => [...]] or
+     * ['type' => 'template', 'template' => [...]].
+     *
+     * The endpoint is /{phone_number_id}/messages. Admins paste the URL in
+     * different forms, so: a URL already ending in /messages is used as is;
+     * otherwise the Phone ID field (or the URL's own last segment) completes it.
+     */
+    protected function sendMetaCloud(MarketingSetting $settings, string $to, array $content): void
+    {
+        $token = $this->cleanToken($settings->whatsapp_api_key);
+        if ($token === '') {
+            throw new \RuntimeException('WhatsApp Cloud API: access token is empty (Marketing Settings > WhatsApp API key).');
+        }
+
+        $url = rtrim(trim((string) $settings->whatsapp_api_url), '/');
+        if (! preg_match('#/messages$#', $url)) {
+            $phoneId = trim((string) $settings->whatsapp_phone_id);
+            $url = $phoneId !== ''
+                ? 'https://graph.facebook.com/'.MetaCloudDriver::GRAPH_VERSION.'/'.$phoneId.'/messages'
+                : $url.'/messages';
+        }
+
+        $client = new HttpClient(['timeout' => 30]);
+        $response = $client->request('POST', $url, [
+            'http_errors' => false,
+            'headers' => ['Accept' => 'application/json', 'Authorization' => 'Bearer '.$token],
+            'json' => [
+                'messaging_product' => 'whatsapp',
+                'recipient_type' => 'individual',
+                // E.164 digits only: Meta rejects "+", spaces and dashes.
+                'to' => preg_replace('/\D+/', '', $to),
+            ] + $content,
+        ]);
+
+        $status = $response->getStatusCode();
+        if ($status >= 200 && $status < 300) {
+            return;
+        }
+
+        $body = json_decode((string) $response->getBody(), true);
+        $code = data_get($body, 'error.code');
+        $detail = data_get($body, 'error.error_data.details') ?: data_get($body, 'error.message');
+        $hint = match ((int) $code) {
+            // The usual cause: the 24-hour token from Meta's "API Setup" page.
+            190 => ' The access token is invalid or expired: use a permanent System User token (Business Settings > System users) with whatsapp_business_messaging permission.',
+            132001 => ' Check the template name and language code match an APPROVED template in WhatsApp Manager exactly.',
+            132000 => ' The number of template parameters must equal the template\'s {{n}} placeholders.',
+            131047 => ' Free-text messages only reach customers who wrote in the last 24 hours; use an approved template.',
+            default => '',
+        };
+
+        throw new \RuntimeException(
+            'WhatsApp Cloud API returned HTTP '.$status
+            .($code ? ' [code '.$code.']' : '')
+            .': '.rtrim((string) ($detail ?: substr((string) $response->getBody(), 0, 300)), '. ')
+            .($hint !== '' ? '.'.$hint : '')
+        );
+    }
+
+    /**
+     * API keys are pasted from provider dashboards: drop surrounding
+     * whitespace/newlines and a copied "Bearer " prefix, either of which makes
+     * an otherwise valid token fail authentication.
+     */
+    protected function cleanToken($value): string
+    {
+        $token = trim((string) $value);
+
+        return trim(preg_replace('/^Bearer\s+/i', '', $token));
+    }
+
+    /**
      * Replace personalization variables in a message body.
      */
-    public function personalize(?string $text, MarketingCampaignRecipient $recipient): string
+    public function personalize(?string $text, MarketingCampaignRecipient $recipient, bool $html = false): string
     {
         if ($text === null) {
             return '';
@@ -277,13 +459,38 @@ class MarketingDispatcher
             $totalSpent = $stats->total_spent ?? '';
         }
 
-        return strtr($text, [
+        $lead = $recipient->crm_lead_id ? $recipient->lead : null;
+
+        $vars = [
             '{customer_name}' => $recipient->name ?: '',
+            '{first_name}'    => $lead ? ($lead->first_name ?: explode(' ', (string) $lead->name)[0]) : (optional($client)->firstname ?: explode(' ', (string) $recipient->name)[0]),
+            '{company}'       => $lead ? (string) $lead->company_name : '',
             '{phone}'         => $recipient->phone ?: '',
             '{email}'         => $recipient->email ?: '',
             '{last_purchase}' => (string) $lastPurchase,
             '{total_spent}'   => (string) $totalSpent,
-        ]);
+            '{unsubscribe_url}' => $lead ? \App\Services\Crm\CrmLeadSegmentResolver::unsubscribeUrl($lead->id) : '',
+        ];
+        // In an HTML email the values (names typed into public forms…) must not become markup.
+        if ($html) {
+            $vars = array_map(fn ($v) => e((string) $v), $vars);
+        }
+
+        return strtr($text, $vars);
+    }
+
+    /** "Received campaign …" on the lead's history (best effort). */
+    protected function logOnLead(MarketingCampaign $campaign, MarketingCampaignRecipient $recipient): void
+    {
+        try {
+            \App\Models\CrmLeadEvent::create([
+                'crm_lead_id' => $recipient->crm_lead_id,
+                'type'        => 'campaign',
+                'meta'        => ['campaign' => $campaign->title, 'campaign_id' => $campaign->id, 'channel' => $campaign->type],
+            ]);
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     protected function markSkipped(MarketingCampaignRecipient $recipient, string $reason): void
@@ -305,13 +512,14 @@ class MarketingDispatcher
      * Apply the SMTP credentials stored in the servers table (same source the
      * rest of Stocky uses for outgoing mail).
      */
-    protected function configureMail(MarketingSetting $settings): void
+    protected function configureMail(MarketingSetting $settings): bool
     {
         $server = DB::table('servers')->where('deleted_at', '=', null)->first();
         $appSettings = DB::table('settings')->where('deleted_at', '=', null)->first();
 
         if (! $server || ! $appSettings) {
-            return;
+            // No tenant mail server: callers must not send (no .env fallback).
+            return false;
         }
 
         $fromEmail = $settings->email_from_address
@@ -337,5 +545,10 @@ class MarketingDispatcher
                 ],
             ],
         ]);
+        // Fresh mailer: marketing:process-scheduled sends for several tenants in
+        // one process, and the cached transport would keep the previous SMTP.
+        Mail::purge();
+
+        return true;
     }
 }

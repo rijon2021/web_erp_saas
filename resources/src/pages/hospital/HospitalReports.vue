@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHeader :title="$t('Hospital Reports')" :breadcrumb="[$t('Hospital'), $t('Reports')]">
+    <PageHeader :title="$t('Hm_Hospital_Reports')" :breadcrumb="[$t('Hospital'), $t('Reports')]">
       <template #actions>
         <a-button :loading="exporting === 'excel'" @click="doExport('excel')">
           <template #icon><FileExcelOutlined /></template>
@@ -53,6 +53,9 @@
           {{ record[column.dataIndex] === null || record[column.dataIndex] === undefined
             ? '—' : number(record[column.dataIndex], 1) }}
         </template>
+        <template v-else-if="report === 'occupancy' && column.key === 'type'">{{ labelOf(WARD_TYPES, record.type) }}</template>
+        <template v-else-if="column.key === 'gender'">{{ record.gender ? labelOf(GENDERS, record.gender) : '—' }}</template>
+        <template v-else-if="column.key === 'method'">{{ labelOf(PAYMENT_METHODS, record.method) }}</template>
         <template v-else-if="column.key === 'last_visit'">
           {{ record.last_visit ? date(record.last_visit) : '—' }}
         </template>
@@ -85,6 +88,7 @@ import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { exportExcel, exportPdf } from '../../lib/exporters';
 import http from '../../lib/http';
+import { WARD_TYPES, GENDERS, PAYMENT_METHODS, labelOf } from './hospitalOptions';
 import { t } from '../../i18n';
 
 const { money, number, date } = useFormat();
@@ -176,7 +180,7 @@ const COLUMNS = {
     { title: t('Age', 'Age'), dataIndex: 'age', key: 'age', sorter: true, width: 90 },
     { title: t('Consultations', 'Consultations'), dataIndex: 'visits', key: 'visits', sorter: true, width: 140 },
     { title: t('Admissions', 'Admissions'), dataIndex: 'admissions', key: 'admissions', sorter: true, width: 130 },
-    { title: t('Lab Orders', 'Lab orders'), dataIndex: 'lab_orders', key: 'lab_orders', sorter: true, width: 130 },
+    { title: t('Hm_Lab_Orders', 'Lab orders'), dataIndex: 'lab_orders', key: 'lab_orders', sorter: true, width: 130 },
     { title: t('Billed', 'Billed'), dataIndex: 'billed', key: 'billed', sorter: true, money: true, width: 130 },
     { title: t('Outstanding', 'Outstanding'), dataIndex: 'outstanding', key: 'outstanding', sorter: true, money: true, width: 140 },
     { title: t('Last_Visit', 'Last visit'), dataIndex: 'last_visit', key: 'last_visit', width: 140 },

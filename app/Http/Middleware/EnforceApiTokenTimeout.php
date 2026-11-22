@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Models\UserLoginSession;
 use App\Support\LoginSessionKey;
+use App\Support\Security\SecurityOptions;
 use Closure;
 use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Http\Request;
@@ -51,6 +52,20 @@ class EnforceApiTokenTimeout
             ], 409)->header('X-Session-Revoked', '1');
         }
 
+        // System Settings > Security > inactivity auto-logout. Revoking the row
+        // reuses the signed-out-device path: the SPA sees the 409 and logs out.
+        if ($session && $this->idleTooLong($session)) {
+            try {
+                $session->forceFill(['revoked_at' => now()])->save();
+            } catch (\Throwable $e) {
+                // Still refuse this request below.
+            }
+
+            return response()->json([
+                'message' => 'You were signed out after a period of inactivity.',
+            ], 409)->header('X-Session-Revoked', '1');
+        }
+
         try {
             if (! $session) {
                 // First API call of a session created before this tracking existed.
@@ -73,6 +88,14 @@ class EnforceApiTokenTimeout
         }
 
         return $next($request);
+    }
+
+    private function idleTooLong(UserLoginSession $session): bool
+    {
+        $minutes = SecurityOptions::get(SecurityOptions::TENANT)['session_timeout_minutes'];
+        $lastSeen = $session->last_activity_at ?? $session->logged_in_at;
+
+        return $minutes > 0 && $lastSeen !== null && $lastSeen->lt(now()->subMinutes($minutes));
     }
 
     private function resolveSessionKey(Request $request, $user): ?string

@@ -142,6 +142,30 @@ class ClientPolicy
         return $user->hasRole($permission->roles);
     }
 
+    // Customer Wallet: see balances / ledger / withdrawal requests.
+    public function customer_wallet_view(User $user)
+    {
+        $permission = Permission::where('name', 'customer_wallet_view')->first();
+
+        return $permission ? $user->hasRole($permission->roles) : false;
+    }
+
+    // Customer Wallet: top-up, cash refund, adjust, freeze, settings, withdrawals.
+    public function customer_wallet_manage(User $user)
+    {
+        $permission = Permission::where('name', 'customer_wallet_manage')->first();
+
+        return $permission ? $user->hasRole($permission->roles) : false;
+    }
+
+    // Gift cards: issue / edit / delete, redeem one for a customer.
+    public function gift_cards_manage(User $user)
+    {
+        $permission = Permission::where('name', 'gift_cards_manage')->first();
+
+        return $permission ? $user->hasRole($permission->roles) : false;
+    }
+
     /**
      * Determine whether the user can restore the model.
      *

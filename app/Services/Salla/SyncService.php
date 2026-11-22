@@ -14,7 +14,9 @@ use App\Models\SallaMapping;
 use App\Models\SallaSetting;
 use App\Models\Warehouse;
 use App\Models\product_warehouse;
+use App\Services\ChannelSales;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * Salla sync engine (single store per tenant), modeled on the Shopify module.
@@ -299,7 +301,7 @@ class SyncService
             $product->cost = 0;
             $product->wholesale_price = 0;
             $product->min_price = 0;
-            $product->category_id = $categoryId;
+            $product->category_id = $categoryId ?: $this->fallbackCategoryId();
             $product->brand_id = $brandId ?: null;
             $product->unit_id = $this->defaultUnitId();
             $product->unit_sale_id = $product->unit_id;
@@ -580,20 +582,19 @@ class SyncService
 
         $existingSaleId = SallaMapping::localId(SallaMapping::TYPE_ORDER, $sallaOrderId);
         if ($existingSaleId) {
-            $sale = Sale::find($existingSaleId);
+            $sale = Sale::whereNull('deleted_at')->find($existingSaleId);
             if ($sale) {
-                $sale->statut = $this->mapOrderStatus($statusSlug);
-                $sale->payment_statut = $paymentStatut;
-                if ($paymentStatut === 'paid') {
-                    $sale->paid_amount = self::amt($order['amounts']['total'] ?? ($order['total'] ?? 0)) ?: (float) $sale->GrandTotal;
-                }
-                $sale->save();
+                return $this->applyStatus($sale, $order, $statusSlug, $paymentStatut);
             }
 
-            return 'updated';
+            // The sale was deleted here on purpose while the shop order lives
+            // on. Keep the link and leave the order alone: importing it again
+            // as new would take the stock a second time and book the money
+            // twice. (A sale reversed by this importer drops its link itself.)
+            return 'skipped';
         }
 
-        if (in_array($statusSlug, ['canceled', 'cancelled', 'restored', 'restoring'], true)) {
+        if (in_array($statusSlug, self::CANCEL_SLUGS, true)) {
             return 'skipped';
         }
 
@@ -646,10 +647,11 @@ class SyncService
 
         $referenceId = $order['reference_id'] ?? $sallaOrderId;
         $orderStatut = $this->mapOrderStatus($statusSlug);
+        $delivered = in_array($statusSlug, self::DELIVERED_SLUGS, true);
 
         DB::transaction(function () use (
             $order, $sallaOrderId, $referenceId, $createdAt, $clientId, $warehouseId, $userId,
-            $tax, $discount, $shipping, $grandTotal, $paymentStatut, $orderStatut, $resolved, $unresolved
+            $tax, $discount, $shipping, $grandTotal, $paymentStatut, $orderStatut, $resolved, $unresolved, $delivered
         ) {
             $sale = Sale::create([
                 'date' => $createdAt->format('Y-m-d'),
@@ -664,8 +666,8 @@ class SyncService
                 'discount' => $discount,
                 'shipping' => $shipping,
                 'GrandTotal' => $grandTotal,
-                'paid_amount' => $paymentStatut === 'paid' ? $grandTotal : 0,
-                'payment_statut' => $paymentStatut,
+                'paid_amount' => 0,
+                'payment_statut' => Sale::paymentStatusFor($grandTotal, 0),
                 'statut' => $orderStatut,
                 'notes' => 'Imported from Salla'
                     .($this->settings->store_name ? ' ('.$this->settings->store_name.')' : '')
@@ -690,6 +692,7 @@ class SyncService
                     'sale_id' => $sale->id,
                     'product_id' => $row['product_id'],
                     'product_variant_id' => $row['variant_id'],
+                    'sale_unit_id' => Product::whereKey($row['product_id'])->value('unit_sale_id'),
                     'quantity' => $qty,
                     'price' => $price,
                     'TaxNet' => 0,
@@ -699,20 +702,18 @@ class SyncService
                     'total' => round($price * $qty, 2),
                 ]);
 
-                // Decrement stock in the receiving warehouse
-                $stockQuery = product_warehouse::where('product_id', $row['product_id'])
-                    ->where('warehouse_id', $warehouseId)
-                    ->whereNull('deleted_at');
-                if ($row['variant_id']) {
-                    $stockQuery->where('product_variant_id', $row['variant_id']);
-                } else {
-                    $stockQuery->whereNull('product_variant_id');
-                }
-                $stock = $stockQuery->first();
-                if ($stock) {
-                    $stock->qte = (float) $stock->qte - $qty;
-                    $stock->save();
-                }
+            }
+
+            if ($orderStatut === 'completed') {
+                ChannelSales::moveStock($sale, -1);
+            }
+
+            if ($paymentStatut === 'paid') {
+                ChannelSales::recordPayment($sale, $grandTotal, 'SLA-'.$referenceId, (string) ($order['payment_method'] ?? ''), 'Salla order #'.$referenceId, $createdAt->format('Y-m-d'));
+            }
+
+            if ($delivered) {
+                ChannelSales::markDelivered($sale);
             }
 
             SallaMapping::put(SallaMapping::TYPE_ORDER, (int) $sale->id, $sallaOrderId, [
@@ -721,6 +722,56 @@ class SyncService
         }, 3);
 
         return 'imported';
+    }
+
+    /** Salla statuses that undo the order ("restored" = cancelled and restocked there). */
+    private const CANCEL_SLUGS = ['canceled', 'cancelled', 'restored', 'restoring'];
+
+    /** Salla statuses that say the goods reached the customer (ChannelSales::markDelivered). */
+    private const DELIVERED_SLUGS = ['delivered', 'completed'];
+
+    /**
+     * A status webhook for a sale already here. Stock follows `completed`,
+     * a cancellation reverses the sale, and money is recorded once.
+     *
+     * @return string 'updated' | 'reversed' | 'review' | 'skipped'
+     */
+    private function applyStatus(Sale $sale, array $order, string $statusSlug, string $paymentStatut): string
+    {
+        $referenceId = $order['reference_id'] ?? ($order['id'] ?? '');
+
+        if (in_array($statusSlug, self::CANCEL_SLUGS, true)) {
+            if (! ChannelSales::reverse($sale)) {
+                $this->log('orders.review', 'warning', 'Sale '.$sale->Ref.' needs review: cancelled on Salla after delivery or return', [
+                    'sale_id' => $sale->id,
+                    'salla_order_id' => $order['id'] ?? null,
+                ]);
+
+                return 'review';
+            }
+
+            SallaMapping::where('entity_type', SallaMapping::TYPE_ORDER)->where('local_id', $sale->id)->delete();
+            $this->log('orders.reverse', 'info', 'Sale '.$sale->Ref.' reversed: the Salla order was cancelled', [
+                'sale_id' => $sale->id,
+                'salla_order_id' => $order['id'] ?? null,
+            ]);
+
+            return 'reversed';
+        }
+
+        $changed = ChannelSales::followStatus($sale, $this->mapOrderStatus($statusSlug));
+
+        if (in_array($statusSlug, self::DELIVERED_SLUGS, true) && $sale->shipping_status !== 'delivered') {
+            ChannelSales::markDelivered($sale);
+            $changed = true;
+        }
+
+        if ($paymentStatut === 'paid' && ChannelSales::due($sale) > 0) {
+            ChannelSales::recordPayment($sale, ChannelSales::due($sale), 'SLA-'.$referenceId, (string) ($order['payment_method'] ?? ''), 'Salla order #'.$referenceId);
+            $changed = true;
+        }
+
+        return $changed ? 'updated' : 'skipped';
     }
 
     /** @return array{product_id:int, variant_id:?int}|null */
@@ -898,6 +949,60 @@ class SyncService
         $this->log('webhook.product.updated', 'info', 'Mapped product refreshed from Salla', [
             'salla_product_id' => $sallaId, 'product_id' => $localId,
         ]);
+    }
+
+    // -----------------------------------------------------------------
+    // Catalog lookups for imported products
+    // -----------------------------------------------------------------
+
+    /** The category named like Salla's (created if missing); null when Salla sent none. */
+    private function resolveCategoryId(string $name): ?int
+    {
+        $name = trim($name);
+        if ($name === '') {
+            return null;
+        }
+
+        $existing = Category::whereNull('deleted_at')->where('name', $name)->first();
+        if ($existing) {
+            return (int) $existing->id;
+        }
+
+        return (int) Category::create([
+            'name' => $name,
+            'code' => Str::upper(Str::slug(Str::limit($name, 20, ''))) ?: Str::random(6),
+        ])->id;
+    }
+
+    /** Where a product with no Salla category lands (an existing "Uncategorised" is reused). */
+    private function fallbackCategoryId(): int
+    {
+        $existing = Category::whereNull('deleted_at')->where('name', 'Uncategorised')->first();
+        if ($existing) {
+            return (int) $existing->id;
+        }
+
+        return (int) Category::create(['name' => 'Uncategorised', 'code' => 'UNCAT'])->id;
+    }
+
+    /** The brand named like Salla's (created if missing); null when Salla sent none. */
+    private function resolveBrandId(string $name): ?int
+    {
+        $name = trim($name);
+        if ($name === '') {
+            return null;
+        }
+
+        $existing = Brand::whereNull('deleted_at')->where('name', $name)->first();
+
+        return (int) ($existing ? $existing->id : Brand::create(['name' => $name])->id);
+    }
+
+    private function defaultUnitId(): ?int
+    {
+        $unit = DB::table('units')->whereNull('deleted_at')->orderBy('id')->first();
+
+        return $unit ? (int) $unit->id : null;
     }
 
     // -----------------------------------------------------------------

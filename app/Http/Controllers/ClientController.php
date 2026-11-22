@@ -48,6 +48,14 @@ class ClientController extends BaseController
         $data = [];
         $clients = Client::where('deleted_at', '=', null);
 
+        // Settings -> Features: optionally show only customers who have bought
+        // from one of this user's warehouses. A customer with no sales anywhere
+        // stays visible so a newly created one is not hidden from its author.
+        $this->scopeMasterDataToWarehouses($clients, fn ($ids) => DB::table('sales')
+            ->whereNull('sales.deleted_at')
+            ->whereColumn('sales.client_id', 'clients.id')
+            ->when($ids !== null, fn ($q) => $q->whereIn('sales.warehouse_id', $ids)));
+
         // Multiple Filter
         $Filtred = $helpers->filter($clients, $columns, $param, $request)
         // Search With Multiple Param
@@ -79,6 +87,11 @@ class ClientController extends BaseController
                 ->get();
         }
 
+        // Customer Wallet: one query for the whole page.
+        $walletService = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+        $walletOn = $walletService->enabled();
+        $walletBalances = $walletOn ? $walletService->balancesFor(collect($clients)->pluck('id')->all()) : [];
+
         foreach ($clients as $client) {
 
             $client_exist = EcommerceClient::where('deleted_at', '=', null)
@@ -90,29 +103,31 @@ class ClientController extends BaseController
                 $item['client_ecommerce'] = 'no';
             }
 
-            $item['total_amount'] = DB::table('sales')
-                ->where('deleted_at', '=', null)
-                ->where('statut', 'completed')
-                ->where('client_id', $client->id)
-                ->sum('GrandTotal');
+            // Same warehouse scope as the customer page, so the totals in this
+            // list agree with the ones shown when the customer is opened.
+            $salesOf = fn () => $this->scopeToWarehouses(
+                DB::table('sales')
+                    ->where('deleted_at', '=', null)
+                    ->where('statut', 'completed')
+                    ->where('client_id', $client->id),
+                'warehouse_id'
+            );
+            $returnsOf = fn () => $this->scopeToWarehouses(
+                DB::table('sale_returns')
+                    ->where('deleted_at', '=', null)
+                    ->where('client_id', $client->id),
+                'warehouse_id'
+            );
 
-            $item['total_paid'] = DB::table('sales')
-                ->where('deleted_at', '=', null)
-                ->where('statut', 'completed')
-                ->where('client_id', $client->id)
-                ->sum('paid_amount');
+            $item['total_amount'] = $salesOf()->sum('GrandTotal');
+
+            $item['total_paid'] = $salesOf()->sum('paid_amount');
 
             $item['due'] = $item['total_amount'] - $item['total_paid'];
 
-            $item['total_amount_return'] = DB::table('sale_returns')
-                ->where('deleted_at', '=', null)
-                ->where('client_id', $client->id)
-                ->sum('GrandTotal');
+            $item['total_amount_return'] = $returnsOf()->sum('GrandTotal');
 
-            $item['total_paid_return'] = DB::table('sale_returns')
-                ->where('sale_returns.deleted_at', '=', null)
-                ->where('sale_returns.client_id', $client->id)
-                ->sum('paid_amount');
+            $item['total_paid_return'] = $returnsOf()->sum('paid_amount');
 
             $item['return_Due'] = $item['total_amount_return'] - $item['total_paid_return'];
 
@@ -135,6 +150,7 @@ class ClientController extends BaseController
             $item['opening_balance'] = $client->opening_balance ?? 0;
             $item['credit_limit'] = $client->credit_limit ?? 0;
             $item['net_balance'] = ($client->opening_balance ?? 0) + $item['due'] - $item['return_Due'];
+            $item['wallet_balance'] = $walletOn ? round((float) ($walletBalances[$client->id] ?? 0), 2) : null;
             $data[] = $item;
         }
 
@@ -155,6 +171,11 @@ class ClientController extends BaseController
             'clients_without_ecommerce' => $clientsWithoutEcommerce,
             'accounts' => $accounts,
             'payment_methods' => $payment_methods,
+            'customer_wallet' => [
+                'enabled' => $walletOn,
+                'payment_method_id' => $walletOn ? $walletService->paymentMethodId() : null,
+                'allow_negative' => $walletOn ? $walletService->allowsNegative() : false,
+            ],
         ]);
     }
 
@@ -690,7 +711,15 @@ class ClientController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'pay_due', Client::class);
 
+        // Customer-wallet tender: each payment row below is funded from the
+        // customer's wallet (its own wallet transaction) instead of an account.
+        $wallets = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+        $fromWallet = $wallets->isWalletMethod($request['payment_method_id']);
+
         if ($request['amount'] > 0) {
+            try {
+            // One transaction: a wallet refusal half-way leaves nothing behind.
+            DB::transaction(function () use ($request, $wallets, $fromWallet) {
             $client = Client::findOrFail($request->client_id);
             $paid_amount_total = $request->amount;
 
@@ -713,8 +742,15 @@ class ClientController extends BaseController
                 // Record opening balance payment in history table
                 $payment_opening_balance = new PaymentOpeningBalance;
                 $payment_opening_balance->client_id = $request->client_id;
-                $payment_opening_balance->account_id = $request['account_id'] ? $request['account_id'] : null;
+                $payment_opening_balance->account_id = (! $fromWallet && $request['account_id']) ? $request['account_id'] : null;
                 $payment_opening_balance->Ref = $this->getOpeningBalancePaymentNumberOrder();
+                if ($fromWallet) {
+                    $payment_opening_balance->wallet_transaction_id = $wallets->payFromWallet((int) $client->id, (float) $opening_balance_paid, 'opening_balance_payment', [
+                        'reference_type' => PaymentOpeningBalance::class,
+                        'note' => 'Opening balance · '.$payment_opening_balance->Ref,
+                        'user_id' => Auth::id(),
+                    ])->id;
+                }
                 $payment_opening_balance->date = Carbon::now();
                 $payment_opening_balance->payment_method_id = $request['payment_method_id'];
                 $payment_opening_balance->montant = $opening_balance_paid;
@@ -724,12 +760,11 @@ class ClientController extends BaseController
                 $payment_opening_balance->save();
 
                 // Update account balance if account is provided
-                $account = Account::where('id', $request['account_id'])->exists();
-                if ($account) {
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance + $opening_balance_paid,
-                    ]);
+                if (! $fromWallet) {
+                    Account::adjustBalance($request['account_id'], $opening_balance_paid);
+                } elseif ($payment_opening_balance->wallet_transaction_id) {
+                    \App\Models\WalletTransaction::whereKey($payment_opening_balance->wallet_transaction_id)
+                        ->update(['reference_id' => $payment_opening_balance->id]);
                 }
             }
 
@@ -758,8 +793,17 @@ class ClientController extends BaseController
 
                     $payment_sale = new PaymentSale;
                     $payment_sale->sale_id = $client_sale->id;
-                    $payment_sale->account_id = $request['account_id'] ? $request['account_id'] : null;
+                    $payment_sale->account_id = (! $fromWallet && $request['account_id']) ? $request['account_id'] : null;
                     $payment_sale->Ref = app('App\Http\Controllers\PaymentSalesController')->getNumberOrder();
+                    if ($fromWallet) {
+                        // Set before save(): the payment journal posts on create.
+                        $payment_sale->wallet_transaction_id = $wallets->payFromWallet((int) $client_sale->client_id, (float) $amount, 'sale_payment', [
+                            'reference_type' => Sale::class,
+                            'reference_id' => $client_sale->id,
+                            'note' => 'Sale '.$client_sale->Ref.' · '.$payment_sale->Ref,
+                            'user_id' => Auth::id(),
+                        ])->id;
+                    }
                     $payment_sale->date = Carbon::now();
                     $payment_sale->payment_method_id = $request['payment_method_id'];
                     $payment_sale->montant = $amount;
@@ -768,14 +812,8 @@ class ClientController extends BaseController
                     $payment_sale->user_id = Auth::user()->id;
                     $payment_sale->save();
 
-                    $account = Account::where('id', $request['account_id'])->exists();
-
-                    if ($account) {
-                        // Account exists, perform the update
-                        $account = Account::find($request['account_id']);
-                        $account->update([
-                            'balance' => $account->balance + $amount,
-                        ]);
+                    if (! $fromWallet) {
+                        Account::adjustBalance($request['account_id'], $amount);
                     }
 
                     $client_sale->paid_amount += $amount;
@@ -784,6 +822,10 @@ class ClientController extends BaseController
 
                     $paid_amount_total -= $amount;
                 }
+            }
+            }, 10);
+            } catch (\App\Services\SupplierWallet\WalletException $e) {
+                return $e->toResponse();
             }
         }
 
@@ -797,7 +839,12 @@ class ClientController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'pay_sale_return_due', Client::class);
 
+        $wallets = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+        $toWallet = $wallets->isWalletMethod($request['payment_method_id']);
+
         if ($request['amount'] > 0) {
+            try {
+            DB::transaction(function () use ($request, $wallets, $toWallet) {
             $client_sell_return_due = SaleReturn::where('deleted_at', '=', null)
                 ->where([
                     ['payment_statut', '!=', 'paid'],
@@ -822,8 +869,16 @@ class ClientController extends BaseController
 
                 $payment_sale_return = new PaymentSaleReturns;
                 $payment_sale_return->sale_return_id = $client_sale_return->id;
-                $payment_sale_return->account_id = $request['account_id'] ? $request['account_id'] : null;
+                $payment_sale_return->account_id = (! $toWallet && $request['account_id']) ? $request['account_id'] : null;
                 $payment_sale_return->Ref = app('App\Http\Controllers\PaymentSaleReturnsController')->getNumberOrder();
+                if ($toWallet) {
+                    $payment_sale_return->wallet_transaction_id = $wallets->creditFromReturn((int) $client_sale_return->client_id, (float) $amount, [
+                        'reference_type' => SaleReturn::class,
+                        'reference_id' => $client_sale_return->id,
+                        'note' => 'Sale return '.$client_sale_return->Ref.' · '.$payment_sale_return->Ref,
+                        'user_id' => Auth::id(),
+                    ])->id;
+                }
                 $payment_sale_return->date = Carbon::now();
                 $payment_sale_return->payment_method_id = $request['payment_method_id'];
                 $payment_sale_return->montant = $amount;
@@ -832,14 +887,8 @@ class ClientController extends BaseController
                 $payment_sale_return->user_id = Auth::user()->id;
                 $payment_sale_return->save();
 
-                $account = Account::where('id', $request['account_id'])->exists();
-
-                if ($account) {
-                    // Account exists, perform the update
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance - $amount,
-                    ]);
+                if (! $toWallet) {
+                    Account::adjustBalance($request['account_id'], -$amount);
                 }
 
                 $client_sale_return->paid_amount += $amount;
@@ -847,6 +896,10 @@ class ClientController extends BaseController
                 $client_sale_return->save();
 
                 $paid_amount_total -= $amount;
+            }
+            }, 10);
+            } catch (\App\Services\SupplierWallet\WalletException $e) {
+                return $e->toResponse();
             }
         }
 
@@ -943,8 +996,14 @@ class ClientController extends BaseController
         $q = Sale::query()
             ->whereNull('deleted_at')
             ->with(['client:id,name', 'warehouse:id,name'])
-            ->where('client_id', $request->id)
+            ->where('client_id', $request->id);
 
+        // A user assigned to specific warehouses must not see this customer's
+        // business done elsewhere — the figures on the customer page are built
+        // from these same rows.
+        $this->scopeToWarehouses($q, 'warehouse_id');
+
+        $q
             // Search (Ref, statut, payment_statut, warehouse.name, client.name)
             ->when($request->filled('search'), function ($query) use ($request) {
                 $s = $request->input('search');
@@ -1017,12 +1076,18 @@ class ClientController extends BaseController
         $page = max(1, (int) $request->input('page', 1));
         $offSet = ($page - 1) * ($perPage > 0 ? $perPage : 0);
 
-        // Get sales payments
+        // Get sales payments. A payment carries no warehouse of its own — it
+        // inherits the one on the sale it settles, which is how the rest of the
+        // app scopes payments too.
         $salesPaymentsQuery = DB::table('payment_sales')
             ->whereNull('payment_sales.deleted_at')
             ->join('sales', 'payment_sales.sale_id', '=', 'sales.id')
             ->join('payment_methods', 'payment_sales.payment_method_id', '=', 'payment_methods.id')
-            ->where('sales.client_id', $request->id)
+            ->where('sales.client_id', $request->id);
+
+        $this->scopeToWarehouses($salesPaymentsQuery, 'sales.warehouse_id');
+
+        $salesPaymentsQuery
             ->when($request->filled('search'), function ($query) use ($request) {
                 $s = $request->input('search');
                 $query->where(function ($qr) use ($s) {
@@ -1110,42 +1175,41 @@ class ClientController extends BaseController
             ->whereNull('deleted_at')
             ->findOrFail($id);
 
-        // -------- SALES TOTALS --------
-        $total_amount = DB::table('sales')
-            ->whereNull('deleted_at')
-            ->where('statut', 'completed')
-            ->where('client_id', $client->id)
-            ->sum('GrandTotal');
+        // Every figure below is restricted to the warehouses this user may see,
+        // so the header totals agree with the rows in the tabs underneath.
+        $salesBase = fn () => $this->scopeToWarehouses(
+            DB::table('sales')->whereNull('deleted_at')->where('client_id', $client->id),
+            'warehouse_id'
+        );
+        $returnsBase = fn () => $this->scopeToWarehouses(
+            DB::table('sale_returns')->whereNull('deleted_at')->where('client_id', $client->id),
+            'warehouse_id'
+        );
 
-        $total_paid = DB::table('sales')
-            ->whereNull('deleted_at')
-            ->where('statut', 'completed')
-            ->where('client_id', $client->id)
-            ->sum('paid_amount');
+        // -------- SALES TOTALS --------
+        $completed = fn () => $salesBase()->where('statut', 'completed');
+
+        $total_amount = $completed()->sum('GrandTotal');
+        $total_paid = $completed()->sum('paid_amount');
 
         $sale_due = $total_amount - $total_paid;
 
         // -------- RETURNS TOTALS --------
-        $total_amount_return = DB::table('sale_returns')
-            ->whereNull('deleted_at')
-            ->where('client_id', $client->id)
-            ->sum('GrandTotal');
-
-        $total_paid_return = DB::table('sale_returns')
-            ->whereNull('deleted_at')
-            ->where('client_id', $client->id)
-            ->sum('paid_amount');
+        $total_amount_return = $returnsBase()->sum('GrandTotal');
+        $total_paid_return = $returnsBase()->sum('paid_amount');
 
         $return_due = $total_amount_return - $total_paid_return;
 
         // -------- PAYMENTS TOTALS --------
 
-        $payments_total = DB::table('payment_sales')
-            ->join('sales', 'payment_sales.sale_id', '=', 'sales.id')
-            ->whereNull('payment_sales.deleted_at')
-            ->whereNull('sales.deleted_at')
-            ->where('sales.client_id', $client->id)
-            ->sum('payment_sales.montant');
+        $payments_total = $this->scopeToWarehouses(
+            DB::table('payment_sales')
+                ->join('sales', 'payment_sales.sale_id', '=', 'sales.id')
+                ->whereNull('payment_sales.deleted_at')
+                ->whereNull('sales.deleted_at')
+                ->where('sales.client_id', $client->id),
+            'sales.warehouse_id'
+        )->sum('payment_sales.montant');
 
         // -------- ATTACH STATS TO CLIENT --------
         $client->salesGrand = $total_amount;
@@ -1154,8 +1218,174 @@ class ClientController extends BaseController
         $client->return_due = $return_due;
         $client->paymentsTotal = $payments_total;
         $client->netBalance = ($client->opening_balance ?? 0) + $sale_due - $return_due;
+        // Settings -> Features: the performance score is optional, and the four
+        // extra aggregates behind it are skipped entirely when it is off.
+        $client->performance = (bool) (Setting::first()->customer_performance_enabled ?? true)
+            ? $this->clientPerformance(
+                $completed(),
+                $returnsBase(),
+                (float) $total_amount,
+                (float) $total_paid,
+                (float) $total_amount_return
+            )
+            : null;
+
+        // Courier return risk (only with the Courier integration feature).
+        $client->courier_return_risk = null;
+        try {
+            if (app(\App\Services\TenantLimitsService::class)->hasFeature('couriers')) {
+                $client->courier_return_risk = \App\Services\Couriers\ReturnRisk::forClient((int) $client->id, $this->warehouseScopeIds());
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        // -------- CUSTOMER WALLET --------
+        $walletService = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+        $walletSummary = $walletService->summaryFor((int) $client->id);
+        $client->wallet_enabled = $walletSummary['enabled'];
+        $client->wallet_balance = $walletSummary['balance'];
+        $client->wallet_status = $walletSummary['status'];
+        $client->wallet_payment_method_id = $walletSummary['payment_method_id'];
 
         return response()->json($client);
+    }
+
+    /**
+     * Customer performance summary shown on the customer page.
+     *
+     * Deliberately built from figures the user can already see in the tabs
+     * below it, so the score is explainable rather than a black box: the three
+     * components are returned alongside the total.
+     *
+     * Score (0-100), weighted to what actually matters when deciding whether to
+     * keep selling to someone on credit:
+     *   payment  0-40  share of what they were billed that they have paid
+     *   recency  0-30  how recently they last bought
+     *   returns  0-30  share of their purchases they sent back
+     *
+     * A customer with no completed sales is "new", not "poor" — scoring them 0
+     * would rank a brand-new account below a genuinely bad payer.
+     *
+     * @param  \Illuminate\Database\Query\Builder  $completedSales  already warehouse-scoped
+     * @param  \Illuminate\Database\Query\Builder  $returns         already warehouse-scoped
+     */
+    private function clientPerformance($completedSales, $returns, float $billed, float $paid, float $returned): array
+    {
+        $orders = (clone $completedSales)->count();
+        $firstDate = (clone $completedSales)->min('date');
+        $lastDate = (clone $completedSales)->max('date');
+        $returnCount = (clone $returns)->count();
+
+        if ($orders === 0) {
+            return [
+                'orders' => 0,
+                'total_purchased' => 0.0,
+                'total_paid' => 0.0,
+                'average_order_value' => 0.0,
+                'first_purchase' => null,
+                'last_purchase' => null,
+                'days_since_last_purchase' => null,
+                'orders_per_month' => 0.0,
+                'returns_count' => $returnCount,
+                'return_rate' => 0.0,
+                'paid_ratio' => 0.0,
+                'score' => null,
+                'rating' => 'new',
+                // Same keys as the scored branch — the UI reads one shape.
+                'flags' => [],
+                'breakdown' => ['payment' => 0, 'recency' => 0, 'returns' => 0],
+            ];
+        }
+
+        $first = Carbon::parse($firstDate)->startOfDay();
+        $last = Carbon::parse($lastDate)->startOfDay();
+        $today = Carbon::today();
+
+        // A sale dated in the future (data entry, or a post-dated invoice) must
+        // not produce a negative age and a recency bonus above the cap.
+        $daysSinceLast = max(0, $last->diffInDays($today, false));
+
+        // Months the customer has been active, floored at one so a customer who
+        // bought three times today reads as 3/month rather than dividing by zero.
+        $months = max(1.0, $first->diffInDays($today) / 30.4375);
+
+        $paidRatio = $billed > 0 ? min(1.0, $paid / $billed) : 1.0;
+        $returnRate = $billed > 0 ? min(1.0, $returned / $billed) : 0.0;
+
+        $paymentPoints = (int) round($paidRatio * 40);
+
+        // Full marks within a month, tapering to zero at a year of silence.
+        $recencyPoints = match (true) {
+            $daysSinceLast <= 30 => 30,
+            $daysSinceLast <= 90 => 22,
+            $daysSinceLast <= 180 => 14,
+            $daysSinceLast <= 365 => 6,
+            default => 0,
+        };
+
+        $returnPoints = (int) round((1 - $returnRate) * 30);
+
+        $score = $paymentPoints + $recencyPoints + $returnPoints;
+
+        $rating = match (true) {
+            $score >= 80 => 'excellent',
+            $score >= 60 => 'good',
+            $score >= 40 => 'fair',
+            default => 'poor',
+        };
+
+        // Caps. A purely additive score lets one serious problem hide behind two
+        // good components — a customer who has paid nothing still scored "good"
+        // on recency and returns alone. Each cap below is a single fact that
+        // should stop a customer being recommended, and is returned in `flags`
+        // so the UI can say WHY the rating is held down.
+        //
+        // Note on payment: sales carry no due date in this schema, so the paid
+        // ratio cannot tell a genuinely bad payer from an invoice raised
+        // yesterday on normal terms. That is why a low ratio caps the rating at
+        // "fair" rather than forcing "poor".
+        $flags = [];
+        $cap = null;
+
+        if ($paidRatio < 0.5) {
+            $flags[] = 'low_payment';
+            $cap = 'fair';
+        }
+        if ($daysSinceLast > 365) {
+            $flags[] = 'dormant';
+            $cap = 'fair';
+        }
+        if ($returnRate > 0.25) {
+            $flags[] = 'high_returns';
+            $cap = 'fair';
+        }
+
+        if ($cap === 'fair' && in_array($rating, ['excellent', 'good'], true)) {
+            $rating = 'fair';
+        }
+
+        return [
+            'orders' => $orders,
+            'total_purchased' => round($billed, 2),
+            'total_paid' => round($paid, 2),
+            'average_order_value' => round($billed / $orders, 2),
+            'first_purchase' => $first->toDateString(),
+            'last_purchase' => $last->toDateString(),
+            'days_since_last_purchase' => (int) $daysSinceLast,
+            'orders_per_month' => round($orders / $months, 2),
+            'returns_count' => $returnCount,
+            'return_rate' => round($returnRate * 100, 1),
+            'paid_ratio' => round($paidRatio * 100, 1),
+            'score' => $score,
+            'rating' => $rating,
+            'flags' => $flags,
+            'breakdown' => [
+                'payment' => $paymentPoints,
+                'recency' => $recencyPoints,
+                'returns' => $returnPoints,
+            ],
+        ];
     }
 
     public function export(Request $request)
@@ -1218,18 +1448,23 @@ class ClientController extends BaseController
         $client->quotationsTotal = $quotations_total;
         $client->netBalance = ($client->opening_balance ?? 0) + $sale_due - $return_due;
 
-        // ---------------- FULL DATA (NO FILTERS) ----------------
-        $sales = Sale::with('warehouse:id,name')
+        // ---------------- FULL DATA (no date/search filters) ----------------
+        // Warehouse access still applies: the printed ledger must not disclose
+        // business the person cannot see on screen.
+        $salesQuery = Sale::with('warehouse:id,name')
             ->whereNull('deleted_at')
-            ->where('client_id', $client->id)
-            ->orderByDesc('id')->get();
+            ->where('client_id', $client->id);
+        $this->scopeToWarehouses($salesQuery, 'warehouse_id');
+        $sales = $salesQuery->orderByDesc('id')->get();
 
         // Get sales payments
-        $salesPayments = DB::table('payment_sales')
+        $salesPaymentsQuery = DB::table('payment_sales')
             ->join('sales', 'payment_sales.sale_id', '=', 'sales.id')
             ->join('payment_methods', 'payment_sales.payment_method_id', '=', 'payment_methods.id')
             ->whereNull('payment_sales.deleted_at')
-            ->where('sales.client_id', $client->id)
+            ->where('sales.client_id', $client->id);
+        $this->scopeToWarehouses($salesPaymentsQuery, 'sales.warehouse_id');
+        $salesPayments = $salesPaymentsQuery
             ->select(
                 'payment_sales.date',
                 'payment_sales.Ref',
@@ -1262,15 +1497,17 @@ class ClientController extends BaseController
             })
             ->values();
 
-        $quotations = Quotation::with('warehouse:id,name')
+        $quotationsQuery = Quotation::with('warehouse:id,name')
             ->whereNull('deleted_at')
-            ->where('client_id', $client->id)
-            ->orderByDesc('id')->get();
+            ->where('client_id', $client->id);
+        $this->scopeToWarehouses($quotationsQuery, 'warehouse_id');
+        $quotations = $quotationsQuery->orderByDesc('id')->get();
 
-        $returns = SaleReturn::with(['warehouse:id,name', 'sale:id,Ref'])
+        $returnsQuery = SaleReturn::with(['warehouse:id,name', 'sale:id,Ref'])
             ->whereNull('deleted_at')
-            ->where('client_id', $client->id)
-            ->orderByDesc('id')->get();
+            ->where('client_id', $client->id);
+        $this->scopeToWarehouses($returnsQuery, 'warehouse_id');
+        $returns = $returnsQuery->orderByDesc('id')->get();
 
         // ---------------- PDF ----------------
         $settings = Setting::where('deleted_at', '=', null)->first();
@@ -1309,7 +1546,11 @@ class ClientController extends BaseController
         $q = Quotation::query()
             ->with('client:id,name', 'warehouse:id,name')
             ->whereNull('deleted_at')
-            ->where('client_id', $request->id)
+            ->where('client_id', $request->id);
+
+        $this->scopeToWarehouses($q, 'warehouse_id');
+
+        $q
             ->when($request->filled('search'), function ($query) use ($request) {
                 $s = $request->input('search');
                 $query->where(function ($qr) use ($s) {
@@ -1370,7 +1611,11 @@ class ClientController extends BaseController
         $q = SaleReturn::query()
             ->with('sale:id,Ref', 'client:id,name', 'warehouse:id,name')
             ->whereNull('deleted_at')
-            ->where('client_id', $request->id)
+            ->where('client_id', $request->id);
+
+        $this->scopeToWarehouses($q, 'warehouse_id');
+
+        $q
             ->when($request->filled('search'), function ($query) use ($request) {
                 $s = $request->input('search');
                 $query->where(function ($qr) use ($s) {
@@ -1443,7 +1688,12 @@ class ClientController extends BaseController
             ->whereNull('payment_sale_returns.deleted_at')
             ->join('sale_returns', 'payment_sale_returns.sale_return_id', '=', 'sale_returns.id')
             ->join('payment_methods', 'payment_sale_returns.payment_method_id', '=', 'payment_methods.id')
-            ->where('sale_returns.client_id', $request->id)
+            ->where('sale_returns.client_id', $request->id);
+
+        // Inherits the warehouse of the return it settles.
+        $this->scopeToWarehouses($q, 'sale_returns.warehouse_id');
+
+        $q
             ->when($request->filled('search'), function ($query) use ($request) {
                 $s = $request->input('search');
                 $query->where(function ($qr) use ($s) {

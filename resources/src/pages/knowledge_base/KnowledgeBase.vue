@@ -283,7 +283,7 @@
  * latest unfiltered load of the active tab.
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { message, Modal } from 'ant-design-vue';
 import {
@@ -300,13 +300,15 @@ import http from '../../lib/http';
 const { t } = useI18n();
 const { date } = useFormat();
 const router = useRouter();
+const route = useRoute();
 const auth = useAuthStore();
 
 // Reading and writing sit behind the same permission here (see the policies),
 // so this only ever hides the buttons in the fail-open/demo case.
 const canManage = computed(() => auth.can('knowledge_base_view'));
 
-const tab = ref('help');
+// ?tab=team (Client Portal → Help Center): the tenant's own articles — the ones portal clients read.
+const tab = ref(route.query.tab === 'team' ? 'team' : 'help');
 const loading = ref(true);
 const q = ref('');
 
@@ -339,10 +341,10 @@ const emptyHint = computed(() => {
 });
 
 function excerpt(article) {
-  // Content is Quill HTML; strip tags for the card preview.
-  const div = document.createElement('div');
-  div.innerHTML = article.content || '';
-  return (div.textContent || '').trim().slice(0, 180);
+  // Content is Quill HTML; strip tags for the card preview. DOMParser builds an
+  // inert document (no handlers fire, no images load), unlike innerHTML on a div.
+  const doc = new DOMParser().parseFromString(article.content || '', 'text/html');
+  return (doc.body.textContent || '').trim().slice(0, 180);
 }
 
 function openArticle(article) {
@@ -588,6 +590,7 @@ function confirmDeleteGroup(g) {
 onMounted(() => {
   load();
   loadHelpGroups();
+  if (isTeam.value) loadTeamGroups();
 });
 </script>
 

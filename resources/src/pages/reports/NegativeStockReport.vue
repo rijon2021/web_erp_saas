@@ -8,6 +8,7 @@
     export-endpoint="report/negative_stock"
     :export-params="filterParams"
     export-rows-key="rows"
+    product-data
   >
     <template #actions>
       <!-- Multi-Currency: view amounts converted (display-only) -->
@@ -35,7 +36,8 @@
             <a-typography-text v-if="hasIssues && !crud.loading.value" type="secondary">
               {{ fmt(summary.products) }} {{ $t('Products') }}
               · {{ fmt(summary.warehouses_affected) }} {{ tf('Warehouses_Affected', 'warehouses affected') }}
-              · {{ tf('Shortage_Value', 'shortage value') }} ≈ <strong>{{ money(summary.shortage_value) }}</strong>
+              <!-- shortage value = qty × cost -->
+              <template v-if="auth.canSeeCost">· {{ tf('Shortage_Value', 'shortage value') }} ≈ <strong>{{ money(summary.shortage_value) }}</strong></template>
             </a-typography-text>
             <a-typography-text v-else-if="!crud.loading.value" type="secondary">
               {{ tf('No_Negative_Stock_Hint', 'Every product is at zero or above in the selected scope.') }}
@@ -86,6 +88,11 @@
         v-model:value="warehouseId" allow-clear show-search option-filter-prop="label" style="width: 200px"
         :placeholder="$t('warehouse')" :options="warehouseOptions" @change="crud.reload()"
       />
+      <!-- A recount list per category. -->
+      <a-select
+        v-model:value="categoryId" allow-clear show-search option-filter-prop="label" style="width: 200px"
+        :placeholder="$t('Category')" :options="categoryOptions" @change="crud.reload()"
+      />
     </template>
 
     <template #bodyCell="{ column, record }">
@@ -106,15 +113,19 @@ import ViewCurrencySelect from '../../components/ViewCurrencySelect.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { useUiStore } from '../../stores/ui';
+import { useAuthStore } from '../../stores/auth';
 import { t as tf } from '../../i18n';
 
 const { t } = useI18n();
 const { money } = useFormat();
 const ui = useUiStore();
+const auth = useAuthStore();
 
 const warehouseId = ref(undefined);
+const categoryId = ref(undefined);
 const filterParams = () => ({
   ...(warehouseId.value ? { warehouse_id: warehouseId.value } : {}),
+  ...(categoryId.value ? { category_id: categoryId.value } : {}),
 });
 
 // Payload is { rows, totalRows, summary, worst_products, by_warehouse,
@@ -124,6 +135,9 @@ const crud = useCrudTable('report/negative_stock', { rowsKey: 'rows', params: fi
 
 const warehouseOptions = computed(() =>
   (crud.payload.value?.warehouses || []).map(w => ({ value: w.id, label: w.name }))
+);
+const categoryOptions = computed(() =>
+  (crud.payload.value?.categories || []).map(c => ({ value: c.id, label: c.name }))
 );
 
 const fmt = v => (Number(v) || 0).toLocaleString();
@@ -176,6 +190,7 @@ const rowKey = 'id';
 const columns = computed(() => [
   { title: t('Ref'), dataIndex: 'code', key: 'code', sorter: true },
   { title: t('Name_product'), dataIndex: 'name', key: 'name', sorter: true },
+  { title: t('Category'), dataIndex: 'category_name', key: 'category_name' },
   { title: t('warehouse'), dataIndex: 'warehouse_name', key: 'warehouse_name' },
   { title: t('Quantity'), key: 'quantity', dataIndex: 'quantity', sorter: true, align: 'right', sum: true, exportValue: r => r.quantity },
 ]);

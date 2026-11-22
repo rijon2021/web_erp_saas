@@ -56,6 +56,7 @@
               <div>
                 <div class="font-semibold text-sm" id="ty-payment-label"></div>
                 <div class="text-xs" id="ty-payment-status"></div>
+                <div class="text-xs text-fg-muted hidden" id="ty-payment-note">{{ __('messages.OrderBeingProcessed') }}</div>
               </div>
             </div>
           </div>
@@ -102,12 +103,23 @@
           <div class="space-y-2">
             <div class="flex justify-between text-sm text-fg-muted">
               <span>{{ __('messages.Subtotal') }}</span>
-              <strong class="text-fg-primary" id="ty-subtotal">{{ $currency }}0.00</strong>
+              <strong class="text-fg-primary" id="ty-subtotal">{{ store_with_currency($currency, '0.00') }}</strong>
             </div>
             <div class="flex justify-between text-lg font-bold">
               <span>{{ __('messages.GrandTotal') }}</span>
-              <strong class="text-accent-500" id="ty-grand">{{ $currency }}0.00</strong>
+              <strong class="text-accent-500" id="ty-grand">{{ store_with_currency($currency, '0.00') }}</strong>
             </div>
+          </div>
+
+          {{-- Guest checkout: no account, so the secret order link is the way back --}}
+          <div id="ty-guest-block" class="hidden rounded-xl border border-line-subtle p-4 mt-4">
+            <div class="font-semibold text-sm mb-1 flex items-center gap-2">
+              <x-store.icon name="info" class="w-4 h-4 text-accent-500" />{{ __('messages.GuestOrderSaveLink') }}
+            </div>
+            <p class="text-xs text-fg-muted mb-3">{{ __('messages.GuestOrderLinkHint') }}</p>
+            <a href="#" id="ty-guest-link" class="btn btn-outline btn-sm">
+              <x-store.icon name="receipt" class="w-4 h-4" />{{ __('messages.ViewYourOrder') }}
+            </a>
           </div>
 
           <div class="mt-6 flex gap-2 flex-wrap">
@@ -139,7 +151,7 @@
   // Multi-Currency: the stored receipt totals are BASE; display multiplies by the rate.
   const CURRENCY_RATE = parseFloat(document.querySelector('meta[name="currency-rate"]')?.content) || 1;
   const NOIMG    = @json(global_asset(upload_path('products') . '/no-image.png'));
-  const fmt = v => CURRENCY + (Number(v || 0) * CURRENCY_RATE).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt = v => storeWithCurrency(CURRENCY, storeFmtNumber(Number(v || 0) * CURRENCY_RATE));
   function esc(s){ return String(s || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
   const empty   = document.getElementById('ty-empty');
@@ -190,6 +202,24 @@
   const paymentIcon  = document.getElementById('ty-payment-icon');
   const paymentLabel = document.getElementById('ty-payment-label');
   const paymentStat  = document.getElementById('ty-payment-status');
+  const paymentNote  = document.getElementById('ty-payment-note');
+
+  // Where the live order can be read back (guests use their secret link).
+  const ORDER_URL_BASE = @json(url('/'.store_path_to('account/orders')));
+  const MY_ORDER_BASE  = @json(url('/'.store_path_to('my/orders')));
+  const guestUrl  = rec.guest_url || '';
+  const orderPage = guestUrl || (rec.order_id ? ORDER_URL_BASE + '/' + rec.order_id : '');
+  const orderData = guestUrl ? guestUrl + '/data' : (rec.order_id ? MY_ORDER_BASE + '/' + rec.order_id : '');
+
+  // Paid: "Payment successful" + "your order is being processed" so a
+  // shopper whose card was charged never reads "pending". Anything else is
+  // still owed (offline methods, abandoned gateway redirect).
+  function renderPaymentStatus(status){
+    const paid = status === 'paid';
+    paymentStat.textContent = paid ? @json(__('messages.PaymentSuccessful')) : @json(__('messages.PaymentPending'));
+    paymentStat.className   = 'text-xs font-semibold ' + (paid ? 'text-success' : 'text-warning');
+    paymentNote?.classList.toggle('hidden', !paid);
+  }
 
   if (rec.payment_method && paymentInfo) {
     paymentInfo.classList.remove('hidden');
@@ -200,34 +230,60 @@
       gcash:          { icon: '📲', label: @json(__('messages.GCash')) },
       bank_transfer:  { icon: '🏦', label: @json(__('messages.BankTransfer')) },
       cash_on_pickup: { icon: '🏬', label: @json(__('messages.CashOnPickup')) },
+      wallet:         { icon: '👛', label: @json(__('messages.PayWithWallet')) },
       paypal:         { icon: '🌐', label: 'PayPal' },
       paystack:       { icon: '💳', label: 'Paystack' },
-      flutterwave:    { icon: '🦅', label: 'Flutterwave' }
+      flutterwave:    { icon: '🦅', label: 'Flutterwave' },
+      bkash:          { icon: '📱', label: 'bKash' },
+      sslcommerz:     { icon: '💳', label: 'SSLCommerz' },
+      razorpay:       { icon: '💳', label: 'Razorpay' },
+      payfast:        { icon: '💳', label: 'PayFast' },
+      paymob:         { icon: '💳', label: 'Paymob' },
+      myfatoorah:     { icon: '💳', label: 'MyFatoorah' },
+      moyasar:        { icon: '💳', label: 'Moyasar' },
+      xpay:           { icon: '💳', label: 'XPay' },
+      ligdicash:      { icon: '📱', label: 'LigdiCash' },
+      waafipay:       { icon: '📱', label: 'WaafiPay' },
+      dodo:           { icon: '💳', label: 'Dodo Payments' }
     };
     const pm = methodMap[rec.payment_method] || { icon: '💰', label: rec.payment_method };
     paymentIcon.textContent  = pm.icon;
     paymentLabel.textContent = pm.label;
 
-    const statusMap = {
-      paid:    { text: @json(__('messages.Paid')),          cls: 'text-success' },
-      pending: { text: @json(__('messages.PaymentPending')), cls: 'text-warning' }
-    };
-    const ps = statusMap[rec.payment_status] || statusMap.pending;
-    paymentStat.textContent = ps.text;
-    paymentStat.className   = 'text-xs ' + ps.cls;
+    renderPaymentStatus(rec.payment_status);
+
+    // The receipt was saved BEFORE a hosted gateway (SSLCommerz, bKash,
+    // PayFast...) took the shopper away, so it still says "pending" even
+    // though the return callback has since marked the order paid. Read the
+    // live order and correct the badge (and the saved receipt, so a refresh
+    // or the back button does not resurrect "pending").
+    if (rec.payment_status !== 'paid' && orderData) {
+      fetch(orderData, { headers: { 'Accept': 'application/json' } })
+        .then(r => r.ok ? r.json() : null)
+        .then(o => {
+          if (!o || !o.payment_status || o.payment_status === rec.payment_status) return;
+          rec.payment_status = o.payment_status;
+          renderPaymentStatus(o.payment_status);
+          try { localStorage.setItem('shop.last_order', JSON.stringify(rec)); } catch(e){}
+        })
+        .catch(() => {});
+    }
   }
 
   // Offline methods: reveal the matching pay-now block and point the upload
   // link at this order. Pickup: fetch the branch the shopper chose.
   (function offlineExtras(){
-    const ORDER_URL_BASE = @json(url('/'.store_path_to('account/orders')));
-    const MY_ORDER_BASE  = @json(url('/'.store_path_to('my/orders')));
+    // Guest orders live behind their secret link instead of the account pages.
+    if (guestUrl) {
+      document.getElementById('ty-guest-block').classList.remove('hidden');
+      document.getElementById('ty-guest-link').href = guestUrl;
+    }
 
     const block = document.querySelector('.ty-pay-block[data-method="'+ rec.payment_method +'"]');
     if (block) {
       block.classList.remove('hidden');
       const link = block.querySelector('.ty-proof-link');
-      if (link && rec.order_id) link.href = ORDER_URL_BASE + '/' + rec.order_id + '#payment-proof';
+      if (link && orderPage) link.href = orderPage + '#payment-proof';
 
       // A picture attached at checkout is uploaded after the order exists, so
       // the shopper only learns the result here. Confirm it, or say it did not
@@ -249,8 +305,8 @@
 
       // The receipt is a snapshot taken at checkout and goes stale the moment
       // the shopper uploads from the order page - let the order correct it.
-      if (rec.order_id) {
-        fetch(MY_ORDER_BASE + '/' + rec.order_id, { headers: { 'Accept': 'application/json' } })
+      if (orderData) {
+        fetch(orderData, { headers: { 'Accept': 'application/json' } })
           .then(r => r.ok ? r.json() : null)
           .then(o => {
             if (!o || !Array.isArray(o.payment_proofs)) return;
@@ -260,9 +316,9 @@
       }
     }
 
-    if (rec.payment_method !== 'cash_on_pickup' || !rec.order_id) return;
+    if (rec.payment_method !== 'cash_on_pickup' || !orderData) return;
 
-    fetch(MY_ORDER_BASE + '/' + rec.order_id, { headers: { 'Accept': 'application/json' } })
+    fetch(orderData, { headers: { 'Accept': 'application/json' } })
       .then(r => r.ok ? r.json() : null)
       .then(o => {
         const b = o && o.pickup_branch;

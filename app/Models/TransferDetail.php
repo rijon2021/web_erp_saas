@@ -10,7 +10,7 @@ class TransferDetail extends Model
 
     protected $fillable = [
         'id', 'transfer_id', 'quantity', 'purchase_unit_id', 'product_id', 'total', 'product_variant_id',
-        'cost', 'TaxNet', 'discount', 'discount_method', 'tax_method',
+        'cost', 'TaxNet', 'discount', 'discount_method', 'tax_method', 'batch_picks',
     ];
 
     protected $casts = [

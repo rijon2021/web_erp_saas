@@ -79,11 +79,36 @@ function currencyRate() {
   const r = m ? Number(m.content) : 1;
   return Number.isFinite(r) && r > 0 ? r : 1;
 }
+// Letter symbols ("FCFA") get a non-breaking space before the amount; signs
+// ("$") stay attached. The layout defines window.storeCurrencyPrefix.
+function currencyPrefix(sym) {
+  if (typeof window.storeCurrencyPrefix === 'function') return window.storeCurrencyPrefix(sym);
+  const s = sym == null ? '' : String(sym);
+  return /[A-Za-z]$/.test(s) ? s + ' ' : s;
+}
+// Symbol + amount per the Currency Position setting. The layout defines
+// window.storeWithCurrency (meta currency-position); this fallback keeps the
+// historical prefix rendering on pages without it.
+function withCurrency(sym, formatted) {
+  if (typeof window.storeWithCurrency === 'function') return window.storeWithCurrency(sym, formatted);
+  return currencyPrefix(sym) + formatted;
+}
+// Amount without symbol. The layout's <head> defines window.storeFmtNumber
+// (meta price-decimals / hide-zero-decimals: 100.00 -> 100 when the System
+// Settings switch is on); this fallback keeps the historical 2-decimal output
+// on pages without it.
+function fmtNumber(v, dec) {
+  if (typeof window.storeFmtNumber === 'function') return window.storeFmtNumber(v, dec);
+  const d = Number.isInteger(dec) ? dec : 2;
+  return Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
 function fmtMoney(v, sym) {
   const s = sym || currencySymbol();
-  return s + (Number(v || 0) * currencyRate()).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return withCurrency(s, fmtNumber(Number(v || 0) * currencyRate()));
 }
 window.fmtMoney = fmtMoney;
+window.fmtNumber = fmtNumber;
+window.withCurrency = withCurrency;
 window.currencyRate = currencyRate;
 
 /* ----------------------------------------------------------------------------
@@ -163,6 +188,15 @@ window.currencyRate = currencyRate;
           currency: item.currency || c.currency,
         };
         if (stock != null) row.stock = stock;
+        // Restaurant add-ons: the line id carries the choice ("12:o3.7") so
+        // the same dish with other add-ons is its own line; the server
+        // re-prices option_ids at checkout.
+        if (Array.isArray(item.option_ids) && item.option_ids.length) {
+          row.option_ids = item.option_ids.map(Number);
+          row.product_id = item.product_id != null ? Number(item.product_id) : Number(String(item.id).split(':')[0]);
+          row.product_variant_id = item.product_variant_id != null ? Number(item.product_variant_id) : null;
+          if (item.options_label) row.options_label = String(item.options_label);
+        }
         c.items.push(row);
       }
       save(calc(c));
@@ -192,6 +226,15 @@ window.currencyRate = currencyRate;
       save(calc(c));
       return c;
     },
+    /* Drop every line the predicate matches; saves only when something went. */
+    removeLines(predicate) {
+      const c = load();
+      const kept = c.items.filter((i) => !predicate(i));
+      if (kept.length === c.items.length) return c;
+      c.items = kept;
+      save(calc(c));
+      return c;
+    },
     clear() {
       const base = load();
       const c = { items: [], currency: base.currency, subtotal: 0, grand: 0 };
@@ -199,6 +242,66 @@ window.currencyRate = currencyRate;
       return c;
     },
   };
+})();
+
+/* ----------------------------------------------------------------------------
+ * Cart clean-up — the cart lives in localStorage, so a product hidden,
+ * deactivated or deleted after it was added would linger forever. On each
+ * page load ask the server which cart products/variants are still for sale
+ * and drop the rest (checkout enforces the same rule server-side).
+ * -------------------------------------------------------------------------- */
+// Cart line ids are "product" or "product:variant".
+function cartProductId(item) {
+  if (item && item.product_id != null) return String(item.product_id);
+  return String((item && item.id) || '').split(':')[0];
+}
+function cartVariantId(item) {
+  if (item && item.product_variant_id != null) return String(item.product_variant_id);
+  if (item && item.product_id != null) return null;
+  const part = String((item && item.id) || '').split(':')[1];
+  return part ? part : null;
+}
+
+(function initCartAvailability() {
+  if (!window.__CART_AVAILABILITY_URL__) return;
+
+  function check() {
+    const cart = window.CartLS.get();
+    if (!cart.items.length) return;
+
+    const ids = [];
+    const variants = [];
+    cart.items.forEach((i) => {
+      const pid = cartProductId(i);
+      const vid = cartVariantId(i);
+      if (pid && ids.indexOf(pid) === -1) ids.push(pid);
+      if (vid && variants.indexOf(vid) === -1) variants.push(vid);
+    });
+    if (!ids.length) return;
+
+    const qs = 'ids=' + encodeURIComponent(ids.join(','))
+      + (variants.length ? '&variants=' + encodeURIComponent(variants.join(',')) : '');
+
+    fetch(window.__CART_AVAILABILITY_URL__ + '?' + qs, {
+      headers: { Accept: 'application/json' },
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        // No answer (offline, server error) → keep the cart as it is.
+        if (!d || !Array.isArray(d.products) || !Array.isArray(d.variants)) return;
+        window.CartLS.removeLines((i) => {
+          if (d.products.indexOf(cartProductId(i)) === -1) return true;
+          const vid = cartVariantId(i);
+          return vid != null && d.variants.indexOf(vid) === -1;
+        });
+      })
+      .catch(() => {});
+  }
+
+  if (document.readyState !== 'loading') check();
+  else document.addEventListener('DOMContentLoaded', check);
 })();
 
 /* ----------------------------------------------------------------------------

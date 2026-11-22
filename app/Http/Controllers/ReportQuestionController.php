@@ -114,6 +114,7 @@ class ReportQuestionController extends BaseController
         $data = null;
         $compare = null;
         $insights = null;
+        $insightItems = null;
 
         switch ($question->report_key) {
             case 'daily_sales_summary':
@@ -129,6 +130,7 @@ class ReportQuestionController extends BaseController
                         $warehouseId
                     );
                     $insights = $this->reportService->generateInsights($data, $compare);
+                    $insightItems = $this->reportService->insightItems($data, $compare);
                 }
                 break;
 
@@ -154,6 +156,8 @@ class ReportQuestionController extends BaseController
             'data' => $data,
             'compare' => $compare,
             'insights' => $insights,
+            // Same changes as data, so the SPA can word them in the user's language.
+            'insight_items' => $insightItems,
         ]);
     }
 }

@@ -248,6 +248,7 @@
   .gr-stars-icons svg { width: 11px; height: 11px; }
   .gr-stars-icons .is-empty { color: rgb(var(--color-border-strong)); }
   .gr-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 6px; }
+  .gr-card-foot .js-request-quote { width: 100%; height: auto; min-height: 36px; padding: 6px 12px; font-size: 12.5px; line-height: 1.25; white-space: normal; text-align: center; }
   .gr-price { display: flex; flex-direction: column; line-height: 1.1; }
   .gr-price b { font-family: 'Manrope', sans-serif; font-size: 16px; font-weight: 800; color: var(--gr-ink); }
   .gr-price s { font-size: 11.5px; color: var(--gr-muted); }
@@ -291,8 +292,8 @@
   .gr-trust-item { display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--gr-soft); border-radius: 14px; }
   .gr-trust-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--gr-card); color: var(--gr-green); display: grid; place-items: center; flex-shrink: 0; }
   .gr-trust-icon svg { width: 22px; height: 22px; }
-  .gr-trust-item strong { display: block; font-size: 13.5px; font-weight: 800; color: var(--gr-ink); }
-  .gr-trust-item span { display: block; font-size: 12px; color: var(--gr-muted); }
+  .gr-trust-item > div > strong { display: block; font-size: 13.5px; font-weight: 800; color: var(--gr-ink); }
+  .gr-trust-item > div > span { display: block; font-size: 12px; color: var(--gr-muted); }
 
   /* newsletter + brands */
   .gr-newsletter { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: center; padding: 26px; border-radius: 20px; background: var(--gr-green); color: #fff; position: relative; overflow: hidden; }

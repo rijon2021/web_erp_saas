@@ -8,6 +8,7 @@
     export-endpoint="report/stock_aging"
     :export-params="filterParams"
     export-rows-key="report"
+    product-data
   >
     <template #filters>
       <a-select v-model:value="dimension" style="width: 140px" :options="dimensionOptions" @change="crud.reload()" />

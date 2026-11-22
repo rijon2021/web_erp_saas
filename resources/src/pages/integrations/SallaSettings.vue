@@ -1,9 +1,9 @@
 <template>
   <div class="page">
-    <PageHeader title="Salla" :breadcrumb="['Ecommerce Platforms', 'Salla']">
+    <PageHeader title="Salla" :breadcrumb="[$t('Int_Ecommerce_Platforms'), 'Salla']">
       <template #actions>
         <a-tag v-if="!isLoading" :color="state.connected ? 'success' : 'default'" style="font-size: 13px; padding: 4px 12px">
-          {{ state.connected ? $t('Connected') : 'Not connected' }}
+          {{ state.connected ? $t('Connected') : $t('Not_connected') }}
         </a-tag>
       </template>
     </PageHeader>
@@ -18,44 +18,44 @@
           <template #icon><ShopOutlined /></template>
         </a-avatar>
         <div>
-          <div class="hero-title">Salla store sync</div>
-          <div class="muted">Sync products, stock and orders with your Salla store — orders arrive automatically via webhooks.</div>
+          <div class="hero-title">{{ $t('Int_Store_Sync_Title', { name: 'Salla' }) }}</div>
+          <div class="muted">{{ $t('Salla_Hero_Desc') }}</div>
         </div>
       </div>
 
       <a-tabs v-model:activeKey="tab">
         <!-- ============================ Connection ============================ -->
-        <a-tab-pane key="connection" tab="Connection">
+        <a-tab-pane key="connection" :tab="$t('Connection')">
           <a-row :gutter="[16, 16]">
             <a-col :xs="24" :lg="12">
-              <a-card size="small" title="App credentials" style="height: 100%">
+              <a-card size="small" :title="$t('Salla_App_Credentials')" style="height: 100%">
                 <a-form layout="vertical">
-                  <a-form-item label="Client ID">
-                    <a-input v-model:value="form.client_id" placeholder="From your Salla Partners app" />
+                  <a-form-item :label="$t('Client_ID')">
+                    <a-input v-model:value="form.client_id" :placeholder="$t('Salla_From_Partners_App')" />
                   </a-form-item>
-                  <a-form-item label="Client Secret">
+                  <a-form-item :label="$t('Client_Secret')">
                     <a-input-password
                       v-model:value="form.client_secret"
-                      :placeholder="state.has_client_secret ? 'Saved — paste a new value to replace it' : 'From your Salla Partners app'"
+                      :placeholder="state.has_client_secret ? $t('Int_Saved_Paste_New_Value') : $t('Salla_From_Partners_App')"
                       autocomplete="off"
                     />
                   </a-form-item>
-                  <a-form-item label="Webhook Secret">
+                  <a-form-item :label="$t('Salla_Webhook_Secret')">
                     <a-input-password
                       v-model:value="form.webhook_secret"
-                      :placeholder="state.has_webhook_secret ? 'Saved — paste a new value to replace it' : 'Signature secret from the Webhooks page of your app'"
+                      :placeholder="state.has_webhook_secret ? $t('Int_Saved_Paste_New_Value') : $t('Salla_Webhook_Secret_Placeholder')"
                       autocomplete="off"
                     />
                   </a-form-item>
-                  <a-form-item label="Stock warehouse">
+                  <a-form-item :label="$t('Int_Stock_Warehouse')">
                     <a-select
                       v-model:value="form.warehouse_id"
-                      :options="[{ value: null, label: 'All warehouses (aggregate)' }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
+                      :options="[{ value: null, label: $t('Int_All_Warehouses_Aggregate') }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
                     />
                   </a-form-item>
                   <a-space align="center" style="margin-bottom: 16px">
                     <a-switch v-model:checked="form.enabled" />
-                    <span>Enable Salla sync</span>
+                    <span>{{ $t('Int_Enable_Sync', { name: 'Salla' }) }}</span>
                   </a-space>
                   <div>
                     <a-button type="primary" :loading="saving" @click="save">{{ $t('Save') }}</a-button>
@@ -65,82 +65,82 @@
             </a-col>
 
             <a-col :xs="24" :lg="12">
-              <a-card size="small" title="Store connection" style="margin-bottom: 16px">
+              <a-card size="small" :title="$t('Int_Store_Connection')" style="margin-bottom: 16px">
                 <a-descriptions :column="1" size="small" bordered>
-                  <a-descriptions-item label="Store">
+                  <a-descriptions-item :label="$t('Store')">
                     {{ state.store?.name || '—' }}
                     <span v-if="state.store?.domain" class="muted" style="margin-left: 6px">({{ state.store.domain }})</span>
                   </a-descriptions-item>
-                  <a-descriptions-item label="Token expires">
+                  <a-descriptions-item :label="$t('Salla_Token_Expires')">
                     {{ state.access_token_expires_at ? date(state.access_token_expires_at) : '—' }}
                   </a-descriptions-item>
-                  <a-descriptions-item label="Last sync">
+                  <a-descriptions-item :label="$t('Last_Sync')">
                     {{ state.last_sync_at ? date(state.last_sync_at) : '—' }}
                   </a-descriptions-item>
                 </a-descriptions>
                 <a-space wrap style="margin-top: 16px">
                   <a-button type="primary" :disabled="!state.client_id || !state.has_client_secret" @click="connect">
                     <template #icon><LinkOutlined /></template>
-                    {{ state.connected ? 'Reconnect with Salla' : 'Connect with Salla' }}
+                    {{ state.connected ? $t('Int_Reconnect_With', { name: 'Salla' }) : $t('Int_Connect_With', { name: 'Salla' }) }}
                   </a-button>
                   <a-button :disabled="!state.connected" :loading="testing" @click="testConnection">{{ $t('Test_Connection') }}</a-button>
                   <a-popconfirm
                     v-if="state.connected"
-                    title="Disconnect the Salla store? Sync stops until you reconnect."
+                    :title="$t('Salla_Disconnect_Confirm')"
                     :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="disconnect"
                   >
-                    <a-button danger>Disconnect</a-button>
+                    <a-button danger>{{ $t('Disconnect') }}</a-button>
                   </a-popconfirm>
                 </a-space>
               </a-card>
 
-              <a-card size="small" title="URLs for the Salla Partners portal">
+              <a-card size="small" :title="$t('Salla_Urls_Title')">
                 <div class="url-row">
-                  <span class="muted">OAuth callback</span>
+                  <span class="muted">{{ $t('Salla_OAuth_Callback') }}</span>
                   <a-input-group compact style="display: flex">
                     <a-input :value="state.callback_url" readonly style="flex: 1" />
                     <a-button @click="copy(state.callback_url)"><CopyOutlined /></a-button>
                   </a-input-group>
                 </div>
                 <div class="url-row">
-                  <span class="muted">Webhook URL (all events)</span>
+                  <span class="muted">{{ $t('Salla_Webhook_Url_All') }}</span>
                   <a-input-group compact style="display: flex">
                     <a-input :value="state.webhook_url" readonly style="flex: 1" />
                     <a-button @click="copy(state.webhook_url)"><CopyOutlined /></a-button>
                   </a-input-group>
                 </div>
-                <div class="muted" style="margin-top: 8px">
-                  Set both in your app on <a href="https://salla.partners" target="_blank" rel="noopener">salla.partners</a>,
-                  choose the <strong>Signature</strong> webhook security strategy, and subscribe to the order, product and app events.
-                </div>
+                <i18n-t keypath="Salla_Urls_Help" tag="div" class="muted" style="margin-top: 8px">
+                  <template #link><a href="https://salla.partners" target="_blank" rel="noopener">salla.partners</a></template>
+                  <template #signature><strong>Signature</strong></template>
+                </i18n-t>
               </a-card>
             </a-col>
           </a-row>
         </a-tab-pane>
 
         <!-- ============================ Products ============================ -->
-        <a-tab-pane key="products" tab="Products" :disabled="!state.connected">
-          <StatsRow :stats="stats" :items="[['products_total', 'Total products'], ['products_mapped', 'Linked to Salla'], ['variants_mapped', 'Variants linked']]" />
-          <a-card size="small" title="Push products to Salla" style="margin-bottom: 16px">
-            <p class="muted">Creates or updates simple products on Salla by SKU. Variant products are skipped in this version — pull them from Salla instead, or match them by SKU.</p>
-            <a-checkbox v-model:checked="onlyUnsynced" :disabled="sync.running.value" style="margin-bottom: 12px">Only products not linked yet</a-checkbox>
+        <a-tab-pane key="products" :tab="$t('Products')" :disabled="!state.connected">
+          <StatsRow :stats="stats" :items="[['products_total', $t('Total_Products')], ['products_mapped', $t('Int_Linked_To', { name: 'Salla' })], ['variants_mapped', $t('Salla_Variants_Linked')]]" />
+          <a-card size="small" :title="$t('Int_Push_Products_To', { name: 'Salla' })" style="margin-bottom: 16px">
+            <p class="muted">{{ $t('Salla_Push_Desc') }}</p>
+            <a-checkbox v-model:checked="onlyUnsynced" :disabled="sync.running.value" style="margin-bottom: 12px">{{ $t('Salla_Only_Unlinked') }}</a-checkbox>
             <div>
               <a-space>
                 <a-button type="primary" :disabled="sync.running.value" @click="runSync('salla/sync/products?mode=push', { only_unsynced: onlyUnsynced }, 'push')">
-                  <template #icon><UploadOutlined /></template>Push to Salla
+                  <template #icon><UploadOutlined /></template>{{ $t('Int_Push_To', { name: 'Salla' }) }}
                 </a-button>
                 <a-button v-if="sync.running.value" danger @click="sync.cancel()">{{ $t('Cancel') }}</a-button>
               </a-space>
             </div>
           </a-card>
-          <a-card size="small" title="Pull products from Salla" style="margin-bottom: 16px">
-            <p class="muted">Imports Salla products (variants included), matching existing ones by SKU and creating the rest.</p>
+          <a-card size="small" :title="$t('Int_Pull_Products_From', { name: 'Salla' })" style="margin-bottom: 16px">
+            <p class="muted">{{ $t('Salla_Pull_Desc') }}</p>
             <a-space>
               <a-button :disabled="sync.running.value" @click="runSync('salla/sync/products?mode=pull', {}, 'pull')">
-                <template #icon><DownloadOutlined /></template>Pull from Salla
+                <template #icon><DownloadOutlined /></template>{{ $t('Int_Pull_From', { name: 'Salla' }) }}
               </a-button>
-              <a-popconfirm title="Reset product & variant links? Order history keeps its links." :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="resetMappings('product')">
-                <a-button :disabled="sync.running.value">Reset product links</a-button>
+              <a-popconfirm :title="$t('Salla_Reset_Confirm')" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="resetMappings('product')">
+                <a-button :disabled="sync.running.value">{{ $t('Int_Reset_Product_Links') }}</a-button>
               </a-popconfirm>
             </a-space>
           </a-card>
@@ -148,15 +148,15 @@
         </a-tab-pane>
 
         <!-- ============================ Stock ============================ -->
-        <a-tab-pane key="stock" tab="Stock" :disabled="!state.connected">
-          <a-card size="small" title="Push stock levels to Salla" style="margin-bottom: 16px">
+        <a-tab-pane key="stock" :tab="$t('Stock')" :disabled="!state.connected">
+          <a-card size="small" :title="$t('Int_Push_Stock_Levels_To', { name: 'Salla' })" style="margin-bottom: 16px">
             <p class="muted">
-              Sends current quantities for every linked product (by SKU) and linked variant.
-              {{ state.warehouse_id ? 'Counting stock from the selected warehouse only.' : 'Counting stock across all warehouses.' }}
+              {{ $t('Salla_Stock_Desc') }}
+              {{ state.warehouse_id ? $t('Int_Counting_Stock_Selected') : $t('Int_Counting_Stock_All') }}
             </p>
             <a-space>
               <a-button type="primary" :disabled="sync.running.value" @click="runSync('salla/sync/inventory', {}, 'push')">
-                <template #icon><UploadOutlined /></template>Push stock
+                <template #icon><UploadOutlined /></template>{{ $t('Int_Push_Stock') }}
               </a-button>
               <a-button v-if="sync.running.value" danger @click="sync.cancel()">{{ $t('Cancel') }}</a-button>
             </a-space>
@@ -165,24 +165,23 @@
         </a-tab-pane>
 
         <!-- ============================ Orders ============================ -->
-        <a-tab-pane key="orders" tab="Orders" :disabled="!state.connected">
-          <StatsRow :stats="stats" :items="[['orders_imported', 'Orders imported'], ['customers_mapped', 'Customers linked']]" />
-          <a-card size="small" title="Pull orders from Salla" style="margin-bottom: 16px">
+        <a-tab-pane key="orders" :tab="$t('Orders')" :disabled="!state.connected">
+          <StatsRow :stats="stats" :items="[['orders_imported', $t('Int_Orders_Imported')], ['customers_mapped', $t('Int_Customers_Linked')]]" />
+          <a-card size="small" :title="$t('Int_Pull_Orders_From', { name: 'Salla' })" style="margin-bottom: 16px">
             <p class="muted">
-              New Salla orders normally arrive on their own through webhooks and become sales.
-              Use this pull to backfill orders placed before the webhook was set up — already-imported orders are skipped.
+              {{ $t('Salla_Orders_Desc') }}
             </p>
             <a-form layout="inline" style="margin-bottom: 12px">
-              <a-form-item label="Import into warehouse">
+              <a-form-item :label="$t('Int_Import_Into_Warehouse')">
                 <a-select
                   v-model:value="ordersWarehouseId" style="min-width: 220px"
-                  :options="[{ value: null, label: 'Default (settings / first warehouse)' }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
+                  :options="[{ value: null, label: $t('Int_Default_Warehouse_Option') }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
                 />
               </a-form-item>
             </a-form>
             <a-space>
               <a-button type="primary" :disabled="sync.running.value" @click="runSync('salla/sync/orders', ordersWarehouseId ? { warehouse_id: ordersWarehouseId } : {}, 'pull')">
-                <template #icon><DownloadOutlined /></template>Pull orders
+                <template #icon><DownloadOutlined /></template>{{ $t('Int_Pull_Orders') }}
               </a-button>
               <a-button v-if="sync.running.value" danger @click="sync.cancel()">{{ $t('Cancel') }}</a-button>
             </a-space>
@@ -191,18 +190,18 @@
         </a-tab-pane>
 
         <!-- ============================ Logs ============================ -->
-        <a-tab-pane key="logs" tab="Logs">
+        <a-tab-pane key="logs" :tab="$t('Logs')">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap">
             <a-select
               v-model:value="logLevel" style="min-width: 160px" :options="[
-                { value: '', label: 'All levels' },
-                { value: 'info', label: 'Info' },
-                { value: 'warning', label: 'Warning' },
-                { value: 'error', label: 'Error' },
+                { value: '', label: $t('Int_All_Levels') },
+                { value: 'info', label: $t('Info') },
+                { value: 'warning', label: $t('Warning') },
+                { value: 'error', label: $t('Cr_Log_Error') },
               ]" @change="loadLogs(1)"
             />
-            <a-popconfirm title="Clear all Salla logs?" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="clearLogs">
-              <a-button danger size="small">Clear logs</a-button>
+            <a-popconfirm :title="$t('Int_Clear_All_Logs_Confirm', { name: 'Salla' })" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="clearLogs">
+              <a-button danger size="small">{{ $t('Clear_Logs') }}</a-button>
             </a-popconfirm>
           </div>
           <a-table
@@ -220,20 +219,39 @@
         </a-tab-pane>
 
         <!-- ============================ Guide ============================ -->
-        <a-tab-pane key="guide" tab="Guide">
+        <a-tab-pane key="guide" :tab="$t('Guide')">
           <a-card size="small" style="max-width: 860px">
             <ol class="guide">
-              <li>Create a (private) app on <a href="https://salla.partners" target="_blank" rel="noopener">salla.partners</a> and pick the <strong>Custom Mode</strong> authorization flow.</li>
-              <li>Copy the app's <strong>Client ID</strong> and <strong>Client Secret</strong> into the Connection tab and save.</li>
-              <li>In the app's settings, set the OAuth callback URL shown on the Connection tab.</li>
-              <li>On the app's Webhooks page: choose the <strong>Signature</strong> security strategy, copy its secret into the Webhook Secret field here, set the Webhook URL shown on the Connection tab, and subscribe at least to <code>order.created</code>, <code>order.updated</code>, <code>product.updated</code>, <code>product.deleted</code>, <code>app.store.authorize</code> and <code>app.uninstalled</code>.</li>
-              <li>Click <strong>Connect with Salla</strong> and approve the app on your store. (Apps in Easy Mode connect automatically through the <code>app.store.authorize</code> webhook instead.)</li>
-              <li>Pull or push products, then push stock. New orders arrive automatically and appear under Sales with references like <code>SLA-12345</code>.</li>
+              <i18n-t keypath="Salla_Guide_1" tag="li">
+                <template #link><a href="https://salla.partners" target="_blank" rel="noopener">salla.partners</a></template>
+                <template #mode><strong>Custom Mode</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Salla_Guide_2" tag="li">
+                <template #clientId><strong>{{ $t('Client_ID') }}</strong></template>
+                <template #clientSecret><strong>{{ $t('Client_Secret') }}</strong></template>
+              </i18n-t>
+              <li>{{ $t('Salla_Guide_3') }}</li>
+              <i18n-t keypath="Salla_Guide_4" tag="li">
+                <template #signature><strong>Signature</strong></template>
+                <template #e1><code>order.created</code></template>
+                <template #e2><code>order.updated</code></template>
+                <template #e3><code>product.updated</code></template>
+                <template #e4><code>product.deleted</code></template>
+                <template #e5><code>app.store.authorize</code></template>
+                <template #e6><code>app.uninstalled</code></template>
+              </i18n-t>
+              <i18n-t keypath="Salla_Guide_5" tag="li">
+                <template #connect><strong>{{ $t('Int_Connect_With', { name: 'Salla' }) }}</strong></template>
+                <template #webhook><code>app.store.authorize</code></template>
+              </i18n-t>
+              <i18n-t keypath="Salla_Guide_6" tag="li">
+                <template #ref><code>SLA-12345</code></template>
+              </i18n-t>
             </ol>
             <a-alert
               type="info" show-icon style="margin-top: 8px"
-              message="Product identity is the SKU"
-              description="Stocky's product code is matched to Salla's SKU. Keep SKUs consistent on both sides; variant products are matched on pull and in orders, but are not pushed in this version."
+              :message="$t('Salla_Identity_Title')"
+              :description="$t('Salla_Identity_Desc')"
             />
           </a-card>
         </a-tab-pane>
@@ -283,9 +301,9 @@ const sync = useSallaSync();
 
 const logColumns = [
   { title: 'ID', dataIndex: 'id', width: 70 },
-  { title: 'Action', dataIndex: 'action', width: 180 },
-  { title: 'Level', key: 'level', width: 100 },
-  { title: 'Message', dataIndex: 'message', ellipsis: true },
+  { title: t('Action'), dataIndex: 'action', width: 180 },
+  { title: t('Level'), key: 'level', width: 100 },
+  { title: t('Message'), dataIndex: 'message', ellipsis: true },
   { title: t('Date'), key: 'created_at', width: 170 },
 ];
 
@@ -343,9 +361,9 @@ async function testConnection() {
   testing.value = true;
   try {
     const res = await http.post('salla/test-connection');
-    message.success('Connected to ' + (res?.store?.name || 'Salla'));
+    message.success(t('Int_Connected_To', { name: res?.store?.name || 'Salla' }));
   } catch (e) {
-    message.error(e?.data?.error || e?.data?.message || 'Connection test failed');
+    message.error(e?.data?.error || e?.data?.message || t('Connection_Test_Failed'));
   } finally {
     testing.value = false;
   }
@@ -354,7 +372,7 @@ async function testConnection() {
 async function disconnect() {
   try {
     await http.post('salla/disconnect');
-    message.success('Disconnected');
+    message.success(t('Disconnected'));
     await load();
   } catch (e) {
     message.error(e?.data?.message || t('InvalidData'));
@@ -364,7 +382,7 @@ async function disconnect() {
 async function resetMappings(entityType) {
   try {
     const res = await http.post('salla/reset-mappings', { entity_type: entityType });
-    message.success(`Removed ${res.deleted} links`);
+    message.success(t('Int_Removed_N_Links', { n: res.deleted }));
     loadStats();
   } catch (e) {
     message.error(e?.data?.message || t('InvalidData'));
@@ -404,7 +422,7 @@ async function copy(text) {
 onMounted(() => {
   load();
   loadLogs(1);
-  if (route.query.connected === '1') message.success('Salla store connected.');
+  if (route.query.connected === '1') message.success(t('Salla_Store_Connected'));
   if (route.query.salla_error) message.error(String(route.query.salla_error));
 });
 

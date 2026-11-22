@@ -105,6 +105,12 @@
             <template #icon><CloseOutlined /></template>
             {{ $t('Cancel') }} ({{ crud.selectedIds.value.length }})
           </a-button>
+          <a-tooltip :title="$t('Comm_Recalculate_Help')">
+            <a-button :loading="recalculating" @click="recalculateSelected">
+              <template #icon><SyncOutlined /></template>
+              {{ $t('Comm_Recalculate') }}
+            </a-button>
+          </a-tooltip>
         </a-space>
       </div>
       <a-table
@@ -129,10 +135,13 @@
             {{ formatMoney(record.base_amount) }}
           </template>
           <template v-else-if="column.key === 'commission_amount'">
-            {{ formatMoney(record.commission_amount) }}
+            <a-tooltip v-if="record.is_adjustment" :title="$t('Comm_Adjustment_Help')">
+              <a-tag color="orange" class="adj-tag">{{ $t('Comm_Adjustment') }}</a-tag>
+            </a-tooltip>
+            <span :class="{ 'neg': Number(record.commission_amount) < 0 }">{{ formatMoney(record.commission_amount) }}</span>
           </template>
           <template v-else-if="column.key === 'status'">
-            <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
           </template>
           <template v-else-if="column.key === 'calculated_at'">
             {{ formatDateTime(record.calculated_at) }}
@@ -151,11 +160,13 @@
  * paid_total, grand_total}, by_status}; agent chart GET
  * commission_report/by_agent → {by_agent[{name, code, total_commission}]}.
  * Bulk actions on selected rows: POST commissions/approve|cancel
- * {commission_ids} (cancel behind a confirm), edit-permission gated.
+ * {commission_ids} (cancel behind a confirm), POST commissions/recalculate
+ * {sale_ids} (the ticked rows' sales), edit-permission gated. Rows flagged
+ * is_adjustment are top-ups / claw-backs on partly paid commissions.
  */
 import { ref, computed, onMounted, createVNode } from 'vue';
 import { message, Modal } from 'ant-design-vue';
-import { ExclamationCircleOutlined, ReloadOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons-vue';
+import { ExclamationCircleOutlined, ReloadOutlined, CheckOutlined, CloseOutlined, SyncOutlined } from '@ant-design/icons-vue';
 import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
@@ -170,6 +181,7 @@ const filterDateTo = ref('');
 const filterAgentId = ref(null);
 const filterStatus = ref('');
 const agentsList = ref([]);
+const recalculating = ref(false);
 
 const summary = ref(null);
 const byAgent = ref([]);
@@ -252,6 +264,10 @@ function formatDateTime(v) { return v ? new Date(v).toLocaleString() : '—'; }
 function statusColor(s) {
   return { pending: 'warning', approved: 'processing', paid: 'success', cancelled: 'default' }[s] || 'default';
 }
+function statusLabel(s) {
+  const key = { pending: 'Pending', approved: 'Approved', paid: 'Paid', cancelled: 'Cancelled' }[s];
+  return key ? t(key) : s;
+}
 
 async function loadSummary() {
   const data = await http.get('commission_report/summary', filterParams());
@@ -306,7 +322,8 @@ async function approveSelected() {
 function cancelSelected() {
   if (!crud.selectedIds.value.length) return;
   Modal.confirm({
-    title: t('Confirm_delete'),
+    title: t('Comm_Cancel_Confirm'),
+    content: t('Comm_Cancel_Confirm_Help'),
     icon: createVNode(ExclamationCircleOutlined),
     okType: 'danger',
     async onOk() {
@@ -323,6 +340,24 @@ function cancelSelected() {
   });
 }
 
+async function recalculateSelected() {
+  const selected = new Set(crud.selectedIds.value);
+  const saleIds = [...new Set(crud.rows.value.filter(r => selected.has(r.id)).map(r => r.sale_id))];
+  if (!saleIds.length) return;
+  recalculating.value = true;
+  try {
+    await http.post('commissions/recalculate', { sale_ids: saleIds });
+    message.success(t('Success'));
+    crud.selectedIds.value = [];
+    await crud.fetchRows();
+    loadAllCharts();
+  } catch (e) {
+    message.error(e?.data?.message || t('Error'));
+  } finally {
+    recalculating.value = false;
+  }
+}
+
 onMounted(async () => {
   crud.fetchRows();
   loadAllCharts();
@@ -335,6 +370,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.adj-tag {
+  margin-inline-end: 6px;
+}
+.neg {
+  color: #cf1322;
+}
 .filter-label {
   font-size: 12px;
   color: rgba(var(--ink-rgb), 0.55);

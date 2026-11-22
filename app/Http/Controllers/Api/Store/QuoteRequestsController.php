@@ -48,6 +48,13 @@ class QuoteRequestsController extends BaseController
 
         $this->notifyOwner($quote);
 
+        // CRM: a lead, or a deal when the visitor is already a customer.
+        \App\Services\Crm\CrmCaptureService::hook('capture_quote_requests', fn ($crm) => $crm->capture('quote_request', [
+            'name' => $quote->name, 'email' => $quote->email, 'phone' => $quote->phone,
+            'subject' => $quote->product_name, 'message' => $quote->message,
+            'extra' => ['Product' => $quote->product_name, 'Quantity' => $quote->quantity !== null ? (float) $quote->quantity : null],
+        ], ['ref_id' => $quote->id, 'client_id' => $quote->client_id]));
+
         return response()->json([
             'success' => true,
             'message' => __('messages.QuoteRequestSent'),
@@ -57,7 +64,7 @@ class QuoteRequestsController extends BaseController
     /** GET /store/quote-requests — admin list. */
     public function index(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_quote_requests', StoreSetting::class);
 
         $query = StoreQuoteRequest::with('product:id,name,code')->orderByDesc('created_at');
 
@@ -101,7 +108,7 @@ class QuoteRequestsController extends BaseController
 
     public function setStatus(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_quote_requests', StoreSetting::class);
 
         $data = $request->validate(['status' => ['required', Rule::in(StoreQuoteRequest::STATUSES)]]);
 
@@ -114,7 +121,7 @@ class QuoteRequestsController extends BaseController
 
     public function destroy(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_quote_requests', StoreSetting::class);
 
         StoreQuoteRequest::findOrFail($id)->delete();
 

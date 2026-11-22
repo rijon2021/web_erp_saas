@@ -138,7 +138,7 @@ class LogsHealthController extends Controller
             'resolution_note' => $request->input('note'),
         ]);
 
-        return response()->json(['success' => true, 'message' => 'Log marked as resolved.']);
+        return response()->json(['success' => true, 'message' => __('super.flash.log_resolved')]);
     }
 
     public function reopen(SystemLog $log): JsonResponse
@@ -150,20 +150,50 @@ class LogsHealthController extends Controller
             'resolution_note' => null,
         ]);
 
-        return response()->json(['success' => true, 'message' => 'Log reopened.']);
+        return response()->json(['success' => true, 'message' => __('super.flash.log_reopened')]);
     }
 
     public function destroy(SystemLog $log): JsonResponse
     {
         $log->delete();
-        return response()->json(['success' => true, 'message' => 'Log deleted.']);
+        return response()->json(['success' => true, 'message' => __('super.flash.log_deleted')]);
     }
 
     public function clearResolved(): JsonResponse
     {
-        $count = SystemLog::resolved()->count();
-        SystemLog::resolved()->delete();
-        return response()->json(['success' => true, 'message' => "Deleted {$count} resolved logs."]);
+        return $this->clearScope('resolved');
+    }
+
+    /**
+     * Bulk-delete logs by scope: resolved, unresolved or all.
+     */
+    public function clear(Request $request): JsonResponse
+    {
+        $request->validate([
+            'scope' => ['required', 'in:resolved,unresolved,all'],
+        ]);
+
+        return $this->clearScope((string) $request->input('scope'));
+    }
+
+    private function clearScope(string $scope): JsonResponse
+    {
+        $query = match ($scope) {
+            'resolved'   => SystemLog::resolved(),
+            'unresolved' => SystemLog::unresolved(),
+            default      => SystemLog::query(),
+        };
+
+        $count = $query->count();
+        $query->delete();
+
+        $message = match ($scope) {
+            'resolved'   => __('super.flash.logs_deleted', ['count' => $count]),
+            'unresolved' => __('super.flash.logs_deleted_unresolved', ['count' => $count]),
+            default      => __('super.flash.logs_deleted_all', ['count' => $count]),
+        };
+
+        return response()->json(['success' => true, 'message' => $message, 'count' => $count, 'scope' => $scope]);
     }
 
     /**
@@ -177,7 +207,7 @@ class LogsHealthController extends Controller
             SystemLog::TYPE_SSL          => $this->recheckSsl($log),
             SystemLog::TYPE_DATABASE     => $this->recheckDatabase($log),
             SystemLog::TYPE_PROVISIONING => $this->recheckDatabase($log),
-            default                      => ['success' => false, 'status' => 'manual', 'message' => 'This log type has no automated re-check. Please investigate and resolve manually.'],
+            default                      => ['success' => false, 'status' => 'manual', 'message' => __('super.flash.log_no_recheck')],
         };
 
         if (($result['status'] ?? null) === 'ok') {
@@ -200,17 +230,17 @@ class LogsHealthController extends Controller
     {
         $domain = $log->context['domain'] ?? null;
         if (! $domain) {
-            return ['success' => false, 'status' => 'missing', 'message' => 'No domain stored on this log.'];
+            return ['success' => false, 'status' => 'missing', 'message' => __('super.flash.log_no_domain')];
         }
 
         try {
             $records = @dns_get_record($domain, DNS_A + DNS_AAAA + DNS_CNAME);
             if (empty($records)) {
-                return ['success' => true, 'status' => 'fail', 'message' => "No DNS records found for {$domain}."];
+                return ['success' => true, 'status' => 'fail', 'message' => __('super.flash.dns_none', ['domain' => $domain])];
             }
-            return ['success' => true, 'status' => 'ok', 'message' => "DNS resolves for {$domain} (" . count($records) . ' records).'];
+            return ['success' => true, 'status' => 'ok', 'message' => __('super.flash.dns_ok', ['domain' => $domain, 'count' => count($records)])];
         } catch (Throwable $e) {
-            return ['success' => false, 'status' => 'fail', 'message' => 'DNS lookup failed: ' . $e->getMessage()];
+            return ['success' => false, 'status' => 'fail', 'message' => __('super.flash.dns_failed', ['error' => $e->getMessage()])];
         }
     }
 
@@ -218,43 +248,43 @@ class LogsHealthController extends Controller
     {
         $domain = $log->context['domain'] ?? null;
         if (! $domain) {
-            return ['success' => false, 'status' => 'missing', 'message' => 'No domain stored on this log.'];
+            return ['success' => false, 'status' => 'missing', 'message' => __('super.flash.log_no_domain')];
         }
 
         try {
             $ctx = stream_context_create(['ssl' => ['capture_peer_cert' => true, 'verify_peer' => false, 'verify_peer_name' => false]]);
             $fp  = @stream_socket_client("ssl://{$domain}:443", $errno, $errstr, 5, STREAM_CLIENT_CONNECT, $ctx);
             if (! $fp) {
-                return ['success' => true, 'status' => 'fail', 'message' => "Unable to connect to {$domain}: {$errstr}"];
+                return ['success' => true, 'status' => 'fail', 'message' => __('super.flash.ssl_unreachable', ['domain' => $domain, 'error' => $errstr])];
             }
             $params = stream_context_get_params($fp);
             fclose($fp);
 
             $cert = $params['options']['ssl']['peer_certificate'] ?? null;
             if (! $cert) {
-                return ['success' => true, 'status' => 'fail', 'message' => 'No certificate presented.'];
+                return ['success' => true, 'status' => 'fail', 'message' => __('super.flash.ssl_no_cert')];
             }
             $info = openssl_x509_parse($cert);
             $validTo = $info['validTo_time_t'] ?? 0;
             if ($validTo < time()) {
-                return ['success' => true, 'status' => 'fail', 'message' => 'Certificate is expired.'];
+                return ['success' => true, 'status' => 'fail', 'message' => __('super.flash.ssl_expired')];
             }
             $daysLeft = (int) floor(($validTo - time()) / 86400);
-            return ['success' => true, 'status' => 'ok', 'message' => "Certificate valid. Expires in {$daysLeft} days."];
+            return ['success' => true, 'status' => 'ok', 'message' => __('super.flash.ssl_valid', ['days' => $daysLeft])];
         } catch (Throwable $e) {
-            return ['success' => false, 'status' => 'fail', 'message' => 'SSL check failed: ' . $e->getMessage()];
+            return ['success' => false, 'status' => 'fail', 'message' => __('super.flash.ssl_failed', ['error' => $e->getMessage()])];
         }
     }
 
     private function recheckDatabase(SystemLog $log): array
     {
         if (! $log->tenant_id) {
-            return ['success' => false, 'status' => 'missing', 'message' => 'Log has no tenant associated.'];
+            return ['success' => false, 'status' => 'missing', 'message' => __('super.flash.log_no_tenant')];
         }
 
         $tenant = Tenant::find($log->tenant_id);
         if (! $tenant) {
-            return ['success' => false, 'status' => 'missing', 'message' => 'Tenant not found.'];
+            return ['success' => false, 'status' => 'missing', 'message' => __('super.flash.log_tenant_missing')];
         }
 
         $creds = $tenant->getEffectiveDatabaseCredentials();
@@ -265,9 +295,9 @@ class LogsHealthController extends Controller
                 PDO::ATTR_ERRMODE    => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_TIMEOUT    => 4,
             ]);
-            return ['success' => true, 'status' => 'ok', 'message' => 'Database connection succeeded.'];
+            return ['success' => true, 'status' => 'ok', 'message' => __('super.flash.db_check_ok')];
         } catch (Throwable $e) {
-            return ['success' => true, 'status' => 'fail', 'message' => 'Connection failed: ' . $e->getMessage()];
+            return ['success' => true, 'status' => 'fail', 'message' => __('super.flash.db_check_failed', ['error' => $e->getMessage()])];
         }
     }
 

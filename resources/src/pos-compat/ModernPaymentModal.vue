@@ -9,6 +9,7 @@
       id="modern_payment_modal"
       class="payment-modal-wrapper premium-payment-modal-large"
       centered
+      :no-close-on-backdrop="hasTerminalActivity"
       @hidden="resetForm"
       body-class="modal-body-custom"
       modal-class="premium-modal"
@@ -24,7 +25,7 @@
               <h2 class="modal-title">{{ isEditMode ? $t('Edit_Payment') : $t('Payment_Checkout') }}</h2>
             </div>
           </div>
-          <button type="button" class="close-button" @click="$refs.paymentModal.hide()">
+          <button type="button" class="close-button" @click="requestClose">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -133,13 +134,13 @@
                               min="0"
                               inputmode="decimal"
                               pattern="\\d*(\\.\\d*)?"
-                              :disabled="Number(paymentForm.amountDue) === 0"
+                              :disabled="Number(paymentForm.amountDue) === 0 || isLineTerminalLocked(p)"
                               placeholder="0.00"
                               class="form-input" 
                             />
                           </div>
                         </div>
-                        <div class="input-field">
+                        <div class="input-field" v-if="!isLineWallet(p)">
                           <label class="field-label">{{$t('Account')}}</label>
                           <select v-model="p.accountId" class="form-select">
                             <option value="">{{$t('Select_Account')}}</option>
@@ -174,7 +175,10 @@
                         <!-- Wallet balances are base-currency; compare/display converted -->
                         <small :class="walletBalance != null && Number(p.amount) > Number(walletBalance) * docRate ? 'text-danger' : 'text-muted'">
                           {{ $t('WalletBalance') }}:
-                          {{ walletBalance != null ? (Number(walletBalance) * docRate).toFixed(priceDecimals) : '—' }}
+                          {{ walletBalance != null ? fmtAmount(Number(walletBalance) * docRate) : '—' }}
+                        </small>
+                        <small v-if="walletInfo && walletInfo.status === 'frozen'" class="text-danger d-block">
+                          {{ $t('CW_Err_wallet_frozen') }}
                         </small>
                       </div>
                       <!-- Per-line Credit Card Section -->
@@ -188,6 +192,76 @@
                           <div class="new-card-form">
                             <div :id="'card-element-' + idx" class="stripe-card-element"></div>
                             <small class="text-muted">{{$t('Card_Info_Secure_Stripe')}}</small>
+                          </div>
+                        </div>
+                      </div>
+                      <!-- Card terminal (Sales > POS Devices): charge this line on the device -->
+                      <div class="form-group" v-if="lineTerminals(p).length">
+                        <div class="terminal-section" :class="'is-' + terminalState(p)">
+                          <div class="terminal-row">
+                            <lucide-icon name="credit-card" />
+                            <select
+                              v-if="lineTerminals(p).length > 1"
+                              v-model="p.terminalId"
+                              class="form-select terminal-select"
+                              :disabled="isLineTerminalLocked(p)"
+                            >
+                              <option v-for="d in lineTerminals(p)" :key="d.id" :value="d.id">{{ d.name }}</option>
+                            </select>
+                            <span v-else class="terminal-name">{{ lineTerminals(p)[0].name }}</span>
+                            <select
+                              v-if="terminalFor(p) && terminalFor(p).max_installments > 1"
+                              v-model.number="p.installments"
+                              class="form-select terminal-installments"
+                              :disabled="isLineTerminalLocked(p)"
+                              :title="$t('Pd_Installments')"
+                            >
+                              <option v-for="n in terminalFor(p).max_installments" :key="n" :value="n">
+                                {{ n === 1 ? $t('Pd_Single_Payment') : $t('Pd_Installments_N', { n }) }}
+                              </option>
+                            </select>
+                          </div>
+                          <div class="terminal-status">
+                            <span v-if="p.terminalBusy" class="loading-spinner terminal-spinner"></span>
+                            {{ terminalStatusText(p) }}
+                          </div>
+                          <div class="terminal-actions">
+                            <button
+                              v-if="!p.terminalBusy && !isLineCharged(p) && !p.terminalLost"
+                              type="button"
+                              class="action-btn terminal-charge-btn"
+                              :disabled="!(Number(p.amount) > 0) || !isOnline || isSubmitting"
+                              @click="chargeLine(p)"
+                            >
+                              <lucide-icon name="credit-card" /> {{ $t('Pd_Charge_On_Device', { amount: formatCurrency(p.amount) }) }}
+                            </button>
+                            <button
+                              v-if="canRecheck(p)"
+                              type="button"
+                              class="action-btn cancel-btn"
+                              :disabled="!isOnline"
+                              @click="recheckLine(p)"
+                            >
+                              {{ $t('Pd_Check_Again') }}
+                            </button>
+                            <button
+                              v-if="p.terminalBusy && p.terminalTxn && p.terminalTxn.id && !p.terminalVoiding"
+                              type="button"
+                              class="action-btn cancel-btn"
+                              :disabled="p.terminalCancelling"
+                              @click="cancelLineCharge(p)"
+                            >
+                              {{ $t('Cancel') }}
+                            </button>
+                            <button
+                              v-if="isLineCharged(p) && !p.terminalBusy"
+                              type="button"
+                              class="action-btn cancel-btn"
+                              :disabled="isSubmitting"
+                              @click="voidLineCharge(p)"
+                            >
+                              {{ $t('Pd_Void_Charge') }}
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -281,7 +355,7 @@
         <button
           type="button"
           class="footer-btn footer-cancel"
-          @click="$refs.paymentModal.hide()"
+          @click="requestClose"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -317,8 +391,24 @@ import axios from "./axios";
 import { bvToast } from "./bv";
 import { posCompatComponents } from "./components";
 import Util from "./util";
-import { getPriceDecimals } from "./priceFormat";
-import { receiptFontHeadTags, whenPrintFontsReady } from "../lib/receiptFont";
+import { formatPriceDisplay, getPriceDecimals, resolveHideZeroDecimals, withCurrency } from "./priceFormat";
+import { useAuthStore } from "../stores/auth";
+import { usePlanStore } from "../stores/plan";
+import { receiptFontHeadTags, receiptPageHeadTag, whenPrintReady } from "../lib/receiptFont";
+import { chargeOnTerminal, cancelTransaction, voidTransaction, recheckTransaction, fetchTransaction } from "../lib/posTerminal";
+
+// Last device used on this computer (POS Devices), preselected per payment line.
+const TERMINAL_LAST_KEY = 'pos_terminal_last';
+// Payment method ids bound to a device, from the last list this computer loaded.
+const TERMINAL_METHODS_KEY = 'pos_terminal_methods';
+function readBoundMethods() {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(TERMINAL_METHODS_KEY) || '[]');
+    return Array.isArray(v) ? v.map(String) : [];
+  } catch (e) {
+    return [];
+  }
+}
 export default {
   components: { ...posCompatComponents },
   name: 'ModernPaymentModal',
@@ -338,6 +428,8 @@ export default {
     // Change Salesperson During Checkout: user id the sale is attributed to
     // (null when the feature is off — the backend then uses the cashier).
     sellerId: { type: [Number, String], default: null },
+    // Commissions: Sales Agent picked on the POS (sales.sales_agent_id)
+    salesAgentId: { type: [Number, String], default: null },
     warehouseId: { type: [Number, String], default: null },
     sale: { type: Object, default: () => ({}) },
     details: { type: Array, default: () => [] },
@@ -396,8 +488,26 @@ export default {
         notes: ''
       },
       // Selected customer's wallet balance (null until fetched).
-      walletBalance: null
+      walletBalance: null,
+      // GET pos/wallet-balance/{client} → { enabled, balance, status,
+      // allow_negative, payment_method_id } (null until fetched / on error).
+      walletInfo: null,
+      // POS Devices (card terminals) usable from this warehouse; a payment line
+      // whose method one of them is bound to is charged on the device.
+      terminals: [],
+      terminalsState: 'idle', // idle | loading | ready | failed
+      terminalsLoadedFor: null,
+      terminalsLoadedAt: 0,
+      boundMethodIds: readBoundMethods(),
+      terminalStop: false
     };
+  },
+  mounted() {
+    window.addEventListener('beforeunload', this.onTerminalBeforeUnload);
+  },
+  beforeUnmount() {
+    this.terminalStop = true;
+    window.removeEventListener('beforeunload', this.onTerminalBeforeUnload);
   },
   watch: {
     clientId: {
@@ -409,6 +519,12 @@ export default {
     // Monetary precision (2 or 3) driven by the "Enable 3 Decimal Pricing" setting.
     priceDecimals() {
       return getPriceDecimals({ store: this.$store });
+    },
+    // System Settings -> Hide Zero Decimals. Read from the Pinia auth store:
+    // the compat $store facade has no getters (the auth cache covers offline).
+    hideZeroDecimals() {
+      const user = useAuthStore().user || {};
+      return resolveHideZeroDecimals(user.hide_zero_decimals);
     },
     // Multi-Currency: sanitized rate (1 = base currency).
     docRate() {
@@ -450,12 +566,13 @@ export default {
       return this.accounts || [];
     },
     anyCreditCardUsed() {
-      return (this.paymentLines || []).some(line => {
-        const pm = this.resolvedPaymentMethods.find(m => String(m.id) === String(line.paymentMethodId));
-        return this.isCreditCardMethod(pm);
-      });
-    }
-    ,
+      // Stripe card lines only — a line charged on a POS device is already paid.
+      return (this.paymentLines || []).some(line => this.isLineCreditCard(line));
+    },
+    // A device is busy or has charged a line: closing must void it first.
+    hasTerminalActivity() {
+      return (this.paymentLines || []).some(line => line.terminalBusy || this.isLineCharged(line));
+    },
     quickAmountOptions() {
       const base = [this.paymentForm && this.paymentForm.amountDue, 15, 20, 50, 100, 200]
         .map(v => Number(v))
@@ -473,6 +590,11 @@ export default {
     }
   },
   methods: {
+    // Amount text per the Price Format / precision / Hide Zero Decimals settings (no symbol).
+    fmtAmount(v) {
+      const user = useAuthStore().user || {};
+      return formatPriceDisplay(v, this.priceDecimals, user.price_format || null, this.hideZeroDecimals);
+    },
     // Get current date in configured timezone (YYYY-MM-DD format)
     getCurrentDateInTimezone() {
       try {
@@ -504,13 +626,17 @@ export default {
     },
     isLineCreditCard(line) {
       if (!line) return false;
+      // Bound to a POS device: paid on the terminal, not through Stripe.
+      if (this.lineTerminals(line).length) return false;
       const pm = this.resolvedPaymentMethods.find(m => String(m.id) === String(line.paymentMethodId));
       return this.isCreditCardMethod(pm);
     },
     isWalletMethod(method) {
-      // Match by name only — id 8 can belong to a different method (e.g. Wave).
-      if (!method) return false;
-      return !!(method.name && method.name.trim().toLowerCase() === 'wallet');
+      // The Customer Wallet tender is the payment method the server names in
+      // pos/wallet-balance (payment_method_id), never a guess by name or id.
+      if (!method || !this.walletInfo || !this.walletInfo.enabled) return false;
+      if (this.walletInfo.payment_method_id == null) return false;
+      return String(method.id) === String(this.walletInfo.payment_method_id);
     },
     isLineWallet(line) {
       if (!line) return false;
@@ -518,16 +644,38 @@ export default {
       return this.isWalletMethod(pm);
     },
     async fetchWalletBalance() {
-      this.walletBalance = null;
-      if (!this.clientId) return;
+      const clientId = this.clientId;
+      if (!clientId) {
+        this.walletInfo = null;
+        this.walletBalance = null;
+        return;
+      }
+      // Always answers ({ enabled: false } when the Customer Wallet is off);
+      // any failure just hides the hint.
       try {
-        const r = await axios.get('pos/wallet-balance/' + this.clientId);
-        this.walletBalance = Number(r.data.balance || 0);
+        const r = await axios.get('pos/wallet-balance/' + clientId);
+        if (String(clientId) !== String(this.clientId)) return; // customer changed meanwhile
+        const info = (r && r.data) || null;
+        this.walletInfo = info;
+        this.walletBalance = info && info.enabled ? Number(info.balance || 0) : null;
       } catch (e) {
+        if (String(clientId) !== String(this.clientId)) return;
+        this.walletInfo = null;
         this.walletBalance = null;
       }
     },
     changePaymentMethod(line, method) {
+      if (this.isLineTerminalLocked(line)) {
+        this.makeToast('warning', this.$t('Pd_Line_Locked'), this.$t('Warning'));
+        return;
+      }
+      if (this.methodTerminals(method && method.id).length) {
+        line.paymentMethodId = method.id;
+        const idx = (this.paymentLines || []).indexOf(line);
+        if (idx >= 0) this.destroyCardElementForLine(idx);
+        this.ensureLineTerminal(line);
+        return;
+      }
       // If attempting to select credit card without Stripe config, block and notify
       if (this.isCreditCardMethod(method) && !this.stripeKey) {
         this.makeToast('warning', this.$t ? this.$t('credit_card_account_not_available') : 'Credit card account not available', this.$t ? this.$t('Warning') : 'Warning');
@@ -610,7 +758,7 @@ export default {
         maximumFractionDigits: dec
       }).format(amount);
       const sign = isValid && num < 0 ? '-' : '';
-      return `${sign}${this.currency} ${formattedNumber}`;
+      return sign + withCurrency(this.currency, formattedNumber, useAuthStore().user?.currency_position);
     },
     addPaymentLine() {
       if (Number(this.paymentForm.amountDue) === 0) {
@@ -619,11 +767,25 @@ export default {
       }
       const defaultMethodId = this.getDefaultPaymentMethodId();
       const defaultAccountId = this.getDefaultAccountId();
-      this.paymentLines.push({ amount: 0, paymentMethodId: defaultMethodId, accountId: defaultAccountId || this.paymentForm.accountId || '' });
+      const line = this.newLine(0, defaultMethodId, defaultAccountId || this.paymentForm.accountId || '');
+      this.paymentLines.push(line);
+      this.ensureLineTerminal(this.paymentLines[this.paymentLines.length - 1]);
+    },
+    // Payment line shape; the terminal* fields are used by POS Devices lines.
+    newLine(amount, paymentMethodId, accountId) {
+      return {
+        amount, paymentMethodId, accountId,
+        terminalId: null, terminalTxn: null, terminalBusy: false, terminalVoiding: false,
+        terminalCancelling: false, terminalLost: false, installments: 1,
+      };
     },
     removePaymentLine(index) {
       // Never allow removing the last remaining line – there must always be at least one payment method
       if (!this.paymentLines || this.paymentLines.length <= 1) {
+        return;
+      }
+      if (this.isLineTerminalLocked(this.paymentLines[index])) {
+        this.makeToast('warning', this.$t('Pd_Line_Locked'), this.$t('Warning'));
         return;
       }
       // Remove the line
@@ -638,6 +800,7 @@ export default {
         return;
       }
       if (!this.paymentLines.length) this.addPaymentLine();
+      if (this.isLineTerminalLocked(this.paymentLines[0])) return;
       this.paymentLines[0].amount = Number(amount) || 0;
     },
     onAmountInput(idx) {
@@ -717,6 +880,322 @@ export default {
         this.cardElementsByLine = {};
       } catch (e) { /* ignore */ }
     },
+    //------------------------------ POS Devices (card terminals) -------------------------\\
+    // The plan must include POS Devices: an unconditional request would show the
+    // upgrade dialog (or the billing redirect) on every checkout for tenants without it.
+    terminalsEnabled() {
+      try {
+        const summary = usePlanStore().summary;
+        if (!summary || !summary.has_plan) return false;
+        const f = summary.features && summary.features.pos_terminals;
+        return !!(f && f.enabled);
+      } catch (e) {
+        return false;
+      }
+    },
+    async loadTerminals() {
+      if (!this.isOnline || !this.terminalsEnabled()) return;
+      const wh = String(this.warehouseId || '');
+      if (this.terminalsLoadedFor === wh && this.terminalsState === 'ready' && Date.now() - this.terminalsLoadedAt < 60000) return;
+      this.terminalsState = 'loading';
+      try {
+        const r = await axios.get('pos-terminals/available', { params: { warehouse_id: wh } });
+        this.terminals = (r && r.data && r.data.terminals) || [];
+        this.terminalsLoadedFor = wh;
+        this.terminalsLoadedAt = Date.now();
+        this.terminalsState = 'ready';
+        // Remember which methods are device-bound, so a line on one of them
+        // is never paid "normally" while the list is loading / unavailable.
+        this.boundMethodIds = [...new Set(this.terminals.map(d => String(d.payment_method_id)))];
+        try { window.localStorage.setItem(TERMINAL_METHODS_KEY, JSON.stringify(this.boundMethodIds)); } catch (e) { /* ignore */ }
+      } catch (e) {
+        this.terminals = [];
+        this.terminalsState = 'failed';
+      }
+      (this.paymentLines || []).forEach((line, idx) => {
+        this.ensureLineTerminal(line);
+        // A Stripe element mounted before we knew the method is device-bound.
+        if (this.lineTerminals(line).length) this.destroyCardElementForLine(idx);
+      });
+    },
+    methodTerminals(methodId) {
+      if (methodId === null || methodId === undefined || methodId === '') return [];
+      return (this.terminals || []).filter(d => String(d.payment_method_id) === String(methodId));
+    },
+    lineTerminals(line) {
+      return line ? this.methodTerminals(line.paymentMethodId) : [];
+    },
+    // Bound to a device per the last list this computer saw (used while the list is not available).
+    isBoundMethod(methodId) {
+      return methodId !== null && methodId !== undefined && (this.boundMethodIds || []).includes(String(methodId));
+    },
+    terminalFor(line) {
+      const list = this.lineTerminals(line);
+      return list.find(d => d.id === line.terminalId) || list[0] || null;
+    },
+    ensureLineTerminal(line) {
+      if (!line) return;
+      const list = this.lineTerminals(line);
+      if (!list.length) {
+        line.terminalId = null;
+        return;
+      }
+      if (list.some(d => d.id === line.terminalId)) return;
+      let last = null;
+      try { last = Number(window.localStorage.getItem(TERMINAL_LAST_KEY)); } catch (e) { last = null; }
+      line.terminalId = (list.find(d => d.id === last) || list[0]).id;
+    },
+    isLineCharged(line) {
+      return !!(line && line.terminalTxn && line.terminalTxn.id && line.terminalTxn.status === 'approved');
+    },
+    isLineTerminalLocked(line) {
+      return !!(line && (line.terminalBusy || this.isLineCharged(line) || line.terminalLost));
+    },
+    // The device line has a transaction whose outcome we may not know (lost
+    // connection, or it ended as "no answer" / cancelled on our side).
+    canRecheck(line) {
+      const txn = line && line.terminalTxn;
+      return !!(txn && txn.id && !line.terminalBusy && (line.terminalLost || ['timeout', 'cancelled', 'failed'].includes(txn.status)));
+    },
+    terminalState(line) {
+      if (line.terminalBusy) return 'busy';
+      if (line.terminalLost) return 'timeout';
+      return (line.terminalTxn && line.terminalTxn.status) || 'idle';
+    },
+    terminalStatusText(line) {
+      const txn = line.terminalTxn;
+      const device = this.terminalFor(line);
+      if (line.terminalVoiding) return this.$t('Pd_Voiding');
+      if (line.terminalBusy) return this.$t('Pd_Waiting_For_Card', { device: device ? device.name : '' });
+      if (line.terminalLost) return this.$t('Pd_Lost_Track');
+      if (!txn) return this.$t('Pd_Ready_To_Charge');
+      if (txn.status === 'approved') {
+        return [this.$t('Pd_Status_Approved'), txn.card_mask, txn.auth_code ? this.$t('Pd_Auth_Code') + ' ' + txn.auth_code : null]
+          .filter(Boolean).join(' · ');
+      }
+      const label = {
+        declined: 'Pd_Status_Declined', cancelled: 'Pd_Status_Cancelled', failed: 'Pd_Status_Failed', timeout: 'Pd_Status_Timeout',
+      }[txn.status];
+      return [label ? this.$t(label) : '', txn.message].filter(Boolean).join(': ');
+    },
+    // Items for devices that print the fiscal receipt (POS Devices > Full fiscal receipt).
+    // Order-level discount / shipping / tax travel as the difference to sale_total.
+    terminalReceiptItems() {
+      const rate = this.docRate;
+      return (this.details || []).map(d => {
+        const qty = Number(d.quantity) || 0;
+        const total = (Number(d.subtotal) || 0) * rate;
+        return {
+          name: String(d.name || d.product_name || '').slice(0, 191),
+          code: d.code ? String(d.code).slice(0, 191) : null,
+          quantity: qty,
+          unit_price: qty ? Number((total / qty).toFixed(4)) : 0,
+          total: Number(total.toFixed(2)),
+          vat_rate: Number(d.tax_percent) || 0,
+        };
+      });
+    },
+    terminalError(e) {
+      const data = e && (e.data || (e.response && e.response.data));
+      if (data && data.errors) {
+        const first = Object.values(data.errors)[0];
+        if (Array.isArray(first) && first.length) return first[0];
+      }
+      return (data && data.message) || this.$t('Pd_Device_Error');
+    },
+    // How long the till follows one device operation before offering "Check again".
+    terminalDeadlineMs(device) {
+      return ((Number(device && device.timeout_seconds) || 120) + 60) * 1000;
+    },
+    async chargeLine(line) {
+      const device = this.terminalFor(line);
+      if (!device || line.terminalBusy || this.isLineCharged(line) || line.terminalLost || this.isSubmitting) return;
+      if (!this.isOnline) {
+        this.makeToast('warning', this.$t('Pd_Needs_Online'), this.$t('Warning'));
+        return;
+      }
+      // Another line is already using this device.
+      if ((this.paymentLines || []).some(l => l !== line && l.terminalBusy && l.terminalId === device.id)) {
+        this.makeToast('warning', this.$t('Pd_Wait_For_Device'), this.$t('Warning'));
+        return;
+      }
+      const amount = Number(Number(line.amount || 0).toFixed(this.priceDecimals));
+      const due = Number(this.paymentForm.amountDue) || 0;
+      if (!(amount > 0)) return;
+      // No change can come back from a card: at most what the other lines leave to pay.
+      const others = (this.paymentLines || []).filter(l => l !== line).reduce((s, l) => s + (Number(l.amount) || 0), 0);
+      if (amount > Math.max(0, due - others) + 0.0001) {
+        this.makeToast('warning', this.$t('Pd_Charge_Exceeds_Due'), this.$t('Warning'));
+        return;
+      }
+      try { window.localStorage.setItem(TERMINAL_LAST_KEY, String(device.id)); } catch (e) { /* ignore */ }
+
+      line.terminalBusy = true;
+      line.terminalLost = false;
+      line.terminalTxn = null;
+      try {
+        const txn = await chargeOnTerminal(device.id, {
+          amount,
+          currency_id: this.currencyId || null,
+          sale_uuid: this.ensureSaleUuid(),
+          warehouse_id: this.warehouseId || null,
+          installments: line.installments || 1,
+          sale_total: due,
+          items: device.fiscal_mode === 'full_receipt' ? this.terminalReceiptItems() : undefined,
+        }, this.followOpts(line, device));
+        this.afterFollow(line, txn);
+      } catch (e) {
+        this.followFailed(line, e);
+      } finally {
+        line.terminalBusy = false;
+        line.terminalCancelling = false;
+      }
+    },
+    followOpts(line, device) {
+      return {
+        onUpdate: (tx) => { line.terminalTxn = tx; },
+        stopped: () => this.terminalStop,
+        deadlineMs: this.terminalDeadlineMs(device),
+      };
+    },
+    afterFollow(line, txn) {
+      line.terminalTxn = txn;
+      line.terminalLost = !!(txn && txn.status === 'pending');
+      if (txn && txn.status === 'approved') {
+        this.makeToast('success', this.$t('Pd_Charge_Approved'), this.$t('Success'));
+      } else if (txn && txn.status !== 'pending') {
+        this.makeToast('danger', this.terminalStatusText(line), this.$t('Failed'));
+      }
+    },
+    // Once the device has the payment, never forget it: keep the transaction
+    // and offer "Check again" instead of a fresh charge (no double charging).
+    followFailed(line, e) {
+      if (e && e.transaction) line.terminalTxn = e.transaction;
+      if (line.terminalTxn && line.terminalTxn.id) {
+        line.terminalLost = true;
+        this.makeToast('warning', this.$t('Pd_Lost_Track'), this.$t('Warning'));
+      } else {
+        line.terminalTxn = null;
+        this.makeToast('danger', this.terminalError(e), this.$t('Failed'));
+      }
+    },
+    // "Check again": resume a lost / timed-out device payment.
+    async recheckLine(line) {
+      const txn = line.terminalTxn;
+      if (!txn || !txn.id || line.terminalBusy) return;
+      const device = this.terminalFor(line);
+      line.terminalBusy = true;
+      try {
+        const result = await recheckTransaction(txn.id, this.followOpts(line, device));
+        line.terminalLost = false;
+        this.afterFollow(line, result);
+      } catch (e) {
+        this.followFailed(line, e);
+      } finally {
+        line.terminalBusy = false;
+      }
+    },
+    async cancelLineCharge(line) {
+      const txn = line.terminalTxn;
+      if (!txn || !txn.id || line.terminalCancelling) return;
+      line.terminalCancelling = true;
+      try {
+        // The charge loop picks up the outcome (a card that went through
+        // before the cancel still ends approved).
+        await cancelTransaction(txn.id);
+      } catch (e) {
+        line.terminalCancelling = false;
+        this.makeToast('danger', this.terminalError(e), this.$t('Failed'));
+      }
+    },
+    // Voids the line's charge. True when nothing is left to void (voided, or
+    // the charge already belongs to a saved sale / was reversed elsewhere).
+    async voidLineCharge(line, silent = false) {
+      const txn = line.terminalTxn;
+      if (!this.isLineCharged(line)) return true;
+      if (line.terminalBusy || this.isSubmitting) return false;
+      if (!silent && !window.confirm(this.$t('Pd_Void_Charge_Confirm', { amount: this.formatCurrency(txn.amount) }))) return false;
+      line.terminalBusy = true;
+      line.terminalVoiding = true;
+      try {
+        // A sale may already hold this charge (its response got lost): never void that.
+        const current = await fetchTransaction(txn.id).catch(() => null);
+        if (current && (current.linked || Number(current.reversed) >= Number(current.amount) - 0.0001)) {
+          line.terminalTxn = null;
+          return true;
+        }
+        const v = await voidTransaction(txn.id, { stopped: () => this.terminalStop, deadlineMs: this.terminalDeadlineMs(this.terminalFor(line)) });
+        if (v && v.status === 'approved') {
+          line.terminalTxn = null;
+          this.makeToast('success', this.$t('Pd_Void_Done'), this.$t('Success'));
+          return true;
+        }
+        this.makeToast('danger', (v && v.message) || this.$t('Pd_Void_Failed'), this.$t('Failed'));
+      } catch (e) {
+        this.makeToast('danger', this.terminalError(e), this.$t('Failed'));
+      } finally {
+        line.terminalBusy = false;
+        line.terminalVoiding = false;
+      }
+      return false;
+    },
+    // Message key when a device line can't be submitted yet, else null.
+    terminalLineIssue() {
+      for (const line of this.paymentLines || []) {
+        if (!(Number(line.amount) > 0)) continue;
+        if (!this.lineTerminals(line).length) {
+          // Device-bound method but the device list is not here (yet).
+          if (this.terminalsEnabled() && this.isBoundMethod(line.paymentMethodId) && this.terminalsState !== 'ready') {
+            return this.terminalsState === 'loading' ? 'Pd_Devices_Loading' : 'Pd_Devices_Unavailable';
+          }
+          continue;
+        }
+        if (line.terminalBusy) return 'Pd_Wait_For_Device';
+        if (line.terminalLost) return 'Pd_Lost_Track';
+        if (!this.isLineCharged(line)) return 'Pd_Charge_First';
+        if (Math.abs(Number(line.terminalTxn.amount) - Number(line.amount)) > 0.005) return 'Pd_Amount_Changed';
+      }
+      return null;
+    },
+    // Close (×, Cancel): a charged device line is voided first so no card
+    // payment is left behind without a sale.
+    async requestClose() {
+      if (this.isSubmitting) {
+        this.makeToast('warning', this.$t('Pd_Saving_Sale'), this.$t('Warning'));
+        return;
+      }
+      if ((this.paymentLines || []).some(l => l.terminalBusy)) {
+        this.makeToast('warning', this.$t('Pd_Wait_For_Device'), this.$t('Warning'));
+        return;
+      }
+      const lost = (this.paymentLines || []).some(l => l.terminalLost);
+      if ((this.paymentLines || []).some(l => this.isLineCharged(l))) {
+        if (!window.confirm(this.$t('Pd_Void_Before_Close'))) return;
+        if (!(await this.voidChargedLines())) {
+          // Could not void (device offline, batch closed…): the cashier may
+          // still close; the charge stays listed as charged without a sale.
+          if (!window.confirm(this.$t('Pd_Close_Anyway'))) return;
+        }
+      } else if (lost && !window.confirm(this.$t('Pd_Close_Anyway'))) {
+        return;
+      }
+      this.$refs.paymentModal && this.$refs.paymentModal.hide && this.$refs.paymentModal.hide();
+    },
+    // Voids every line charged on a device; false if one could not be voided.
+    async voidChargedLines() {
+      for (const line of (this.paymentLines || []).filter(l => this.isLineCharged(l))) {
+        if (!(await this.voidLineCharge(line, true))) return false;
+      }
+      return true;
+    },
+    // Leaving / reloading the page with a card charged or a device busy.
+    onTerminalBeforeUnload(e) {
+      if (!this.hasTerminalActivity) return undefined;
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    },
+
     // Keep template hook but delegate to CreatePOS to mirror old logic
     async submitPayment() {
       await this.CreatePOS();
@@ -766,11 +1245,11 @@ export default {
         return axios.post('direct_network_print/' + saleId)
           .then((response) => {
             if (response && response.data && response.data.success) return { ok: true };
-            const message = (response && response.data && response.data.message) || 'Network printer error';
+            const message = (response && response.data && response.data.message) || (this.$t ? this.$t('Network_Printer_Error') : 'Network printer error');
             return { ok: false, configured: true, message };
           })
           .catch((err) => {
-            const message = (err && err.response && err.response.data && err.response.data.message) || (err && err.message) || 'Network printer unreachable';
+            const message = (err && err.response && err.response.data && err.response.data.message) || (err && err.message) || (this.$t ? this.$t('Network_Printer_Unreachable') : 'Network printer unreachable');
             return { ok: false, configured: true, message };
           });
       } catch (e) {
@@ -818,7 +1297,7 @@ export default {
       if (!a) { return; }
       // Custom receipt font (Settings → System → POS Receipt); this popup
       // writes the receipt innerHTML directly into <body>, hence body scope.
-      a.document.write('<html><head><link rel="stylesheet" href="/css/pos_print.css">' + receiptFontHeadTags(posSettings, 'body') + '</head><body>');
+      a.document.write('<html><head><link rel="stylesheet" href="/css/pos_print.css">' + receiptPageHeadTag(posSettings) + receiptFontHeadTags(posSettings, 'body') + '</head><body>');
       a.document.write(divContents);
       a.document.write('</body></html>');
       a.document.close();
@@ -828,8 +1307,9 @@ export default {
       };
       try { window.addEventListener('focus', reloadParent); } catch(e) {}
       try { a.onafterprint = reloadParent; } catch(e) {}
-      // Wait for the custom receipt webfont (if any) before snapshotting.
-      whenPrintFontsReady(a, () => {
+      // Wait for the receipt webfont, the print stylesheet AND the logo /
+      // QR images before snapshotting (see lib/receiptFont whenPrintReady).
+      whenPrintReady(a, () => {
         try { a.focus(); } catch(e) {}
         try { a.print(); } catch(e) { reloadParent(); }
       });
@@ -938,6 +1418,7 @@ export default {
         const payload = {
           client_id: this.clientId,
           seller_id: this.sellerId || undefined,
+          sales_agent_id: this.salesAgentId || undefined,
           warehouse_id: this.warehouseId,
           tax_rate: this.sale && this.sale.tax_rate ? this.sale.tax_rate : 0,
           TaxNet: this.sale && this.sale.TaxNet ? this.sale.TaxNet : 0,
@@ -957,7 +1438,9 @@ export default {
           payments: (this.paymentLines || []).map((l) => ({
             amount: (Number(l.amount) || 0) / this.docRate,
             payment_method_id: l.paymentMethodId,
-            account_id: l.accountId || this.paymentForm.accountId || null
+            // Customer Wallet lines never land in an account.
+            account_id: this.isLineWallet(l) ? null : (l.accountId || this.paymentForm.accountId || null),
+            terminal_transaction_id: this.isLineCharged(l) ? l.terminalTxn.id : undefined
           })),
           send_email: this.sendEmail,
           send_sms: this.sendSMS,
@@ -991,7 +1474,8 @@ export default {
             id: response.data.id,
             payload,
             updated_stock: response.data.updated_stock,
-            server_time: response.data.server_time
+            server_time: response.data.server_time,
+            change: this.changeReturn
           });
           this.$refs.paymentModal && this.$refs.paymentModal.hide && this.$refs.paymentModal.hide();
         } else {
@@ -1002,8 +1486,29 @@ export default {
         this.paymentProcessing = false;
         this.isSubmitting = false;
         if (typeof NProgress !== 'undefined') NProgress.done();
+        if (this.handleUnavailableProducts(e)) return;
         this.makeToast('danger', this.$t ? this.$t('InvalidData') : 'Invalid data', this.$t ? this.$t('Failed') : 'Failed');
       }
+    },
+
+    // The server refused products deleted / marked "Not for sale" since they
+    // were added: say which, close, and let the POS drop those lines (the
+    // totals change, so the cashier re-opens payment). True if handled.
+    handleUnavailableProducts(error) {
+      const data = error && error.response && error.response.data;
+      const ids = data && Array.isArray(data.unavailable_product_ids) ? data.unavailable_product_ids : null;
+      if (!ids || !ids.length) return false;
+      this.makeToast('danger', data.message || (this.$t ? this.$t('InvalidData') : 'Invalid data'), this.$t ? this.$t('Failed') : 'Failed');
+      this.$emit('unavailable-products', ids);
+      const hide = () => { try { this.$refs.paymentModal && this.$refs.paymentModal.hide && this.$refs.paymentModal.hide(); } catch (e) { /* ignore */ } };
+      // The total changes, so a card already charged on a device is voided
+      // first; if that fails the modal stays open so the cashier can retry.
+      if ((this.paymentLines || []).some(l => this.isLineCharged(l))) {
+        this.voidChargedLines().then(ok => { if (ok) hide(); });
+      } else {
+        hide();
+      }
+      return true;
     },
 
     //----------------------------------Create POS (mirror old, with offline queue) ------------------------------\\
@@ -1023,6 +1528,14 @@ export default {
         return;
       }
       // Account selection is optional per line; proceed even if unset
+
+      // POS Devices: every device line must be charged (and still match) first.
+      const terminalIssue = this.terminalLineIssue();
+      if (terminalIssue) {
+        if (typeof NProgress !== 'undefined') NProgress.done();
+        this.makeToast('warning', this.$t(terminalIssue), this.$t('Warning'));
+        return;
+      }
 
       // Validate multi-payment overpay like old POS
       const total = parseFloat(this.totalPaid);
@@ -1078,6 +1591,7 @@ export default {
         return {
           client_id: this.clientId,
           seller_id: this.sellerId || undefined,
+          sales_agent_id: this.salesAgentId || undefined,
           warehouse_id: this.warehouseId,
           tax_rate: this.sale && this.sale.tax_rate ? this.sale.tax_rate : 0,
           TaxNet: this.sale && this.sale.TaxNet ? this.sale.TaxNet : 0,
@@ -1098,7 +1612,8 @@ export default {
           payments: (this.paymentLines || []).map((l) => ({
             amount: (Number(l.amount) || 0) / this.docRate,
             payment_method_id: l.paymentMethodId,
-            account_id: l.accountId || null
+            account_id: this.isLineWallet(l) ? null : (l.accountId || null),
+            terminal_transaction_id: this.isLineCharged(l) ? l.terminalTxn.id : undefined
           })),
           send_email: this.sendEmail,
           send_sms: this.sendSMS,
@@ -1217,7 +1732,8 @@ export default {
             id: response.data.id,
             payload,
             updated_stock: response.data.updated_stock,
-            server_time: response.data.server_time
+            server_time: response.data.server_time,
+            change: this.changeReturn
           });
           this.$refs.paymentModal && this.$refs.paymentModal.hide && this.$refs.paymentModal.hide();
         } else {
@@ -1240,6 +1756,11 @@ export default {
             ? (this.$t('pos.NetworkError') || 'Network error, please try again.')
             : 'Network error, please try again.';
           this.makeToast && this.makeToast('danger', msg, this.$t ? this.$t('Failed') : 'Failed');
+        } else if (this.handleUnavailableProducts(error)) {
+          // handled: message shown, lines dropped by the POS
+        } else if (this.hasTerminalActivity && error.response && error.response.status === 422) {
+          // A device payment was refused by the server: say why.
+          this.makeToast('danger', this.terminalError(error), this.$t ? this.$t('Failed') : 'Failed');
         } else {
           this.makeToast('danger', this.$t ? this.$t('InvalidData') : 'Invalid data', this.$t ? this.$t('Failed') : 'Failed');
         }
@@ -1252,6 +1773,16 @@ export default {
           record = Util.offlinePos.addOfflineSale(payload);
         }
       } catch (e) {}
+      // Not persisted (browser storage full / blocked): the sale exists nowhere,
+      // so keep the modal and cart open and say so instead of "saved offline".
+      if (!record) {
+        const fallback = 'This sale could not be saved offline because the browser storage is full. It was NOT recorded — please try again.';
+        // $t returns the key itself on a tenant not yet re-seeded with it.
+        const translated = this.$t ? this.$t('pos.Offline_Sale_Not_Saved') : '';
+        const msg = translated && translated !== 'pos.Offline_Sale_Not_Saved' ? translated : fallback;
+        this.makeToast && this.makeToast('danger', msg, this.$t ? this.$t('Failed') : 'Failed');
+        return;
+      }
       // Record shadow stock deductions in IndexedDB for this offline sale (best-effort)
       try {
         const offlineId = record && record.id ? record.id : (payload && payload.offline_id) || null;
@@ -1269,7 +1800,8 @@ export default {
         id: null,
         payload,
         offline: true,
-        offlineId: record && record.id ? record.id : null
+        offlineId: record && record.id ? record.id : null,
+        change: this.changeReturn
       });
       this.$refs.paymentModal && this.$refs.paymentModal.hide && this.$refs.paymentModal.hide();
     },
@@ -1324,7 +1856,11 @@ export default {
       const defaultMethodId = this.getDefaultPaymentMethodId();
       const defaultAccountId = this.getDefaultAccountId();
       this.paymentForm.accountId = defaultAccountId;
-      this.paymentLines.push({ amount: Number(this.paymentForm.amountDue || 0), paymentMethodId: defaultMethodId, accountId: defaultAccountId });
+      this.paymentLines.push(this.newLine(Number(this.paymentForm.amountDue || 0), defaultMethodId, defaultAccountId));
+      this.ensureLineTerminal(this.paymentLines[0]);
+      this.loadTerminals();
+      // Fresh wallet balance every time the modal opens (it may have moved since).
+      this.fetchWalletBalance();
       this.paymentNote = '';
       this.saleNote = '';
       this.kitchenAction = 'none';
@@ -2523,6 +3059,86 @@ export default {
   .transaction-info {
     overflow-y: visible;
     max-height: none;
+  }
+}
+
+/* POS Devices: card terminal panel on a payment line */
+.terminal-section {
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #f9fafb;
+
+  &.is-busy,
+  &.is-pending {
+    border-color: #93c5fd;
+    background: #eff6ff;
+  }
+  &.is-approved {
+    border-color: #6ee7b7;
+    background: #ecfdf5;
+  }
+  &.is-declined,
+  &.is-failed,
+  &.is-timeout {
+    border-color: #fca5a5;
+    background: #fef2f2;
+  }
+
+  .terminal-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+
+    svg {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+    }
+  }
+
+  .terminal-name {
+    font-weight: 700;
+    font-size: 13px;
+  }
+
+  .terminal-select {
+    flex: 1 1 160px;
+    min-width: 0;
+  }
+
+  .terminal-installments {
+    flex: 0 1 140px;
+  }
+
+  .terminal-status {
+    font-size: 12px;
+    color: #374151;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    word-break: break-word;
+  }
+
+  .terminal-spinner {
+    border-color: rgba(37, 99, 235, 0.25);
+    border-top-color: #2563eb;
+    flex: 0 0 auto;
+  }
+
+  .terminal-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .terminal-charge-btn {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    color: #fff;
   }
 }
 </style>

@@ -19,8 +19,9 @@ class ProcessScheduledCampaigns extends Command
     public function handle()
     {
         // Marketing tables live in each tenant DB — this must run per tenant,
-        // never on the central connection.
-        foreach (Tenant::where('status', Tenant::STATUS_ACTIVE)->cursor() as $tenant) {
+        // never on the central connection. Only tenants whose plan has the
+        // module are entered: this runs every minute.
+        foreach (Tenant::activeWithFeature('marketing') as $tenant) {
             try {
                 $tenant->run(fn () => $this->processTenant($tenant));
             } catch (\Illuminate\Database\QueryException $e) {
@@ -45,9 +46,24 @@ class ProcessScheduledCampaigns extends Command
             return;
         }
 
+        // Only tenants whose plan has the module are swept, so a campaign that
+        // came due while the plan lapsed waits here. Once more than a day late
+        // it is cancelled, not sent: renewing must not blast every overdue
+        // campaign — some weeks old — in the same minute.
+        $staleBefore = Carbon::now()->subDay();
+        $stale = MarketingCampaign::where('status', 'scheduled')
+            ->whereNotNull('scheduled_at')
+            ->where('scheduled_at', '<', $staleBefore)
+            ->get();
+        foreach ($stale as $campaign) {
+            $campaign->update(['status' => 'cancelled']);
+            Log::info("marketing:process-scheduled cancelled overdue campaign #{$campaign->id}", ['tenant' => $tenant->id, 'scheduled_at' => (string) $campaign->scheduled_at]);
+            $this->info("[{$tenant->id}] Cancelled campaign #{$campaign->id} — more than a day overdue.");
+        }
+
         $campaigns = MarketingCampaign::where('status', 'scheduled')
             ->whereNotNull('scheduled_at')
-            ->where('scheduled_at', '<=', Carbon::now())
+            ->whereBetween('scheduled_at', [$staleBefore, Carbon::now()])
             ->get();
 
         foreach ($campaigns as $campaign) {

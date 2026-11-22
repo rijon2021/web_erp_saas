@@ -16,13 +16,13 @@ document.addEventListener('DOMContentLoaded', function () {
     function confirmAction(text, confirmText) {
         if (typeof Swal === 'undefined') return Promise.resolve({ isConfirmed: confirm(text) });
         return Swal.fire({
-            title: 'Are you sure?',
+            title: __s('are_you_sure'),
             text: text,
             icon: 'question',
             showCancelButton: true,
             confirmButtonColor: '#018A00',
             cancelButtonColor: '#64748b',
-            confirmButtonText: confirmText || 'Yes',
+            confirmButtonText: confirmText || __s('yes'),
             reverseButtons: true,
         });
     }
@@ -52,20 +52,45 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ── Clear resolved ────────────────────────────────
-    var btnClear = document.getElementById('btnClearResolved');
-    if (btnClear) {
-        btnClear.addEventListener('click', function () {
-            var url = btnClear.getAttribute('data-url');
-            confirmAction('Delete all resolved logs? This cannot be undone.', 'Delete').then(function (res) {
-                if (!res.isConfirmed) return;
-                postJson(url).then(function (resp) {
-                    if (resp.ok && resp.data.success) {
-                        toast(resp.data.message || 'Resolved logs cleared.', 'success');
-                        setTimeout(function () { window.location.reload(); }, 700);
-                    } else {
-                        toast((resp.data && resp.data.message) || 'Request failed.', 'error');
-                    }
+    // ── Clear logs (resolved / unresolved / all) ──────
+    var clearDropdown = document.getElementById('clearLogsDropdown');
+    if (clearDropdown) {
+        var clearUrl = clearDropdown.getAttribute('data-url');
+        var clearMessages = {
+            resolved:   __s('log_delete_all'),
+            unresolved: __s('log_clear_unresolved_confirm'),
+            all:        __s('log_clear_all_confirm'),
+        };
+        clearDropdown.querySelectorAll('.btn-clear-logs').forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                if (btn.disabled) return;
+                var scope = btn.getAttribute('data-scope') || 'resolved';
+                var text  = clearMessages[scope] || __s('log_delete_all');
+                var ask = (typeof Swal === 'undefined' || scope !== 'all')
+                    ? confirmAction(text, __s('delete'))
+                    : Swal.fire({
+                        title: __s('are_you_sure'),
+                        text: text,
+                        icon: 'warning',
+                        showCancelButton: true,
+                        confirmButtonColor: '#dc2626',
+                        cancelButtonColor: '#64748b',
+                        confirmButtonText: __s('delete'),
+                        reverseButtons: true,
+                    });
+                ask.then(function (res) {
+                    if (!res.isConfirmed) return;
+                    btn.disabled = true;
+                    postJson(clearUrl, { scope: scope }).then(function (resp) {
+                        if (resp.ok && resp.data.success) {
+                            toast(resp.data.message || __s('logs_cleared'), 'success');
+                            setTimeout(function () { window.location.reload(); }, 700);
+                        } else {
+                            btn.disabled = false;
+                            toast((resp.data && resp.data.message) || __s('request_failed'), 'error');
+                        }
+                    });
                 });
             });
         });
@@ -79,14 +104,14 @@ document.addEventListener('DOMContentLoaded', function () {
             var url    = btn.getAttribute('data-url');
 
             if (action === 'delete') {
-                confirmAction('Delete this log permanently?', 'Delete').then(function (res) {
+                confirmAction(__s('log_delete_confirm'), __s('delete')).then(function (res) {
                     if (!res.isConfirmed) return;
                     postJson(url, null, 'DELETE').then(function (resp) {
                         if (resp.ok && resp.data.success) {
-                            toast(resp.data.message || 'Deleted.', 'success');
+                            toast(resp.data.message || __s('log_deleted'), 'success');
                             setTimeout(function () { window.location.reload(); }, 500);
                         } else {
-                            toast((resp.data && resp.data.message) || 'Delete failed.', 'error');
+                            toast((resp.data && resp.data.message) || __s('delete_failed'), 'error');
                         }
                     });
                 });
@@ -96,12 +121,12 @@ document.addEventListener('DOMContentLoaded', function () {
             if (action === 'recheck') {
                 btn.disabled = true;
                 var originalHtml = btn.innerHTML;
-                btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Checking…';
+                btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> ' + __s('checking');
                 postJson(url).then(function (resp) {
                     btn.disabled = false;
                     btn.innerHTML = originalHtml;
                     var status = resp.data && resp.data.status;
-                    var msg    = (resp.data && resp.data.message) || 'Re-check complete.';
+                    var msg    = (resp.data && resp.data.message) || __s('recheck_done');
                     if (status === 'ok') {
                         toast(msg, 'success');
                         setTimeout(function () { window.location.reload(); }, 900);
@@ -115,9 +140,9 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             var confirmMsg = action === 'resolve'
-                ? 'Mark this log as resolved?'
-                : (action === 'reopen' ? 'Reopen this log?' : 'Confirm action?');
-            var confirmBtn = action === 'resolve' ? 'Resolve' : (action === 'reopen' ? 'Reopen' : 'Yes');
+                ? __s('log_mark_resolved')
+                : (action === 'reopen' ? __s('log_reopen_confirm') : __s('confirm_action'));
+            var confirmBtn = action === 'resolve' ? __s('log_resolve') : (action === 'reopen' ? __s('log_reopen') : __s('yes'));
 
             confirmAction(confirmMsg, confirmBtn).then(function (res) {
                 if (!res.isConfirmed) return;
@@ -126,7 +151,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         toast(resp.data.message || 'Done.', 'success');
                         setTimeout(function () { window.location.reload(); }, 500);
                     } else {
-                        toast((resp.data && resp.data.message) || 'Request failed.', 'error');
+                        toast((resp.data && resp.data.message) || __s('request_failed'), 'error');
                     }
                 });
             });
@@ -162,10 +187,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 btnConfirmResolve.disabled = false;
                 if (resp.ok && resp.data.success) {
                     if (modalInstance) modalInstance.hide();
-                    toast(resp.data.message || 'Resolved.', 'success');
+                    toast(resp.data.message || __s('log_resolved'), 'success');
                     setTimeout(function () { window.location.reload(); }, 600);
                 } else {
-                    toast((resp.data && resp.data.message) || 'Request failed.', 'error');
+                    toast((resp.data && resp.data.message) || __s('request_failed'), 'error');
                 }
             });
         });

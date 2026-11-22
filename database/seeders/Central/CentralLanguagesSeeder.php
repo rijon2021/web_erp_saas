@@ -3,30 +3,48 @@
 namespace Database\Seeders\Central;
 
 use App\Models\Central\CentralLanguage;
+use App\Services\Localization\CentralTranslationManager;
+use App\Support\CentralLanguageCatalog;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Schema;
 
+/**
+ * Runs on setup and on every platform update. Installs the default languages
+ * only on an empty table, so a language the super admin uninstalled, switched
+ * off or made default stays that way across updates. Then syncs the shipped
+ * translations into central_translations.
+ */
 class CentralLanguagesSeeder extends Seeder
 {
     public function run(): void
     {
-        $languages = [
-            ['name' => 'English',    'locale' => 'en', 'flag' => 'gb.svg', 'is_default' => true,  'is_rtl' => false, 'sort_order' => 1],
-            ['name' => 'French',     'locale' => 'fr', 'flag' => 'fr.svg', 'is_default' => false, 'is_rtl' => false, 'sort_order' => 2],
-            ['name' => 'Arabic',     'locale' => 'ar', 'flag' => 'sa.svg', 'is_default' => false, 'is_rtl' => true,  'sort_order' => 3],
-            ['name' => 'Spanish',    'locale' => 'es', 'flag' => 'es.svg', 'is_default' => false, 'is_rtl' => false, 'sort_order' => 4],
-            ['name' => 'Hindi',      'locale' => 'hi', 'flag' => 'in.svg', 'is_default' => false, 'is_rtl' => false, 'sort_order' => 5],
-            ['name' => 'Bengali',    'locale' => 'bn', 'flag' => 'bd.svg', 'is_default' => false, 'is_rtl' => false, 'sort_order' => 6],
-            ['name' => 'Turkish',    'locale' => 'tr', 'flag' => 'tr.svg', 'is_default' => false, 'is_rtl' => false, 'sort_order' => 7],
-            ['name' => 'German',     'locale' => 'de', 'flag' => 'de.svg', 'is_default' => false, 'is_rtl' => false, 'sort_order' => 8],
-            ['name' => 'Portuguese', 'locale' => 'pt', 'flag' => 'pt.svg', 'is_default' => false, 'is_rtl' => false, 'sort_order' => 9],
-            ['name' => 'Urdu',       'locale' => 'ur', 'flag' => 'pk.svg', 'is_default' => false, 'is_rtl' => true,  'sort_order' => 10],
-        ];
+        $hasNativeName = Schema::connection('central')->hasColumn('central_languages', 'native_name');
 
-        foreach ($languages as $lang) {
-            CentralLanguage::updateOrCreate(
-                ['locale' => $lang['locale']],
-                array_merge($lang, ['is_active' => true])
-            );
+        if (! CentralLanguage::exists()) {
+            foreach (CentralLanguageCatalog::DEFAULT_INSTALLED as $i => $locale) {
+                $entry = CentralLanguageCatalog::get($locale);
+                CentralLanguage::create(array_filter([
+                    'name'        => $entry['name'],
+                    'native_name' => $hasNativeName ? $entry['native'] : null,
+                    'locale'      => $locale,
+                    'flag'        => $entry['flag'],
+                    'is_active'   => true,
+                    'is_default'  => $locale === 'en',
+                    'is_rtl'      => $entry['rtl'],
+                    'sort_order'  => $i + 1,
+                ], fn ($v) => $v !== null));
+            }
+        } elseif ($hasNativeName) {
+            // Rows created before native_name existed.
+            foreach (CentralLanguage::whereNull('native_name')->get() as $language) {
+                if ($entry = CentralLanguageCatalog::get($language->locale)) {
+                    $language->update(['native_name' => $entry['native']]);
+                }
+            }
+        }
+
+        if (CentralTranslationManager::ready()) {
+            app(CentralTranslationManager::class)->syncAll();
         }
     }
 }

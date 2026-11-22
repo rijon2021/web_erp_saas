@@ -1,7 +1,7 @@
 /**
- * POS receipt HTML builder — string port of the five receipt layouts rendered
+ * POS receipt HTML builder — string port of the six receipt layouts rendered
  * by PosPage.vue's hidden `#invoice-POS` DOM (Standard / Compact / Detailed /
- * Bilingual / Minimal), selected by `pos_settings.receipt_layout`. Used by
+ * Bilingual / Minimal / Tabular), selected by `pos_settings.receipt_layout`. Used by
  * pages that print a receipt without mounting the POS (e.g. next/sales), so a
  * layout change in Settings → POS Receipt applies everywhere.
  *
@@ -13,9 +13,13 @@
  * (the popup has no Vue refs to mount QR canvases into).
  */
 
+import { uploadUrl } from './uploadUrl';
+import { stripZeroFraction, withCurrency } from './priceFormat';
+import { refBarcodeSvg } from './receiptBarcode';
+
 export function normalizeReceiptLayout(raw) {
   const n = Number(raw) || 1;
-  return [1, 2, 3, 4, 5].includes(n) ? n : 1;
+  return [1, 2, 3, 4, 5, 6].includes(n) ? n : 1;
 }
 
 const esc = v => String(v ?? '')
@@ -23,29 +27,35 @@ const esc = v => String(v ?? '')
   .replace(/"/g, '&quot;');
 
 // Grouped quantity/percent formatter (PosPage.formatNumber): always 2 decimals
-// in receipt templates, en-US separators regardless of price format.
-const qty = (v, d = 2) => {
+// in receipt templates, en-US separators regardless of price format. With the
+// "Hide Zero Decimals" setting a whole number drops its .00 (5.00 -> 5).
+const makeQty = hideZeroDecimals => (v, d = 2) => {
   const n = Number(v);
   const safe = Number.isFinite(n) ? n : 0;
-  return safe.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const s = safe.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  return hideZeroDecimals ? stripZeroFraction(s, '.') : s;
 };
 
 export function buildPosReceiptHtml(opts) {
+  const qty = makeQty(!!opts.hideZeroDecimals);
+  const t = opts.t;          // i18n translate fn
   const {
-    t,                      // i18n translate fn
     sale: s = {},           // data.sale from sales_print_invoice
     setting = {},           // company/receipt header info
     ps = {},                // pos_settings
     symbol = '',
+    currencyPosition = 'before', // settings.currency_position: symbol before/after the amount
     details = [],
     payments = [],
     formatPrice,            // (v) => price string per user settings (no symbol)
     qr = {},                // { zatca: dataUrl|null, invoice: dataUrl|null }
+    fiscal = null,          // AGT / DGI block from sales_print_invoice: { blocks: [{ title, lines[], qr }] }
+    licenseKeys = [],       // License Keys › "Print keys on receipt": [{ product, key, expires_at }]
   } = opts;
 
   const layout = normalizeReceiptLayout(ps.receipt_layout);
   const price = v => formatPrice ? formatPrice(v) : qty(v);
-  const cash = v => (symbol ? `${symbol} ${price(v)}` : price(v));
+  const cash = v => withCurrency(symbol, price(v), currencyPosition);
 
   // Two flag conventions, mirroring PosPage exactly: legacy columns rendered
   // with `!== 0` default ON when absent; the rest are plain truthy checks.
@@ -73,19 +83,34 @@ export function buildPosReceiptHtml(opts) {
   const discountAmt = d => price(Number(d.DiscountNet) * Number(d.quantity));
   const hasImei = d => d.is_imei && d.imei_number != null;
 
+  // Tenant-aware upload URL (images/tenants/<id>/settings/<file>), same as
+  // PosPage's $imgUrl('settings', …) — a bare /images/<file> 404s on a tenant.
   const logo = on('show_logo') && setting.logo
-    ? `<img src="/images/${esc(setting.logo)}" alt width="${Number(ps.logo_size) || 60}" height="${Number(ps.logo_size) || 60}">`
+    ? `<img src="${esc(uploadUrl('settings', setting.logo))}" alt width="${Number(ps.logo_size) || 60}" height="${Number(ps.logo_size) || 60}" onerror="this.onerror=null;this.src='/images/logo-default.png'">`
     : '';
 
-  const qrRow = () => {
+  // withInvoice=false: Layout 6 prints a CODE128 barcode of the ref instead
+  // of the Invoice QR, so only the ZATCA QR stays in this row.
+  const qrRow = (withInvoice = true) => {
     const wantZatca = setting.zatca_enabled && qr.zatca && on('show_zatca_qr');
-    const wantInvoice = on('show_barcode') && s.Ref && qr.invoice;
+    const wantInvoice = withInvoice && on('show_barcode') && s.Ref && qr.invoice;
     if (!wantZatca && !wantInvoice) return '';
     const block = (title, url) => url
       ? `<div class="receipt-qr-block"><div class="receipt-qr-title">${title}</div>
          <div class="receipt-qr-canvas"><img src="${url}" width="100" height="100" alt=""></div></div>`
       : '';
-    return `<div class="receipt-qr-row mt-2">${block('ZATCA QR', wantZatca ? qr.zatca : null)}${block('Invoice QR', wantInvoice ? qr.invoice : null)}</div>`;
+    return `<div class="receipt-qr-row mt-2">${block('ZATCA QR', wantZatca ? qr.zatca : null)}${block(t('Invoice_QR'), wantInvoice ? qr.invoice : null)}</div>`;
+  };
+
+  // AGT (Angola) / DGI (DR Congo) e-invoicing mentions + QR (server-rendered image).
+  const fiscalRow = () => {
+    const blocks = fiscal && Array.isArray(fiscal.blocks) ? fiscal.blocks : [];
+    if (!blocks.length) return '';
+    return `<div class="receipt-fiscal mt-2" style="text-align:center;">${blocks.map(b => `<div class="receipt-fiscal-block" style="margin-bottom:6px;">`
+      + `<div style="font-weight:700;font-size:11px;">${esc(b.title)}</div>`
+      + (b.lines || []).map(l => `<div style="font-size:10px;line-height:1.35;word-break:break-word;">${esc(l)}</div>`).join('')
+      + (b.qr ? `<img src="${esc(b.qr)}" alt="QR" style="width:110px;height:110px;margin-top:4px;">` : '')
+      + `</div>`).join('')}</div>`;
   };
 
   const saleNote = () => s.notes
@@ -93,6 +118,13 @@ export function buildPosReceiptHtml(opts) {
     : '';
   const customerNote = () => set('show_note') && ps.note_customer
     ? `<p class="legal" style="white-space:pre-line;"><strong>${esc(ps.note_customer)}</strong></p>`
+    : '';
+
+  // Warehouse Letterhead: the issuing branch's own invoice footer note.
+  // applyIssuer() puts it on the setting; it is empty when the feature is off
+  // or the branch has no note, and it prints below the customer note.
+  const branchNote = () => setting.issuer_footer
+    ? `<p class="legal receipt-branch-note" style="white-space:pre-line;">${esc(setting.issuer_footer)}</p>`
     : '';
 
   // Payment rows share structure; only classes/formatters differ per layout.
@@ -144,7 +176,7 @@ export function buildPosReceiptHtml(opts) {
   };
 
   const legalcopy = extraClass =>
-    `<div id="legalcopy" class="${extraClass}">${saleNote()}${customerNote()}${qrRow()}</div>`;
+    `<div id="legalcopy" class="${extraClass}">${saleNote()}${customerNote()}${branchNote()}${fiscalRow()}${qrRow()}</div>`;
 
   // ------------------------- Layout 1 — Standard -------------------------
   const layout1 = () => {
@@ -365,10 +397,11 @@ export function buildPosReceiptHtml(opts) {
           <div class="bl4-thanks-en">Thank You For Shopping With Us!</div>
         </div>
         ${set('show_note') && ps.note_customer ? `<div class="bl4-policy">${esc(ps.note_customer)}</div>` : ''}
+        ${setting.issuer_footer ? `<div class="bl4-policy receipt-branch-note">${esc(setting.issuer_footer)}</div>` : ''}
         ${(setting.CompanyPhone || setting.email)
           ? `<div class="bl4-footer-contact">${setting.CompanyPhone ? `<span>${esc(setting.CompanyPhone)}</span>` : ''}${setting.CompanyPhone && setting.email ? '<span> &middot; </span>' : ''}${setting.email ? `<span>${esc(setting.email)}</span>` : ''}</div>`
           : ''}
-        ${qrRow()}
+        ${fiscalRow()}${qrRow()}
       </div>
     </div>`;
   };
@@ -382,7 +415,7 @@ export function buildPosReceiptHtml(opts) {
           <div class="minimal-item-qty">${qty(q)} ${esc(packUnit(d))} &times; ${price(Number(d.total) / q)}</div>
           ${hasPack(d) ? `<div class="minimal-item-qty">(×${esc(d.pack_multiplier)}) = ${qty(q * Number(d.pack_multiplier))} ${pcs(d)}</div>` : ''}
           ${lineDiscount(d) ? `<div class="minimal-item-discount">${t('Discount')} &minus;${discountAmt(d)}</div>` : ''}
-          ${hasImei(d) ? `<div class="minimal-item-qty">IMEI/SN: ${esc(d.imei_number)}</div>` : ''}
+          ${hasImei(d) ? `<div class="minimal-item-qty">${t('IMEI_SN')}: ${esc(d.imei_number)}</div>` : ''}
         </td>
         <td class="minimal-item-total">${price(d.total)}</td></tr>`;
     };
@@ -445,15 +478,143 @@ export function buildPosReceiptHtml(opts) {
       <table class="minimal-totals"><tbody>${totals}</tbody></table>
       ${paymentsTable}
       ${set('show_note') && ps.note_customer ? `<p class="minimal-note" style="white-space:pre-line;">${esc(ps.note_customer)}</p>` : ''}
-      ${qrRow()}
+      ${setting.issuer_footer ? `<p class="minimal-note receipt-branch-note" style="white-space:pre-line;">${esc(setting.issuer_footer)}</p>` : ''}
+      ${fiscalRow()}${qrRow()}
     </div>`;
   };
 
-  switch (layout) {
-    case 2: return layout2();
-    case 3: return layout3();
-    case 4: return layout4();
-    case 5: return layout5();
-    default: return layout1();
-  }
+  // ------------------------- Layout 6 — Tabular --------------------------
+  // Cash/credit invoice style: centred header + ruled document title,
+  // label/value info rows, a fully boxed Description | Qty | Rate | Total
+  // grid, Total Items + bold TOTAL band + Amount Paid / Balance, one line
+  // per payment, Customer / Management signature boxes (Show Signature Line)
+  // and a CODE128 barcode of the invoice ref (Show Barcode, in place of the
+  // Invoice QR). Mirrors PosPage.vue and PosReceipt.vue's demo.
+  const layout6 = () => {
+    const itemCount = details.reduce((sum, d) => sum + (Number(d.quantity) || 0), 0);
+    const line = d => {
+      const q = Number(d.quantity) || 1;
+      return `<tr><td class="r6-desc">
+          <div>${esc(d.name)}</div>
+          ${hasImei(d) ? `<div class="r6-sub">${t('IMEI_SN')}: ${esc(d.imei_number)}</div>` : ''}
+          ${hasPack(d) ? `<div class="r6-sub">(×${esc(d.pack_multiplier)}) = ${qty(q * Number(d.pack_multiplier))} ${pcs(d)}</div>` : ''}
+          ${lineDiscount(d) ? `<div class="r6-sub" style="font-style:italic;">${t('Discount')}: -${discountAmt(d)}</div>` : ''}
+        </td>
+        <td class="r6-c-qty">${qty(q)}${packUnit(d) ? ` <span class="r6-sub">${esc(packUnit(d))}</span>` : ''}</td>
+        <td class="r6-c-rate">${price(Number(d.total) / q)}</td>
+        <td class="r6-c-tot">${price(d.total)}</td></tr>`;
+    };
+    const row = (label, value, cls = '') =>
+      `<tr${cls ? ` class="${cls}"` : ''}><td>${label}</td><td>${value}</td></tr>`;
+    const totals = [
+      row(t('Total_Items'), Number.isInteger(itemCount) ? String(itemCount) : qty(itemCount)),
+      row(t('pos.Subtotal'), cash(shownSubtotal)),
+      on('show_items_tax') && itemsTax > 0
+        ? row(t('TotalProductTax'), `${cash(itemsTax)} (${qty(itemsTaxRate)} %)`) : '',
+      set('show_tax') ? row(t('OrderTax'), `${cash(s.taxe)} (${qty(s.tax_rate)} %)`) : '',
+      set('show_discount')
+        ? row(t('Discount'), isPercentDiscount
+            ? `${qty(s.discount)}% (${cash(manualDiscount)})`
+            : cash(manualDiscount)) : '',
+      set('show_discount') && Number(s.discount_from_points || 0) > 0
+        ? row(t('Discount_from_Points'), cash(s.discount_from_points)) : '',
+      ...(promotions.length
+        ? promotions.map(p => row(
+            `${t('Promotions')} — ${esc(p.name || '')}${p.code ? ` (${esc(p.code)})` : ''}`,
+            `−${cash(p.amount)}`))
+        : (Number(s.promotion_discount || 0) > 0
+            ? [row(`${t('Promotions')}${s.promotion_code ? ` (${esc(s.promotion_code)})` : ''}`, `−${cash(s.promotion_discount)}`)]
+            : [])),
+      set('show_shipping') ? row(t('Shipping'), cash(s.shipping)) : '',
+      row(t('Total'), cash(s.GrandTotal), 'r6-grand'),
+      on('show_paid') ? row(t('Amount_Paid'), cash(s.paid_amount), 'r6-gap') : '',
+      on('show_due') ? row(t('Balance'), cash(Number(s.GrandTotal) - Number(s.paid_amount))) : '',
+      showPrevRow ? row(t('Previous_Dues'), cash(previousDues)) : '',
+      showNetRow ? row(t('Net_Balance'), cash(netBalance)) : '',
+    ].filter(Boolean).join('');
+
+    const meta = [
+      on('show_reference') && s.Ref ? [t('Rcpt_Invoice_No'), s.Ref] : null,
+      on('show_date') ? [t('Rcpt_Date_Time'), s.date] : null,
+      set('show_Warehouse') ? [t('Rcpt_Outlet'), s.warehouse_name] : null,
+      on('show_seller') ? [t('Cashier'), s.seller_name] : null,
+      set('show_customer') ? [t('Customer'), s.client_name] : null,
+    ].filter(Boolean).map(([k, v]) => `<tr><td>${k}:</td><td>${esc(v)}</td></tr>`).join('');
+
+    const pays = paymentsVisible
+      ? `<div class="r6-pay"><div class="r6-pay-title">${t('Payment')}:</div>${payments.map(p =>
+          `<div>${p.payment_method ? esc(p.payment_method.name) : '---'} — ${price(p.montant)}${Number(p.change) > 0 ? ` (${t('Change')}: ${price(p.change)})` : ''}</div>` +
+          (p.notes ? `<div class="r6-sub" style="font-style:italic;white-space:pre-line;">${t('Payment_note')}: ${esc(p.notes)}</div>` : '')
+        ).join('')}</div>`
+      : '';
+
+    const sigs = set('show_signature_line')
+      ? `<table class="r6-sigs"><tbody><tr><td>${t('Customer_Signature')}</td><td>${t('Rcpt_Management')}</td></tr></tbody></table>`
+      : '';
+
+    // A ref CODE128 can't encode (non-Latin characters) yields '' and the
+    // Invoice QR prints instead, as on the other layouts.
+    const barcodeSvg = on('show_barcode') && s.Ref ? refBarcodeSvg(s.Ref) : '';
+    const barcode = barcodeSvg
+      ? `<div class="r6-barcode">${barcodeSvg}<div class="r6-ref">${esc(s.Ref)}</div></div>`
+      : '';
+
+    return `<div class="receipt-layout-6">
+      <div class="r6-head">
+        ${logo ? `<div class="invoice_logo r6-logo">${logo}</div>` : ''}
+        ${on('show_store_name') ? `<div class="r6-store">${esc(setting.CompanyName)}</div>` : ''}
+        <div class="r6-contact">
+          ${set('show_address') ? `<div>${esc(setting.CompanyAdress)}</div>` : ''}
+          ${set('show_phone') ? `<div>${esc(setting.CompanyPhone)}</div>` : ''}
+          ${set('show_email') ? `<div>${esc(setting.email)}</div>` : ''}
+        </div>
+      </div>
+      <div class="r6-title">${t('Rcpt_Cash_Credit_Invoice')}</div>
+      ${meta ? `<table class="r6-meta"><tbody>${meta}</tbody></table>` : ''}
+      <table class="r6-items">
+        <thead><tr>
+          <th class="r6-desc">${t('Description')}</th>
+          <th class="r6-c-qty">${t('Qty')}</th>
+          <th class="r6-c-rate">${t('Rate')} ${esc(symbol)}</th>
+          <th class="r6-c-tot">${t('Total')} ${esc(symbol)}</th>
+        </tr></thead>
+        <tbody>${details.map(line).join('')}</tbody>
+      </table>
+      <table class="r6-totals"><tbody>${totals}</tbody></table>
+      ${pays}
+      ${sigs}
+      ${barcode}
+      <div id="legalcopy" class="r6-legal">${saleNote()}${customerNote()}${branchNote()}${fiscalRow()}${qrRow(!barcodeSvg)}</div>
+    </div>`;
+  };
+
+  // Settings > POS Receipt > Show Signature Line: a blank customer signature
+  // line under every layout (default off; plain truthy flag).
+  const signature = () => set('show_signature_line')
+    ? `<div class="receipt-signature"><div class="receipt-signature-line"></div><div class="receipt-signature-label">${t('Customer_Signature')}</div></div>`
+    : '';
+
+  const body = (() => {
+    switch (layout) {
+      case 2: return layout2();
+      case 3: return layout3();
+      case 4: return layout4();
+      case 5: return layout5();
+      case 6: return layout6();
+      default: return layout1();
+    }
+  })();
+
+  // Software license keys sold on this sale (only sent when the setting is on).
+  const licenses = () => (Array.isArray(licenseKeys) && licenseKeys.length)
+    ? `<div class="receipt-license-keys" style="margin-top:6px;padding-top:4px;border-top:1px dashed #000;">`
+      + `<div style="font-weight:700;font-size:11px;text-align:center;">${t('LicK_Receipt_Title')}</div>`
+      + licenseKeys.map(k => `<div style="font-size:10px;margin-top:3px;word-break:break-all;"><div>${esc(k.product)}</div>`
+        + `<div style="font-family:monospace;font-weight:700;font-size:11px;">${esc(k.key)}</div>`
+        + (k.expires_at ? `<div>${t('LicK_Valid_Until')}: ${esc(k.expires_at)}</div>` : '') + `</div>`).join('')
+      + `</div>`
+    : '';
+
+  // Layout 6 draws its own Customer / Management signature boxes.
+  return body + licenses() + (layout === 6 ? '' : signature());
 }

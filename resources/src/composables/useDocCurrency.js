@@ -23,7 +23,7 @@ export function useDocCurrency() {
     const auth = useAuthStore();
     // moneyBase, not money: document forms must not follow the report pages'
     // display-currency selector — base documents always render in base.
-    const { moneyBase, number } = useFormat();
+    const { moneyBase, number, withSymbol } = useFormat();
 
     // Module toggle AND the 'multi_currency' permission — users without it
     // never see the picker and their documents stay in the base currency.
@@ -79,7 +79,7 @@ export function useDocCurrency() {
     function docMoney(v, dec) {
         if (isBase.value) return moneyBase(v, dec);
         const formatted = number(toDoc(v), dec);
-        return symbol.value ? `${symbol.value} ${formatted}` : formatted;
+        return withSymbol(symbol.value, formatted);
     }
 
     /** Adopt the currency snapshot stored on a document being edited. */

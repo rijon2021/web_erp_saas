@@ -61,7 +61,7 @@ class ServiceJobPaymentController extends BaseController
             'date' => 'required|date',
             'montant' => 'required|numeric|min:0.01',
             'change' => 'nullable|numeric|min:0',
-            'payment_method_id' => 'nullable|integer|exists:payment_methods,id',
+            'payment_method_id' => ['nullable', 'integer', 'exists:payment_methods,id', \App\Models\PaymentMethod::notCustomerWalletRule()],
             'account_id' => 'nullable|integer|exists:accounts,id',
             'payment_kind' => 'nullable|string|in:deposit,payment,refund',
             'notes' => 'nullable|string',
@@ -69,32 +69,27 @@ class ServiceJobPaymentController extends BaseController
 
         $job = ServiceJob::whereNull('deleted_at')->findOrFail($serviceJobId);
 
+        // No try/catch inside the closure: returning from it COMMITS whatever
+        // was already written (payment row + balance) while reporting failure.
+        // Letting the exception escape rolls the whole payment back.
+        // (Account::adjustBalance is an atomic increment, so no row lock needed.)
         DB::transaction(function () use ($validated, $job) {
-            try {
-                ServiceJobPayment::create([
-                    'Ref' => $this->getNumberOrder(),
-                    'service_job_id' => $job->id,
-                    'user_id' => Auth::id(),
-                    'date' => $validated['date'],
-                    'montant' => $validated['montant'],
-                    'change' => $validated['change'] ?? 0,
-                    'payment_method_id' => $validated['payment_method_id'] ?? null,
-                    'account_id' => $validated['account_id'] ?? null,
-                    'payment_kind' => $validated['payment_kind'] ?? 'payment',
-                    'notes' => $validated['notes'] ?? null,
-                ]);
+            ServiceJobPayment::create([
+                'Ref' => $this->getNumberOrder(),
+                'service_job_id' => $job->id,
+                'user_id' => Auth::id(),
+                'date' => $validated['date'],
+                'montant' => $validated['montant'],
+                'change' => $validated['change'] ?? 0,
+                'payment_method_id' => $validated['payment_method_id'] ?? null,
+                'account_id' => $validated['account_id'] ?? null,
+                'payment_kind' => $validated['payment_kind'] ?? 'payment',
+                'notes' => $validated['notes'] ?? null,
+            ]);
 
-                if (! empty($validated['account_id'])) {
-                    $account = Account::find($validated['account_id']);
-                    if ($account) {
-                        $account->update(['balance' => $account->balance + $validated['montant']]);
-                    }
-                }
+            Account::adjustBalance($validated['account_id'] ?? null, $validated['montant']);
 
-                app(ServiceJobController::class)->recalcTotals($job->fresh());
-            } catch (Exception $e) {
-                return response()->json(['message' => $e->getMessage()], 500);
-            }
+            app(ServiceJobController::class)->recalcTotals($job->fresh());
         }, 10);
 
         return response()->json(['success' => true], 200);
@@ -109,7 +104,7 @@ class ServiceJobPaymentController extends BaseController
             'date' => 'required|date',
             'montant' => 'required|numeric|min:0.01',
             'change' => 'nullable|numeric|min:0',
-            'payment_method_id' => 'nullable|integer|exists:payment_methods,id',
+            'payment_method_id' => ['nullable', 'integer', 'exists:payment_methods,id', \App\Models\PaymentMethod::notCustomerWalletRule()],
             'account_id' => 'nullable|integer|exists:accounts,id',
             'payment_kind' => 'nullable|string|in:deposit,payment,refund',
             'notes' => 'nullable|string',
@@ -122,12 +117,7 @@ class ServiceJobPaymentController extends BaseController
 
         DB::transaction(function () use ($validated, $job, $payment) {
             // Reverse old account balance
-            if ($payment->account_id) {
-                $oldAccount = Account::find($payment->account_id);
-                if ($oldAccount) {
-                    $oldAccount->update(['balance' => $oldAccount->balance - $payment->montant]);
-                }
-            }
+            Account::adjustBalance($payment->account_id, -$payment->montant);
 
             $payment->update([
                 'date' => $validated['date'],
@@ -140,12 +130,7 @@ class ServiceJobPaymentController extends BaseController
             ]);
 
             // Apply new account balance
-            if (! empty($validated['account_id'])) {
-                $newAccount = Account::find($validated['account_id']);
-                if ($newAccount) {
-                    $newAccount->update(['balance' => $newAccount->balance + $validated['montant']]);
-                }
-            }
+            Account::adjustBalance($validated['account_id'] ?? null, $validated['montant']);
 
             app(ServiceJobController::class)->recalcTotals($job->fresh());
         }, 10);
@@ -164,12 +149,7 @@ class ServiceJobPaymentController extends BaseController
             ->findOrFail($id);
 
         DB::transaction(function () use ($job, $payment) {
-            if ($payment->account_id) {
-                $account = Account::find($payment->account_id);
-                if ($account) {
-                    $account->update(['balance' => $account->balance - $payment->montant]);
-                }
-            }
+            Account::adjustBalance($payment->account_id, -$payment->montant);
 
             $payment->update(['deleted_at' => Carbon::now()]);
             app(ServiceJobController::class)->recalcTotals($job->fresh());

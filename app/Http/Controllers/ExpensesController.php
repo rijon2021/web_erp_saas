@@ -59,7 +59,7 @@ class ExpensesController extends BaseController
             });
 
             if (! $is_all_warehouses) {
-                $Sales->whereIn('warehouse_id', $warehouse_ids);
+                $Expenses->whereIn('warehouse_id', $warehouse_ids);
             }
 
         // Multiple Filter
@@ -124,7 +124,7 @@ class ExpensesController extends BaseController
 
         $Expenses_category = ExpenseCategory::where('deleted_at', '=', null)->get(['id', 'name']);
         $accounts = Account::where('deleted_at', '=', null)->get(['id', 'account_name']);
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->exceptCustomerWallet()->where('deleted_at', '=', null)->get(['id', 'name']);
 
         // get warehouses assigned to user
         $user_auth = auth()->user();
@@ -174,13 +174,7 @@ class ExpensesController extends BaseController
                 'amount' => $request['expense']['amount'],
             ]);
 
-            $account = Account::find($request['expense']['account_id']);
-
-            if ($account) {
-                $account->update([
-                    'balance' => $account->balance - $request['expense']['amount'],
-                ]);
-            }
+            Account::adjustBalance($request['expense']['account_id'], -$request['expense']['amount']);
 
         }, 10);
 
@@ -214,7 +208,7 @@ class ExpensesController extends BaseController
         $expense = Expense::findOrFail($expenseId);
 
         $request->validate([
-            'documents.*' => 'required|file|max:10240', // Max 10MB per file
+            'documents.*' => 'required|file|mimes:jpg,jpeg,png,webp,pdf,doc,docx,xls,xlsx,csv,txt|max:10240', // Max 10MB per file
         ]);
 
         $uploadedDocuments = [];
@@ -226,13 +220,20 @@ class ExpensesController extends BaseController
                 mkdir($uploadPath, 0755, true);
             }
 
-            foreach ($request->file('documents') as $file) {
+            // Refuse the whole batch before writing anything if one file is not an allowed type
+            $extensions = [];
+            foreach ($request->file('documents') as $i => $file) {
+                $extensions[$i] = \App\Support\SafeUpload::documentExtension($file, 'documents');
+            }
+
+            foreach ($request->file('documents') as $i => $file) {
                 // Capture metadata BEFORE moving the file (tmp file is still readable)
-                $originalName = $file->getClientOriginalName();
+                $originalName = \App\Support\SafeUpload::displayName($file);
                 $size = $file->getSize();
                 $mimeType = $file->getMimeType();
 
-                $filename = time() . '_' . Str::random(10) . '_' . $originalName;
+                // Never reuse the client name on disk: it decides how public/ serves the file
+                $filename = \App\Support\SafeUpload::name($extensions[$i], time() . '_');
 
                 // Move file to public/images/expense_documents
                 $file->move($uploadPath, $filename);
@@ -313,8 +314,11 @@ class ExpensesController extends BaseController
             ->update(['deleted_at' => Carbon::now()]);
 
         // Optionally delete the physical file
-        $filePath = public_path($document->path);
-        if (file_exists($filePath)) {
+        // Only delete files that really live under public/images — the stored
+        // path is server-written, but keep the unlink() contained regardless.
+        $filePath = realpath(public_path($document->path));
+        $imagesRoot = realpath(public_path('images'));
+        if ($filePath && $imagesRoot && str_starts_with($filePath, $imagesRoot . DIRECTORY_SEPARATOR) && is_file($filePath)) {
             unlink($filePath);
         }
 
@@ -364,15 +368,9 @@ class ExpensesController extends BaseController
                 'expense.payment_method_id' => 'required',
             ]);
 
-            $account = Account::find($expense->account_id);
+            Account::adjustBalance($expense->account_id, $expense->amount);
 
-            if ($account) {
-                $account->update([
-                    'balance' => $account->balance + $expense->amount,
-                ]);
-            }
-
-            Expense::whereId($id)->update([
+            $expense->update([
                 'date' => $request['expense']['date'],
                 'payment_method_id' => $request['expense']['payment_method_id'],
                 'warehouse_id' => $request['expense']['warehouse_id'],
@@ -382,12 +380,7 @@ class ExpensesController extends BaseController
                 'amount' => $request['expense']['amount'],
             ]);
 
-            $account = Account::find($request['expense']['account_id']);
-            if ($account) {
-                $account->update([
-                    'balance' => $account->balance - $request['expense']['amount'],
-                ]);
-            }
+            Account::adjustBalance($request['expense']['account_id'], -$request['expense']['amount']);
 
         }, 10);
 
@@ -415,19 +408,11 @@ class ExpensesController extends BaseController
             $this->authorizeForUser($request->user('api'), 'check_record', $expense);
         }
 
-        Expense::whereId($id)->update([
+        $expense->update([
             'deleted_at' => Carbon::now(),
         ]);
 
-        $account = Account::where('id', $expense->account_id)->exists();
-
-        if ($account) {
-            // Account exists, perform the update
-            $account = Account::find($expense->account_id);
-            $account->update([
-                'balance' => $account->balance + $expense->amount,
-            ]);
-        }
+        Account::adjustBalance($expense->account_id, $expense->amount);
 
         return response()->json(['success' => true]);
     }
@@ -455,19 +440,11 @@ class ExpensesController extends BaseController
                 // Check If User->id === expense->id
                 $this->authorizeForUser($request->user('api'), 'check_record', $expense);
             }
-            Expense::whereId($expense_id)->update([
+            $expense->update([
                 'deleted_at' => Carbon::now(),
             ]);
 
-            $account = Account::where('id', $expense->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($expense->account_id);
-                $account->update([
-                    'balance' => $account->balance + $expense->amount,
-                ]);
-            }
+            Account::adjustBalance($expense->account_id, $expense->amount);
         }
 
         return response()->json(['success' => true]);
@@ -515,7 +492,7 @@ class ExpensesController extends BaseController
 
         $Expenses_category = ExpenseCategory::where('deleted_at', '=', null)->get(['id', 'name']);
         $accounts = Account::where('deleted_at', '=', null)->get(['id', 'account_name']);
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->exceptCustomerWallet()->where('deleted_at', '=', null)->get(['id', 'name']);
 
         return response()->json([
             'Expenses_category' => $Expenses_category,
@@ -599,7 +576,7 @@ class ExpensesController extends BaseController
 
         $Expenses_category = ExpenseCategory::where('deleted_at', '=', null)->get(['id', 'name']);
         $accounts = Account::where('deleted_at', '=', null)->get(['id', 'account_name']);
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->exceptCustomerWallet()->where('deleted_at', '=', null)->get(['id', 'name']);
 
         return response()->json([
             'expense' => $data,

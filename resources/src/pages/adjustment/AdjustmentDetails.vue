@@ -7,6 +7,7 @@
             <template #icon><ArrowLeftOutlined /></template>
             {{ $t('Back') }}
           </a-button>
+          <AuditHistoryButton type="adjustment" />
           <a-button :loading="downloadingPdf" @click="downloadPdf">
             <template #icon><FilePdfOutlined /></template>
             {{ $t('DownloadPdf') }}
@@ -49,6 +50,7 @@
             <template v-if="column.key === 'product'">
               <div style="font-weight: 500">{{ record.name }}</div>
               <div class="muted">{{ record.code }}</div>
+              <div v-if="(record.serial_numbers || []).length" class="muted">{{ $t('SN') }}: {{ record.serial_numbers.join(', ') }}</div>
               <div v-if="record.is_batch_tracked && (record.batches || []).length">
                 <a-tag v-for="(b, i) in record.batches" :key="i" style="margin-top: 2px">
                   {{ b.batch_number || b.batch_no || b }}
@@ -81,6 +83,7 @@ import {
   ArrowLeftOutlined, EditOutlined, FilePdfOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import AuditHistoryButton from '../../components/AuditHistoryButton.vue';
 import { useFormat } from '../../composables/useFormat';
 import { useAuthStore } from '../../stores/auth';
 import http from '../../lib/http';

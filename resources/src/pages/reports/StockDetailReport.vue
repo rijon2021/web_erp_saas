@@ -57,6 +57,7 @@
           :endpoint="pane.endpoint" :rows-key="pane.rowsKey" row-key="Ref"
           :columns="pane.columns" :extra-params="{ id }" :title="titleFor(pane.label)"
           :sums="pane.sums"
+          :exportable="auth.canExportProducts"
         >
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'Ref' && pane.link">
@@ -94,10 +95,12 @@ import ReportTab from '../../components/ReportTab.vue';
 import ViewCurrencySelect from '../../components/ViewCurrencySelect.vue';
 import { useFormat } from '../../composables/useFormat';
 import http from '../../lib/http';
+import { useAuthStore } from '../../stores/auth';
 
 const { t } = useI18n();
 const { money, number } = useFormat();
 const route = useRoute();
+const auth = useAuthStore();
 const id = route.params.id;
 
 const tab = ref('sales');

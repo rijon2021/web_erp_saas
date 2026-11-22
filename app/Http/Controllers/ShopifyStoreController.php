@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\Shopify\ShopifySyncJob;
 use App\Models\ShopifyLink;
 use App\Models\ShopifyLog;
 use App\Models\ShopifyStore;
@@ -623,6 +624,9 @@ class ShopifyStoreController extends BaseController
             'base_path' => base_path(),
             'sync' => 'php artisan shopify:sync'.$scope,
             'queue' => 'php artisan queue:work database --once --queue=webhooks',
+            // The worker for syncs started from the Sync Centre (ShopifySyncJob).
+            'manual' => 'php artisan queue:work database --queue='.ShopifySyncJob::QUEUE
+                .' --stop-when-empty --max-time=55 --timeout=600',
         ];
     }
 }

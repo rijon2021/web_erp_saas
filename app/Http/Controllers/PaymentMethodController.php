@@ -112,6 +112,29 @@ class PaymentMethodController extends BaseController
         return response()->json(['success' => true]);
     }
 
+    // -------------- Flag / unflag as physical cash ---------------\\
+
+    /**
+     * Separate from update() for the same reason as setActive(): the default
+     * methods can't be renamed, but which of them counts as cash is a tenant
+     * decision. Drives the cash register close — a method flagged here is
+     * expected to be in the drawer at the end of the shift.
+     */
+    public function setCash(Request $request, $id)
+    {
+        $this->authorizeForUser($request->user('api'), 'update', PaymentMethod::class);
+
+        request()->validate([
+            'is_cash' => 'required|boolean',
+        ]);
+
+        PaymentMethod::whereId($id)->update([
+            'is_cash' => $request->boolean('is_cash'),
+        ]);
+
+        return response()->json(['success' => true]);
+    }
+
     // -------------- Remove PaymentMethod ---------------\\
 
     public function destroy(Request $request, $id)

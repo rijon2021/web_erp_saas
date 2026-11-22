@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHeader title="Departments" :breadcrumb="['Hospital', 'Departments']">
+    <PageHeader :title="$t('Hm_Departments')" :breadcrumb="[$t('Hm_Hospital'), $t('Hm_Departments')]">
       <template #actions>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
@@ -12,12 +12,12 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search name, code or location…"
+          v-model:value="crud.search.value" :placeholder="$t('Hm_Search_Department_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
-          v-model:value="filters.active" class="tb-item" allow-clear placeholder="All"
-          :options="[{ value: '1', label: 'Active' }, { value: '0', label: 'Inactive' }]"
+          v-model:value="filters.active" class="tb-item" allow-clear :placeholder="$t('Hm_All')"
+          :options="[{ value: '1', label: $t('Hm_Active') }, { value: '0', label: $t('Hm_Inactive') }]"
           @change="crud.reload"
         />
       </div>
@@ -35,13 +35,13 @@
         </template>
         <template v-else-if="column.key === 'counts'">
           <a-space :size="4">
-            <a-tag>{{ record.doctors_count }} doctors</a-tag>
-            <a-tag>{{ record.wards_count }} wards</a-tag>
+            <a-tag>{{ record.doctors_count }} {{ $t('Hm_Doctors_Lc') }}</a-tag>
+            <a-tag>{{ record.wards_count }} {{ $t('Hm_Wards_Lc') }}</a-tag>
           </a-space>
         </template>
         <template v-else-if="column.key === 'is_active'">
           <a-tag :color="record.is_active ? 'success' : 'default'">
-            {{ record.is_active ? 'Active' : 'Inactive' }}
+            {{ record.is_active ? $t('Hm_Active') : $t('Hm_Inactive') }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'actions'">
@@ -62,29 +62,29 @@
     </DataTable>
 
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit department' : 'New department'" :width="560"
+      :open="formOpen" :title="editing ? $t('Hm_Edit_Department') : $t('Hm_New_Department')" :width="560"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="16">
-            <a-form-item label="Name *" name="name">
-              <a-input v-model:value="form.name" placeholder="e.g. Cardiology" allow-clear />
+            <a-form-item :label="$t('Name') + ' *'" name="name">
+              <a-input v-model:value="form.name" :placeholder="$t('Hm_Department_Name_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Code">
-              <a-input v-model:value="form.code" placeholder="e.g. CARD" allow-clear />
+            <a-form-item :label="$t('Code')">
+              <a-input v-model:value="form.code" :placeholder="$t('Hm_Example_Value', { value: 'CARD' })" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Location">
-              <a-input v-model:value="form.location" placeholder="e.g. Block B, 2nd floor" allow-clear />
+            <a-form-item :label="$t('Hm_Location')">
+              <a-input v-model:value="form.location" :placeholder="$t('Hm_Location_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Extension / phone">
+            <a-form-item :label="$t('Hm_Extension_Phone')">
               <a-input v-model:value="form.phone" allow-clear />
             </a-form-item>
           </a-col>
@@ -95,7 +95,7 @@
           </a-col>
           <a-col :span="24">
             <a-form-item style="margin-bottom: 0">
-              <a-checkbox v-model:checked="form.is_active">Active</a-checkbox>
+              <a-checkbox v-model:checked="form.is_active">{{ $t('Hm_Active') }}</a-checkbox>
             </a-form-item>
           </a-col>
         </a-row>
@@ -128,12 +128,12 @@ const crud = useCrudTable('hospital/departments', {
 });
 
 const columns = computed(() => [
-  { title: 'Department', key: 'name', dataIndex: 'name', sorter: true },
-  { title: 'Code', key: 'code', dataIndex: 'code', sorter: true, width: 120 },
-  { title: 'Location', dataIndex: 'location', key: 'location', width: 200 },
-  { title: 'Phone', dataIndex: 'phone', key: 'phone', width: 140 },
-  { title: 'Contains', key: 'counts', width: 200 },
-  { title: 'Status', key: 'is_active', dataIndex: 'is_active', sorter: true, width: 110 },
+  { title: t('Hm_Department'), key: 'name', dataIndex: 'name', sorter: true },
+  { title: t('Code'), key: 'code', dataIndex: 'code', sorter: true, width: 120 },
+  { title: t('Hm_Location'), dataIndex: 'location', key: 'location', width: 200 },
+  { title: t('Phone'), dataIndex: 'phone', key: 'phone', width: 140 },
+  { title: t('Hm_Contains'), key: 'counts', width: 200 },
+  { title: t('Status'), key: 'is_active', dataIndex: 'is_active', sorter: true, width: 110 },
   { title: '', key: 'actions', width: 90 },
 ]);
 

@@ -49,9 +49,9 @@
               <a-input-number v-model:value="form.total_cycles" :min="1" style="width: 100%">
                 <template #addonAfter>
                   <a-select v-model:value="form.cycle_type" style="width: 100px">
-                    <a-select-option value="monthly">Months</a-select-option>
-                    <a-select-option value="weekly">Weeks</a-select-option>
-                    <a-select-option value="yearly">Years</a-select-option>
+                    <a-select-option value="monthly">{{ $t('Months') }}</a-select-option>
+                    <a-select-option value="weekly">{{ $t('Sbs_Weeks') }}</a-select-option>
+                    <a-select-option value="yearly">{{ $t('Years') }}</a-select-option>
                   </a-select>
                 </template>
               </a-input-number>
@@ -61,16 +61,16 @@
             <a-form-item name="billing_cycle">
               <template #label>
                 {{ $t('Billing_Cycle') }} *
-                <a-tooltip title="How often the user pays (e.g., monthly, weekly, yearly)">
+                <a-tooltip :title="$t('Sbs_Billing_Cycle_Hint')">
                   <QuestionCircleOutlined style="margin-left: 4px; color: #1677ff" />
                 </a-tooltip>
               </template>
               <a-select
                 v-model:value="form.billing_cycle"
                 :options="[
-                  { label: 'Monthly', value: 'monthly' },
-                  { label: 'Weekly', value: 'weekly' },
-                  { label: 'Yearly', value: 'yearly' },
+                  { label: $t('Monthly'), value: 'monthly' },
+                  { label: $t('Sbs_Weekly'), value: 'weekly' },
+                  { label: $t('Yearly'), value: 'yearly' },
                 ]"
               />
             </a-form-item>

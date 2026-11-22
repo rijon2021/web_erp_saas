@@ -2,6 +2,8 @@
 
 export const SERIAL_STATUSES = [
     'available', 'sold', 'returned_customer', 'returned_supplier', 'damaged', 'reserved',
+    // Set by adjustments: assembled into a kit (combo) / written off.
+    'in_kit', 'written_off',
 ];
 
 export function serialStatusColor(status) {
@@ -12,6 +14,8 @@ export function serialStatusColor(status) {
         returned_supplier: 'warning',
         damaged: 'error',
         reserved: 'default',
+        in_kit: 'purple',
+        written_off: 'error',
     };
     return map[status] || 'default';
 }

@@ -271,6 +271,8 @@
   .ty-cart-btn.is-pre { background: #ffe6da; color: #e2703a; }
   .ty-card .js-add-status { font-size: 11px; color: #2f9e6e; min-height: 14px; }
   .ty-card-stock { font-size: 11.5px; color: var(--ty-muted); font-weight: 600; }
+  .ty-card-foot.is-quote { flex-wrap: wrap; }
+  .ty-card-foot .js-request-quote { flex: 1 1 100%; height: auto; min-height: 36px; padding: 6px 12px; font-size: 12.5px; line-height: 1.25; white-space: normal; text-align: center; }
 
   /* ---------- Trust band ---------- */
   .ty-trust { position: relative; display: grid; grid-template-columns: 1fr; gap: 14px; padding: 22px 26px; border-radius: 24px; background: var(--ty-accent); color: #fff; }
@@ -278,11 +280,11 @@
   @media (min-width: 640px) { .ty-trust { grid-template-columns: repeat(2, 1fr); } }
   @media (min-width: 1024px) { .ty-trust { grid-template-columns: repeat(var(--ty-trust-cols, 4), 1fr); padding: 26px 34px; } }
   .ty-trust-item { display: flex; align-items: center; gap: 14px; position: relative; }
-  @media (min-width: 1024px) { .ty-trust-item + .ty-trust-item::before { content: ''; position: absolute; inset-inline-start: -18px; top: 6px; bottom: 6px; width: 1px; background: rgba(255,255,255,.35); } }
+  @media (min-width: 1024px) { .ty-trust-item + .ty-trust-item::before { content: ''; position: absolute; inset-inline-start: -7.5px; top: 6px; bottom: 6px; width: 1px; background: rgba(255,255,255,.35); } }
   .ty-trust-icon { width: 46px; height: 46px; flex-shrink: 0; display: grid; place-items: center; }
   .ty-trust-icon svg { width: 34px; height: 34px; stroke-width: 1.5; }
-  .ty-trust-item strong { display: block; font-size: 15px; font-weight: 800; }
-  .ty-trust-item span { display: block; font-size: 12.5px; opacity: .9; font-weight: 600; }
+  .ty-trust-item > div > strong { display: block; font-size: 15px; font-weight: 800; }
+  .ty-trust-item > div > span { display: block; font-size: 12.5px; opacity: .9; font-weight: 600; }
 
   /* ---------- Newsletter ---------- */
   .ty-newsletter { position: relative; display: grid; grid-template-columns: 1fr; gap: 16px; align-items: center; padding: 26px; border-radius: 26px; background: var(--ty-yellow-soft); overflow: hidden; }

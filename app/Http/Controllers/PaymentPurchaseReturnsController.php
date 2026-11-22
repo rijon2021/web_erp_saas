@@ -11,6 +11,8 @@ use App\Models\PurchaseReturn;
 use App\Models\Role;
 use App\Models\Setting;
 use App\Models\sms_gateway;
+use App\Services\SupplierWallet\SupplierWalletService;
+use App\Services\SupplierWallet\WalletException;
 use App\utils\helpers;
 use ArPHP\I18N\Arabic;
 use Carbon\Carbon;
@@ -126,7 +128,8 @@ class PaymentPurchaseReturnsController extends BaseController
             $item['Ref_return'] = $Payment['PurchaseReturn']->Ref;
             $item['purchase_return_id'] = $Payment['PurchaseReturn']->id;
             $item['provider_name'] = $Payment['PurchaseReturn']['provider']?->name ?? '---';
-            $item['payment_method'] = $Payment['payment_method']?->name ?? '---';
+            $item['payment_method'] = ! empty($Payment->wallet_transaction_id) ? 'Supplier Wallet' : ($Payment['payment_method']?->name ?? '---');
+            $item['wallet_transaction_id'] = $Payment->wallet_transaction_id ?? null;
             $item['montant'] = $Payment->montant;
             $item['account_name'] = $Payment['account'] ? $Payment['account']->account_name : '---';
             $item['user_name'] = $Payment['user'] ? $Payment['user']->username : '---';
@@ -135,7 +138,7 @@ class PaymentPurchaseReturnsController extends BaseController
 
         $suppliers = Provider::where('deleted_at', '=', null)->get(['id', 'name']);
         $purchase_returns = PurchaseReturn::get(['Ref', 'id']);
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->exceptCustomerWallet()->where('deleted_at', '=', null)->get(['id', 'name']);
 
         return response()->json([
             'totalRows' => $totalRows,
@@ -155,63 +158,84 @@ class PaymentPurchaseReturnsController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'create', PaymentPurchaseReturns::class);
 
+        // to_wallet=1: the supplier settles the return as wallet credit
+        // (a credit note we can spend on later purchases) instead of cash.
+        $toWallet = SupplierWalletService::wantsWallet($request);
+
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $toWallet ? 'nullable' : $this->paymentAccountRule()]);
+
         if ($request['montant'] > 0) {
-            \DB::transaction(function () use ($request) {
-                $user = Auth::user();
-                // New way: Check user's record_view field (user-level boolean)
-                // Backward compatibility: If record_view is null, fall back to role permission check
-                $view_records = $user->hasRecordView();
-                $PurchaseReturn = PurchaseReturn::findOrFail($request['purchase_return_id']);
+            try {
+                \DB::transaction(function () use ($request, $toWallet) {
+                    $user = Auth::user();
+                    // New way: Check user's record_view field (user-level boolean)
+                    // Backward compatibility: If record_view is null, fall back to role permission check
+                    $view_records = $user->hasRecordView();
+                    $PurchaseReturn = PurchaseReturn::findOrFail($request['purchase_return_id']);
 
-                // Check If User Has Permission view All Records
-                // Warehouse half of the same rule: record_view says whose documents,
-                // the assigned warehouses say which warehouses they may come from.
-                $this->abortIfDocumentWarehouseDenied($PurchaseReturn);
+                    // Check If User Has Permission view All Records
+                    // Warehouse half of the same rule: record_view says whose documents,
+                    // the assigned warehouses say which warehouses they may come from.
+                    $this->abortIfDocumentWarehouseDenied($PurchaseReturn);
 
-                if (! $view_records) {
-                    // Check If User->id === purchase return->id
-                    $this->authorizeForUser($request->user('api'), 'check_record', $PurchaseReturn);
-                }
+                    if (! $view_records) {
+                        // Check If User->id === purchase return->id
+                        $this->authorizeForUser($request->user('api'), 'check_record', $PurchaseReturn);
+                    }
 
-                $total_paid = $PurchaseReturn->paid_amount + $request['montant'];
-                $due = $PurchaseReturn->GrandTotal - $total_paid;
+                    $total_paid = $PurchaseReturn->paid_amount + $request['montant'];
+                    $due = $PurchaseReturn->GrandTotal - $total_paid;
 
-                if ($due === 0.0 || $due < 0.0) {
-                    $payment_statut = 'paid';
-                } elseif ($due !== $PurchaseReturn->GrandTotal) {
-                    $payment_statut = 'partial';
-                } elseif ($due === $PurchaseReturn->GrandTotal) {
-                    $payment_statut = 'unpaid';
-                }
+                    if ($due === 0.0 || $due < 0.0) {
+                        $payment_statut = 'paid';
+                    } elseif ($due !== $PurchaseReturn->GrandTotal) {
+                        $payment_statut = 'partial';
+                    } elseif ($due === $PurchaseReturn->GrandTotal) {
+                        $payment_statut = 'unpaid';
+                    }
 
-                PaymentPurchaseReturns::create([
-                    'purchase_return_id' => $request['purchase_return_id'],
-                    'account_id' => $request['account_id'] ? $request['account_id'] : null,
-                    'Ref' => $this->getNumberOrder(),
-                    'date' => $request['date'],
-                    'payment_method_id' => $request['payment_method_id'],
-                    'montant' => $request['montant'],
-                    'change' => $request['change'],
-                    'notes' => $request['notes'],
-                    'user_id' => Auth::user()->id,
-                ]);
+                    $ref = $this->getNumberOrder();
+                    $walletTxId = null;
+                    if ($toWallet) {
+                        $walletTxId = app(SupplierWalletService::class)->creditFromReturn(
+                            (int) $PurchaseReturn->provider_id, (float) $request['montant'], [
+                                'reference_type' => PurchaseReturn::class,
+                                'reference_id' => $PurchaseReturn->id,
+                                'note' => 'Purchase return '.$PurchaseReturn->Ref.' · '.$ref,
+                                'date' => $request['date'],
+                                'user_id' => Auth::id(),
+                            ]
+                        )->id;
+                    }
 
-                $account = Account::where('id', $request['account_id'])->exists();
-
-                if ($account) {
-                    // Account exists, perform the update
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance + $request['montant'],
+                    PaymentPurchaseReturns::create([
+                        'purchase_return_id' => $request['purchase_return_id'],
+                        'account_id' => (! $toWallet && $request['account_id']) ? $request['account_id'] : null,
+                        'Ref' => $ref,
+                        'date' => $request['date'],
+                        'payment_method_id' => $toWallet ? null : $request['payment_method_id'],
+                        'montant' => $request['montant'],
+                        'change' => $toWallet ? 0 : $request['change'],
+                        'notes' => $request['notes'],
+                        'user_id' => Auth::user()->id,
+                        'wallet_transaction_id' => $walletTxId,
                     ]);
-                }
 
-                $PurchaseReturn->update([
-                    'paid_amount' => $total_paid,
-                    'payment_statut' => $payment_statut,
-                ]);
+                    if (! $toWallet) {
+                        Account::adjustBalance($request['account_id'], $request['montant']);
+                    }
 
-            }, 10);
+                    $PurchaseReturn->update([
+                        'paid_amount' => $total_paid,
+                        'payment_statut' => $payment_statut,
+                    ]);
+
+                }, 10);
+            } catch (WalletException $e) {
+                return $e->toResponse();
+            }
         }
 
         return response()->json(['success' => true, 'message' => 'Payment Create successfully'], 200);
@@ -231,74 +255,88 @@ class PaymentPurchaseReturnsController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'update', PaymentPurchaseReturns::class);
 
-        \DB::transaction(function () use ($id, $request) {
-            $user = Auth::user();
-            // New way: Check user's record_view field (user-level boolean)
-            // Backward compatibility: If record_view is null, fall back to role permission check
-            $view_records = $user->hasRecordView();
-            $payment = PaymentPurchaseReturns::findOrFail($id);
+        $toWallet = SupplierWalletService::wantsWallet($request);
 
-            // Check If User Has Permission view All Records
-            // Warehouse half of the same rule: record_view says whose documents,
-            // the assigned warehouses say which warehouses they may come from.
-            $this->abortIfDocumentWarehouseDenied($payment);
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $toWallet ? 'nullable' : $this->paymentAccountRule()]);
 
-            if (! $view_records) {
-                // Check If User->id === payment->id
-                $this->authorizeForUser($request->user('api'), 'check_record', $payment);
-            }
+        try {
+            \DB::transaction(function () use ($id, $request, $toWallet) {
+                $user = Auth::user();
+                // New way: Check user's record_view field (user-level boolean)
+                // Backward compatibility: If record_view is null, fall back to role permission check
+                $view_records = $user->hasRecordView();
+                $payment = PaymentPurchaseReturns::findOrFail($id);
 
-            $PurchaseReturn = PurchaseReturn::find($payment->purchase_return_id);
-            $old_total_paid = $PurchaseReturn->paid_amount - $payment->montant;
-            $new_total_paid = $old_total_paid + $request['montant'];
-            $due = $PurchaseReturn->GrandTotal - $new_total_paid;
+                // Check If User Has Permission view All Records
+                // Warehouse half of the same rule: record_view says whose documents,
+                // the assigned warehouses say which warehouses they may come from.
+                $this->abortIfDocumentWarehouseDenied($payment);
 
-            if ($due === 0.0 || $due < 0.0) {
-                $payment_statut = 'paid';
-            } elseif ($due !== $PurchaseReturn->GrandTotal) {
-                $payment_statut = 'partial';
-            } elseif ($due === $PurchaseReturn->GrandTotal) {
-                $payment_statut = 'unpaid';
-            }
+                if (! $view_records) {
+                    // Check If User->id === payment->id
+                    $this->authorizeForUser($request->user('api'), 'check_record', $payment);
+                }
 
-            // delete old balance
-            $account = Account::where('id', $payment->account_id)->exists();
+                $PurchaseReturn = PurchaseReturn::find($payment->purchase_return_id);
+                $old_total_paid = $PurchaseReturn->paid_amount - $payment->montant;
+                $new_total_paid = $old_total_paid + $request['montant'];
+                $due = $PurchaseReturn->GrandTotal - $new_total_paid;
 
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance - $payment->montant,
+                if ($due === 0.0 || $due < 0.0) {
+                    $payment_statut = 'paid';
+                } elseif ($due !== $PurchaseReturn->GrandTotal) {
+                    $payment_statut = 'partial';
+                } elseif ($due === $PurchaseReturn->GrandTotal) {
+                    $payment_statut = 'unpaid';
+                }
+
+                // Undo the old settlement (wallet credit or cash), then apply the new one.
+                $wallets = app(SupplierWalletService::class);
+                if (! empty($payment->wallet_transaction_id)) {
+                    $wallets->reverse((int) $payment->wallet_transaction_id, [
+                        'note' => 'Return payment '.$payment->Ref.' edited', 'user_id' => Auth::id(),
+                    ]);
+                } else {
+                    Account::adjustBalance($payment->account_id, -$payment->montant);
+                }
+
+                $walletTxId = null;
+                if ($toWallet) {
+                    $walletTxId = $wallets->creditFromReturn((int) $PurchaseReturn->provider_id, (float) $request['montant'], [
+                        'reference_type' => PurchaseReturn::class,
+                        'reference_id' => $PurchaseReturn->id,
+                        'note' => 'Purchase return '.$PurchaseReturn->Ref.' · '.$payment->Ref,
+                        'date' => $request['date'],
+                        'user_id' => Auth::id(),
+                    ])->id;
+                }
+
+                $payment->update([
+                    'date' => $request['date'],
+                    'payment_method_id' => $toWallet ? null : $request['payment_method_id'],
+                    'account_id' => (! $toWallet && $request['account_id']) ? $request['account_id'] : null,
+                    'montant' => $request['montant'],
+                    'change' => $toWallet ? 0 : $request['change'],
+                    'notes' => $request['notes'],
+                    'wallet_transaction_id' => $walletTxId,
                 ]);
-            }
 
-            $payment->update([
-                'date' => $request['date'],
-                'payment_method_id' => $request['payment_method_id'],
-                'account_id' => $request['account_id'] ? $request['account_id'] : null,
-                'montant' => $request['montant'],
-                'change' => $request['change'],
-                'notes' => $request['notes'],
-            ]);
+                // update new account
+                if (! $toWallet) {
+                    Account::adjustBalance($request['account_id'], $request['montant']);
+                }
 
-            // update new account
-
-            $new_account = Account::where('id', $request['account_id'])->exists();
-
-            if ($new_account) {
-                // Account exists, perform the update
-                $new_account = Account::find($request['account_id']);
-                $new_account->update([
-                    'balance' => $new_account->balance + $request['montant'],
+                $PurchaseReturn->update([
+                    'paid_amount' => $new_total_paid,
+                    'payment_statut' => $payment_statut,
                 ]);
-            }
 
-            $PurchaseReturn->update([
-                'paid_amount' => $new_total_paid,
-                'payment_statut' => $payment_statut,
-            ]);
-
-        }, 10);
+            }, 10);
+        } catch (WalletException $e) {
+            return $e->toResponse();
+        }
 
         return response()->json(['success' => true, 'message' => 'Payment Update successfully'], 200);
     }
@@ -342,15 +380,9 @@ class PaymentPurchaseReturnsController extends BaseController
                 'deleted_at' => Carbon::now(),
             ]);
 
-            $account = Account::where('id', $payment->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance - $payment->montant,
-                ]);
-            }
+            // Wallet-credited: take the credit back out of the supplier wallet.
+            app(SupplierWalletService::class)->reversePaymentPurchaseReturn($payment, ['user_id' => Auth::id()]);
+            Account::adjustBalance($payment->account_id, -$payment->montant);
 
             $PurchaseReturn->update([
                 'paid_amount' => $total_paid,
@@ -389,10 +421,26 @@ class PaymentPurchaseReturnsController extends BaseController
         $last = DB::table('payment_purchase_returns')->latest('id')->first();
 
         if ($last) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = $nwMsg[1] + 1;
-            $code = $nwMsg[0].'_'.$inMsg;
+            $item = (string) ($last->Ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[0], $nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $inMsg = $nwMsg[1] + 1;
+                $code = $nwMsg[0].$sep.$inMsg;
+            } else {
+                $code = 'INV/RT_1111';
+            }
 
         } else {
             $code = 'INV/RT_1111';
@@ -406,6 +454,8 @@ class PaymentPurchaseReturnsController extends BaseController
     public function payment_return(Request $request, $id)
     {
         $payment = PaymentPurchaseReturns::with('PurchaseReturn', 'PurchaseReturn.provider')->findOrFail($id);
+
+        $this->authorizeDocumentView($request, $payment);
 
         $payment_data['return_Ref'] = $payment['PurchaseReturn']->Ref;
         $payment_data['supplier_name'] = $payment['PurchaseReturn']['provider']?->name ?? '---';
@@ -424,6 +474,8 @@ class PaymentPurchaseReturnsController extends BaseController
         $Html = view('pdf.Payment_Purchase_Return', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve(optional($payment->PurchaseReturn)->warehouse_id, $settings),
             'payment' => $payment_data,
         ])->render();
 
@@ -449,7 +501,8 @@ class PaymentPurchaseReturnsController extends BaseController
         $gateway = sms_gateway::where('id', $settings->sms_gateway)
             ->where('deleted_at', '=', null)->first();
 
-        $url = url('/api/payment_return_purchase_pdf/'.$request->id);
+        $this->authorizeDocumentView($request, $payment);
+        $url = $payment->shareUrl();
         $receiverNumber = $payment['PurchaseReturn']['provider']->phone;
         $message = 'Dear'.' '.$payment['PurchaseReturn']['provider']?->name." \n We are contacting you in regard to a Payment #".$payment['PurchaseReturn']->Ref.' '.$url.' '."that has been created on your account. \n We look forward to conducting future business with you.";
 

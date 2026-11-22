@@ -1,29 +1,29 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Quality Control"
-      subtitle="Every inspection, and what it found."
-      :breadcrumb="['Manufacturing', 'Quality Control']"
+      :title="$t('Mrp_Quality_Control')"
+      :subtitle="$t('Mrp_Quality_Subtitle')"
+      :breadcrumb="[$t('Manufacturing'), $t('Mrp_Quality_Control')]"
     >
       <template #actions>
         <a-button type="primary" @click="qcOpen = true">
           <template #icon><PlusOutlined /></template>
-          Record inspection
+          {{ $t('Mrp_Record_Inspection') }}
         </a-button>
       </template>
     </PageHeader>
 
     <div class="kpis">
       <div class="kpi">
-        <span class="kpi-label">Units inspected</span>
+        <span class="kpi-label">{{ $t('Mrp_Units_Inspected') }}</span>
         <span class="kpi-value">{{ number(totals.inspected || 0, 0) }}</span>
       </div>
       <div class="kpi">
-        <span class="kpi-label">Rejected</span>
+        <span class="kpi-label">{{ $t('Mrp_Rejected') }}</span>
         <span class="kpi-value kpi-value--bad">{{ number(totals.rejected || 0, 0) }}</span>
       </div>
       <div class="kpi kpi--accent">
-        <span class="kpi-label">Pass rate</span>
+        <span class="kpi-label">{{ $t('Mrp_Pass_Rate') }}</span>
         <span class="kpi-value">
           {{ totals.pass_rate !== null && totals.pass_rate !== undefined ? totals.pass_rate + '%' : '—' }}
         </span>
@@ -33,16 +33,16 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search reference, order or product…"
+          v-model:value="crud.search.value" :placeholder="$t('Mrp_Search_Qc_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item" allow-clear
-          placeholder="All outcomes" :options="QC_STATUSES" @change="crud.reload"
+          :placeholder="$t('Mrp_All_Outcomes')" :options="QC_STATUSES" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.type" class="tb-item" allow-clear
-          placeholder="All stages" :options="QC_TYPES" @change="crud.reload"
+          :placeholder="$t('Mrp_All_Stages')" :options="QC_TYPES" @change="crud.reload"
         />
       </div>
     </a-card>
@@ -97,6 +97,9 @@ import QualityCheckModal from './QualityCheckModal.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { QC_STATUSES, QC_TYPES, labelOf, optionOf, passRateColor } from './mrpOptions';
+import { useI18n } from 'vue-i18n';
+
+const { t } = useI18n();
 
 const { number, dateTime } = useFormat();
 
@@ -110,12 +113,12 @@ const crud = useCrudTable('mrp/quality-checks', {
 const totals = computed(() => crud.payload.value?.totals || {});
 
 const columns = computed(() => [
-  { title: 'Inspection', key: 'reference', dataIndex: 'reference', width: 180 },
-  { title: 'Order', key: 'order', dataIndex: 'order_reference' },
-  { title: 'Outcome', key: 'status', dataIndex: 'status', width: 120 },
-  { title: 'Passed', key: 'result', width: 180 },
-  { title: 'Inspector', dataIndex: 'inspector_name', key: 'inspector_name', width: 150 },
-  { title: 'When', key: 'checked_at', dataIndex: 'checked_at', width: 160 },
+  { title: t('Mrp_Inspection'), key: 'reference', dataIndex: 'reference', width: 180 },
+  { title: t('Mrp_Order'), key: 'order', dataIndex: 'order_reference' },
+  { title: t('Mrp_Outcome'), key: 'status', dataIndex: 'status', width: 120 },
+  { title: t('Mrp_Passed'), key: 'result', width: 180 },
+  { title: t('Mrp_Inspector'), dataIndex: 'inspector_name', key: 'inspector_name', width: 150 },
+  { title: t('Mrp_When'), key: 'checked_at', dataIndex: 'checked_at', width: 160 },
   { title: '', key: 'actions', width: 70, align: 'center' },
 ]);
 

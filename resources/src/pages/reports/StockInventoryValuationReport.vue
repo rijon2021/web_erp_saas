@@ -8,6 +8,7 @@
     export-endpoint="report/stock_inventory_valuation"
     :export-params="filterParams"
     export-rows-key="reports"
+    product-data
   >
     <template #actions>
       <!-- Multi-Currency: view amounts converted (display-only) -->
@@ -47,9 +48,11 @@ import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import DateRangePicker from '../../components/DateRangePicker.vue';
 import ViewCurrencySelect from '../../components/ViewCurrencySelect.vue';
+import { useAuthStore } from '../../stores/auth';
 
 const { t } = useI18n();
 const { money } = useFormat();
+const auth = useAuthStore();
 
 const MONEY_KEYS = ['selling_price', 'stock_value_cost', 'stock_value_selling'];
 
@@ -65,7 +68,7 @@ const filterParams = () => ({
 // Payload: { reports, totalRows, warehouses }
 const crud = useCrudTable('report/stock_inventory_valuation', {
   rowsKey: 'reports',
-  sortField: 'stock_value_cost',
+  sortField: auth.canSeeCost ? 'stock_value_cost' : 'stock_value_selling',
   sortType: 'desc',
   params: filterParams,
 });
@@ -82,9 +85,9 @@ const columns = computed(() => [
   { title: t('Warehouse'), dataIndex: 'warehouse', key: 'warehouse' },
   { title: t('Selling_Price_Unit'), key: 'selling_price', dataIndex: 'selling_price', align: 'right', exportValue: r => money(r.selling_price) },
   { title: t('Current_Quantity'), dataIndex: 'current_quantity', key: 'current_quantity', sorter: true, align: 'right', sum: true },
-  { title: t('Stock_Value_Cost'), key: 'stock_value_cost', dataIndex: 'stock_value_cost', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.stock_value_cost) },
+  { title: t('Stock_Value_Cost'), key: 'stock_value_cost', dataIndex: 'stock_value_cost', sorter: true, align: 'right', sum: 'money', cost: true, exportValue: r => money(r.stock_value_cost) },
   { title: t('Stock_Value_Selling'), key: 'stock_value_selling', dataIndex: 'stock_value_selling', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.stock_value_selling) },
-  { title: t('Potential_Profit'), key: 'potential_profit', dataIndex: 'potential_profit', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.potential_profit) },
+  { title: t('Potential_Profit'), key: 'potential_profit', dataIndex: 'potential_profit', sorter: true, align: 'right', sum: 'money', cost: true, exportValue: r => money(r.potential_profit) },
   { title: t('Total_Units_Sold'), dataIndex: 'total_units_sold', key: 'total_units_sold', align: 'right', sum: true },
   { title: t('Total_Units_Transferred'), dataIndex: 'total_units_transferred', key: 'total_units_transferred', align: 'right', sum: true },
   { title: t('Total_Units_Adjusted'), dataIndex: 'total_units_adjusted', key: 'total_units_adjusted', align: 'right', sum: true },

@@ -18,9 +18,21 @@ class Product extends Model
         'is_preorder', 'preorder_available_date', 'preorder_limit', 'preorder_note',
         'is_batch_tracked', 'shelf_life_days', 'generic_name', 'strength', 'dosage_form',
         'pack_size', 'manufacturer', 'prescription_required', 'drug_schedule',
+        // Default supplier to reorder this product from (Settings -> Features)
+        'provider_id',
+        // Home warehouse the product was created for (Settings -> Features:
+        // restrict products by warehouse). NULL = not assigned to any branch.
+        'warehouse_id',
+        // Size chart shown on the storefront product page (Products > Size guides)
+        'size_guide_id',
+        // Item code a counter weighing scale prints on its labels
+        'scale_plu',
+        // Software License: none | pool (uploaded keys) | generated (own software)
+        'license_mode',
     ];
 
     protected $casts = [
+        'size_guide_id' => 'integer',
         'is_returnable' => 'boolean',
         'wholesale_price' => 'double',
         'min_price' => 'double',
@@ -33,6 +45,8 @@ class Product extends Model
         'is_variant' => 'integer',
         'is_imei' => 'integer',
         'brand_id' => 'integer',
+        'provider_id' => 'integer',
+        'warehouse_id' => 'integer',
         'is_active' => 'integer',
         'cost' => 'double',
         'price' => 'double',
@@ -69,6 +83,15 @@ class Product extends Model
     {
         // table is "product_variants", FK is "product_id"
         return $this->hasMany(ProductVariant::class, 'product_id');
+    }
+
+    /**
+     * Variant option dimensions (Color, Size...). Empty for products that use
+     * the legacy flat variant list.
+     */
+    public function options()
+    {
+        return $this->hasMany(ProductOption::class, 'product_id')->orderBy('position')->orderBy('id');
     }
 
     public function batches()
@@ -150,6 +173,143 @@ class Product extends Model
     public function brand()
     {
         return $this->belongsTo('App\Models\Brand');
+    }
+
+    public function sizeGuide()
+    {
+        return $this->belongsTo(SizeGuide::class, 'size_guide_id');
+    }
+
+    /**
+     * The product's active size guide when it has something to show, else
+     * null. Safe before the size_guides migration has run.
+     */
+    public function activeSizeGuide(): ?SizeGuide
+    {
+        if (! $this->size_guide_id || ! SizeGuide::tablesReady()) {
+            return null;
+        }
+        $guide = $this->relationLoaded('sizeGuide') ? $this->sizeGuide : $this->sizeGuide()->first();
+
+        return $guide && ! $guide->deleted_at && $guide->status && $guide->hasChart() ? $guide : null;
+    }
+
+    /** Car Dealership theme: make, model, year, mileage … (vehicle_specs). */
+    public function vehicleSpec()
+    {
+        return $this->hasOne(VehicleSpec::class);
+    }
+
+    /** Booking Management: a service product's booking details (bk_services). */
+    public function bookingDetail()
+    {
+        return $this->hasOne(BookingServiceDetail::class, 'product_id');
+    }
+
+    /** Home warehouse (see the warehouse_id column note above). */
+    public function warehouse()
+    {
+        return $this->belongsTo('App\Models\Warehouse', 'warehouse_id');
+    }
+
+    /**
+     * Products a user assigned to the given warehouses may see: the home
+     * warehouse is one of theirs, or real stock (qte > 0) sits in one of
+     * theirs — a product transferred or purchased into a branch belongs to
+     * that branch's day-to-day work even if it was created elsewhere. The
+     * zero-quantity rows every product gets in every warehouse do NOT count,
+     * which is the whole point of the home warehouse column.
+     */
+    public function scopeVisibleInWarehouses($query, array $warehouseIds, string $table = 'products')
+    {
+        return static::applyVisibleInWarehouses($query, $warehouseIds, $table);
+    }
+
+    /** Builder-agnostic body of visibleInWarehouses (Eloquent or DB builder). */
+    public static function applyVisibleInWarehouses($query, array $warehouseIds, string $table = 'products')
+    {
+        // A non-correlated IN (…) lets MySQL materialise the stocked ids once
+        // (semi-join) instead of probing product_warehouse per product row:
+        // ~4x faster than the equivalent EXISTS on a 30k-product catalogue.
+        return $query->where(function ($q) use ($warehouseIds, $table) {
+            $q->whereIn($table.'.warehouse_id', $warehouseIds)
+                ->orWhereIn($table.'.id', function ($e) use ($warehouseIds) {
+                    $e->select('product_warehouse.product_id')
+                        ->from('product_warehouse')
+                        ->whereNull('product_warehouse.deleted_at')
+                        ->whereIn('product_warehouse.warehouse_id', $warehouseIds)
+                        ->where('product_warehouse.qte', '>', 0);
+                });
+        });
+    }
+
+    /**
+     * Storefront counterpart of the back-office "Restrict products by
+     * warehouse" rule. While that Features switch is on AND Store Settings
+     * sells from a subset of warehouses, the shop lists only products that
+     * belong to (or hold stock in) those warehouses, exactly like a user
+     * restricted to them would see. No-op when the switch is off or the
+     * store sells from every warehouse.
+     */
+    public function scopeForStorefrontWarehouses($query, string $table = 'products')
+    {
+        return static::applyStorefrontWarehouses($query, $table);
+    }
+
+    /** Same rule for Eloquent or DB builders ($table = alias of products). */
+    public static function applyStorefrontWarehouses($query, string $table = 'products')
+    {
+        $ids = static::storefrontWarehouseIds();
+        if ($ids === null) {
+            return $query;
+        }
+
+        return static::applyVisibleInWarehouses($query, $ids, $table);
+    }
+
+    /** Per-request memo, keyed by tenant database. */
+    private static array $storefrontWarehouseMemo = [];
+
+    /**
+     * Warehouses the storefront is restricted to, or null when every product
+     * may be listed (switch off, no store settings row, or the store sells
+     * from every warehouse).
+     *
+     * @return int[]|null
+     */
+    public static function storefrontWarehouseIds(): ?array
+    {
+        $key = (string) \Illuminate\Support\Facades\DB::connection()->getDatabaseName();
+        if (array_key_exists($key, self::$storefrontWarehouseMemo)) {
+            return self::$storefrontWarehouseMemo[$key];
+        }
+
+        $ids = null;
+        $setting = Setting::current();
+        if ($setting && ($setting->restrict_products_by_warehouse ?? false)) {
+            $store = StoreSetting::query()->first();
+            if ($store) {
+                $selected = $store->activeWarehouseIds();
+                $all = Warehouse::whereNull('deleted_at')->pluck('id')->map(fn ($id) => (int) $id)->all();
+                if ($selected && array_diff($all, $selected)) {
+                    $ids = $selected;
+                }
+            }
+        }
+
+        return self::$storefrontWarehouseMemo[$key] = $ids;
+    }
+
+    /** Forget the memo (tests, or after Store Settings change in-request). */
+    public static function forgetStorefrontWarehouses(): void
+    {
+        self::$storefrontWarehouseMemo = [];
+    }
+
+    /** Default supplier to reorder this product from. */
+    public function provider()
+    {
+        return $this->belongsTo('App\Models\Provider');
     }
 
     // Relationship for products that are combined in a combo

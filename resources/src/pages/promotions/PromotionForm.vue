@@ -1,18 +1,18 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="isEdit ? 'Edit promotion' : 'New promotion'"
-      :breadcrumb="['Promotions', isEdit ? $t('Edit') : $t('Add')]"
+      :title="isEdit ? $t('EditPromotion') : $t('NewPromotion')"
+      :breadcrumb="[$t('Promotions'), isEdit ? $t('Edit') : $t('Add')]"
     >
       <template #actions>
         <a-button :disabled="saving" @click="$router.push('/promotions')">{{ $t('Cancel') }}</a-button>
         <a-button :disabled="saving" @click="submit(false)">
           <template #icon><InboxOutlined /></template>
-          Save as draft
+          {{ $t('SaveAsDraft') }}
         </a-button>
         <a-button type="primary" :loading="saving" @click="submit(true)">
           <template #icon><CheckOutlined /></template>
-          {{ isEdit ? 'Save changes' : 'Save & activate' }}
+          {{ isEdit ? $t('Save_Changes') : $t('SaveAndActivate') }}
         </a-button>
       </template>
     </PageHeader>
@@ -29,52 +29,52 @@
           <div class="section-head">
             <span class="step">1</span>
             <div>
-              <h3>Basics</h3>
-              <p>Give the promotion a clear name and choose its type.</p>
+              <h3>{{ $t('Basics') }}</h3>
+              <p>{{ $t('BasicsHint') }}</p>
             </div>
           </div>
 
           <a-form layout="vertical">
             <a-form-item
-              label="Name" required
+              :label="$t('Name')" required
               :validate-status="fieldErrors.name ? 'error' : ''"
               :help="fieldErrors.name"
             >
-              <a-input v-model:value="form.name" placeholder="e.g. Summer Weekend Special" @input="fieldErrors.name = ''" />
+              <a-input v-model:value="form.name" :placeholder="$t('PromoNamePh')" @input="fieldErrors.name = ''" />
             </a-form-item>
 
             <a-row :gutter="16">
               <a-col :xs="24" :md="12">
-                <a-form-item label="Type">
+                <a-form-item :label="$t('Type')">
                   <div class="seg">
                     <button type="button" :class="{ active: form.kind === 'discount' }" @click="form.kind = 'discount'">
-                      <PercentageOutlined /> Discount
+                      <PercentageOutlined /> {{ $t('Discount') }}
                     </button>
                     <button type="button" :class="{ active: form.kind === 'promotion' }" @click="form.kind = 'promotion'">
-                      <GiftOutlined /> Promotion
+                      <GiftOutlined /> {{ $t('Promotion') }}
                     </button>
                   </div>
                   <div class="hint">
                     {{ form.kind === 'discount'
-                      ? 'Unconditional reduction that auto-applies.'
-                      : 'Conditional offer; usually paired with a code.' }}
+                      ? $t('DiscountKindHint')
+                      : $t('PromotionKindHint') }}
                   </div>
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
                 <a-form-item>
-                  <template #label>Code <span class="optional">optional</span></template>
+                  <template #label>{{ $t('Code') }} <span class="optional">{{ $t('Optional') }}</span></template>
                   <a-input
                     v-model:value="form.code" class="mono" placeholder="SUMMER15"
                     @input="form.code = (form.code || '').toUpperCase().replace(/\s+/g, '')"
                   />
-                  <div class="hint">If set, customers must enter this code at checkout.</div>
+                  <div class="hint">{{ $t('CodeHint') }}</div>
                 </a-form-item>
               </a-col>
             </a-row>
 
-            <a-form-item label="Description" style="margin-bottom: 0">
-              <a-textarea v-model:value="form.description" :rows="2" placeholder="A short note for staff or receipts." />
+            <a-form-item :label="$t('Description')" style="margin-bottom: 0">
+              <a-textarea v-model:value="form.description" :rows="2" :placeholder="$t('DescriptionPh')" />
             </a-form-item>
           </a-form>
         </a-card>
@@ -84,27 +84,27 @@
           <div class="section-head">
             <span class="step">2</span>
             <div>
-              <h3>Discount value</h3>
-              <p>How much to take off the cart.</p>
+              <h3>{{ $t('DiscountValue') }}</h3>
+              <p>{{ $t('DiscountValueHint') }}</p>
             </div>
           </div>
 
           <a-row :gutter="16">
             <a-col :xs="24" :md="12">
-              <a-form-item label="Discount type">
+              <a-form-item :label="$t('DiscountType')">
                 <div class="seg">
                   <button type="button" :class="{ active: form.discount_type === 'percentage' }" @click="form.discount_type = 'percentage'">
-                    % Percentage
+                    % {{ $t('Percentage') }}
                   </button>
                   <button type="button" :class="{ active: form.discount_type === 'fixed' }" @click="form.discount_type = 'fixed'">
-                    {{ auth.currency }} Fixed
+                    {{ auth.currency }} {{ $t('Fixed') }}
                   </button>
                 </div>
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
               <a-form-item
-                label="Value" required
+                :label="$t('Value')" required
                 :validate-status="fieldErrors.discount_value ? 'error' : ''"
                 :help="fieldErrors.discount_value"
               >
@@ -127,15 +127,15 @@
           <div class="section-head">
             <span class="step">3</span>
             <div>
-              <h3>Validity</h3>
-              <p>When the promotion is honored.</p>
+              <h3>{{ $t('Validity') }}</h3>
+              <p>{{ $t('ValidityHint') }}</p>
             </div>
           </div>
 
           <a-row :gutter="16">
             <a-col :xs="24" :md="12">
               <a-form-item>
-                <template #label>Starts at <span class="optional">optional</span></template>
+                <template #label>{{ $t('StartsAt') }} <span class="optional">{{ $t('Optional') }}</span></template>
                 <a-date-picker
                   v-model:value="form.starts_at" style="width: 100%"
                   show-time value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm"
@@ -144,7 +144,7 @@
             </a-col>
             <a-col :xs="24" :md="12">
               <a-form-item>
-                <template #label>Ends at <span class="optional">optional</span></template>
+                <template #label>{{ $t('EndsAt') }} <span class="optional">{{ $t('Optional') }}</span></template>
                 <a-date-picker
                   v-model:value="form.ends_at" style="width: 100%"
                   show-time value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm"
@@ -155,18 +155,18 @@
 
           <div class="toggle-row">
             <a-switch v-model:checked="restrictHours" size="small" />
-            <span>Restrict to specific hours of the day</span>
+            <span>{{ $t('RestrictHours') }}</span>
           </div>
           <a-row v-if="restrictHours" :gutter="16" style="margin-top: 12px">
             <a-col :xs="24" :md="12">
-              <a-form-item label="From time">
+              <a-form-item :label="$t('FromTime')">
                 <a-time-picker v-model:value="form.time_of_day_start" style="width: 100%" value-format="HH:mm:ss" />
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
-              <a-form-item label="To time">
+              <a-form-item :label="$t('ToTime')">
                 <a-time-picker v-model:value="form.time_of_day_end" style="width: 100%" value-format="HH:mm:ss" />
-                <div class="hint">Times can cross midnight (e.g. 22:00 → 02:00).</div>
+                <div class="hint">{{ $t('HoursCrossMidnightHint') }}</div>
               </a-form-item>
             </a-col>
           </a-row>
@@ -177,41 +177,41 @@
           <div class="section-head">
             <span class="step">4</span>
             <div>
-              <h3>Conditions</h3>
-              <p>Minimum requirements before the promotion kicks in.</p>
+              <h3>{{ $t('Conditions') }}</h3>
+              <p>{{ $t('ConditionsHint') }}</p>
             </div>
           </div>
 
           <a-row :gutter="16">
             <a-col :xs="24" :md="12">
-              <a-form-item label="Minimum cart total">
+              <a-form-item :label="$t('MinCartTotal')">
                 <a-input-number v-model:value="form.min_cart_total" style="width: 100%" :min="0" :step="0.01" placeholder="0.00">
                   <template #prefix>{{ auth.currency }}</template>
                 </a-input-number>
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
-              <a-form-item label="Minimum item count">
+              <a-form-item :label="$t('MinItemCount')">
                 <a-input-number v-model:value="form.min_item_count" style="width: 100%" :min="0" placeholder="0" />
               </a-form-item>
             </a-col>
           </a-row>
 
-          <a-form-item label="Product scope" style="margin-bottom: 0">
+          <a-form-item :label="$t('ProductScope')" style="margin-bottom: 0">
             <div class="choice-grid">
               <button type="button" class="choice-card" :class="{ active: form.product_scope === 'all' }" @click="form.product_scope = 'all'">
                 <span class="choice-icon"><AppstoreOutlined /></span>
                 <span class="choice-text">
-                  <strong>All products</strong>
-                  <small>Applies to every item in the cart.</small>
+                  <strong>{{ $t('AllProducts') }}</strong>
+                  <small>{{ $t('AllProductsHint') }}</small>
                 </span>
                 <span class="choice-check"><CheckOutlined /></span>
               </button>
               <button type="button" class="choice-card" :class="{ active: form.product_scope === 'specific' }" @click="form.product_scope = 'specific'">
                 <span class="choice-icon"><TagsOutlined /></span>
                 <span class="choice-text">
-                  <strong>Specific products</strong>
-                  <small>Only triggers when one of these is in the cart.</small>
+                  <strong>{{ $t('SpecificProducts') }}</strong>
+                  <small>{{ $t('SpecificProductsHint') }}</small>
                 </span>
                 <span class="choice-check"><CheckOutlined /></span>
               </button>
@@ -220,12 +220,12 @@
 
           <a-form-item v-if="form.product_scope === 'specific'" style="margin: 16px 0 0">
             <template #label>
-              Products
+              {{ $t('Products') }}
               <a-tag v-if="form.product_ids.length" color="purple" style="margin-left: 6px">{{ form.product_ids.length }}</a-tag>
             </template>
             <a-select
               v-model:value="form.product_ids" mode="multiple" style="width: 100%"
-              placeholder="Search products…" option-filter-prop="label"
+              :placeholder="$t('SearchProducts')" option-filter-prop="label"
               :options="productOptions" :max-tag-count="6"
             />
           </a-form-item>
@@ -237,10 +237,10 @@
             <span class="step">5</span>
             <div>
               <h3>{{ $t('Warehouses') }}</h3>
-              <p>Where this promotion is honored.</p>
+              <p>{{ $t('WarehousesHint') }}</p>
             </div>
             <a-button v-if="warehouses.length" type="link" size="small" class="head-action" @click="toggleAllWarehouses">
-              {{ allWarehousesSelected ? 'Deselect all' : 'Select all' }}
+              {{ allWarehousesSelected ? $t('Deselect_all') : $t('Select_all') }}
             </a-button>
           </div>
 
@@ -258,7 +258,7 @@
               <span class="choice-check"><CheckOutlined /></span>
             </button>
           </div>
-          <a-empty v-else description="No warehouses configured yet." style="padding: 16px 0" />
+          <a-empty v-else :description="$t('Promo_No_Warehouses')" style="padding: 16px 0" />
         </a-card>
 
         <!-- 6 · Stacking & limits -->
@@ -266,25 +266,25 @@
           <div class="section-head">
             <span class="step">6</span>
             <div>
-              <h3>Stacking & limits</h3>
-              <p>How this competes with other promotions, and how often it can be used.</p>
+              <h3>{{ $t('StackingAndLimits') }}</h3>
+              <p>{{ $t('StackingHint') }}</p>
             </div>
           </div>
 
           <a-row :gutter="16">
             <a-col :xs="24" :md="12">
-              <a-form-item label="Priority">
+              <a-form-item :label="$t('Priority')">
                 <a-input-number v-model:value="form.priority" style="width: 100%" placeholder="0" />
-                <div class="hint">Higher priority wins when promotions overlap.</div>
+                <div class="hint">{{ $t('HigherWins') }}</div>
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
-              <a-form-item label="Stackable">
+              <a-form-item :label="$t('Stackable')">
                 <div class="toggle-row" style="margin-top: 4px">
                   <a-switch v-model:checked="form.stackable" size="small" />
                   <span>{{ form.stackable
-                    ? 'Yes — stacks with other stackable promotions'
-                    : 'No — exclusive (only this one wins)' }}</span>
+                    ? $t('YesStacksWithOthers')
+                    : $t('NoExclusive') }}</span>
                 </div>
               </a-form-item>
             </a-col>
@@ -292,15 +292,15 @@
 
           <a-row :gutter="16">
             <a-col :xs="24" :md="12">
-              <a-form-item label="Total usage limit" style="margin-bottom: 0">
-                <a-input-number v-model:value="form.usage_limit_total" style="width: 100%" :min="0" placeholder="Unlimited" />
-                <div class="hint">Leave blank for unlimited.</div>
+              <a-form-item :label="$t('UsageLimitTotal')" style="margin-bottom: 0">
+                <a-input-number v-model:value="form.usage_limit_total" style="width: 100%" :min="0" :placeholder="$t('Unlimited')" />
+                <div class="hint">{{ $t('LeaveBlankUnlimited') }}</div>
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
-              <a-form-item label="Per-customer limit" style="margin-bottom: 0">
-                <a-input-number v-model:value="form.usage_limit_per_customer" style="width: 100%" :min="0" placeholder="Unlimited" />
-                <div class="hint">Leave blank for unlimited.</div>
+              <a-form-item :label="$t('UsageLimitPerCustomer')" style="margin-bottom: 0">
+                <a-input-number v-model:value="form.usage_limit_per_customer" style="width: 100%" :min="0" :placeholder="$t('Unlimited')" />
+                <div class="hint">{{ $t('LeaveBlankUnlimited') }}</div>
               </a-form-item>
             </a-col>
           </a-row>
@@ -311,18 +311,18 @@
       <aside class="form-side">
         <div class="side-sticky">
           <div class="preview-card">
-            <div class="preview-eyebrow">Preview</div>
+            <div class="preview-eyebrow">{{ $t('Preview') }}</div>
             <div class="preview-value-row">
               <span class="preview-value">{{ previewValue }}</span>
-              <span class="preview-off">OFF</span>
+              <span class="preview-off">{{ $t('Promo_Off') }}</span>
             </div>
-            <div class="preview-name">{{ form.name || 'Untitled promotion' }}</div>
+            <div class="preview-name">{{ form.name || $t('UntitledPromotion') }}</div>
             <div v-if="form.description" class="preview-desc">{{ form.description }}</div>
             <div class="preview-tags">
-              <span class="ptag" :class="`ptag-${form.kind}`">{{ form.kind }}</span>
+              <span class="ptag" :class="`ptag-${form.kind}`">{{ form.kind === 'discount' ? $t('Discount') : $t('Promotion') }}</span>
               <span v-if="form.code" class="ptag ptag-code">{{ form.code }}</span>
               <span class="ptag" :class="form.is_active ? 'ptag-active' : 'ptag-draft'">
-                {{ form.is_active ? 'Active' : 'Draft' }}
+                {{ form.is_active ? $t('Active') : $t('Draft') }}
               </span>
             </div>
           </div>
@@ -330,26 +330,26 @@
           <a-card size="small" class="side-card">
             <div class="side-head">
               <EnvironmentOutlined />
-              <h4>Applies at</h4>
+              <h4>{{ $t('AppliesAt') }}</h4>
               <a-tag color="purple">{{ selectedWarehouses.length }}</a-tag>
             </div>
             <div v-if="selectedWarehouses.length" class="chip-row">
               <a-tag v-for="w in selectedWarehouses" :key="w.id">{{ w.name }}</a-tag>
             </div>
-            <div v-else class="hint" style="margin: 0">Pick at least one warehouse.</div>
+            <div v-else class="hint" style="margin: 0">{{ $t('PickAtLeastOne') }}</div>
           </a-card>
 
           <a-card size="small" class="side-card">
             <div class="side-head">
               <CalendarOutlined />
-              <h4>Validity</h4>
+              <h4>{{ $t('Validity') }}</h4>
             </div>
             <div class="summary-line">
-              <span class="summary-label">Window</span>
+              <span class="summary-label">{{ $t('Window') }}</span>
               <span class="summary-value">{{ validityWindowLabel }}</span>
             </div>
             <div v-if="restrictHours && (form.time_of_day_start || form.time_of_day_end)" class="summary-line">
-              <span class="summary-label">Hours</span>
+              <span class="summary-label">{{ $t('Hours') }}</span>
               <span class="summary-value">{{ form.time_of_day_start || '00:00:00' }} → {{ form.time_of_day_end || '23:59:59' }}</span>
             </div>
           </a-card>
@@ -357,20 +357,20 @@
           <a-card size="small" class="side-card">
             <div class="side-head">
               <FilterOutlined />
-              <h4>Conditions</h4>
+              <h4>{{ $t('Conditions') }}</h4>
             </div>
             <div class="summary-line">
-              <span class="summary-label">Cart</span>
-              <span class="summary-value">{{ form.min_cart_total ? `≥ ${money(form.min_cart_total)}` : 'Any' }}</span>
+              <span class="summary-label">{{ $t('Cart') }}</span>
+              <span class="summary-value">{{ form.min_cart_total ? `≥ ${money(form.min_cart_total)}` : $t('Any') }}</span>
             </div>
             <div class="summary-line">
-              <span class="summary-label">Items</span>
-              <span class="summary-value">{{ form.min_item_count ? `≥ ${form.min_item_count}` : 'Any' }}</span>
+              <span class="summary-label">{{ $t('Items') }}</span>
+              <span class="summary-value">{{ form.min_item_count ? `≥ ${form.min_item_count}` : $t('Any') }}</span>
             </div>
             <div class="summary-line">
-              <span class="summary-label">Scope</span>
+              <span class="summary-label">{{ $t('Scope') }}</span>
               <span class="summary-value">
-                {{ form.product_scope === 'specific' ? `${form.product_ids.length} products` : 'All products' }}
+                {{ form.product_scope === 'specific' ? $t('NProducts', { n: form.product_ids.length }) : $t('AllProducts') }}
               </span>
             </div>
           </a-card>
@@ -463,9 +463,9 @@ const previewValue = computed(() => {
 const validityWindowLabel = computed(() => {
   const f = form.value.starts_at ? form.value.starts_at.substring(0, 16) : null;
   const to = form.value.ends_at ? form.value.ends_at.substring(0, 16) : null;
-  if (!f && !to) return 'Always';
-  if (f && !to) return `From ${f}`;
-  if (!f && to) return `Until ${to}`;
+  if (!f && !to) return t('Always');
+  if (f && !to) return t('Promo_From_Date', { date: f });
+  if (!f && to) return t('Promo_Until_Date', { date: to });
   return `${f} → ${to}`;
 });
 
@@ -526,7 +526,7 @@ function validate() {
     fieldErrors.value.name = t('Field_is_required');
   }
   if (Number(form.value.discount_value) < 0) {
-    fieldErrors.value.discount_value = 'Must be ≥ 0';
+    fieldErrors.value.discount_value = t('MustBePositive');
   }
   return Object.keys(fieldErrors.value).length === 0;
 }

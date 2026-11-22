@@ -52,6 +52,11 @@
           {{ money(record.due) }}
         </strong>
       </template>
+      <template v-else-if="column.key === 'total_due'">
+        <strong :style="{ color: Number(record.total_due) > 0 ? '#ff4d4f' : undefined }">
+          {{ money(record.total_due) }}
+        </strong>
+      </template>
       <template v-else-if="column.key === 'actions'">
         <a-tooltip :title="$t('Reports')">
           <a-button type="text" size="small" @click="$router.push(`/reports/suppliers/${record.id}`)">
@@ -78,7 +83,7 @@ import { useFormat } from '../../composables/useFormat';
 const { t } = useI18n();
 const { money } = useFormat();
 
-const MONEY_KEYS = ['total_amount', 'total_paid'];
+const MONEY_KEYS = ['total_amount', 'total_paid', 'opening_balance'];
 
 // Payload: { report, totalRows }
 const crud = useCrudTable('report/provider', {
@@ -98,9 +103,10 @@ const kpiTiles = computed(() => {
     { label: t('Purchases'), value: n('purchases'), icon: ShoppingOutlined, color: '#1677ff', tint: 'rgba(22, 119, 255, 0.12)' },
     { label: t('TotalAmount'), value: money(n('total')), icon: DollarOutlined, color: '#10b981', tint: 'rgba(16, 185, 129, 0.12)' },
     {
-      label: t('Total_Purchase_Due'), value: money(n('due')), icon: ExclamationCircleOutlined,
+      // Opening balance + unpaid purchases — what is owed to suppliers overall.
+      label: t('Total_Due'), value: money(n('total_due')), icon: ExclamationCircleOutlined,
       color: '#f43f5e', tint: 'rgba(244, 63, 94, 0.12)',
-      style: n('due') > 0 ? { color: '#f43f5e' } : undefined,
+      style: n('total_due') > 0 ? { color: '#f43f5e' } : undefined,
     },
   ];
 });
@@ -112,6 +118,8 @@ const columns = computed(() => [
   { title: t('TotalAmount'), key: 'total_amount', dataIndex: 'total_amount', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.total_amount) },
   { title: t('Paid'), key: 'total_paid', dataIndex: 'total_paid', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.total_paid) },
   { title: t('Total_Purchase_Due'), key: 'due', dataIndex: 'due', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.due) },
+  { title: t('Opening_Balance'), key: 'opening_balance', dataIndex: 'opening_balance', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.opening_balance) },
+  { title: t('Total_Due'), key: 'total_due', dataIndex: 'total_due', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.total_due) },
   { title: t('Action'), key: 'actions', align: 'center', width: 80, exportable: false },
 ]);
 

@@ -22,7 +22,7 @@ import http from '../lib/http';
  */
 export function useDetailsCurrency(payloadRef) {
     const auth = useAuthStore();
-    const { moneyBase, number } = useFormat();
+    const { moneyBase, number, withSymbol } = useFormat();
 
     const currencies = ref([]);
     const baseId = ref(null);
@@ -61,7 +61,7 @@ export function useDetailsCurrency(payloadRef) {
         if (selectedId.value === null
             || Number(selectedId.value) === Number(docCurrencyId ?? 0)) {
             const sym = doc.currency_symbol;
-            return sym ? `${sym} ${number(v, dec)}` : moneyBase(v, dec);
+            return sym ? withSymbol(sym, number(v, dec)) : moneyBase(v, dec);
         }
 
         // Re-express: back to base at the document's snapshotted rate, then
@@ -72,7 +72,7 @@ export function useDetailsCurrency(payloadRef) {
             return moneyBase(base, dec);
         }
         const rate = Number(sel.exchange_rate) || 1;
-        return `${sel.symbol} ${number(base * rate, dec)}`;
+        return withSymbol(sel.symbol, number(base * rate, dec));
     }
 
     return { docMoney, currencyOptions, currencySelectId, showCurrencySelect };

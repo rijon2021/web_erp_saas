@@ -1,10 +1,10 @@
 <template>
   <a-modal
     :open="open"
-    :title="isEdit ? `Edit ${store.name}` : 'Connect a Shopify store'"
+    :title="isEdit ? $t('Shp_Edit_Store_Name', { name: store.name }) : $t('Shp_Connect_Shopify_Store')"
     :width="720"
     :confirm-loading="saving"
-    :ok-text="isEdit ? $t('submit') : 'Connect'"
+    :ok-text="isEdit ? $t('submit') : $t('Connect')"
     :cancel-text="$t('Cancel')"
     @ok="submit"
     @cancel="close"
@@ -12,15 +12,15 @@
     <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
       <a-tabs v-model:activeKey="tab">
         <!-- ------------------------------------------------ connection -->
-        <a-tab-pane key="connection" tab="Connection">
+        <a-tab-pane key="connection" :tab="$t('Connection')">
           <a-row :gutter="16">
             <a-col :xs="24" :md="12">
-              <a-form-item label="Name *" name="name" extra="How this shop is labelled in the ERP">
-                <a-input v-model:value="form.name" placeholder="e.g. Main storefront" allow-clear />
+              <a-form-item :label="$t('Name') + ' *'" name="name" :extra="$t('Shp_Name_Hint')">
+                <a-input v-model:value="form.name" :placeholder="$t('Shp_Name_Placeholder')" allow-clear />
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
-              <a-form-item label="Shop domain *" name="shop_domain" extra="acme.myshopify.com — the admin URL works too">
+              <a-form-item :label="$t('Shop_Domain') + ' *'" name="shop_domain" :extra="$t('Shp_Domain_Hint', { domain: 'acme.myshopify.com' })">
                 <a-input
                   v-model:value="form.shop_domain" placeholder="acme.myshopify.com"
                   :disabled="isEdit && !allowRebind" allow-clear
@@ -28,10 +28,10 @@
               </a-form-item>
             </a-col>
             <a-col :span="24">
-              <a-form-item label="App credentials" name="auth_mode" style="margin-bottom: 8px">
+              <a-form-item :label="$t('Shp_App_Credentials')" name="auth_mode" style="margin-bottom: 8px">
                 <a-radio-group v-model:value="form.auth_mode" @change="onAuthModeChange">
-                  <a-radio value="client_credentials">Client ID + client secret (Dev Dashboard app)</a-radio>
-                  <a-radio value="token">Admin API access token (legacy custom app)</a-radio>
+                  <a-radio value="client_credentials">{{ $t('Shp_Auth_Client_Credentials') }}</a-radio>
+                  <a-radio value="token">{{ $t('Shp_Auth_Token') }}</a-radio>
                 </a-radio-group>
               </a-form-item>
             </a-col>
@@ -40,33 +40,33 @@
               <a-col :span="24">
                 <a-alert type="info" show-icon style="margin-bottom: 12px">
                   <template #message>
-                    Since January 2026 Shopify no longer creates custom apps in the admin. Create the app in the
-                    <strong>Dev Dashboard</strong>, grant its Admin API scopes, install it on this shop, then copy the
-                    Client ID and Client secret from its <em>Settings</em> page. The ERP fetches a fresh access token
-                    itself every 24 hours. The app and the shop must belong to the same Shopify organisation.
+                    <i18n-t keypath="Shp_Cc_Alert" tag="span">
+                      <template #dashboard><strong>Dev Dashboard</strong></template>
+                      <template #settings><em>{{ $t('Settings') }}</em></template>
+                    </i18n-t>
                   </template>
                 </a-alert>
               </a-col>
               <a-col :xs="24" :md="12">
                 <a-form-item
-                  :label="isEdit && clientPairStored ? 'Client ID' : 'Client ID *'" name="client_id"
-                  :extra="isEdit && clientPairStored ? 'Leave blank to keep the stored one.' : ''"
+                  :label="isEdit && clientPairStored ? $t('Client_ID') : $t('Client_ID') + ' *'" name="client_id"
+                  :extra="isEdit && clientPairStored ? $t('Shp_Leave_Blank_Keep_Stored') : ''"
                 >
                   <a-input
                     v-model:value="form.client_id"
-                    :placeholder="isEdit && store?.client_id ? store.client_id : 'From the app\'s Settings page'"
+                    :placeholder="isEdit && store?.client_id ? store.client_id : $t('Shp_Client_Id_Placeholder')"
                     autocomplete="off" allow-clear
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
                 <a-form-item
-                  :label="isEdit && clientPairStored ? 'Client secret' : 'Client secret *'" name="client_secret"
-                  :extra="isEdit && clientPairStored ? 'Leave blank to keep the stored one.' : 'Also signs webhooks, so no separate signing secret is needed.'"
+                  :label="isEdit && clientPairStored ? $t('Client_Secret') : $t('Client_Secret') + ' *'" name="client_secret"
+                  :extra="isEdit && clientPairStored ? $t('Shp_Leave_Blank_Keep_Stored') : $t('Shp_Client_Secret_Hint')"
                 >
                   <a-input-password
                     v-model:value="form.client_secret"
-                    :placeholder="isEdit && store?.has_client_secret ? '•••••••••••••• (unchanged)' : 'shpss_…'"
+                    :placeholder="isEdit && store?.has_client_secret ? $t('Shp_Masked_Unchanged') : 'shpss_…'"
                     autocomplete="new-password"
                   />
                 </a-form-item>
@@ -75,34 +75,34 @@
 
             <a-col v-else :span="24">
               <a-form-item
-                :label="isEdit && store?.auth_mode === 'token' ? 'Admin API access token' : 'Admin API access token *'"
+                :label="isEdit && store?.auth_mode === 'token' ? $t('Admin_API_Access_Token') : $t('Admin_API_Access_Token') + ' *'"
                 name="access_token"
                 :extra="isEdit && store?.auth_mode === 'token'
-                  ? 'Leave blank to keep the token already stored.'
-                  : 'Only for custom apps created in Shopify admin before 2026 (Apps → Develop apps → API credentials). New apps do not show a token; use the client ID + secret instead.'"
+                  ? $t('Shp_Token_Keep_Hint')
+                  : $t('Shp_Token_Legacy_Hint')"
               >
                 <a-input-password
                   v-model:value="form.access_token"
-                  :placeholder="isEdit && store?.auth_mode === 'token' && store.has_token ? '•••••••••••••• (unchanged)' : 'shpat_…'"
+                  :placeholder="isEdit && store?.auth_mode === 'token' && store.has_token ? $t('Shp_Masked_Unchanged') : 'shpat_…'"
                   autocomplete="new-password"
                 />
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
-              <a-form-item label="API version" name="api_version">
+              <a-form-item :label="$t('API_Version')" name="api_version">
                 <a-input v-model:value="form.api_version" placeholder="2024-10" allow-clear />
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
               <a-form-item
-                label="Webhook signing secret" name="webhook_secret"
+                :label="$t('Shp_Webhook_Signing_Secret')" name="webhook_secret"
                 :extra="form.auth_mode === 'client_credentials'
-                  ? 'Optional here — the client secret above signs webhooks for a Dev Dashboard app.'
-                  : 'Required before webhooks are accepted — unsigned deliveries are refused.'"
+                  ? $t('Shp_Webhook_Secret_Optional_Hint')
+                  : $t('Shp_Webhook_Secret_Required_Hint')"
               >
                 <a-input-password
                   v-model:value="form.webhook_secret"
-                  :placeholder="form.clear_webhook_secret ? 'Will be cleared on save' : (store?.has_explicit_webhook_secret ? '•••••••••••••• (unchanged)' : 'Optional')"
+                  :placeholder="form.clear_webhook_secret ? $t('Shp_Will_Be_Cleared') : (store?.has_explicit_webhook_secret ? $t('Shp_Masked_Unchanged') : $t('Optional'))"
                   :disabled="form.clear_webhook_secret"
                   autocomplete="new-password"
                 />
@@ -111,13 +111,13 @@
                     v-if="!form.clear_webhook_secret" type="link" size="small" danger
                     style="padding: 0; margin-top: 4px" @click="form.clear_webhook_secret = true"
                   >
-                    Clear the stored secret
+                    {{ $t('Shp_Clear_Stored_Secret') }}
                   </a-button>
                   <a-button
                     v-else type="link" size="small" style="padding: 0; margin-top: 4px"
                     @click="form.clear_webhook_secret = false"
                   >
-                    Keep it after all
+                    {{ $t('Shp_Keep_It') }}
                   </a-button>
                 </template>
               </a-form-item>
@@ -126,76 +126,75 @@
             <a-col v-if="isEdit && !allowRebind" :span="24">
               <a-alert type="info" show-icon banner style="margin-bottom: 12px">
                 <template #message>
-                  The domain is locked because changing it invalidates every mapping for this shop.
-                  <a class="link" @click="allowRebind = true">Change it anyway</a>
+                  {{ $t('Shp_Domain_Locked') }}
+                  <a class="link" @click="allowRebind = true">{{ $t('Shp_Change_Anyway') }}</a>
                 </template>
               </a-alert>
             </a-col>
             <a-col v-else-if="isEdit && allowRebind" :span="24">
               <a-alert
                 type="warning" show-icon banner style="margin-bottom: 12px"
-                message="Saving a different domain deletes all record mappings for this connection — the stored ids belong to the old shop."
+                :message="$t('Shp_Domain_Change_Warning')"
               />
             </a-col>
           </a-row>
         </a-tab-pane>
 
         <!-- ------------------------------------------------ targets -->
-        <a-tab-pane key="targets" tab="Where data lands">
+        <a-tab-pane key="targets" :tab="$t('Shp_Where_Data_Lands')">
           <a-row :gutter="16">
             <a-col :xs="24" :md="12">
               <a-form-item
-                label="ERP warehouse" name="warehouse_id"
-                extra="Stock levels and imported orders belong to this warehouse."
+                :label="$t('Shp_ERP_Warehouse')" name="warehouse_id"
+                :extra="$t('Shp_ERP_Warehouse_Hint')"
               >
                 <a-select
                   v-model:value="form.warehouse_id" show-search option-filter-prop="label"
-                  :options="warehouseOptions" allow-clear placeholder="Select a warehouse"
+                  :options="warehouseOptions" allow-clear :placeholder="$t('Mrp_Select_Warehouse')"
                 />
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
-              <a-form-item label="Shopify location" name="location_id">
+              <a-form-item :label="$t('Shopify_Location')" name="location_id">
                 <a-select
                   v-model:value="form.location_id" :options="locationOptions" allow-clear
                   :loading="loadingLocations"
-                  :placeholder="isEdit ? 'Load locations from Shopify' : 'Available after connecting'"
+                  :placeholder="isEdit ? $t('Load_locations') : $t('Shp_Available_After_Connecting')"
                   :disabled="!isEdit"
                 />
                 <a-button
                   v-if="isEdit" type="link" size="small" style="padding: 0; margin-top: 4px"
                   :loading="loadingLocations" @click="loadLocations"
                 >
-                  Fetch locations from Shopify
+                  {{ $t('Shp_Fetch_Locations') }}
                 </a-button>
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
-              <a-form-item label="Price sent to Shopify" name="price_field">
+              <a-form-item :label="$t('Shp_Price_Sent')" name="price_field">
                 <a-select v-model:value="form.price_field" :options="PRICE_FIELDS" />
               </a-form-item>
             </a-col>
             <a-col :span="24">
               <a-form-item style="margin-bottom: 8px">
                 <a-checkbox v-model:checked="form.create_missing_products">
-                  Create ERP products for Shopify products that do not match a SKU
+                  {{ $t('Shp_Create_Missing_Products') }}
                 </a-checkbox>
               </a-form-item>
               <a-form-item style="margin-bottom: 0">
                 <a-checkbox v-model:checked="form.create_missing_customers">
-                  Create ERP customers for Shopify customers that do not match an email
+                  {{ $t('Shp_Create_Missing_Customers') }}
                 </a-checkbox>
-                <div class="hint">With this off, an order from an unknown customer is skipped rather than guessed at.</div>
+                <div class="hint">{{ $t('Shp_Create_Missing_Customers_Hint') }}</div>
               </a-form-item>
             </a-col>
           </a-row>
         </a-tab-pane>
 
         <!-- ------------------------------------------------ entities -->
-        <a-tab-pane key="entities" tab="What to sync">
+        <a-tab-pane key="entities" :tab="$t('Shp_What_To_Sync')">
           <p class="lead">
-            Only the entities switched on here can be synced — a shop you just pull orders from
-            should not have a stray product push rewriting its catalogue.
+            {{ $t('Shp_Entities_Lead') }}
           </p>
           <div class="ent-grid">
             <label v-for="entity in ENTITIES" :key="entity.value" class="ent-card">
@@ -217,28 +216,26 @@
         </a-tab-pane>
 
         <!-- ------------------------------------------------ automatic -->
-        <a-tab-pane key="auto" tab="Automatic sync">
+        <a-tab-pane key="auto" :tab="$t('Shp_Automatic_Sync')">
           <a-form-item style="margin-bottom: 10px">
             <a-checkbox v-model:checked="form.auto_sync">
-              Sync automatically on a schedule
+              {{ $t('Shp_Sync_On_Schedule') }}
             </a-checkbox>
             <div class="hint">
-              The scheduler checks every 5 minutes, which is the finest the intervals below
-              can use. Syncs can always be started by hand.
+              {{ $t('Shp_Scheduler_Hint') }}
             </div>
           </a-form-item>
 
           <a-form-item style="margin-bottom: 10px">
             <a-checkbox v-model:checked="form.instant_stock_push" :disabled="!form.sync_inventory">
-              Push stock the moment it changes
+              {{ $t('Shp_Push_Stock_On_Change') }}
             </a-checkbox>
             <div class="hint">
-              A sale, return or adjustment sends a stock push for just those products the instant
-              it is saved, so the shop is right within seconds instead of at the next scheduled
-              run. Nothing else to install — the push runs after the sale has been answered, so
-              the till never waits for Shopify.
+              {{ $t('Shp_Instant_Push_Hint') }}
               <template v-if="!form.sync_inventory">
-                Switch Inventory on under <em>What to sync</em> first.
+                <i18n-t keypath="Shp_Switch_Inventory_First" tag="span">
+                  <template #tab><em>{{ $t('Shp_What_To_Sync') }}</em></template>
+                </i18n-t>
               </template>
             </div>
             <!-- Spelled out, because the consequence of leaving this off is
@@ -247,42 +244,42 @@
             <a-alert
               v-if="form.sync_inventory && !form.instant_stock_push"
               type="info" show-icon style="margin-top: 8px"
-              :message="`Leave it off and a POS sale reaches Shopify only on the next Inventory push — up to ${inventoryEvery} minutes later.`"
+              :message="$t('Shp_Leave_Off_Lag', { n: inventoryEvery })"
             />
           </a-form-item>
 
-          <a-form-item label="Default interval (minutes)" name="sync_interval_minutes" style="max-width: 260px">
+          <a-form-item :label="$t('Shp_Default_Interval')" name="sync_interval_minutes" style="max-width: 260px">
             <a-input-number
               v-model:value="form.sync_interval_minutes" :min="5" :max="1440"
               style="width: 100%" :disabled="!form.auto_sync"
             />
-            <div class="hint">Used by every step that does not set its own.</div>
+            <div class="hint">{{ $t('Shp_Default_Interval_Hint') }}</div>
           </a-form-item>
 
           <a-divider style="margin: 12px 0" />
 
           <div class="plan-head">
             <div>
-              <strong>What runs automatically</strong>
+              <strong>{{ $t('Shp_What_Runs_Auto') }}</strong>
               <div class="hint">
-                Each step is one entity in one direction. Orders only ever come <em>from</em> Shopify.
+                <i18n-t keypath="Shp_Plan_Hint" tag="span">
+                  <template #from><em>{{ $t('Shp_From') }}</em></template>
+                </i18n-t>
               </div>
             </div>
             <a-button size="small" :disabled="!form.auto_sync || !remainingChoices.length" @click="addStep">
               <template #icon><PlusOutlined /></template>
-              Add step
+              {{ $t('Shp_Add_Step') }}
             </a-button>
           </div>
 
           <a-alert
             v-if="!form.auto_sync_plan.length"
             type="info" show-icon style="margin-top: 10px"
-            message="Using the default plan"
+            :message="$t('Shp_Using_Default_Plan')"
           >
             <template #description>
-              Orders are pulled in and stock is pushed out, every
-              {{ form.sync_interval_minutes || 60 }} minutes. Add a step to choose your own —
-              clearing the list again restores this default.
+              {{ $t('Shp_Default_Plan_Desc', { n: form.sync_interval_minutes || 60 }) }}
             </template>
           </a-alert>
 
@@ -298,13 +295,13 @@
               />
               <a-input-number
                 v-model:value="step.every" :min="5" :max="10080" style="flex: 0 0 130px"
-                :placeholder="`${form.sync_interval_minutes || 60} min`" :disabled="!form.auto_sync"
+                :placeholder="$t('Shp_N_Min', { n: form.sync_interval_minutes || 60 })" :disabled="!form.auto_sync"
               />
               <a-button type="text" danger :disabled="!form.auto_sync" @click="form.auto_sync_plan.splice(i, 1)">
                 <template #icon><DeleteOutlined /></template>
               </a-button>
               <div v-if="!form[`sync_${step.entity}`]" class="plan-warn">
-                {{ entityOf(step.entity).label }} is switched off on the previous tab — this step will be skipped.
+                {{ $t('Shp_Step_Entity_Off', { entity: entityOf(step.entity).label }) }}
               </div>
             </div>
           </div>
@@ -328,8 +325,8 @@ import { PlusOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import {
   ENTITIES, PRICE_FIELDS, DIRECTIONS, autoStepChoices, entityOf, stepKey, labelOf, optionOf,
 } from './shopifyOptions';
+import { useI18n } from 'vue-i18n';
 import http from '../../lib/http';
-import { t } from '../../i18n';
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -339,6 +336,7 @@ const props = defineProps({
   initialTab: { type: String, default: 'connection' },
 });
 const emit = defineEmits(['update:open', 'saved']);
+const { t } = useI18n();
 
 const formRef = ref();
 const tab = ref('connection');
@@ -352,7 +350,7 @@ const locations = ref([]);
 const loadingLocations = ref(false);
 const locationOptions = computed(() => locations.value.map(l => ({
   value: l.id,
-  label: `${l.name}${l.city ? ' — ' + l.city : ''}${l.active ? '' : ' (inactive)'}`,
+  label: `${l.name}${l.city ? ' — ' + l.city : ''}${l.active ? '' : ` (${t('Shp_Inactive_Lc')})`}`,
 })));
 
 const form = reactive(emptyForm());
@@ -439,7 +437,7 @@ watch(() => props.open, (isOpen) => {
     // belongs to the list page behind this modal.
     form.auto_sync_plan = (props.store.auto_sync_plan || []).map(s => ({ ...s }));
     if (props.store.location_id) {
-      locations.value = [{ id: props.store.location_id, name: `Location ${props.store.location_id}`, active: true }];
+      locations.value = [{ id: props.store.location_id, name: t('Shp_Location_N', { id: props.store.location_id }), active: true }];
     }
   }
 
@@ -499,9 +497,9 @@ async function loadLocations() {
   try {
     const res = await http.get(`shopify/stores/${props.store.id}/locations`);
     locations.value = res?.locations || [];
-    if (!locations.value.length) message.info('That shop reports no locations');
+    if (!locations.value.length) message.info(t('Shp_No_Locations'));
   } catch (e) {
-    message.error(e?.data?.error || 'Could not load locations — check the connection first');
+    message.error(e?.data?.error || t('Shp_Could_Not_Load_Locations'));
   } finally {
     loadingLocations.value = false;
   }
@@ -542,10 +540,10 @@ async function submit() {
     if (isEdit.value) await http.put(`shopify/stores/${props.store.id}`, payload);
     else await http.post('shopify/stores', payload);
 
-    message.success(isEdit.value ? 'Store updated' : 'Store connected');
+    message.success(isEdit.value ? t('Shp_Store_Updated') : t('Shp_Store_Connected'));
     emit('saved');
   } catch (e) {
-    message.error(firstError(e) || 'Could not save this store');
+    message.error(firstError(e) || t('Shp_Could_Not_Save_Store'));
   } finally {
     saving.value = false;
   }

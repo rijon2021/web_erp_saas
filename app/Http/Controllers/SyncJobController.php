@@ -26,7 +26,7 @@ class SyncJobController extends BaseController
         try {
             // IMPORTANT: in "no-cron" mode we run a queue job inside this HTTP request.
             // If PHP's max_execution_time is short, the request can be killed mid-batch and appear "stuck".
-            $tickLimit = (int) env('WOO_POLL_TICK_MAX_SECONDS', 300);
+            $tickLimit = (int) config('woocommerce.poll_tick_max_seconds');
             $tickLimit = max(30, min(1800, $tickLimit));
             @ini_set('max_execution_time', (string) $tickLimit);
             if (function_exists('set_time_limit')) {
@@ -62,7 +62,7 @@ class SyncJobController extends BaseController
                     '--queue' => $queue,
                     '--sleep' => 1,
                     '--tries' => 1,
-                    '--timeout' => (int) env('QUEUE_WORKER_TIMEOUT', 1200),
+                    '--timeout' => (int) config('queue.worker_timeout'),
                 ]);
             } finally {
                 try {
@@ -107,11 +107,29 @@ class SyncJobController extends BaseController
     }
 
     /**
+     * A sync job may be watched/cancelled by the user who started it, or by
+     * anyone allowed to manage WooCommerce — not by any staff account that
+     * guesses an id (status also runs queued batches inline).
+     */
+    private function findAccessibleJob(Request $request, int $id): SyncJob
+    {
+        $job = SyncJob::query()->findOrFail($id);
+        $user = $request->user('api');
+
+        if (! $user || ((int) $job->user_id !== (int) $user->id
+            && ! $user->can('view', \App\Models\WooCommerceSetting::class))) {
+            abort(403, 'This action is unauthorized.');
+        }
+
+        return $job;
+    }
+
+    /**
      * GET /api/sync/status/{id}
      */
     public function status(Request $request, int $id)
     {
-        $job = SyncJob::query()->findOrFail($id);
+        $job = $this->findAccessibleJob($request, $id);
 
         // If this sync is waiting on the next batch and no worker exists, run one batch inline.
         try {
@@ -127,7 +145,7 @@ class SyncJobController extends BaseController
         // Stuck detection: if worker heartbeat hasn't moved, mark as failed so UI doesn't hang forever.
         $stuck = false;
         try {
-            $stuckAfterSeconds = (int) env('WOO_SYNC_STUCK_SECONDS', 600);
+            $stuckAfterSeconds = (int) config('woocommerce.sync_stuck_seconds');
             $stuckAfterSeconds = max(60, min(3600, $stuckAfterSeconds));
 
             $stage = (string) ($job->stage ?? '');
@@ -135,14 +153,14 @@ class SyncJobController extends BaseController
 
             // Between batches, the job may be queued waiting for the next worker tick.
             if ($stage !== '' && str_starts_with($stage, 'queued')) {
-                $queueWait = (int) env('WOO_SYNC_QUEUE_WAIT_SECONDS', 1800);
+                $queueWait = (int) config('woocommerce.sync_queue_wait_seconds');
                 $queueWait = max(120, min(21600, $queueWait));
                 $effectiveStuckSeconds = max($effectiveStuckSeconds, $queueWait);
             }
 
             // Media uploads can legitimately take longer on shared hosting.
             if ($stage === 'media') {
-                $uploadTimeout = (int) env('WOO_WP_MEDIA_UPLOAD_TIMEOUT', 60);
+                $uploadTimeout = (int) config('woocommerce.wp_media.upload_timeout');
                 $uploadTimeout = max(1, min(300, $uploadTimeout));
                 $effectiveStuckSeconds = max($effectiveStuckSeconds, $uploadTimeout + 60);
             }
@@ -189,7 +207,7 @@ class SyncJobController extends BaseController
      */
     public function cancel(Request $request, int $id)
     {
-        $job = SyncJob::query()->findOrFail($id);
+        $job = $this->findAccessibleJob($request, $id);
 
         // Signal cancel; worker will stop at next product boundary.
         // UX requirement: mark as cancelled immediately (not "cancelling").

@@ -13,7 +13,8 @@ use Illuminate\Support\Facades\Log;
  */
 class MetaCloudDriver implements WhatsAppDriverInterface
 {
-    protected const GRAPH_VERSION = 'v21.0';
+    // Public: Marketing campaigns build their Cloud API URL with the same version.
+    public const GRAPH_VERSION = 'v21.0';
 
     protected ?WhatsappSetting $settings = null;
 

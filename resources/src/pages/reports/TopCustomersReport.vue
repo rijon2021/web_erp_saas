@@ -146,10 +146,10 @@ const metric = ref('amount');
 const topPreset = ref(10);
 const topCustom = ref(200);
 const topOptions = computed(() => [
-  { value: 10, label: 'Top 10' },
-  { value: 20, label: 'Top 20' },
-  { value: 50, label: 'Top 50' },
-  { value: 100, label: 'Top 100' },
+  { value: 10, label: t('Top_N', { n: 10 }) },
+  { value: 20, label: t('Top_N', { n: 20 }) },
+  { value: 50, label: t('Top_N', { n: 50 }) },
+  { value: 100, label: t('Top_N', { n: 100 }) },
   { value: 0, label: t('All') },
   { value: 'custom', label: tf('Custom_Number', 'Custom number…') },
 ]);

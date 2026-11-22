@@ -57,6 +57,8 @@ function allowed(entry) {
   // SaaS: entries carrying a plan `feature` key hide when the tenant's plan
   // does not include it (legacy Sidebar.vue planFeature()); no plan data = shown.
   if (entry.feature && !usePlanStore().featureEnabled(entry.feature)) return false;
+  // Cost-derived pages (profit reports) hide for roles with hide_product_cost.
+  if (entry.costData && !auth.canSeeCost) return false;
   if (!entry.permissions || !entry.permissions.length) return true;
   return entry.permissions.some(p => auth.can(p));
 }

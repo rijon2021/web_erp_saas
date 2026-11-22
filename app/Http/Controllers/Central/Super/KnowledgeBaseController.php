@@ -49,7 +49,7 @@ class KnowledgeBaseController extends Controller
 
         KbCategory::create($data);
 
-        return redirect()->route('super.knowledge-base.index')->with('success', "Category \"{$data['name']}\" created.");
+        return redirect()->route('super.knowledge-base.index')->with('success', __('super.flash.kb_cat_created', ['name' => $data['name']]));
     }
 
     public function editCategory(KbCategory $category): View
@@ -69,7 +69,7 @@ class KnowledgeBaseController extends Controller
 
         $category->update($data);
 
-        return redirect()->route('super.knowledge-base.index')->with('success', "Category \"{$category->name}\" updated.");
+        return redirect()->route('super.knowledge-base.index')->with('success', __('super.flash.kb_cat_updated', ['name' => $category->name]));
     }
 
     public function destroyCategory(KbCategory $category): RedirectResponse
@@ -77,7 +77,7 @@ class KnowledgeBaseController extends Controller
         $name = $category->name;
         $category->delete(); // cascades to articles
 
-        return redirect()->route('super.knowledge-base.index')->with('success', "Category \"{$name}\" and its articles deleted.");
+        return redirect()->route('super.knowledge-base.index')->with('success', __('super.flash.kb_cat_deleted', ['name' => $name]));
     }
 
     // ── Articles ──
@@ -114,7 +114,7 @@ class KnowledgeBaseController extends Controller
 
         KbArticle::create($data);
 
-        return redirect()->route('super.knowledge-base.index')->with('success', "Article \"{$data['title']}\" created.");
+        return redirect()->route('super.knowledge-base.index')->with('success', __('super.flash.kb_article_created', ['name' => $data['title']]));
     }
 
     public function editArticle(KbArticle $article): View
@@ -143,7 +143,7 @@ class KnowledgeBaseController extends Controller
 
         $article->update($data);
 
-        return redirect()->route('super.knowledge-base.index')->with('success', "Article \"{$article->title}\" updated.");
+        return redirect()->route('super.knowledge-base.index')->with('success', __('super.flash.kb_article_updated', ['name' => $article->title]));
     }
 
     public function destroyArticle(KbArticle $article): RedirectResponse
@@ -151,6 +151,6 @@ class KnowledgeBaseController extends Controller
         $title = $article->title;
         $article->delete();
 
-        return redirect()->route('super.knowledge-base.index')->with('success', "Article \"{$title}\" deleted.");
+        return redirect()->route('super.knowledge-base.index')->with('success', __('super.flash.kb_article_deleted', ['name' => $title]));
     }
 }

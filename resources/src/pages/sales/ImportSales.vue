@@ -61,8 +61,8 @@
                 v-model:value="sale.statut"
                 :placeholder="$t('Choose_Status')"
                 :options="[
-                  { label: 'completed', value: 'completed' },
-                  { label: 'Pending', value: 'pending' },
+                  { label: $t('complete'), value: 'completed' },
+                  { label: $t('Pending'), value: 'pending' },
                 ]"
               />
             </a-form-item>
@@ -111,14 +111,7 @@
             {{ $t('Parsing_CSV') || 'Parsing and validating CSV...' }}
           </div>
 
-          <a-alert v-if="errorMessages.length" type="error" style="margin-top: 16px" show-icon>
-            <template #message>{{ $t('Import_Failed_Fix_Below') || 'Import failed. Fix the issues below:' }}</template>
-            <template #description>
-              <ul style="margin: 0; padding-left: 18px">
-                <li v-for="(err, idx) in errorMessages" :key="'err-' + idx">{{ err }}</li>
-              </ul>
-            </template>
-          </a-alert>
+          <ImportErrorList :errors="errorMessages" filename="sales_import_errors" />
 
           <div v-if="previewRows.length" style="margin-top: 20px">
             <a-table
@@ -180,11 +173,12 @@
  * ^\d*\.?\d*$ + NaN→0 keyup on tax/discount/shipping; sales_agent_id only
  * appended when set; error lists collected via the legacy collectors.
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { notification } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
+import ImportErrorList from '../../components/ImportErrorList.vue';
 import ImportDropzone from '../../components/ImportDropzone.vue';
 import { useAuthStore } from '../../stores/auth';
 import { useFormat } from '../../composables/useFormat';
@@ -298,7 +292,7 @@ function collectErrorsFromResponse(data) {
   }
   if (data.insufficient && Array.isArray(data.insufficient)) {
     data.insufficient.forEach((it) => {
-      out.push(`${it.product_code}: requested ${it.requested}, available ${it.available}`);
+      out.push(t('Import_Insufficient_Line', { code: it.product_code, requested: it.requested, available: it.available }));
     });
   }
   if (data.msg && !(data.insufficient && data.insufficient.length)) {
@@ -355,6 +349,9 @@ function clearFile() {
   if (dz.value) dz.value.resetInput();
 }
 
+// A different warehouse can mean different store prices: refresh the preview.
+watch(() => sale.value.warehouse_id, () => { if (importFile.value) fetchPreview(); });
+
 async function fetchPreview() {
   if (!importFile.value) return;
   previewLoading.value = true;
@@ -364,6 +361,8 @@ async function fetchPreview() {
 
   const formData = new FormData();
   formData.append('products', importFile.value);
+  // Prices follow the warehouse's store prices ("Different prices per store").
+  if (sale.value.warehouse_id) formData.append('warehouse_id', sale.value.warehouse_id);
 
   try {
     const resp = await uploadForm('preview_import_sales', formData);

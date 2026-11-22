@@ -247,7 +247,7 @@
                         name="test_email"
                         class="form-control @error('test_email') is-invalid @enderror"
                         value="{{ old('test_email') }}"
-                        placeholder="recipient@example.com"
+                        placeholder="{{ __('super.email_templates.ph_test_to') }}"
                     >
                     @error('test_email')
                         <div class="invalid-feedback">{{ $message }}</div>

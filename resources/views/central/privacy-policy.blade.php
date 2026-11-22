@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 @php
-    $isRtl = in_array(app()->getLocale(), ['ar', 'he', 'fa', 'ur']);
+    $isRtl = \App\Models\Central\CentralLanguage::isRtl(app()->getLocale());
     $generalSettings = \App\Models\Central\GeneralSetting::instance();
     $appName = $generalSettings->app_name ?: 'Stocky';
     $logoUrl = $generalSettings->getLogoUrl();
@@ -11,7 +11,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ __('landing.privacy_policy') }} — {{ $appName }}</title>
     @php
-        $faviconUrl = ($seo && $seo->favicon) ? asset($seo->favicon) : $generalSettings->getFaviconUrl();
+        $faviconUrl = $generalSettings->getPublicFaviconUrl($seo);
     @endphp
     @if($faviconUrl)
         <link rel="icon" href="{{ $faviconUrl }}">

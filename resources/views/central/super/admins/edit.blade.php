@@ -128,20 +128,7 @@
                         @error('permissions')
                             <div class="text-danger mb-2 section-desc">{{ $message }}</div>
                         @enderror
-                        <div class="row g-2">
-                            @php $currentPerms = old('permissions', $admin->permissions ?? []); @endphp
-                            @foreach($permissions as $key => $label)
-                            <div class="col-md-4 col-6">
-                                <label class="perm-check-card">
-                                    <input type="checkbox" name="permissions[]" value="{{ $key }}" {{ in_array($key, $currentPerms) ? 'checked' : '' }}>
-                                    <span class="perm-check-label">
-                                        <i class="bi bi-check-lg perm-check-icon"></i>
-                                        {{ $label }}
-                                    </span>
-                                </label>
-                            </div>
-                            @endforeach
-                        </div>
+                        @include('central.super.admins._permissions', ['checked' => old('permissions', \App\Models\Central\CentralUser::expandPermissions($admin->permissions))])
                         <p class="text-muted mt-2 fs-xs3">
                             <i class="bi bi-info-circle me-1"></i>
                             {{ __('central.OnlySelectedSectionsVisible') }}

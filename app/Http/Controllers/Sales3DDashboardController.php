@@ -22,6 +22,12 @@ class Sales3DDashboardController extends Controller
     {
         $user = Auth::user();
 
+        // The page's `sales_3d_dashboard` permission, enforced server-side too.
+        $role = $user?->roles()->first();
+        if (! $role || ! $role->inRole('sales_3d_dashboard')) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
         if ($user->is_all_warehouses) {
             $warehouses = Warehouse::whereNull('deleted_at')->get(['id', 'name']);
             $allowed_warehouse_ids = $warehouses->pluck('id')->toArray();

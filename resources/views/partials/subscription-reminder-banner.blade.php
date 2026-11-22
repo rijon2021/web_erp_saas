@@ -12,8 +12,12 @@
         'trial'   => __('central.banner_trial_title'),
         'expiry'  => __('central.banner_expiry_title'),
         'expired' => __('central.banner_expired_title'),
+        'grace'   => __('central.banner_grace_title'),
     ];
     $texts = [
+        'grace'   => ($banner['read_only'] ?? false)
+            ? __('central.banner_grace_text_read_only', ['plan' => $banner['plan_name'], 'days' => $banner['days'], 'date' => $banner['date']])
+            : __('central.banner_grace_text', ['plan' => $banner['plan_name'], 'days' => $banner['days'], 'date' => $banner['date']]),
         'trial'   => __('central.banner_trial_text', ['days' => $banner['days'], 'date' => $banner['date']]),
         'expiry'  => __('central.banner_expiry_text', ['plan' => $banner['plan_name'], 'days' => $banner['days'], 'date' => $banner['date']]),
         'expired' => __('central.banner_expired_text', ['plan' => $banner['plan_name'], 'date' => $banner['date']]),
@@ -25,7 +29,7 @@
 <div id="subReminderBanner" class="sub-reminder-banner sub-reminder-{{ $level }}" data-dismiss-key="{{ $dismissKey }}" role="alert" hidden>
     <div class="sub-reminder-inner">
         <span class="sub-reminder-icon">
-            @if($banner['type'] === 'expired')
+            @if(in_array($banner['type'], ['expired', 'grace'], true))
                 <i class="bi bi-exclamation-octagon-fill"></i>
             @else
                 <i class="bi bi-alarm-fill"></i>

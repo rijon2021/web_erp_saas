@@ -6,6 +6,7 @@
           <template #icon><LeftOutlined /></template>
           {{ $t('Back') }}
         </a-button>
+        <AuditHistoryButton type="client" />
         <a-button
           v-if="totalDue > 0 && auth.can('pay_due')"
           type="primary" @click="openPayDue"
@@ -30,6 +31,9 @@
           <a-descriptions-item :label="$t('Country')">{{ client.country || '-' }}</a-descriptions-item>
           <a-descriptions-item :label="$t('Tax_Number')">{{ client.tax_number || '-' }}</a-descriptions-item>
           <a-descriptions-item :label="$t('Credit_Limit')">{{ creditLimitText }}</a-descriptions-item>
+          <a-descriptions-item v-if="brief.courier_return_risk" :label="$t('Cr_Return_Risk')">
+            <ReturnRiskBadge :risk="brief.courier_return_risk" />
+          </a-descriptions-item>
         </a-descriptions>
       </a-card>
 
@@ -64,7 +68,13 @@
               :title="$t('WalletBalance')" :value="money(walletBalance)"
               :value-style="{ color: walletBalance < 0 ? '#ff4d4f' : '#52c41a' }"
             />
-            <div class="muted">{{ $t('E_Wallet') }}</div>
+            <div class="muted">
+              {{ $t('CW_Customer_Wallet') }}
+              <a-tag v-if="brief.wallet_status === 'frozen'" color="error" style="margin-inline-start: 6px">{{ $t('SW_Frozen') }}</a-tag>
+              <a v-if="auth.can('customer_wallet_view')" style="margin-inline-start: 6px" @click="$router.push(`/customers/${id}/wallet`)">
+                {{ $t('CW_Open_Ledger') }} →
+              </a>
+            </div>
           </a-card>
         </a-col>
         <a-col :xs="24" :md="8">
@@ -74,6 +84,66 @@
           </a-card>
         </a-col>
       </a-row>
+
+      <!-- Customer performance. Every figure is derived from the same
+           warehouse-scoped rows as the tabs below, so the two always agree. -->
+      <a-card v-if="performance" size="small" :title="$t('Customer_Performance')" style="margin-bottom: 16px">
+        <template #extra>
+          <a-tag :color="ratingColor">{{ $t(ratingLabel) }}</a-tag>
+        </template>
+
+        <!-- Why the rating is held down, when it is. -->
+        <a-alert
+          v-if="performanceFlags.length"
+          type="warning"
+          show-icon
+          style="margin-bottom: 14px"
+          :message="$t('Rating_capped')"
+        >
+          <template #description>
+            <ul class="flag-list">
+              <li v-for="f in performanceFlags" :key="f">{{ $t(f) }}</li>
+            </ul>
+          </template>
+        </a-alert>
+
+        <a-row :gutter="[16, 16]" align="middle">
+          <a-col :xs="24" :md="7">
+            <div v-if="performance.score === null" class="score-empty">
+              <div class="score-empty-title">{{ $t('No_purchases_yet') }}</div>
+              <div class="muted">{{ $t('Rating_appears_after_first_sale') }}</div>
+            </div>
+            <a-progress
+              v-else
+              type="dashboard"
+              :percent="performance.score"
+              :stroke-color="ratingHex"
+              :format="p => `${p}/100`"
+            />
+          </a-col>
+
+          <a-col :xs="24" :md="17">
+            <a-row :gutter="[16, 12]">
+              <a-col v-for="m in performanceMetrics" :key="m.label" :xs="12" :md="8">
+                <div class="muted">{{ $t(m.label) }}</div>
+                <div class="metric-value">{{ m.value }}</div>
+              </a-col>
+            </a-row>
+
+            <template v-if="performance.score !== null">
+              <a-divider style="margin: 14px 0 10px" />
+              <div class="muted" style="margin-bottom: 6px">{{ $t('Score_breakdown') }}</div>
+              <div class="breakdown">
+                <span v-for="b in scoreBreakdown" :key="b.label">
+                  {{ $t(b.label) }}
+                  <strong>{{ b.points }}</strong
+                  ><span class="muted">/{{ b.max }}</span>
+                </span>
+              </div>
+            </template>
+          </a-col>
+        </a-row>
+      </a-card>
 
       <a-tabs v-model:activeKey="tab">
         <a-tab-pane v-for="pane in panes" :key="pane.key" :tab="$t(pane.label)">
@@ -163,7 +233,9 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import { LeftOutlined, DollarOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import AuditHistoryButton from '../../components/AuditHistoryButton.vue';
 import PayDueModal from '../../components/PayDueModal.vue';
+import ReturnRiskBadge from '../couriers/ReturnRiskBadge.vue';
 import { useAuthStore } from '../../stores/auth';
 import { useFormat } from '../../composables/useFormat';
 import http from '../../lib/http';
@@ -197,6 +269,63 @@ const creditLimitText = computed(() =>
 const walletEnabled = computed(() => !!brief.value.wallet_enabled);
 const walletBalance = computed(() => Number(brief.value.wallet_balance) || 0);
 const loyaltyPoints = computed(() => Number(brief.value.points ?? client.value.points) || 0);
+
+// ---------------- performance ----------------
+
+const performance = computed(() => brief.value.performance || null);
+
+const RATINGS = {
+  excellent: { label: 'Rating_excellent', color: 'success', hex: '#52c41a' },
+  good: { label: 'Rating_good', color: 'processing', hex: '#1677ff' },
+  fair: { label: 'Rating_fair', color: 'warning', hex: '#faad14' },
+  poor: { label: 'Rating_poor', color: 'error', hex: '#ff4d4f' },
+  new: { label: 'Rating_new', color: 'default', hex: '#8c8c8c' },
+};
+const rating = computed(() => RATINGS[performance.value?.rating] || RATINGS.new);
+const ratingLabel = computed(() => rating.value.label);
+const ratingColor = computed(() => rating.value.color);
+const ratingHex = computed(() => rating.value.hex);
+
+/** "-" rather than "0 days" when the customer has never bought. */
+const daysSinceText = computed(() => {
+  const d = performance.value?.days_since_last_purchase;
+  if (d === null || d === undefined) return '-';
+  return d === 0 ? t('Today') : `${d} ${t('Days_Ago')}`;
+});
+
+const performanceMetrics = computed(() => {
+  const p = performance.value;
+  if (!p) return [];
+  return [
+    { label: 'Total_Orders', value: p.orders },
+    { label: 'TotalAmount', value: money(p.total_purchased) },
+    { label: 'Average_Order_Value', value: money(p.average_order_value) },
+    { label: 'Last_Purchase', value: p.last_purchase || '-' },
+    { label: 'Last_Seen', value: daysSinceText.value },
+    { label: 'Orders_Per_Month', value: p.orders_per_month },
+    { label: 'Paid_Ratio', value: `${p.paid_ratio}%` },
+    { label: 'Return_Rate', value: `${p.return_rate}%` },
+    { label: 'First_Purchase', value: p.first_purchase || '-' },
+  ];
+});
+
+const FLAG_LABELS = {
+  low_payment: 'Flag_low_payment',
+  dormant: 'Flag_dormant',
+  high_returns: 'Flag_high_returns',
+};
+const performanceFlags = computed(() =>
+  (performance.value?.flags || []).map(f => FLAG_LABELS[f]).filter(Boolean));
+
+const scoreBreakdown = computed(() => {
+  const b = performance.value?.breakdown;
+  if (!b) return [];
+  return [
+    { label: 'Payment_reliability', points: b.payment, max: 40 },
+    { label: 'Recency', points: b.recency, max: 30 },
+    { label: 'Returns', points: b.returns, max: 30 },
+  ];
+});
 
 function paymentStatusColor(status) {
   const s = String(status || '').toLowerCase();
@@ -369,5 +498,29 @@ onMounted(async () => {
 .due-open {
   color: #ff4d4f;
   font-weight: 600;
+}
+.metric-value {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-size: 13px;
+}
+.score-empty {
+  text-align: center;
+  padding: 12px 0;
+}
+.score-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.flag-list {
+  margin: 0;
+  padding-inline-start: 18px;
 }
 </style>

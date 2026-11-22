@@ -42,7 +42,8 @@ import {
   Volume2, VolumeX,
   ChefHat, RotateCw,
   CalendarCheck, CalendarClock, Layers, Video, Link, Paperclip, History,
-  Megaphone, MessageCircle, ToggleRight, ScanBarcode, Gift, Keyboard
+  Megaphone, MessageCircle, ToggleRight, ScanBarcode, Gift, Keyboard,
+  CloudOff, CloudUpload, ExternalLink
 } from 'lucide-vue-next';
 
 const REGISTRY = {
@@ -236,6 +237,10 @@ const REGISTRY = {
   'toggle-right': ToggleRight,
   'scan-barcode': ScanBarcode,
   'gift': Gift,
+  // offline sync status menu
+  'cloud-off': CloudOff,
+  'cloud-upload': CloudUpload,
+  'external-link': ExternalLink,
 };
 
 // Vue 3 port of the legacy functional component: class/style/attrs fall

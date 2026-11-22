@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\Security\LoginGuard;
+use App\Support\Security\SingleSession;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\ValidationException;
 
 class AuthController extends BaseController
 {
@@ -18,6 +21,20 @@ class AuthController extends BaseController
 
         $credentials = request(['email', 'password']);
 
+        // Same failed-attempt lockout as the login form (System Settings >
+        // Security), so this endpoint can't be used to guess around it.
+        $guard = LoginGuard::tenant();
+        $email = (string) $request->input('email');
+        try {
+            $guard->ensureNotLocked($request, $email);
+        } catch (ValidationException $e) {
+            // Same JSON shape as the endpoint's other failures, never a redirect.
+            return response()->json([
+                'message' => collect($e->errors())->flatten()->first(),
+                'status' => false,
+            ], 429);
+        }
+
         if (Auth::attempt($credentials)) {
             $userStatus = Auth::User()->statut;
             if ($userStatus === 0) {
@@ -26,8 +43,18 @@ class AuthController extends BaseController
                     'status' => 'NotActive',
                 ]);
             }
+            $guard->recordSuccess($request, $email, (int) Auth::id());
+
+            // One active session per user: the token issued below replaces
+            // every other session and token of this user.
+            if ($guard->options()['single_session']) {
+                SingleSession::revokeOthers((int) Auth::id());
+                SingleSession::rotateRememberToken(Auth::user());
+            }
 
         } else {
+            $guard->recordFailure($request, $email);
+
             return response()->json([
                 'message' => 'Incorrect Login',
                 'status' => false,

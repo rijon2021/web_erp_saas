@@ -1,21 +1,21 @@
 <template>
   <div class="page">
     <PageHeader
-      title="MRP Planning"
-      subtitle="What to make and what to buy, worked out from open demand."
-      :breadcrumb="['Manufacturing', 'Planning']"
+      :title="$t('Page_MRP_Planning')"
+      :subtitle="$t('Mrp_Planning_Subtitle')"
+      :breadcrumb="[$t('Manufacturing'), $t('Mrp_Planning')]"
     >
       <template #actions>
         <a-button type="primary" :loading="running" @click="runOpen = true">
           <template #icon><CalculatorOutlined /></template>
-          Run planning
+          {{ $t('Mrp_Run_Planning') }}
         </a-button>
       </template>
     </PageHeader>
 
     <a-alert
       v-if="latestRun?.last_error" type="warning" show-icon style="margin-bottom: 16px"
-      message="The last run skipped something" :description="latestRun.last_error"
+      :message="$t('Mrp_Last_Run_Skipped')" :description="latestRun.last_error"
     />
 
     <a-card v-if="latestRun" size="small" style="margin-bottom: 16px">
@@ -24,18 +24,18 @@
           <strong>{{ latestRun.reference }}</strong>
           <span class="sub">
             {{ latestRun.warehouse_name }} ·
-            {{ latestRun.horizon_start }} to {{ latestRun.horizon_end }} ·
-            {{ latestRun.demand_lines }} demand line(s)
+            {{ latestRun.horizon_start }} {{ $t('Mrp_To') }} {{ latestRun.horizon_end }} ·
+            {{ latestRun.demand_lines }} {{ $t('Mrp_Demand_Lines') }}
           </span>
         </div>
         <a-space wrap>
-          <a-tag color="purple">{{ latestRun.make_suggestions }} to make</a-tag>
-          <a-tag color="blue">{{ latestRun.buy_suggestions }} to buy</a-tag>
+          <a-tag color="purple">{{ latestRun.make_suggestions }} {{ $t('Mrp_To_Make') }}</a-tag>
+          <a-tag color="blue">{{ latestRun.buy_suggestions }} {{ $t('Mrp_To_Buy') }}</a-tag>
           <a-button
             v-if="pendingMake > 0" size="small" type="primary"
             :loading="accepting" @click="acceptAll"
           >
-            Create {{ pendingMake }} production order(s)
+            {{ $t('Mrp_Create') }} {{ pendingMake }} {{ $t('Mrp_Production_Orders_Lc') }}
           </a-button>
         </a-space>
       </div>
@@ -44,34 +44,34 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search product…"
+          v-model:value="crud.search.value" :placeholder="$t('Mrp_Search_Product')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.action" class="tb-item" allow-clear
-          placeholder="Make and buy" :options="SUGGESTION_ACTIONS" @change="crud.reload"
+          :placeholder="$t('Mrp_Make_And_Buy')" :options="SUGGESTION_ACTIONS" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item" allow-clear
-          placeholder="All statuses" :options="SUGGESTION_STATUSES" @change="crud.reload"
+          :placeholder="$t('Mrp_All_Statuses')" :options="SUGGESTION_STATUSES" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.planning_run_id" class="tb-item tb-run" allow-clear
-          placeholder="Latest run" :options="runOptions" @change="crud.reload"
+          :placeholder="$t('Mrp_Latest_Run')" :options="runOptions" @change="crud.reload"
         />
       </div>
     </a-card>
 
     <a-alert
       type="info" show-icon banner style="margin-bottom: 12px"
-      message="Net requirement = demand − stock on hand − already incoming + safety stock. Accepting a suggestion creates a DRAFT order; nothing is issued until you release it."
+      :message="$t('Mrp_Net_Requirement_Note')"
     />
 
     <DataTable :crud="crud" :columns="columns" :searchable="false">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'product'">
           {{ record.product_name }}
-          <div class="sub">{{ record.product_code }} · level {{ record.level }}</div>
+          <div class="sub">{{ record.product_code }} · {{ $t('Mrp_Level') }} {{ record.level }}</div>
         </template>
         <template v-else-if="column.key === 'action'">
           <a-tag :color="optionOf(SUGGESTION_ACTIONS, record.action).color">
@@ -87,7 +87,7 @@
               <span class="op">+</span> {{ number(record.safety_stock, 2) }}
             </template>
           </span>
-          <div class="sub">demand − on hand − incoming{{ record.safety_stock ? ' + safety' : '' }}</div>
+          <div class="sub">{{ $t('Mrp_Workings_Hint') }}{{ record.safety_stock ? ' + ' + $t('Mrp_Safety') : '' }}</div>
         </template>
         <template v-else-if="column.key === 'suggested_qty'">
           <strong>{{ number(record.suggested_qty, 2) }}</strong>
@@ -103,20 +103,20 @@
               v-if="record.status === 'pending' && record.action === 'make'"
               type="link" size="small" @click="accept(record)"
             >
-              Create order
+              {{ $t('Mrp_Create_Order') }}
             </a-button>
             <a-button
               v-else-if="record.status === 'accepted' && record.created_order_id"
               type="link" size="small"
               @click="$router.push(`/mrp/production-orders/${record.created_order_id}`)"
             >
-              View order
+              {{ $t('Mrp_View_Order') }}
             </a-button>
             <a-button
               v-if="record.status === 'pending'" type="link" size="small" danger
               @click="dismiss(record)"
             >
-              Dismiss
+              {{ $t('Mrp_Dismiss') }}
             </a-button>
           </a-space>
         </template>
@@ -124,29 +124,29 @@
     </DataTable>
 
     <a-modal
-      :open="runOpen" title="Run planning" :width="520"
-      :confirm-loading="running" ok-text="Run" :cancel-text="$t('Cancel')"
+      :open="runOpen" :title="$t('Mrp_Run_Planning')" :width="520"
+      :confirm-loading="running" :ok-text="$t('Mrp_Run')" :cancel-text="$t('Cancel')"
       @ok="run" @cancel="runOpen = false"
     >
       <a-alert
         type="info" show-icon banner style="margin-bottom: 14px"
-        message="Reads open sales in the window, explodes bills of materials down every level, and nets off what you already have or have coming."
+        :message="$t('Mrp_Run_Planning_Note')"
       />
       <a-form layout="vertical">
-        <a-form-item :label="$t('Warehouse')" extra="Leave blank to plan across all of them">
+        <a-form-item :label="$t('Warehouse')" :extra="$t('Mrp_Leave_Blank_All_Warehouses')">
           <a-select
             v-model:value="runForm.warehouse_id" show-search option-filter-prop="label"
-            :options="warehouseOptions" allow-clear placeholder="All warehouses"
+            :options="warehouseOptions" allow-clear :placeholder="$t('Cr_All_Warehouses')"
           />
         </a-form-item>
-        <a-form-item label="Demand window">
+        <a-form-item :label="$t('Mrp_Demand_Window')">
           <a-range-picker v-model:value="runForm.range" style="width: 100%" value-format="YYYY-MM-DD" />
         </a-form-item>
         <a-form-item style="margin-bottom: 0">
           <a-checkbox v-model:checked="runForm.include_safety_stock">
-            Keep safety stock on top of demand
+            {{ $t('Mrp_Keep_Safety_Stock') }}
           </a-checkbox>
-          <div class="hint">Uses each product's stock alert level.</div>
+          <div class="hint">{{ $t('Mrp_Safety_Stock_Hint') }}</div>
         </a-form-item>
       </a-form>
     </a-modal>
@@ -170,6 +170,9 @@ import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { SUGGESTION_ACTIONS, SUGGESTION_STATUSES, labelOf, optionOf } from './mrpOptions';
 import http from '../../lib/http';
+import { useI18n } from 'vue-i18n';
+
+const { t } = useI18n();
 
 const { number } = useFormat();
 
@@ -185,13 +188,13 @@ const crud = useCrudTable('mrp/planning/suggestions', {
 });
 
 const columns = computed(() => [
-  { title: 'Product', key: 'product', dataIndex: 'product_name' },
-  { title: 'Action', key: 'action', dataIndex: 'action', width: 100 },
-  { title: 'Workings', key: 'workings', width: 260 },
-  { title: 'Net need', dataIndex: 'net_requirement', key: 'net_requirement', width: 110, align: 'right' },
-  { title: 'Suggested', key: 'suggested_qty', dataIndex: 'suggested_qty', width: 110, align: 'right' },
-  { title: 'By', dataIndex: 'required_by', key: 'required_by', width: 120 },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 120 },
+  { title: t('Product'), key: 'product', dataIndex: 'product_name' },
+  { title: t('Action'), key: 'action', dataIndex: 'action', width: 100 },
+  { title: t('Mrp_Workings'), key: 'workings', width: 260 },
+  { title: t('Mrp_Net_Need'), dataIndex: 'net_requirement', key: 'net_requirement', width: 110, align: 'right' },
+  { title: t('Mrp_Suggested'), key: 'suggested_qty', dataIndex: 'suggested_qty', width: 110, align: 'right' },
+  { title: t('Mrp_By'), dataIndex: 'required_by', key: 'required_by', width: 120 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 120 },
   { title: '', key: 'actions', width: 180, align: 'center' },
 ]);
 
@@ -203,7 +206,7 @@ const latestRun = computed(() => {
 });
 const runOptions = computed(() => runs.value.map(r => ({
   value: r.id,
-  label: `${r.reference} — ${r.make_suggestions + r.buy_suggestions} suggestion(s)`,
+  label: `${r.reference} — ${r.make_suggestions + r.buy_suggestions} ${t('Mrp_Suggestions_Lc')}`,
 })));
 const warehouseOptions = computed(() => warehouses.value.map(w => ({ value: w.id, label: w.name })));
 
@@ -228,14 +231,14 @@ async function run() {
     });
     const r = res?.run;
     message.success(r
-      ? `${r.make_suggestions} to make, ${r.buy_suggestions} to buy`
-      : 'Planning finished');
+      ? `${r.make_suggestions} ${t('Mrp_To_Make')}, ${r.buy_suggestions} ${t('Mrp_To_Buy')}`
+      : t('Mrp_Planning_Finished'));
     runOpen.value = false;
     filters.planning_run_id = undefined;
     await loadRuns();
     crud.fetchRows();
   } catch (e) {
-    message.error(e?.data?.message || 'Planning failed');
+    message.error(e?.data?.message || t('Mrp_Planning_Failed'));
   } finally {
     running.value = false;
   }
@@ -248,10 +251,10 @@ const accepting = ref(false);
 async function accept(record) {
   try {
     const res = await http.post(`mrp/planning/suggestions/${record.id}/accept`);
-    message.success(`Draft order ${res?.reference || ''} created`);
+    message.success(t('Mrp_Draft_Order_Ref_Created', { ref: res?.reference || '' }));
     crud.fetchRows();
   } catch (e) {
-    message.error(e?.data?.message || 'Could not create that order');
+    message.error(e?.data?.message || t('Mrp_Could_Not_Create_Order'));
   }
 }
 
@@ -263,11 +266,11 @@ async function acceptAll() {
       planning_run_id: latestRun.value.id,
     });
     const failed = res?.failed?.length || 0;
-    message.success(`${res?.created || 0} draft order(s) created`
-      + (failed ? `, ${failed} could not be raised` : ''));
+    message.success(`${res?.created || 0} ${t('Mrp_Draft_Orders_Created')}`
+      + (failed ? `, ${failed} ${t('Mrp_Could_Not_Be_Raised')}` : ''));
     crud.fetchRows();
   } catch (e) {
-    message.error(e?.data?.message || 'Could not create those orders');
+    message.error(e?.data?.message || t('Mrp_Could_Not_Create_Orders'));
   } finally {
     accepting.value = false;
   }
@@ -278,7 +281,7 @@ async function dismiss(record) {
     await http.post(`mrp/planning/suggestions/${record.id}/dismiss`);
     crud.fetchRows();
   } catch (e) {
-    message.error(e?.data?.message || 'Could not dismiss that suggestion');
+    message.error(e?.data?.message || t('Mrp_Could_Not_Dismiss_Suggestion'));
   }
 }
 

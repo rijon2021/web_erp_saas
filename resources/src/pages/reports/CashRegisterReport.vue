@@ -41,7 +41,7 @@
       </template>
       <template v-else-if="column.key === 'status'">
         <a-tag :color="String(record.status).toLowerCase().includes('open') ? 'processing' : 'default'">
-          {{ record.status }}
+          {{ statusLabel(record.status) }}
         </a-tag>
       </template>
     </template>
@@ -95,8 +95,12 @@ const columns = computed(() => [
   { title: t('Closed'), key: 'closed_at', dataIndex: 'closed_at', sorter: true, exportValue: r => (r.closed_at ? dateTime(r.closed_at) : '') },
   { title: t('Closing'), key: 'closing_balance', dataIndex: 'closing_balance', align: 'right', exportValue: r => money(r.closing_balance) },
   { title: t('Difference'), key: 'difference', dataIndex: 'difference', align: 'right', sum: 'money', exportValue: r => money(r.difference) },
-  { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => r.status },
+  { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => statusLabel(r.status) },
 ]);
+
+// Register status is the raw 'open' / 'closed' value.
+const STATUS_LABEL = { open: 'Open', closed: 'Closed' };
+const statusLabel = s => (STATUS_LABEL[s] ? t(STATUS_LABEL[s]) : s);
 
 onMounted(crud.fetchRows);
 </script>

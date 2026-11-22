@@ -65,9 +65,9 @@
                     <div class="form-group">
                         <label class="form-switch-label">
                             <input type="checkbox" name="is_private" value="1" class="form-check-input" {{ old('is_private') ? 'checked' : '' }}>
-                            <span><i class="bi bi-lock me-1"></i>Private Plan</span>
+                            <span><i class="bi bi-lock me-1"></i>{{ __('super.plans.private_plan') }}</span>
                         </label>
-                        <p class="form-hint">Private plans are hidden from the landing page, registration form, and tenant billing page. Only a super admin can assign them to tenants.</p>
+                        <p class="form-hint">{{ __('super.plans.private_hint') }}</p>
                     </div>
                     <div class="form-group">
                         <label class="form-switch-label">
@@ -82,6 +82,9 @@
                     </div>
                 </div>
             </div>
+
+            {{-- Prices in other currencies (multi-currency pricing) --}}
+            @include('central.super.plans._currency_prices', ['plan' => null])
 
             {{-- Usage limits --}}
             <div class="content-card mb-4">
@@ -149,6 +152,8 @@
                     </div>
                 </div>
             </div>
+
+            @include('central.super.plans._retention', ['plan' => null])
 
             <div class="d-flex gap-2">
                 <button type="submit" class="btn btn-primary">

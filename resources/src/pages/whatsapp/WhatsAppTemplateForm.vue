@@ -11,7 +11,7 @@
         <a-card size="small" :title="tf('Template_Details', 'Template Details')">
           <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
             <a-form-item :label="t('Name')" name="name">
-              <a-input v-model:value="form.name" placeholder="e.g. Invoice Created" />
+              <a-input v-model:value="form.name" :placeholder="tf('Wa_Template_Name_Placeholder')" />
             </a-form-item>
             <a-form-item :label="tf('Key', 'Key')" :extra="tf('Template_Key_Hint', 'Used to match automation triggers. Leave blank to auto-generate from the name.')">
               <a-input v-model:value="form.key" placeholder="invoice_created" />
@@ -29,7 +29,7 @@
               </a-col>
             </a-row>
             <a-form-item :label="tf('Message_Body', 'Message Body')" name="body">
-              <a-textarea v-model:value="form.body" :rows="6" placeholder="Hello {{customer_name}}, ..." />
+              <a-textarea v-model:value="form.body" :rows="6" :placeholder="t('Wa_Body_Placeholder', { var: '{{customer_name}}' })" />
             </a-form-item>
             <a-form-item>
               <a-switch v-model:checked="form.is_active" /> <span style="margin-left: 8px">{{ tf('Active', 'Active') }}</span>

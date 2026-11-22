@@ -1,14 +1,14 @@
 <template>
   <div class="page">
-    <PageHeader title="Lab Orders" :breadcrumb="['Hospital', 'Laboratory', 'Orders']">
+    <PageHeader :title="$t('Hm_Lab_Orders')" :breadcrumb="[$t('Hm_Hospital'), $t('Hm_Laboratory'), $t('Orders')]">
       <template #actions>
         <a-button @click="$router.push('/hospital/lab-tests')">
           <template #icon><UnorderedListOutlined /></template>
-          Catalogue
+          {{ $t('Hm_Catalogue') }}
         </a-button>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
-          New order
+          {{ $t('Hm_New_Order') }}
         </a-button>
       </template>
     </PageHeader>
@@ -16,20 +16,20 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search patient, MRN or reference…"
+          v-model:value="crud.search.value" :placeholder="$t('Hm_Search_Patient_Ref_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item" allow-clear
-          placeholder="All statuses" :options="LAB_STATUSES" @change="crud.reload"
+          :placeholder="$t('Hm_All_Statuses')" :options="LAB_STATUSES" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.priority" class="tb-item-sm" allow-clear
-          placeholder="Priority" :options="LAB_PRIORITIES" @change="crud.reload"
+          :placeholder="$t('Hm_Priority')" :options="LAB_PRIORITIES" @change="crud.reload"
         />
         <a-range-picker v-model:value="filters.range" class="tb-range" value-format="YYYY-MM-DD" @change="crud.reload" />
         <a-checkbox v-model:checked="filters.pending" class="tb-check" @change="crud.reload">
-          Pending only
+          {{ $t('Hm_Pending_Only') }}
         </a-checkbox>
       </div>
     </a-card>
@@ -46,7 +46,7 @@
         <template v-else-if="column.key === 'tests'">
           <a-badge :count="record.test_count" :number-style="{ backgroundColor: '#6d28d9' }" />
           <a-tag v-if="record.abnormal_count" color="error" class="abn">
-            {{ record.abnormal_count }} abnormal
+            {{ record.abnormal_count }} {{ $t('Hm_Abnormal_Lc') }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'priority'">
@@ -62,12 +62,12 @@
         <template v-else-if="column.key === 'total'">{{ money(record.total) }}</template>
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
-            <a-tooltip title="Results">
+            <a-tooltip :title="$t('Hm_Results')">
               <a-button type="text" size="small" @click="openResults(record)">
                 <template #icon><FileTextOutlined /></template>
               </a-button>
             </a-tooltip>
-            <a-tooltip title="Bill these tests">
+            <a-tooltip :title="$t('Hm_Bill_These_Tests')">
               <a-button type="text" size="small" @click="bill(record)">
                 <template #icon><DollarOutlined /></template>
               </a-button>
@@ -89,25 +89,25 @@
 
     <!-- Order form -->
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit order' : 'New lab order'" :width="620"
+      :open="formOpen" :title="editing ? $t('Hm_Edit_Order') : $t('Hm_New_Lab_Order')" :width="620"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
-        <a-form-item label="Patient *" name="patient_id">
+        <a-form-item :label="$t('Hm_Patient') + ' *'" name="patient_id">
           <PatientPicker v-model="form.patient_id" :initial-option="editingPatient" />
         </a-form-item>
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Requested by">
+            <a-form-item :label="$t('Hm_Requested_By')">
               <a-select
                 v-model:value="form.doctor_id" allow-clear show-search option-filter-prop="label"
-                :options="doctorOptions" placeholder="Select"
+                :options="doctorOptions" :placeholder="$t('Hm_Select')"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Ordered at">
+            <a-form-item :label="$t('Hm_Ordered_At')">
               <a-date-picker
                 v-model:value="form.ordered_at" show-time style="width: 100%"
                 value-format="YYYY-MM-DD HH:mm:ss"
@@ -115,19 +115,19 @@
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Priority">
+            <a-form-item :label="$t('Hm_Priority')">
               <a-select v-model:value="form.priority" :options="LAB_PRIORITIES" />
             </a-form-item>
           </a-col>
         </a-row>
-        <a-form-item label="Tests *" name="test_ids">
+        <a-form-item :label="$t('Hm_Tests') + ' *'" name="test_ids">
           <a-select
             v-model:value="form.test_ids" mode="multiple" show-search option-filter-prop="label"
-            :options="testOptions" placeholder="Pick the tests to run"
+            :options="testOptions" :placeholder="$t('Hm_Pick_Tests')"
           />
         </a-form-item>
         <div class="order-total">
-          Estimated total: <b>{{ money(estimate) }}</b>
+          {{ $t('Hm_Estimated_Total') }}: <b>{{ money(estimate) }}</b>
         </div>
         <a-form-item :label="$t('Note')" style="margin-bottom: 0">
           <a-textarea v-model:value="form.notes" :rows="2" />
@@ -136,7 +136,7 @@
     </a-modal>
 
     <!-- Results -->
-    <a-drawer :open="resultsOpen" :width="720" :title="`Results — ${current?.reference || ''}`" @close="resultsOpen = false">
+    <a-drawer :open="resultsOpen" :width="720" :title="`${$t('Hm_Results')} — ${current?.reference || ''}`" @close="resultsOpen = false">
       <template #extra>
         <a-space>
           <a-select v-model:value="resultStatus" :options="LAB_STATUSES" style="width: 170px" />
@@ -145,24 +145,24 @@
       </template>
 
       <a-descriptions v-if="current" :column="2" size="small" bordered style="margin-bottom: 16px">
-        <a-descriptions-item label="Patient">{{ current.patient_name }}</a-descriptions-item>
+        <a-descriptions-item :label="$t('Hm_Patient')">{{ current.patient_name }}</a-descriptions-item>
         <a-descriptions-item label="MRN">{{ current.patient_mrn }}</a-descriptions-item>
-        <a-descriptions-item label="Ordered">{{ dateTime(current.ordered_at) }}</a-descriptions-item>
-        <a-descriptions-item label="Priority">{{ labelOf(LAB_PRIORITIES, current.priority) }}</a-descriptions-item>
+        <a-descriptions-item :label="$t('Hm_Ordered')">{{ dateTime(current.ordered_at) }}</a-descriptions-item>
+        <a-descriptions-item :label="$t('Hm_Priority')">{{ labelOf(LAB_PRIORITIES, current.priority) }}</a-descriptions-item>
       </a-descriptions>
 
       <div v-for="item in resultItems" :key="item.id" class="res">
         <div class="res-head">
           <span class="res-name">{{ item.test_name }}</span>
-          <span v-if="item.normal_range" class="res-range">Normal: {{ item.normal_range }}{{ item.unit ? ` ${item.unit}` : '' }}</span>
+          <span v-if="item.normal_range" class="res-range">{{ $t('Hm_Normal') }}: {{ item.normal_range }}{{ item.unit ? ` ${item.unit}` : '' }}</span>
         </div>
         <div class="res-inputs">
-          <a-input v-model:value="item.result_value" placeholder="Result" class="res-value" />
-          <a-select v-model:value="item.flag" :options="RESULT_FLAGS" placeholder="Flag" allow-clear class="res-flag" />
-          <a-input v-model:value="item.remarks" placeholder="Remarks" class="res-remarks" />
+          <a-input v-model:value="item.result_value" :placeholder="$t('Hm_Result')" class="res-value" />
+          <a-select v-model:value="item.flag" :options="RESULT_FLAGS" :placeholder="$t('Hm_Flag')" allow-clear class="res-flag" />
+          <a-input v-model:value="item.remarks" :placeholder="$t('Hm_Remarks')" class="res-remarks" />
         </div>
       </div>
-      <a-empty v-if="!resultItems.length" description="No tests on this order" />
+      <a-empty v-if="!resultItems.length" :description="$t('Hm_No_Tests_On_Order')" />
     </a-drawer>
   </div>
 </template>
@@ -213,13 +213,13 @@ const crud = useCrudTable('hospital/lab-orders', {
 });
 
 const columns = computed(() => [
-  { title: 'Patient', key: 'patient', dataIndex: 'patient_name' },
-  { title: 'Ordered', key: 'ordered_at', dataIndex: 'ordered_at', sorter: true, width: 175 },
-  { title: 'Doctor', dataIndex: 'doctor_name', key: 'doctor_name', width: 150 },
-  { title: 'Tests', key: 'tests', width: 150 },
-  { title: 'Priority', key: 'priority', dataIndex: 'priority', sorter: true, width: 120 },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 160 },
-  { title: 'Total', key: 'total', dataIndex: 'total', sorter: true, width: 120 },
+  { title: t('Hm_Patient'), key: 'patient', dataIndex: 'patient_name' },
+  { title: t('Hm_Ordered'), key: 'ordered_at', dataIndex: 'ordered_at', sorter: true, width: 175 },
+  { title: t('Hm_Doctor'), dataIndex: 'doctor_name', key: 'doctor_name', width: 150 },
+  { title: t('Hm_Tests'), key: 'tests', width: 150 },
+  { title: t('Hm_Priority'), key: 'priority', dataIndex: 'priority', sorter: true, width: 120 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 160 },
+  { title: t('Total'), key: 'total', dataIndex: 'total', sorter: true, width: 120 },
   { title: '', key: 'actions', width: 150 },
 ]);
 
@@ -255,7 +255,7 @@ function empty() {
 const required = () => [{ required: true, message: t('Field_is_required', 'This field is required') }];
 const rules = computed(() => ({
   patient_id: required(),
-  test_ids: [{ required: true, type: 'array', min: 1, message: 'Pick at least one test' }],
+  test_ids: [{ required: true, type: 'array', min: 1, message: t('Hm_Pick_At_Least_One_Test') }],
 }));
 
 const estimate = computed(() =>
@@ -349,7 +349,7 @@ async function saveResults() {
         remarks: i.remarks,
       })),
     });
-    message.success('Results saved.');
+    message.success(t('Hm_Results_Saved'));
     resultsOpen.value = false;
     crud.fetchRows();
   } catch (e) {

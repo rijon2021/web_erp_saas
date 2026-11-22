@@ -60,8 +60,13 @@ class DispatchWebhooks implements ShouldQueue
             }
 
             $model = $this->extractModel($event);
+            // Sales, returns, purchases and adjustments carry their product
+            // lines (code, quantity, price, total …), so a receiver needs no
+            // second call to learn what was sold. Deletions keep them too.
             $payload = $model instanceof Model
-                ? Payload::fromModel($model)
+                ? Payload::fromModel($model, \App\Services\DocumentLines::typeOf($model)
+                    ? ['lines' => \App\Services\DocumentLines::forModel($model)]
+                    : [])
                 : ['attributes' => (array) $event];
 
             $this->dispatcher->dispatch($eventName, $payload);

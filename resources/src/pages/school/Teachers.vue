@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHeader title="Teachers" :breadcrumb="['School', 'Teachers']">
+    <PageHeader :title="$t('Sc_Teachers')" :breadcrumb="[$t('Sc_School'), $t('Sc_Teachers')]">
       <template #actions>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
@@ -12,16 +12,16 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search name, code or specialism…"
+          v-model:value="crud.search.value" :placeholder="$t('Sc_Search_Teacher_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.gender" class="tb-item-sm" allow-clear
-          placeholder="Gender" :options="GENDERS" @change="crud.reload"
+          :placeholder="$t('Sc_Gender')" :options="GENDERS" @change="crud.reload"
         />
         <a-select
-          v-model:value="filters.active" class="tb-item-sm" allow-clear placeholder="All"
-          :options="[{ value: '1', label: 'Active' }, { value: '0', label: 'Inactive' }]"
+          v-model:value="filters.active" class="tb-item-sm" allow-clear :placeholder="$t('Sc_All')"
+          :options="[{ value: '1', label: $t('Sc_Active') }, { value: '0', label: $t('Sc_Inactive') }]"
           @change="crud.reload"
         />
       </div>
@@ -42,12 +42,12 @@
         </template>
         <template v-else-if="column.key === 'workload'">
           <a-space :size="4">
-            <a-tooltip title="Periods a week">
+            <a-tooltip :title="$t('Sc_Periods_A_Week')">
               <a-tag :color="record.weekly_periods > 30 ? 'error' : record.weekly_periods > 20 ? 'warning' : 'default'">
-                {{ record.weekly_periods }} periods
+                {{ $t('Sc_N_Periods', { n: record.weekly_periods }) }}
               </a-tag>
             </a-tooltip>
-            <a-tag v-if="record.form_classes">{{ record.form_classes }} form</a-tag>
+            <a-tag v-if="record.form_classes">{{ $t('Sc_N_Form', { n: record.form_classes }) }}</a-tag>
           </a-space>
         </template>
         <template v-else-if="column.key === 'joining_date'">
@@ -55,12 +55,12 @@
         </template>
         <template v-else-if="column.key === 'is_active'">
           <a-tag :color="record.is_active ? 'success' : 'default'">
-            {{ record.is_active ? 'Active' : 'Inactive' }}
+            {{ record.is_active ? $t('Sc_Active') : $t('Sc_Inactive') }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
-            <a-tooltip title="Weekly timetable">
+            <a-tooltip :title="$t('Sc_Weekly_Timetable')">
               <a-button type="text" size="small" @click="openTimetable(record)">
                 <template #icon><CalendarOutlined /></template>
               </a-button>
@@ -81,64 +81,64 @@
     </DataTable>
 
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit teacher' : 'New teacher'" :width="680"
+      :open="formOpen" :title="editing ? $t('Sc_Edit_Teacher') : $t('Sc_New_Teacher')" :width="680"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Name *" name="name">
+            <a-form-item :label="$t('Name') + ' *'" name="name">
               <a-input v-model:value="form.name" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Staff code">
+            <a-form-item :label="$t('Sc_Staff_Code')">
               <a-input v-model:value="form.employee_code" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Gender *" name="gender">
+            <a-form-item :label="$t('Sc_Gender') + ' *'" name="gender">
               <a-select v-model:value="form.gender" :options="GENDERS" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Specialism">
-              <a-input v-model:value="form.specialization" placeholder="e.g. Mathematics" allow-clear />
+            <a-form-item :label="$t('Sc_Specialism')">
+              <a-input v-model:value="form.specialization" :placeholder="$t('Sc_Specialism_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Qualification">
-              <a-input v-model:value="form.qualification" placeholder="e.g. BSc, PGCE" allow-clear />
+            <a-form-item :label="$t('Sc_Qualification')">
+              <a-input v-model:value="form.qualification" :placeholder="$t('Sc_Qualification_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Phone">
+            <a-form-item :label="$t('Phone')">
               <a-input v-model:value="form.phone" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="10">
-            <a-form-item label="Email" name="email">
+            <a-form-item :label="$t('Email')" name="email">
               <a-input v-model:value="form.email" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Joined on">
+            <a-form-item :label="$t('Sc_Joined_On')">
               <a-date-picker v-model:value="form.joining_date" style="width: 100%" value-format="YYYY-MM-DD" />
             </a-form-item>
           </a-col>
           <a-col :span="24">
-            <a-form-item label="Address">
+            <a-form-item :label="$t('Address')">
               <a-input v-model:value="form.address" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Photo">
+            <a-form-item :label="$t('Sc_Photo')">
               <a-space>
                 <a-upload :show-upload-list="false" accept="image/*" :before-upload="pickImage">
                   <a-button>
                     <template #icon><UploadOutlined /></template>
-                    {{ previewUrl ? 'Replace' : 'Upload' }}
+                    {{ previewUrl ? $t('Sc_Replace') : $t('Upload') }}
                   </a-button>
                 </a-upload>
                 <a-avatar v-if="previewUrl" :size="40" :src="previewUrl" />
@@ -146,8 +146,8 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Status">
-              <a-checkbox v-model:checked="form.is_active">On the staff</a-checkbox>
+            <a-form-item :label="$t('Status')">
+              <a-checkbox v-model:checked="form.is_active">{{ $t('Sc_On_The_Staff') }}</a-checkbox>
             </a-form-item>
           </a-col>
           <a-col :span="24">
@@ -159,8 +159,8 @@
       </a-form>
     </a-modal>
 
-    <a-drawer :open="ttOpen" :width="520" :title="`${timetable.teacher_name || ''} — weekly timetable`" @close="ttOpen = false">
-      <a-empty v-if="!timetable.total" description="No periods assigned" />
+    <a-drawer :open="ttOpen" :width="520" :title="$t('Sc_Teacher_Weekly_Timetable', { name: timetable.teacher_name || '' })" @close="ttOpen = false">
+      <a-empty v-if="!timetable.total" :description="$t('Sc_No_Periods_Assigned')" />
       <div v-else>
         <div v-for="day in WEEK_DAYS" :key="day.value" class="tt-day">
           <div class="tt-day-name">{{ day.label }}</div>
@@ -173,7 +173,7 @@
               </span>
             </div>
           </div>
-          <div v-else class="tt-free">Free</div>
+          <div v-else class="tt-free">{{ $t('Sc_Free') }}</div>
         </div>
       </div>
     </a-drawer>
@@ -198,8 +198,9 @@ import { useFormat } from '../../composables/useFormat';
 import { uploadForm } from '../../lib/upload';
 import { GENDERS, WEEK_DAYS } from './schoolOptions';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const { date } = useFormat();
 const filters = reactive({ gender: undefined, active: undefined });
 
@@ -212,12 +213,12 @@ const crud = useCrudTable('school/teachers', {
 });
 
 const columns = computed(() => [
-  { title: 'Teacher', key: 'name', dataIndex: 'name', sorter: true },
-  { title: 'Phone', dataIndex: 'phone', key: 'phone', width: 140 },
-  { title: 'Email', dataIndex: 'email', key: 'email', width: 200 },
-  { title: 'Workload', key: 'workload', width: 200 },
-  { title: 'Joined', key: 'joining_date', dataIndex: 'joining_date', sorter: true, width: 130 },
-  { title: 'Status', key: 'is_active', dataIndex: 'is_active', sorter: true, width: 110 },
+  { title: t('Sc_Teacher'), key: 'name', dataIndex: 'name', sorter: true },
+  { title: t('Phone'), dataIndex: 'phone', key: 'phone', width: 140 },
+  { title: t('Email'), dataIndex: 'email', key: 'email', width: 200 },
+  { title: t('Sc_Workload'), key: 'workload', width: 200 },
+  { title: t('Sc_Joined'), key: 'joining_date', dataIndex: 'joining_date', sorter: true, width: 130 },
+  { title: t('Status'), key: 'is_active', dataIndex: 'is_active', sorter: true, width: 110 },
   { title: '', key: 'actions', width: 120 },
 ]);
 
@@ -246,7 +247,7 @@ const required = () => [{ required: true, message: t('Field_is_required', 'This 
 const rules = computed(() => ({
   name: required(),
   gender: required(),
-  email: [{ type: 'email', message: t('InvalidData', 'Enter a valid email address') }],
+  email: [{ type: 'email', message: t('Enter_Valid_Email') }],
 }));
 
 function openForm(record) {

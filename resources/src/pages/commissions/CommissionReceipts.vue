@@ -20,6 +20,9 @@
         <template v-else-if="column.key === 'paid_at'">
           {{ formatDate(record.paid_at) }}
         </template>
+        <template v-else-if="column.key === 'account'">
+          {{ record.account ? record.account.account_name : '—' }}
+        </template>
         <template v-else-if="column.key === 'actions'">
           <a-button size="small" @click="viewReceipt(record)">
             <template #icon><EyeOutlined /></template>
@@ -37,6 +40,13 @@
         </a-descriptions-item>
         <a-descriptions-item :label="$t('Amount')">{{ formatMoney(viewReceiptData.amount) }}</a-descriptions-item>
         <a-descriptions-item :label="$t('Paid_At')">{{ formatDate(viewReceiptData.paid_at) }}</a-descriptions-item>
+        <a-descriptions-item :label="$t('Payment_Method')">
+          {{ viewReceiptData.payment_method ? viewReceiptData.payment_method.name : '—' }}
+        </a-descriptions-item>
+        <a-descriptions-item :label="$t('Account')">
+          {{ viewReceiptData.account ? viewReceiptData.account.account_name : '—' }}
+        </a-descriptions-item>
+        <a-descriptions-item v-if="viewReceiptData.notes" :label="$t('Notes')">{{ viewReceiptData.notes }}</a-descriptions-item>
       </a-descriptions>
     </a-modal>
 
@@ -62,6 +72,7 @@
               <div v-for="c in approvedCommissions" :key="c.id" style="margin-bottom: 4px">
                 <a-checkbox :value="c.id">
                   {{ c.sale ? c.sale.Ref : '' }} — {{ formatMoney(c.commission_amount) }}
+                  <a-tag v-if="c.is_adjustment" color="orange" style="margin-inline-start: 6px">{{ $t('Comm_Adjustment') }}</a-tag>
                 </a-checkbox>
               </div>
             </a-checkbox-group>
@@ -85,6 +96,13 @@
             show-search option-filter-prop="label" allow-clear
           />
         </a-form-item>
+        <a-form-item :label="$t('Account')" :extra="$t('Comm_Receipt_Account_Hint')">
+          <a-select
+            v-model:value="createForm.account_id" :placeholder="$t('Choose_Account')"
+            :options="accountsList.map(a => ({ label: a.account_name, value: a.id }))"
+            show-search option-filter-prop="label" allow-clear
+          />
+        </a-form-item>
         <a-form-item :label="$t('Notes')">
           <a-textarea v-model:value="createForm.notes" :rows="2" />
         </a-form-item>
@@ -100,7 +118,9 @@
  * commission_receipts/{id}. Create: Ref pre-filled from
  * commission_receipts/new_ref, agent's approved commissions from
  * commission_report?status=approved&limit=-1, amount auto-summed from ticked
- * ids (legacy watcher), POST commission_receipts {sales_agent_id,
+ * ids (legacy watcher), accounts from commission_receipts/accounts
+ * (the cash/bank account the payout leaves; posts Dr Commission Expense /
+ * Cr account and lowers the account balance), POST commission_receipts {sales_agent_id,
  * commission_ids, Ref?, amount, paid_at, payment_method_id?, notes?}.
  */
 import { ref, computed, watch, onMounted } from 'vue';
@@ -131,6 +151,7 @@ const createOpen = ref(false);
 const creating = ref(false);
 const agentsList = ref([]);
 const paymentMethodsList = ref([]);
+const accountsList = ref([]);
 const approvedCommissions = ref([]);
 const createForm = ref({
   sales_agent_id: null,
@@ -139,6 +160,7 @@ const createForm = ref({
   amount: 0,
   paid_at: new Date().toISOString().slice(0, 10),
   payment_method_id: null,
+  account_id: null,
   notes: '',
 });
 
@@ -147,6 +169,7 @@ const columns = computed(() => [
   { title: t('Sales_Agent'), key: 'agent' },
   { title: t('Amount'), key: 'amount', align: 'right' },
   { title: t('Paid_At'), key: 'paid_at', sorter: true },
+  { title: t('Account'), key: 'account' },
   { title: t('Action'), key: 'actions', width: 70 },
 ]);
 
@@ -183,6 +206,7 @@ function resetCreateForm() {
     amount: 0,
     paid_at: new Date().toISOString().slice(0, 10),
     payment_method_id: null,
+    account_id: null,
     notes: '',
   };
   approvedCommissions.value = [];
@@ -202,6 +226,10 @@ async function openCreateModal() {
   http.get('payment_methods', { limit: '-1' }).then(data => {
     paymentMethodsList.value = data.methods || data.data?.methods || [];
   }).catch(() => { paymentMethodsList.value = []; });
+  http.get('commission_receipts/accounts').then(data => {
+    const d = data.data || data;
+    accountsList.value = d.accounts || [];
+  }).catch(() => { accountsList.value = []; });
 }
 
 async function onCreateAgentSelect() {
@@ -230,6 +258,7 @@ async function submitCreateReceipt() {
       amount: createForm.value.amount,
       paid_at: createForm.value.paid_at,
       payment_method_id: createForm.value.payment_method_id || undefined,
+      account_id: createForm.value.account_id || undefined,
       notes: createForm.value.notes || undefined,
     });
     createOpen.value = false;

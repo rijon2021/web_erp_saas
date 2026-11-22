@@ -156,12 +156,16 @@ export default {
       const p = { product_id: this.productId, warehouse_id: this.warehouseId };
       if (this.productVariantId) p.product_variant_id = this.productVariantId;
       return p;
+    },
+    // Serialized so an inline fetchParams object (a new reference on every
+    // parent render) only refetches when its values actually change.
+    effectiveParamsKey() {
+      return JSON.stringify(this.effectiveParams);
     }
   },
   watch: {
-    effectiveParams: {
-      deep: true,
-      handler() { this.refreshAvailable(); }
+    effectiveParamsKey() {
+      this.refreshAvailable();
     }
   },
   mounted() {
@@ -235,7 +239,7 @@ export default {
         });
         this.addSerials(tokens);
       } catch (err) {
-        this.error = "Import failed";
+        this.error = this.$t("Import_Failed");
       } finally {
         e.target.value = "";
       }

@@ -497,7 +497,7 @@ class FleetVehicleController extends Controller
             mkdir($path, 0755, true);
         }
 
-        $extension = strtolower($file->getClientOriginalExtension()) ?: 'jpg';
+        $extension = \App\Support\SafeUpload::imageExtension($file, 'image');
         $filename = time() . '_' . Str::random(10) . '.' . $extension;
         $file->move($path, $filename);
 

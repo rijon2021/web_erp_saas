@@ -1,43 +1,53 @@
 <template>
-  <div class="portal-page portal-request-new">
-    <header class="pc-page-header">
-      <div>
-        <h1 class="pc-page-title">{{ $t('new_request') }}</h1>
-        <p class="pc-page-sub">{{ $t('new_request_subtitle') }}</p>
-      </div>
-      <router-link to="/requests" class="pc-link-back">{{ $t('back_to_requests') }}</router-link>
-    </header>
+  <!-- Protocol & Requests (SaaS only): send a complaint / request / enquiry with attachments. -->
+  <div>
+    <PageActions>
+      <router-link to="/requests" class="btn btn-outline-secondary"><i class="ti ti-arrow-left me-1"></i>{{ $t('back_to_requests') }}</router-link>
+    </PageActions>
 
-    <form class="pc-card pc-form" @submit.prevent="submit">
-      <div class="pc-form-row">
-        <label>{{ $t('rq_type') }} <span class="pc-required">*</span></label>
-        <select v-model="form.type" class="rq-select" required>
-          <option v-for="t in TYPES" :key="t" :value="t">{{ $t('rq_type_' + t) }}</option>
-        </select>
+    <form class="card" @submit.prevent="submit">
+      <div class="card-header">
+        <div>
+          <h3 class="card-title mb-0">{{ $t('new_request') }}</h3>
+          <p class="card-subtitle mb-0">{{ $t('new_request_subtitle') }}</p>
+        </div>
       </div>
-      <div class="pc-form-row">
-        <label>{{ $t('subject') }} <span class="pc-required">*</span></label>
-        <input v-model="form.subject" type="text" maxlength="255" required />
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label required">{{ $t('rq_type') }}</label>
+            <select v-model="form.type" class="form-select" required>
+              <option v-for="t in types" :key="t" :value="t">{{ tr(`rq_type_${t}`, t) }}</option>
+            </select>
+          </div>
+          <div class="col-md-8">
+            <label class="form-label required">{{ $t('subject') }}</label>
+            <input v-model="form.subject" type="text" class="form-control" maxlength="255" required />
+          </div>
+          <div class="col-12">
+            <label class="form-label required">{{ $t('details') }}</label>
+            <textarea v-model="form.body" class="form-control" rows="6" maxlength="10000" required></textarea>
+          </div>
+          <div class="col-12">
+            <label class="form-label">{{ $t('attachments') }} <span class="form-label-description">{{ $t('optional') }}</span></label>
+            <input ref="file" type="file" class="form-control" multiple @change="onFiles" />
+            <div class="form-hint">{{ $t('rq_attachments_hint') }}</div>
+            <div v-if="files.length" class="d-flex flex-wrap gap-2 mt-2">
+              <span v-for="(f, i) in files" :key="i" class="badge bg-secondary-lt d-inline-flex align-items-center gap-1 py-2">
+                <i class="ti ti-paperclip"></i>{{ f.name }}
+                <button type="button" class="btn-close btn-close-sm ms-1" :aria-label="$t('remove')" @click="files.splice(i, 1)"></button>
+              </span>
+            </div>
+          </div>
+        </div>
+        <div v-if="error" class="alert alert-danger mb-0 mt-3">{{ error }}</div>
       </div>
-      <div class="pc-form-row">
-        <label>{{ $t('details') }} <span class="pc-required">*</span></label>
-        <textarea v-model="form.body" rows="6" maxlength="10000" required></textarea>
-      </div>
-      <div class="pc-form-row">
-        <label>{{ $t('attachments') }} <span class="pc-muted">{{ $t('optional') }}</span></label>
-        <input type="file" multiple @change="onFiles" />
-        <ul v-if="files.length" class="rq-files">
-          <li v-for="(f, i) in files" :key="i">{{ f.name }} <button type="button" class="pc-icon-btn" @click="files.splice(i, 1)">×</button></li>
-        </ul>
-        <small class="pc-muted">{{ $t('rq_attachments_hint') }}</small>
-      </div>
-
-      <div v-if="error" class="pc-alert pc-alert-error">{{ error }}</div>
-
-      <div class="pc-form-actions">
-        <router-link to="/requests" class="pc-btn pc-btn-ghost">{{ $t('cancel') }}</router-link>
-        <button type="submit" class="pc-btn pc-btn-primary" :disabled="submitting">
-          <span v-if="submitting" class="pc-btn-spinner"></span>{{ $t('submit_request') }}
+      <div class="card-footer d-flex justify-content-end gap-2">
+        <router-link to="/requests" class="btn btn-ghost-secondary">{{ $t('cancel') }}</router-link>
+        <button type="submit" class="btn btn-primary" :disabled="submitting">
+          <span v-if="submitting" class="spinner-border spinner-border-sm me-2" role="status"></span>
+          <i v-else class="ti ti-send me-1"></i>
+          {{ submitting ? $t('submitting') : $t('submit_request') }}
         </button>
       </div>
     </form>
@@ -46,21 +56,24 @@
 
 <script>
 /**
- * Customer portal — submit a protocol request (multipart with attachments[]).
- * POST /api/portal/requests → {id, Ref}.
+ * Submit a protocol request — POST /api/portal/requests (multipart:
+ * type, subject, body, attachments[]) → {id, Ref}.
  */
 import http from '../lib/http';
+import PageActions from '../components/PageActions.vue';
 
 const TYPES = ['complaint', 'request', 'memo', 'letter', 'document', 'enquiry', 'other'];
+const MAX_FILES = 5;
 
 export default {
+  components: { PageActions },
   data() {
-    return { form: { type: 'request', subject: '', body: '' }, files: [], submitting: false, error: '', TYPES };
+    return { form: { type: 'request', subject: '', body: '' }, files: [], types: TYPES, submitting: false, error: '' };
   },
   methods: {
+    pageMeta() { return { title: this.$t('new_request'), pretitle: this.$t('nav_requests'), crumbs: [{ label: this.$t('nav_requests'), to: '/requests' }] }; },
     onFiles(e) {
-      const picked = Array.from(e.target.files || []);
-      this.files = this.files.concat(picked).slice(0, 5);
+      this.files = this.files.concat(Array.from(e.target.files || [])).slice(0, MAX_FILES);
       e.target.value = '';
     },
     async submit() {
@@ -71,7 +84,7 @@ export default {
         fd.append('type', this.form.type);
         fd.append('subject', this.form.subject);
         fd.append('body', this.form.body);
-        this.files.forEach(f => fd.append('attachments[]', f));
+        this.files.forEach((f) => fd.append('attachments[]', f));
         const { data } = await http.post('/portal/requests', fd);
         this.$router.push(`/requests/${data.id}`);
       } catch (e) {
@@ -83,18 +96,3 @@ export default {
   },
 };
 </script>
-
-<style scoped>
-.rq-select {
-  width: 100%;
-  height: 40px;
-  padding: 0 10px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 8px;
-  background: #fff;
-  font: inherit;
-  color: inherit;
-}
-.rq-files { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
-.rq-files li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
-</style>

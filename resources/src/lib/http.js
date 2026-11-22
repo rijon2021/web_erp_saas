@@ -7,6 +7,9 @@
  * automatically from the XSRF-TOKEN cookie; fetch does not, so we replicate it.
  *
  * Error policy (mirrors the legacy interceptors):
+ *   401                            renew the session once and retry (see
+ *                                  renewSession), so an expired laravel_token
+ *                                  does not throw the user off their page
  *   401 / 419                      hard logout (POST /logout) then /login — the
  *                                  web session may still be alive, and just
  *                                  visiting /login would bounce back to / forever
@@ -18,6 +21,8 @@
  *                                  a failed mutation → inline message)
  */
 import { showLimitReached } from './limitReached';
+
+import { refuseAllRows } from './rowLimit';
 
 const BASE = '/api/';
 
@@ -52,6 +57,38 @@ function baseHeaders() {
         ...csrfHeaders(),
         ...localeHeader(),
     };
+}
+
+let renewing = null;
+
+/**
+ * Slide the session forward. Only a web request does that, so API traffic alone
+ * ends in a 401 once laravel_token expires. Resolves false when the server no
+ * longer knows this user. Concurrent callers share one request.
+ */
+export function renewSession() {
+    if (!renewing) {
+        renewing = fetch('/session/keepalive', {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        })
+            .then(res => res.ok)
+            .catch(() => false)
+            .finally(() => { renewing = null; });
+    }
+    return renewing;
+}
+
+/**
+ * `send` runs again after a renewal, so it must read the CSRF headers itself:
+ * a remember-me sign-in starts a new session with a new token. Replaying is safe
+ * because auth:api refuses a request before any controller runs.
+ */
+async function withSessionRetry(send) {
+    const res = await send();
+    if (res.status !== 401) return res;
+    return (await renewSession()) ? send() : res;
 }
 
 let redirectingToLogin = false;
@@ -91,13 +128,13 @@ async function failed(res) {
         if (err.data.status === 'limit_reached') {
             // SaaS plan quota (CheckTenantLimits): upgrade modal, stay on the page.
             err.limitReached = true;
-            showLimitReached(err.data.message, 'limit');
+            showLimitReached(err.data.message, 'limit', err.data.addon || '');
         } else if (err.data.status === 'feature_unavailable') {
             // Module not in the plan (CheckTenantFeature): same modal, "Upgrade
             // Required" title — the Blade plan-upgrade-modal partial does this for
             // non-JSON requests; the legacy SPA sent GET loads to its 403 page.
             err.featureUnavailable = true;
-            showLimitReached(err.data.message, 'feature');
+            showLimitReached(err.data.message, 'feature', err.data.addon || '');
         } else if (err.data.status === 'subscription_required') {
             // Subscription lapsed mid-session (EnsureActiveSubscription). Every
             // SPA page is behind the same middleware, so the only reachable UI
@@ -105,6 +142,11 @@ async function failed(res) {
             // have been redirected.
             err.subscriptionRequired = true;
             redirectToBillingPlans();
+        } else if (err.data.status === 'subscription_read_only') {
+            // Read-only grace period (EnsureActiveSubscription): pages still
+            // load, but saving is blocked until the subscription is renewed.
+            err.subscriptionReadOnly = true;
+            showLimitReached(err.data.message, 'feature');
         }
     }
     throw err;
@@ -113,12 +155,19 @@ async function failed(res) {
 let redirectingToBilling = false;
 
 function redirectToBillingPlans() {
+    // Already on the billing pages (reachable while lapsed): a stray call from
+    // the layout (topbar etc.) must not bounce the user away — /billing/plans
+    // would only send them back here, in a loop.
+    if (/^\/(subscription|app\/billing|app\/subscription)(\/|$)/.test(window.location.pathname)) return;
     if (redirectingToBilling) return;
     redirectingToBilling = true;
     window.location.assign('/billing/plans');
 }
 
 async function request(method, url, { params, body, formData, raw } = {}) {
+    if (method === 'GET' && params?.limit === -1 && refuseAllRows(url)) {
+        throw Object.assign(new Error('List too big to load at once'), { status: 413, data: null });
+    }
     let full = BASE + url.replace(/^\//, '');
     if (params) {
         const qs = new URLSearchParams();
@@ -129,21 +178,15 @@ async function request(method, url, { params, body, formData, raw } = {}) {
         if (s) full += (full.includes('?') ? '&' : '?') + s;
     }
 
-    const headers = baseHeaders();
-    let payload;
-    if (formData) {
-        payload = formData;
-    } else if (body !== undefined) {
-        headers['Content-Type'] = 'application/json';
-        payload = JSON.stringify(body);
-    }
+    const isJson = !formData && body !== undefined;
+    const payload = isJson ? JSON.stringify(body) : formData;
 
-    const res = await fetch(full, {
+    const res = await withSessionRetry(() => fetch(full, {
         method,
         credentials: 'same-origin',
-        headers,
+        headers: { ...baseHeaders(), ...(isJson ? { 'Content-Type': 'application/json' } : {}) },
         body: payload,
-    });
+    }));
 
     if (!res.ok) await failed(res);
     if (res.status === 204) return raw ? { status: 204, data: null } : null;
@@ -153,10 +196,10 @@ async function request(method, url, { params, body, formData, raw } = {}) {
 
 /** GET a binary response (PDF downloads) and save it via a temporary link. */
 async function download(url, filename) {
-    const res = await fetch(BASE + url.replace(/^\//, ''), {
+    const res = await withSessionRetry(() => fetch(BASE + url.replace(/^\//, ''), {
         credentials: 'same-origin',
         headers: { 'X-Requested-With': 'XMLHttpRequest', ...csrfHeaders(), ...localeHeader() },
-    });
+    }));
     if (!res.ok) await failed(res);
     const blob = await res.blob();
     const href = window.URL.createObjectURL(blob);
@@ -175,10 +218,10 @@ async function download(url, filename) {
  * something rather than silently failing in an iframe.
  */
 async function blob(url) {
-    const res = await fetch(BASE + url.replace(/^\//, ''), {
+    const res = await withSessionRetry(() => fetch(BASE + url.replace(/^\//, ''), {
         credentials: 'same-origin',
         headers: { 'X-Requested-With': 'XMLHttpRequest', ...csrfHeaders(), ...localeHeader() },
-    });
+    }));
     if (!res.ok) await failed(res);
     const raw = await res.blob();
     return raw.type === 'application/pdf' ? raw : new Blob([raw], { type: 'application/pdf' });

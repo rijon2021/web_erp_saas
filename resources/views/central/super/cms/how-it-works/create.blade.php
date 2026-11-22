@@ -31,18 +31,18 @@
             <div class="form-row mb-4">
                 <div class="form-group">
                     <label class="form-label">{{ __('super.how_it_works.field_icon') }}</label>
-                    <input type="text" name="icon" class="form-control" value="{{ old('icon') }}" placeholder="e.g. bi bi-arrow-repeat">
+                    <input type="text" name="icon" class="form-control" value="{{ old('icon') }}" placeholder="{{ __('super.cms.ph_hiw_icon') }}">
                     <p class="form-hint">{{ __('super.how_it_works.icon_hint') }}</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label">{{ __('super.how_it_works.field_color') }}</label>
                     <select name="icon_color" class="form-control">
-                        <option value="green" {{ old('icon_color', 'green') === 'green' ? 'selected' : '' }}>Green</option>
-                        <option value="blue" {{ old('icon_color') === 'blue' ? 'selected' : '' }}>Blue</option>
-                        <option value="amber" {{ old('icon_color') === 'amber' ? 'selected' : '' }}>Amber</option>
-                        <option value="purple" {{ old('icon_color') === 'purple' ? 'selected' : '' }}>Purple</option>
-                        <option value="teal" {{ old('icon_color') === 'teal' ? 'selected' : '' }}>Teal</option>
-                        <option value="red" {{ old('icon_color') === 'red' ? 'selected' : '' }}>Red</option>
+                        <option value="green" {{ old('icon_color', 'green') === 'green' ? 'selected' : '' }}>{{ __('super.common.color_green') }}</option>
+                        <option value="blue" {{ old('icon_color') === 'blue' ? 'selected' : '' }}>{{ __('super.common.color_blue') }}</option>
+                        <option value="amber" {{ old('icon_color') === 'amber' ? 'selected' : '' }}>{{ __('super.common.color_amber') }}</option>
+                        <option value="purple" {{ old('icon_color') === 'purple' ? 'selected' : '' }}>{{ __('super.common.color_purple') }}</option>
+                        <option value="teal" {{ old('icon_color') === 'teal' ? 'selected' : '' }}>{{ __('super.common.color_teal') }}</option>
+                        <option value="red" {{ old('icon_color') === 'red' ? 'selected' : '' }}>{{ __('super.common.color_red') }}</option>
                     </select>
                 </div>
             </div>

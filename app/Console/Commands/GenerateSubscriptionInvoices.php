@@ -65,11 +65,18 @@ class GenerateSubscriptionInvoices extends Command
                 'notes' => 'Auto payment for subscription #'.$subscription->id,
             ]);
 
-            // 2. Decrease product stock
-            $productWarehouse = product_warehouse::where('warehouse_id', $subscription->warehouse_id)
+            // 2. Decrease product stock (a virtual combo takes its components instead)
+            $unit = Unit::find($subscription->unit_id);
+            $comboMoved = app(\App\Services\ComboStockService::class)->moveComponents(
+                (int) $subscription->product_id,
+                (int) $subscription->warehouse_id,
+                -($subscription->quantity / (($unit ? (float) $unit->operator_value : 1.0) ?: 1.0))
+            );
+
+            $productWarehouse = $comboMoved ? null : product_warehouse::where('warehouse_id', $subscription->warehouse_id)
                 ->where('product_id', $subscription->product_id)
                 ->whereNull('deleted_at')
-                ->first();
+                ->lockForUpdate()->first();
 
             if ($productWarehouse) {
                 $unit = Unit::find($subscription->unit_id);
@@ -77,6 +84,10 @@ class GenerateSubscriptionInvoices extends Command
                 $productWarehouse->qte -= ($subscription->quantity / $operatorValue);
                 $productWarehouse->save();
             }
+
+            // 3. Software License products: renew the generated key / deliver an uploaded one.
+            \App\Support\BookingModule::useTenantUrl();
+            \App\Services\LicenseKeys\LicenseSubscriptions::afterInvoice($subscription, $invoice, true);
 
             // 4. Send SMS on successful charge
 

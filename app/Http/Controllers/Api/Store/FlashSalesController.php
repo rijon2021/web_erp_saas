@@ -13,7 +13,7 @@ class FlashSalesController extends Controller
 {
     public function index(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_flash_sales', StoreSetting::class);
 
         $query = FlashSale::withCount('products')->orderBy('sort_order')->orderByDesc('created_at');
 
@@ -41,7 +41,7 @@ class FlashSalesController extends Controller
 
     public function show(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_flash_sales', StoreSetting::class);
 
         $sale = FlashSale::with('products:id,name,code,price')->findOrFail($id);
 
@@ -68,7 +68,7 @@ class FlashSalesController extends Controller
 
     public function store(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_flash_sales', StoreSetting::class);
 
         $data = $this->validateData($request);
 
@@ -91,7 +91,7 @@ class FlashSalesController extends Controller
 
     public function update(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_flash_sales', StoreSetting::class);
 
         $sale = FlashSale::findOrFail($id);
         $data = $this->validateData($request);
@@ -113,7 +113,7 @@ class FlashSalesController extends Controller
 
     public function destroy(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_flash_sales', StoreSetting::class);
 
         FlashSale::findOrFail($id)->delete();
 
@@ -123,7 +123,7 @@ class FlashSalesController extends Controller
     /** Product typeahead for the admin builder. */
     public function searchProducts(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_flash_sales', StoreSetting::class);
 
         $s = trim((string) $request->input('q', ''));
 

@@ -11,7 +11,7 @@
       </div>
     <div class="payable-summary">
       <div class="payable-label">{{ $t('Total_Payable') }}</div>
-      <div class="payable-value">{{ currency }} {{ format(total) }}</div>
+      <div class="payable-value">{{ money(total) }}</div>
     </div>
     </div>
 
@@ -47,7 +47,7 @@
               </div>
             </div>
             <div class="item-price">
-              <span class="price-value">{{ currency }} {{ format(row.subtotal) }}</span>
+              <span class="price-value">{{ money(row.subtotal) }}</span>
             </div>
           </div>
         </div>
@@ -60,32 +60,32 @@
             <span class="summary-label">
               <i class="icon-subtotal">🧮</i> {{ $t('Subtotal') }}
             </span>
-            <span class="summary-value">{{ currency }} {{ format(subtotal) }}</span>
+            <span class="summary-value">{{ money(subtotal) }}</span>
           </div>
           <div class="summary-row">
             <span class="summary-label">
               <i class="icon-tax">🧾</i> {{ $t('Tax') }}
             </span>
-            <span class="summary-value">{{ currency }} {{ format(tax) }}</span>
+            <span class="summary-value">{{ money(tax) }}</span>
           </div>
           <div class="summary-row">
             <span class="summary-label">
               <i class="icon-discount">🎁</i> {{ $t('Discount') }}
             </span>
-            <span class="summary-value discount">-{{ currency }} {{ format(discount) }}</span>
+            <span class="summary-value discount">-{{ money(discount) }}</span>
           </div>
           <div class="summary-row">
             <span class="summary-label">
               <i class="icon-shipping">🚚</i> {{ $t('Shipping') }}
             </span>
-            <span class="summary-value">{{ currency }} {{ format(shipping) }}</span>
+            <span class="summary-value">{{ money(shipping) }}</span>
           </div>
           <div class="divider"></div>
           <div class="summary-row total-row">
             <span class="summary-label total-label">
               <i class="icon-total">💰</i> {{ $t('Total') }}
             </span>
-            <span class="summary-value total-value">{{ currency }} {{ format(total) }}</span>
+            <span class="summary-value total-value">{{ money(total) }}</span>
           </div>
         </div>
       </div>
@@ -103,6 +103,7 @@
 
 <script>
 import http from '../lib/http';
+import { stripZeroFraction, withCurrency } from '../lib/priceFormat';
 
 export default {
   name: 'CustomerDisplay',
@@ -111,10 +112,16 @@ export default {
       ? new URLSearchParams(window.location.search)
       : null;
     const screenId = (params && params.get('screen')) || '1';
+    // Same access token the page was opened with; last-cart requires it.
+    const token = (params && params.get('token')) || '';
     return {
       screenId,
+      token,
       logo: window.__APP_LOGO__ || '/images/logo.png',
       currency: '',
+      currencyPosition: 'before', // System Settings → Currency Position
+      priceDecimals: 2,            // 2 or 3 (Enable 3 Decimal Pricing), sent with the cart
+      hideZeroDecimals: false,     // System Settings → Hide Zero Decimals, sent with the cart
       items: [],
       discount: 0,
       tax: 0,
@@ -136,16 +143,27 @@ export default {
   methods: {
     format(n) {
       const num = Number(n || 0);
+      const dec = this.priceDecimals === 3 ? 3 : 2;
       const locale = (this.$i18n && this.$i18n.locale) || (navigator.language || 'en-US');
+      // Hide Zero Decimals: a whole number drops its fraction (100.00 -> 100);
+      // 100.50 keeps all its decimals, so only the minimum is relaxed.
+      const whole = this.hideZeroDecimals && Number.isInteger(Number(num.toFixed(dec)));
       try {
-        return new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num);
+        return new Intl.NumberFormat(locale, { minimumFractionDigits: whole ? 0 : dec, maximumFractionDigits: dec }).format(num);
       } catch (e) {
-        return num.toFixed(2);
+        const s = num.toFixed(dec);
+        return this.hideZeroDecimals ? stripZeroFraction(s, '.') : s;
       }
+    },
+    money(n) {
+      return withCurrency(this.currency, this.format(n), this.currencyPosition);
     },
     applyCart(cart) {
       if (!cart) { this.items = []; this.discount = 0; this.tax = 0; this.total = 0; this.currency = cart && cart.currency || ''; return; }
       this.currency = cart.currency || '';
+      this.currencyPosition = cart.currency_position || 'before';
+      this.priceDecimals = Number(cart.price_decimals) === 3 ? 3 : 2;
+      this.hideZeroDecimals = !!cart.hide_zero_decimals;
       this.items = (cart.details || cart.items || []).map(it => {
         const qty = Number(it.quantity || it.Qty || it.qte || 0);
         const unit = Number(it.unit_price || it.Net_price || it.price || 0);
@@ -166,7 +184,7 @@ export default {
     // Polling fallback (per-screen)
     async poll() {
       try {
-        const data = await http.get('pos/customer-display/last-cart', { screen: this.screenId });
+        const data = await http.get('pos/customer-display/last-cart', { screen: this.screenId, token: this.token });
         if (data && data.cart) this.applyCart(data.cart);
         if (data && data.completed) {
           this.items = [];

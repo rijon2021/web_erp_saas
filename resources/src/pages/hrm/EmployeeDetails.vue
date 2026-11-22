@@ -33,7 +33,7 @@
                 <a-form-item :label="$t('Gender') + ' *'" name="gender">
                   <a-select
                     v-model:value="employee.gender" :placeholder="$t('Choose_Gender')"
-                    :options="[{ value: 'male', label: 'Male' }, { value: 'female', label: 'Female' }]"
+                    :options="GENDERS"
                   />
                 </a-form-item>
               </a-col>
@@ -42,7 +42,7 @@
                 <a-form-item :label="$t('Family_status')">
                   <a-select
                     v-model:value="employee.marital_status" allow-clear
-                    :placeholder="$t('Choose_Family_status')" :options="MARITAL"
+                    :placeholder="$t('Choose_Family_status')" :options="MARITAL_STATUSES"
                   />
                 </a-form-item>
               </a-col>
@@ -109,7 +109,7 @@
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="4">
-                <a-form-item :label="$t('Annual_Leave') + ' *'" name="total_leave">
+                <a-form-item :label="$t('Annual_Leave')" name="total_leave">
                   <a-input-number v-model:value="employee.total_leave" :min="0" style="width: 100%" />
                 </a-form-item>
               </a-col>
@@ -357,6 +357,7 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import { LeftOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import { EMPLOYMENT_TYPES, GENDERS, MARITAL_STATUSES } from './hrmVocab';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -371,21 +372,6 @@ const departments = ref([]);
 const designations = ref([]);
 const officeShifts = ref([]);
 
-const MARITAL = [
-  { value: 'married', label: 'Married' },
-  { value: 'single', label: 'Single' },
-  { value: 'divorced', label: 'Divorced' },
-];
-const EMPLOYMENT_TYPES = [
-  { value: 'full_time', label: 'Full-time' },
-  { value: 'part_time', label: 'Part-time' },
-  { value: 'self_employed', label: 'Self-employed' },
-  { value: 'freelance', label: 'Freelance' },
-  { value: 'contract', label: 'Contract' },
-  { value: 'internship', label: 'Internship' },
-  { value: 'apprenticeship', label: 'Apprenticeship' },
-  { value: 'seasonal', label: 'Seasonal' },
-];
 const SOCIAL = [
   { key: 'skype', label: 'Skype', placeholder: 'Enter_Skype' },
   { key: 'facebook', label: 'Facebook', placeholder: 'Enter_Facebook' },
@@ -399,10 +385,8 @@ const basicRef = ref();
 const savingBasic = ref(false);
 const savingSocial = ref(false);
 const basicRules = computed(() => ({
-  firstname: [req()], lastname: [req()], gender: [req()], total_leave: [req()],
+  firstname: [req()], lastname: [req()], gender: [req()],
   company_id: [req()], department_id: [req()], designation_id: [req()], office_shift_id: [req()],
-  // The server requires these two even though legacy never validated them.
-  country: [req()], phone: [req()],
 }));
 
 // ---------------- cascading selects ----------------

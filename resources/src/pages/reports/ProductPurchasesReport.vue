@@ -9,6 +9,7 @@
     export-endpoint="report/product_purchases_report"
     :export-params="filterParams"
     export-rows-key="purchases"
+    product-data
   >
     <template #actions>
       <!-- Multi-Currency: view amounts converted (display-only) -->

@@ -8,6 +8,7 @@
     export-endpoint="report/expiry"
     :export-params="filterParams"
     export-rows-key="batches"
+    product-data
   >
     <template #actions>
       <!-- Multi-Currency: view amounts converted (display-only) -->
@@ -63,7 +64,7 @@
       </template>
       <template v-else-if="column.key === 'value'">{{ money(record.value) }}</template>
       <template v-else-if="column.key === 'status'">
-        <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
+        <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
       </template>
     </template>
   </ReportPage>
@@ -77,9 +78,12 @@ import ReportPage from '../../components/ReportPage.vue';
 import ViewCurrencySelect from '../../components/ViewCurrencySelect.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
+import { useAuthStore } from '../../stores/auth';
+import { t as tf } from '../../i18n';
 
 const { t } = useI18n();
 const { money, date } = useFormat();
+const auth = useAuthStore();
 
 const expiryWindow = ref(30);
 const warehouseId = ref(undefined);
@@ -119,9 +123,10 @@ const kpis = computed(
   () => crud.payload.value?.kpis || { expired: 0, near: 0, valid: 0, expired_value: 0, near_value: 0 }
 );
 
+// Batch value is at cost — the value sub-lines drop for !canSeeCost.
 const tiles = computed(() => [
-  { key: 'expired', label: t('Expired'), value: kpis.value.expired || 0, sub: kpis.value.expired_value, icon: ExclamationCircleOutlined, color: '#ff4d4f', tint: 'rgba(255, 77, 79, 0.12)' },
-  { key: 'near', label: t('Expiring_Soon'), value: kpis.value.near || 0, sub: kpis.value.near_value, icon: ClockCircleOutlined, color: '#faad14', tint: 'rgba(250, 173, 20, 0.14)' },
+  { key: 'expired', label: t('Expired'), value: kpis.value.expired || 0, sub: auth.canSeeCost ? kpis.value.expired_value : null, icon: ExclamationCircleOutlined, color: '#ff4d4f', tint: 'rgba(255, 77, 79, 0.12)' },
+  { key: 'near', label: t('Expiring_Soon'), value: kpis.value.near || 0, sub: auth.canSeeCost ? kpis.value.near_value : null, icon: ClockCircleOutlined, color: '#faad14', tint: 'rgba(250, 173, 20, 0.14)' },
   { key: 'valid', label: t('Valid'), value: kpis.value.valid || 0, sub: null, icon: CheckCircleOutlined, color: '#52c41a', tint: 'rgba(82, 196, 26, 0.12)' },
 ]);
 const donutSeries = computed(() => [
@@ -153,9 +158,12 @@ const columns = computed(() => [
     exportValue: r => (r.expiry_date ? date(r.expiry_date) : ''),
   },
   { title: t('Quantity'), dataIndex: 'qty', key: 'qty', align: 'right', sum: true },
-  { title: t('Value'), key: 'value', dataIndex: 'value', align: 'right', sum: 'money', exportValue: r => money(r.value) },
-  { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => r.status },
+  { title: t('Value'), key: 'value', dataIndex: 'value', align: 'right', sum: 'money', cost: true, exportValue: r => money(r.value) },
+  { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => statusLabel(r.status) },
 ]);
+
+// Raw batch status (active / quarantined / expired / written_off) → label.
+const statusLabel = s => (s ? tf(`Batch_Status_${s}`, s) : '');
 
 function statusColor(status) {
   const s = String(status || '').toLowerCase();

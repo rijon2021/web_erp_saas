@@ -16,6 +16,11 @@ return [
     // Use "database" by default so long-running sync can be cancelled.
     'default' => env('QUEUE_CONNECTION', 'database'),
 
+    // --timeout (seconds) for the queue:work runs the app starts itself (the
+    // scheduler and the no-cron sync ticks). Must exceed the slowest single
+    // sync batch. Read with config('queue.worker_timeout'), never env().
+    'worker_timeout' => (int) env('QUEUE_WORKER_TIMEOUT', 1200),
+
     /*
     |--------------------------------------------------------------------------
     | Queue Connections
@@ -46,7 +51,14 @@ return [
             'table' => 'jobs',
             'queue' => 'default',
             // Must be greater than the longest-running job, otherwise a slow job can be re-queued and run twice.
-            'retry_after' => env('QUEUE_RETRY_AFTER', 1200),
+            // Longest job $timeout is 2000s (ProvisionTenantWorkspace; WooCommerce/Opencart/SendMarketingCampaign
+            // are 1200s), so the value is floored at worker timeout + 60s and at 2060s even when an older .env
+            // still says QUEUE_RETRY_AFTER=1200.
+            'retry_after' => max(
+                (int) env('QUEUE_RETRY_AFTER', 2100),
+                (int) env('QUEUE_WORKER_TIMEOUT', 1200) + 60,
+                2060
+            ),
         ],
 
         'beanstalkd' => [

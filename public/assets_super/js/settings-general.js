@@ -22,6 +22,9 @@ document.addEventListener('DOMContentLoaded', function() {
             if (active) {
                 if (titleEl && p.dataset.title) titleEl.textContent = p.dataset.title;
                 if (subEl   && p.dataset.desc)  subEl.textContent  = p.dataset.desc;
+                // Tabs with their own forms (Security, E-Invoicing) hide the global Save.
+                var actions = document.querySelector('.settings-actionbar-actions');
+                if (actions) actions.style.display = p.dataset.nosave ? 'none' : '';
             }
         });
         if (!matched) return;
@@ -167,13 +170,86 @@ document.addEventListener('DOMContentLoaded', function() {
     wireUpload('tenantFaviconInput', 'tenantFaviconPreview', 'tenantFaviconPreviewImg', 'tenantFaviconPlaceholder',
                'removeTenantFaviconBtn', 'removeTenantFaviconForm', 'removeTenantFaviconConfirm');
 
-    // ── Hosting mode toggle ──────────────────────────
-    document.querySelectorAll('input[name="hosting_mode"]').forEach(function(radio) {
+    // ── Apply tenant branding to existing workspaces ──
+    // The server applies the SAVED values, so unsaved edits in the tab would
+    // silently not be pushed — ask the admin to save first instead.
+    var applyBrandingBtn = document.getElementById('applyTenantBrandingBtn');
+    if (applyBrandingBtn) {
+        applyBrandingBtn.addEventListener('click', function() {
+            var form = document.getElementById('applyTenantBrandingForm');
+            if (!form) return;
+
+            var logoIn = document.getElementById('tenantLogoInput');
+            var favIn  = document.getElementById('tenantFaviconInput');
+            var nameIn = document.querySelector('input[name="tenant_app_name"]');
+            var dirty  = (logoIn && logoIn.files && logoIn.files.length)
+                      || (favIn && favIn.files && favIn.files.length)
+                      || (nameIn && nameIn.value !== nameIn.defaultValue);
+            if (dirty) {
+                alert(data.applyBrandingSaveFirst);
+                return;
+            }
+
+            if (!document.querySelector('input[form="applyTenantBrandingForm"][name="parts[]"]:checked')) {
+                alert(data.applyBrandingPickOne);
+                return;
+            }
+
+            if (confirm(data.applyBrandingConfirm)) {
+                applyBrandingBtn.disabled = true;
+                form.submit();
+            }
+        });
+    }
+
+    // ── Option-card radios (hosting mode, landing page mode) ──
+    // Scoped to each card group so one group never clears another's highlight.
+    document.querySelectorAll('.hosting-mode-option input[type="radio"]').forEach(function(radio) {
         radio.addEventListener('change', function() {
-            document.querySelectorAll('.hosting-mode-option').forEach(function(opt) {
+            this.closest('.hosting-mode-options').querySelectorAll('.hosting-mode-option').forEach(function(opt) {
                 opt.classList.remove('active');
             });
             this.closest('.hosting-mode-option').classList.add('active');
+        });
+    });
+
+    // ── Landing page mode: show only the chosen mode's fields ──
+    // The hidden URL field is disabled so browser validation of a stale value
+    // cannot block saving another mode (the server keeps the stored URL).
+    var landingModeRadios = document.querySelectorAll('input[name="landing_mode"]');
+    function syncLandingMode() {
+        var checked = document.querySelector('input[name="landing_mode"]:checked');
+        var mode = checked ? checked.value : 'builtin';
+        document.querySelectorAll('[data-landing-mode]').forEach(function(group) {
+            var visible = group.getAttribute('data-landing-mode').split(' ').indexOf(mode) !== -1;
+            group.style.display = visible ? '' : 'none';
+            group.querySelectorAll('input[type="url"]').forEach(function(input) {
+                input.disabled = !visible;
+            });
+        });
+    }
+    landingModeRadios.forEach(function(radio) {
+        radio.addEventListener('change', syncLandingMode);
+    });
+    if (landingModeRadios.length) syncLandingMode();
+
+    // Copy the signup / sign-in links shown for external websites.
+    document.querySelectorAll('[data-landing-mode] .js-copy-link').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var url = btn.getAttribute('data-url');
+            var done = function(ok) {
+                if (window.Swal) {
+                    Swal.fire({ toast: true, position: 'top-end', icon: ok ? 'success' : 'error',
+                        title: ok ? __s('link_copied') : __s('copy_failed'), showConfirmButton: false, timer: 2000 });
+                }
+            };
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(url).then(function() { done(true); }, function() { done(false); });
+                return;
+            }
+            var input = btn.parentNode.querySelector('input');
+            input.select();
+            try { done(document.execCommand('copy')); } catch (e) { done(false); }
         });
     });
 
@@ -251,7 +327,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 confirmButtonColor: '#ef4444',
             });
         } else {
-            alert(message || 'Error');
+            alert(message || __s('error'));
         }
     }
 
@@ -315,7 +391,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(function(r) { return r.json().then(function(j){ j.__ok = r.ok; return j; }); })
         .then(function(res) {
             if (!res.__ok || !res.success) {
-                swalError((res && (res.error || res.message)) || 'Delete failed.');
+                swalError((res && (res.error || res.message)) || __s('delete_failed'));
                 btn.disabled = false;
             } else {
                 renderBackups(res.backups || []);
@@ -323,7 +399,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         })
         .catch(function(err) {
-            swalError(err && err.message ? err.message : 'Delete failed.');
+            swalError(err && err.message ? err.message : __s('delete_failed'));
             btn.disabled = false;
         });
     }

@@ -46,12 +46,12 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Sender Name *">
+            <a-form-item :label="$t('Sender_Name') + ' *'">
               <a-input v-model:value="server.sender_name" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Sender Email *">
+            <a-form-item :label="$t('Sender_Email') + ' *'">
               <a-input v-model:value="server.sender_email" />
             </a-form-item>
           </a-col>
@@ -60,7 +60,7 @@
           <a-button type="primary" :loading="saving" @click="save">{{ $t('submit') }}</a-button>
           <a-button :loading="testing" @click="testMail">
             <template #icon><SendOutlined /></template>
-            Test
+            {{ $t('Cr_Test') }}
           </a-button>
         </a-space>
       </a-form>
@@ -88,6 +88,21 @@ const saving = ref(false);
 const testing = ref(false);
 const server = ref({});
 
+// The server's exact reason: message (+ errors when it adds detail), the
+// first validation error, or the HTTP status when the body isn't JSON
+// (web-server/WAF 403s, gateway timeouts on an unreachable SMTP host).
+function errorText(e, fallback) {
+  const data = e && e.data;
+  if (!data) return e && e.status ? `${fallback} (HTTP ${e.status})` : fallback;
+  const { errors } = data;
+  let detail = '';
+  if (typeof errors === 'string') detail = errors;
+  else if (errors && typeof errors === 'object') detail = Object.values(errors).flat().join(' ');
+  const msg = data.message || '';
+  if (msg && detail && !msg.includes(detail)) return `${msg} ${detail}`;
+  return msg || detail || fallback;
+}
+
 async function save() {
   saving.value = true;
   try {
@@ -103,7 +118,7 @@ async function save() {
     });
     message.success(t('Successfully_Updated'));
   } catch (e) {
-    message.error(e?.data?.message || t('InvalidData'));
+    message.error(errorText(e, t('InvalidData')));
   } finally {
     saving.value = false;
   }
@@ -115,8 +130,8 @@ async function testMail() {
     const data = await http.post('test_config_mail');
     message.success(data?.message || data?.msg || t('Success'));
   } catch (e) {
-    const msg = e?.data?.message || (e?.data?.errors && JSON.stringify(e.data.errors));
-    message.error(msg || t('SMTPIncorrect'));
+    // Long SMTP errors need time to be read (and copied into a ticket).
+    message.error({ content: errorText(e, t('SMTPIncorrect')), duration: 12 });
   } finally {
     testing.value = false;
   }

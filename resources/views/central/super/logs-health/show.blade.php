@@ -3,7 +3,7 @@
 @section('title', __('super.logs_health.detail_title'))
 
 @push('styles')
-<link href="{{ asset('assets_super/css/logs-health.css') }}?v={{ time() }}" rel="stylesheet">
+<link href="{{ \App\Support\SuperAsset::url('assets_super/css/logs-health.css') }}" rel="stylesheet">
 @endpush
 
 @section('content')
@@ -119,6 +119,16 @@
                 <dt>{{ __('super.logs_health.meta_occurred') }}</dt>
                 <dd>{{ $log->occurred_at?->toDateTimeString() }}</dd>
 
+                @if($log->occurrences() > 1)
+                    <dt>{{ __('super.logs_health.meta_occurrences') }}</dt>
+                    <dd>{{ number_format($log->occurrences()) }}</dd>
+
+                    @if(! empty($log->context['first_seen']))
+                        <dt>{{ __('super.logs_health.meta_first_seen') }}</dt>
+                        <dd>{{ $log->context['first_seen'] }}</dd>
+                    @endif
+                @endif
+
                 <dt>{{ __('super.logs_health.meta_recorded') }}</dt>
                 <dd>{{ $log->created_at?->toDateTimeString() }}</dd>
             </dl>
@@ -155,7 +165,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">{{ __('super.logs_health.mark_resolved') }}</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{{ __('super.common.close') }}"></button>
             </div>
             <div class="modal-body">
                 <p class="text-muted small">{{ __('super.logs_health.resolve_hint') }}</p>
@@ -172,5 +182,5 @@
 @endsection
 
 @push('scripts')
-<script src="{{ asset('assets_super/js/logs-health.js') }}?v={{ time() }}"></script>
+<script src="{{ \App\Support\SuperAsset::url('assets_super/js/logs-health.js') }}"></script>
 @endpush

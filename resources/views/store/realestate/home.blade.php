@@ -53,7 +53,7 @@
         <select class="re-select" name="max_price" style="border-color:transparent;background-color:var(--re-bg)">
           <option value="">{{ __('messages.MaxPrice') }}</option>
           @foreach([1500, 3000, 5000, 150000, 300000, 500000, 750000, 1000000, 2000000, 5000000] as $mp)
-            <option value="{{ $mp }}">{{ $currency }}{{ number_format($mp) }}</option>
+            <option value="{{ $mp }}">{{ store_with_currency($currency, number_format($mp)) }}</option>
           @endforeach
         </select>
         <button class="re-btn re-btn-primary" type="submit" style="padding-inline:22px"><x-store.icon name="search" />{{ __('messages.Search') }}</button>
@@ -94,7 +94,8 @@
     <div class="re-cat-grid">
       @foreach($categories as $c)
         <a class="re-cat" href="{{ route('store.realestate.listings', ['category' => $c->slug]) }}">
-          @if(!empty($c->cover_image))<img src="{{ $reImg($c->cover_image) }}" alt="{{ $c->name }}" loading="lazy">@endif
+          @php $catImg = $c->image ?? $c->cover_image ?? null; @endphp
+          @if(!empty($catImg))<img src="{{ $reImg($catImg) }}" alt="{{ $c->name }}" loading="lazy">@endif
           <span class="ic"><x-store.icon :name="$catIcons[$c->slug] ?? 'home'" /></span>
           <div class="nm">{{ $c->name }}</div>
           <div class="ct">{{ $c->properties_count }} {{ __('messages.Listings') }}</div>

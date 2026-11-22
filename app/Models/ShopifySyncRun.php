@@ -15,6 +15,22 @@ class ShopifySyncRun extends Model
 {
     protected $table = 'shopify_sync_runs';
 
+    /** The stage a one-record webhook run carries from start to finish. */
+    public const STAGE_WEBHOOK = 'webhook';
+
+    /**
+     * A run that used up one request's time and is waiting for the next to
+     * carry it on. Still "running" — nothing else may start in its place.
+     */
+    public const STAGE_PAUSED = 'paused';
+
+    /**
+     * Waiting for its first slice: started from the Sync Centre and handed to
+     * the queue, which has not picked it up yet. Paused, so whoever claims it
+     * first — the queue worker or the page — does the work.
+     */
+    public const STAGE_QUEUED = 'queued';
+
     protected $fillable = [
         'store_id',
         'user_id',
@@ -31,6 +47,7 @@ class ShopifySyncRun extends Model
         'percentage',
         'stage',
         'cursor',
+        'options',
         'last_error',
         'started_at',
         'finished_at',
@@ -43,6 +60,7 @@ class ShopifySyncRun extends Model
     protected $casts = [
         'dry_run' => 'boolean',
         'cancel_requested' => 'boolean',
+        'options' => 'array',
         'started_at' => 'datetime',
         'finished_at' => 'datetime',
         'heartbeat_at' => 'datetime',
@@ -51,6 +69,51 @@ class ShopifySyncRun extends Model
     public function store()
     {
         return $this->belongsTo(ShopifyStore::class, 'store_id');
+    }
+
+    /**
+     * Runs a person or the schedule started — not the one-record runs a webhook
+     * logs. Those last a moment each and arrive in bursts (a product push makes
+     * Shopify send one per product), so they must not count as "a sync is
+     * running" or hide the run that is.
+     */
+    public function scopeBulk($query)
+    {
+        return $query->where(function ($q) {
+            $q->whereNull('stage')->orWhere('stage', '!=', self::STAGE_WEBHOOK);
+        });
+    }
+
+    public function isWebhook(): bool
+    {
+        return $this->stage === self::STAGE_WEBHOOK;
+    }
+
+    public function isPaused(): bool
+    {
+        return $this->status === 'running' && in_array($this->stage, [self::STAGE_PAUSED, self::STAGE_QUEUED], true);
+    }
+
+    /**
+     * Take a paused run for this request to carry on. Atomic, so when two
+     * requests try — two tabs, a double click — exactly one gets it.
+     */
+    public function claimForResume(): bool
+    {
+        return static::where('id', $this->id)
+            ->where('status', 'running')
+            ->whereIn('stage', [self::STAGE_PAUSED, self::STAGE_QUEUED])
+            ->update(['stage' => 'continuing', 'heartbeat_at' => now()]) === 1;
+    }
+
+    /**
+     * Paused with nobody carrying it on — the page that was driving it has
+     * gone. A few seconds' grace, so the gap between two slices of a run that
+     * is being driven does not count.
+     */
+    public function isWaiting(): bool
+    {
+        return $this->isPaused() && $this->heartbeat_at && $this->heartbeat_at->lt(now()->subSeconds(15));
     }
 
     public function isFinished(): bool
@@ -105,6 +168,7 @@ class ShopifySyncRun extends Model
             'finished_at' => $this->finished_at ? $this->finished_at->toDateTimeString() : null,
             'duration' => $this->durationSeconds(),
             'cancel_requested' => (bool) $this->cancel_requested,
+            'waiting' => $this->isWaiting() && ! $this->isStale(),
         ];
     }
 }

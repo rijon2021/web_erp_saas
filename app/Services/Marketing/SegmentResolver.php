@@ -110,7 +110,32 @@ class SegmentResolver
      */
     public function resolveSegment(MarketingSegment $segment)
     {
-        return $this->resolve((bool) $segment->all_customers, $segment->filters ?? []);
+        return $this->resolveFor($segment->audience ?: 'customers', (bool) $segment->all_customers, $segment->filters ?? []);
+    }
+
+    /** customers (default) or crm_leads — see App\Services\Crm\CrmLeadSegmentResolver. */
+    public function resolveFor(string $audience, bool $all, array $filters = [])
+    {
+        // A lead segment saved earlier reaches nobody once the CRM is switched
+        // off in Settings → Modules or no longer on the plan.
+        if ($audience === 'crm_leads' && ! \App\Services\Crm\CrmCaptureService::enabled()) {
+            return collect();
+        }
+
+        return $audience === 'crm_leads'
+            ? app(\App\Services\Crm\CrmLeadSegmentResolver::class)->resolve($all, $filters)
+            : $this->resolve($all, $filters);
+    }
+
+    public function countFor(string $audience, bool $all, array $filters = []): int
+    {
+        if ($audience === 'crm_leads' && ! \App\Services\Crm\CrmCaptureService::enabled()) {
+            return 0;
+        }
+
+        return $audience === 'crm_leads'
+            ? app(\App\Services\Crm\CrmLeadSegmentResolver::class)->count($all, $filters)
+            : $this->count($all, $filters);
     }
 
     /**

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Central;
 
 use App\Http\Controllers\Controller;
 use App\Models\Central\BlogPost;
+use App\Models\Central\GeneralSetting;
 use App\Services\LandingCmsService;
 use Illuminate\Http\Response;
 
@@ -13,7 +14,11 @@ class SitemapController extends Controller
     {
         $urls = [];
 
-        $urls[] = ['loc' => route('central.welcome')];
+        // The root is only a page of its own when the built-in landing is on;
+        // otherwise it redirects (external site, sign-in or signup).
+        if (GeneralSetting::instance()->landingMode() === GeneralSetting::LANDING_MODE_BUILTIN) {
+            $urls[] = ['loc' => route('central.welcome')];
+        }
 
         // Privacy / terms 404 when their CMS section is missing or inactive.
         try {

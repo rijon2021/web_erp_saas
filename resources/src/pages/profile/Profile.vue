@@ -20,7 +20,7 @@
           <!-- Legacy capped this at an image under 200 KB. -->
           <a-upload
             :file-list="avatarList"
-            accept="image/*"
+            accept="image/jpeg,image/png,image/webp"
             :before-upload="onAvatarPick"
             :max-count="1"
             :show-upload-list="false"
@@ -117,6 +117,39 @@
             </a-button>
           </a-form>
         </a-card>
+
+        <!-- POS approval PIN: managers type it on a cashier's till to approve
+             removing items (POS Settings > Require manager approval). -->
+        <a-card v-if="pinEnabled && pinState.ready" style="margin-top: 16px">
+          <div class="section-title">
+            <SafetyOutlined /> {{ $t('Pv_Approval_Pin') }}
+            <a-tag v-if="pinState.has_pin" color="green" style="margin-left: 4px">{{ $t('Pv_Pin_Set') }}</a-tag>
+          </div>
+          <a-typography-paragraph type="secondary" style="margin-top: -6px">{{ $t('Pv_Approval_Pin_Help') }}</a-typography-paragraph>
+          <a-form layout="vertical">
+            <a-row :gutter="16">
+              <a-col :xs="24" :md="8">
+                <a-form-item :label="$t('CurrentPassword') + ' *'">
+                  <a-input-password v-model:value="pinForm.current_password" :placeholder="$t('Enter_Password')" autocomplete="current-password" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="8">
+                <a-form-item :label="$t('Pv_New_Pin')">
+                  <a-input-password v-model:value="pinForm.pin" inputmode="numeric" :maxlength="6" autocomplete="off" :placeholder="$t('Pv_Pin_Placeholder')" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="8">
+                <a-form-item :label="$t('Pv_Confirm_Pin')">
+                  <a-input-password v-model:value="pinForm.pin_confirmation" inputmode="numeric" :maxlength="6" autocomplete="off" />
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-space>
+              <a-button type="primary" :loading="savingPin" @click="savePin(false)">{{ $t('Pv_Save_Pin') }}</a-button>
+              <a-button v-if="pinState.has_pin" danger :loading="savingPin" @click="savePin(true)">{{ $t('Pv_Remove_Pin') }}</a-button>
+            </a-space>
+          </a-form>
+        </a-card>
       </a-col>
     </a-row>
   </div>
@@ -143,10 +176,11 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import {
   UploadOutlined, UserOutlined, IdcardOutlined, MailOutlined,
-  PhoneOutlined, LockOutlined,
+  PhoneOutlined, LockOutlined, SafetyOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import { useAuthStore } from '../../stores/auth';
+import { usePlanStore } from '../../stores/plan';
 import { uploadForm } from '../../lib/upload';
 import http from '../../lib/http';
 
@@ -189,7 +223,8 @@ const profileRules = computed(() => ({
 
 const passwordRules = computed(() => ({
   current_password: [{ required: true, message: t('Field_is_required') }],
-  new_password: [{ required: true, message: t('Field_is_required') }, { min: 6 }],
+  // Server enforces 8+ chars with upper/lower case, a number and a symbol.
+  new_password: [{ required: true, message: t('Field_is_required') }, { min: 8 }],
   new_password_confirmation: [
     { required: true, message: t('Field_is_required') },
     {
@@ -201,10 +236,21 @@ const passwordRules = computed(() => ({
   ],
 }));
 
-/** Returning false keeps the file local — we upload it with the form. */
+/**
+ * Returning false keeps the file local — we upload it with the form.
+ * Limits mirror UserController::updateProfile (jpg/jpeg/png/webp, 5 MB); the
+ * server resizes to 128×128, so a full-size phone photo is fine. The old
+ * 200 KB cap rejected nearly every phone photo with a misleading message.
+ */
+const AVATAR_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const AVATAR_MAX = 5 * 1024 * 1024;
 function onAvatarPick(file) {
-  if (file.size > 200 * 1024) {
-    message.error(t('Please_fill_the_form_correctly'));
+  if (!AVATAR_TYPES.includes(file.type)) {
+    message.error(t('Avatar_Type_Invalid'));
+    return false;
+  }
+  if (file.size > AVATAR_MAX) {
+    message.error(t('Avatar_Too_Large'));
     return false;
   }
   avatarFile.value = file;
@@ -257,7 +303,10 @@ async function saveProfile() {
       await auth.load();
       await loadProfile();
     } else {
-      message.error(res.data?.message || t('InvalidData'));
+      // Show the server's first validation error (e.g. avatar type, email taken).
+      const errs = res.data?.errors || {};
+      const first = Object.values(errs)[0];
+      message.error((Array.isArray(first) ? first[0] : first) || res.data?.message || t('InvalidData'));
     }
   } catch (e) {
     message.error(t('InvalidData'));
@@ -287,7 +336,59 @@ async function savePassword() {
   }
 }
 
-onMounted(loadProfile);
+// ---- POS approval PIN (GET/POST pos/approval-pin; 4–6 digits, password-confirmed) ----
+const plan = usePlanStore();
+const pinEnabled = computed(() => auth.can('pos_void_items') && plan.featureEnabled('pos'));
+const pinState = ref({ ready: false, has_pin: false });
+const pinForm = ref({ current_password: '', pin: '', pin_confirmation: '' });
+const savingPin = ref(false);
+
+async function loadPin() {
+  if (!pinEnabled.value) return;
+  try {
+    pinState.value = await http.get('pos/approval-pin');
+  } catch (e) { /* card stays hidden */ }
+}
+
+async function savePin(remove) {
+  const f = pinForm.value;
+  if (!f.current_password) {
+    message.error(t('Field_is_required') + ': ' + t('CurrentPassword'));
+    return;
+  }
+  if (!remove) {
+    if (!/^\d{4,6}$/.test(f.pin || '')) {
+      message.error(t('Pv_Pin_Format'));
+      return;
+    }
+    if (f.pin !== f.pin_confirmation) {
+      message.error(t('Pv_Pin_Mismatch'));
+      return;
+    }
+  }
+  savingPin.value = true;
+  try {
+    const res = await http.post('pos/approval-pin', {
+      current_password: f.current_password,
+      pin: remove ? null : f.pin,
+      pin_confirmation: remove ? null : f.pin_confirmation,
+    });
+    pinState.value = { ...pinState.value, has_pin: !!res.has_pin };
+    pinForm.value = { current_password: '', pin: '', pin_confirmation: '' };
+    message.success(remove ? t('Pv_Pin_Removed') : t('Pv_Pin_Saved'));
+  } catch (e) {
+    const errs = e?.data?.errors || {};
+    const first = Object.values(errs)[0];
+    message.error((Array.isArray(first) ? first[0] : first) || e?.data?.message || t('InvalidData'));
+  } finally {
+    savingPin.value = false;
+  }
+}
+
+onMounted(() => {
+  loadProfile();
+  loadPin();
+});
 </script>
 
 <style scoped>

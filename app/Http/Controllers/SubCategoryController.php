@@ -28,7 +28,19 @@ class SubCategoryController extends BaseController
         }
 
         $query = SubCategory::query()
-            ->with('category:id,name')
+            ->with('category:id,name');
+
+        // Settings -> Features: optionally show only sub-categories that have a
+        // product stocked in one of this user's warehouses. One whose products
+        // are stocked nowhere stays visible, so a new one is never hidden.
+        $this->scopeMasterDataToWarehouses($query, fn ($ids) => \Illuminate\Support\Facades\DB::table('products')
+            ->join('product_warehouse', 'product_warehouse.product_id', '=', 'products.id')
+            ->whereNull('products.deleted_at')
+            ->whereNull('product_warehouse.deleted_at')
+            ->whereColumn('products.sub_category_id', 'subcategories.id')
+            ->when($ids !== null, fn ($q) => $q->whereIn('product_warehouse.warehouse_id', $ids)));
+
+        $query
             ->when($search !== '', function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%");
             });

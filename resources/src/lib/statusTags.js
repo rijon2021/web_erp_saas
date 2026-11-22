@@ -58,6 +58,11 @@ export function paymentStatusTag(status) {
     return tag('warning', 'Unpaid');
 }
 
+/** Online order payment_status: same colours as paymentStatusTag above. */
+export function onlineOrderPaymentColor(status) {
+    return { paid: 'success', partial: 'blue' }[status] || 'warning';
+}
+
 const SHIPPING = {
     ordered: ['warning', 'Ordered'],
     packed: ['processing', 'Packed'],

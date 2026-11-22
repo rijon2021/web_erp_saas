@@ -30,6 +30,9 @@ class GeneralSetting extends Model
         'landing_custom_font_path',
         'landing_page_enabled',
         'landing_redirect_url',
+        'landing_mode',
+        'landing_redirect_status',
+        'landing_disabled_target',
         'bank_details',
         'show_customizer_button',
         'show_site_name',
@@ -44,6 +47,7 @@ class GeneralSetting extends Model
         'tenant_currency_code',
         'tenant_currency_symbol',
         'tenant_default_language',
+        'tenant_enabled_languages',
         'tenant_footer_text',
         'tenant_page_title_suffix',
         'tenant_developed_by',
@@ -54,6 +58,10 @@ class GeneralSetting extends Model
         'trial_reminders_enabled',
         'trial_reminder_offsets',
         'subscription_banner_threshold_days',
+        'subscription_grace_days',
+        'subscription_grace_mode',
+        'suspend_unpaid_after_days',
+        'delete_inactive_after_days',
         'sms_gateway',
         'subscription_reminder_sms',
         'trial_reminder_sms',
@@ -61,11 +69,17 @@ class GeneralSetting extends Model
         'whatsapp_enabled',
         'whatsapp_provider',
         'whatsapp_default_templates',
+        'billing_monthly_enabled',
+        'billing_yearly_enabled',
+        'super_dashboard_layout',
+        'super_primary_color',
+        'tenant_primary_color',
     ];
 
     protected $casts = [
         'bank_details' => 'array',
         'reserved_subdomains' => 'array',
+        'tenant_enabled_languages' => 'array',
         'landing_page_enabled' => 'boolean',
         'show_customizer_button' => 'boolean',
         'show_site_name' => 'boolean',
@@ -78,7 +92,25 @@ class GeneralSetting extends Model
         'demo_data_enabled' => 'boolean',
         'whatsapp_enabled' => 'boolean',
         'whatsapp_default_templates' => 'array',
+        'billing_monthly_enabled' => 'boolean',
+        'billing_yearly_enabled' => 'boolean',
+        'super_dashboard_layout' => 'array',
     ];
+
+    /** What the central root (/) serves: the CMS landing, an external redirect, or nothing. */
+    public const LANDING_MODE_BUILTIN = 'builtin';
+    public const LANDING_MODE_REDIRECT = 'redirect';
+    public const LANDING_MODE_DISABLED = 'disabled';
+    public const LANDING_MODES = ['builtin', 'redirect', 'disabled'];
+
+    /** HTTP status used for the external redirect mode. */
+    public const LANDING_REDIRECT_STATUSES = [301, 302];
+
+    /** What / shows when the landing page is disabled. */
+    public const LANDING_DISABLED_TARGETS = ['login', 'signup'];
+
+    /** Every billing cycle the codebase knows how to price and renew. */
+    public const BILLING_CYCLES = ['monthly', 'yearly'];
 
     /**
      * Curated list of Google Font families offered for the landing pages.
@@ -260,6 +292,45 @@ class GeneralSetting extends Model
         return $value > 0 ? $value : 7;
     }
 
+    /** Grace modes: keep everything working, or let staff view but not change data. */
+    public const GRACE_MODES = ['full', 'read_only'];
+
+    /**
+     * Days a lapsed PAID period keeps granting access (0 = none). Trials and
+     * subscriptions the customer cancelled never get grace.
+     */
+    public function subscriptionGraceDays(): int
+    {
+        return max(0, (int) ($this->subscription_grace_days ?? 0));
+    }
+
+    public function subscriptionGraceMode(): string
+    {
+        return in_array($this->subscription_grace_mode, self::GRACE_MODES, true)
+            ? $this->subscription_grace_mode
+            : 'full';
+    }
+
+    /**
+     * Days after expiry before an unpaid workspace is suspended (0 = never).
+     * Never earlier than the end of the grace period.
+     */
+    public function suspendUnpaidAfterDays(): int
+    {
+        $days = (int) ($this->suspend_unpaid_after_days ?? 7);
+        if ($days <= 0) {
+            return 0;
+        }
+
+        return max($days, $this->subscriptionGraceDays());
+    }
+
+    /** Days of inactivity before a suspended/cancelled/failed workspace is deleted (0 = never). */
+    public function deleteInactiveAfterDays(): int
+    {
+        return max(0, (int) ($this->delete_inactive_after_days ?? 90));
+    }
+
     /**
      * SMS body template for expiry reminders (falls back to the default).
      */
@@ -312,8 +383,37 @@ class GeneralSetting extends Model
     /**
      * Get the single settings row (create with defaults if missing).
      */
+    /**
+     * The single settings row, read once per request. Dozens of views,
+     * composers and helpers call instance(); before this memo each call was
+     * its own query (100+ per super-admin dashboard load).
+     */
+    private static ?self $instance = null;
+
+    protected static function booted(): void
+    {
+        // Keep the memo current when the row is saved through any instance,
+        // and drop it when the row is deleted.
+        static::saved(function (self $setting) {
+            static::$instance = $setting;
+        });
+        static::deleted(function () {
+            static::$instance = null;
+        });
+    }
+
+    /** Forget the per-process copy (queue workers call this between jobs). */
+    public static function forgetInstance(): void
+    {
+        static::$instance = null;
+    }
+
     public static function instance(): self
     {
+        if (static::$instance !== null && static::$instance->exists) {
+            return static::$instance;
+        }
+
         $setting = static::first();
 
         if (! $setting) {
@@ -324,7 +424,7 @@ class GeneralSetting extends Model
             ]);
         }
 
-        return $setting;
+        return static::$instance = $setting;
     }
 
     /**
@@ -358,11 +458,98 @@ class GeneralSetting extends Model
     }
 
     /**
+     * Billing cycles customers may actually choose, in display order.
+     *
+     * A missing column (migration not run yet) reads as null, which must mean
+     * "offered" rather than "hidden" — otherwise upgrading the code before the
+     * database would silently take checkout offline. Turning both off is not a
+     * reachable state through the settings form, but a direct DB edit could do
+     * it, so monthly is restored as the floor.
+     *
+     * @return list<string>
+     */
+    public static function enabledBillingCycles(): array
+    {
+        $setting = static::instance();
+
+        $cycles = [];
+        if ($setting->billing_monthly_enabled ?? true) {
+            $cycles[] = 'monthly';
+        }
+        if ($setting->billing_yearly_enabled ?? true) {
+            $cycles[] = 'yearly';
+        }
+
+        return $cycles ?: ['monthly'];
+    }
+
+    /** Whether a given cycle is on offer. */
+    public static function billingCycleEnabled(?string $cycle): bool
+    {
+        return in_array($cycle, static::enabledBillingCycles(), true);
+    }
+
+    /**
+     * The cycle a fresh checkout should start on — the caller's preference when
+     * it is still offered, otherwise the first cycle that is.
+     */
+    public static function defaultBillingCycle(?string $preferred = null): string
+    {
+        $cycles = static::enabledBillingCycles();
+
+        return in_array($preferred, $cycles, true) ? $preferred : $cycles[0];
+    }
+
+    /**
+     * Validation rule for a customer-facing `billing_cycle` field. Super-admin
+     * screens deliberately keep the full `in:monthly,yearly` list so support
+     * can still place a tenant on a cycle that is no longer publicly sold.
+     */
+    public static function billingCycleRule(): string
+    {
+        return 'in:' . implode(',', static::enabledBillingCycles());
+    }
+
+    /**
      * Landing layout key stored in general_settings (always a valid template key).
      */
     public static function resolvedLandingTemplateKey(): string
     {
         return LandingPageTemplate::canonicalKey(static::instance()->landing_template);
+    }
+
+    /**
+     * Effective landing page mode. Before the landing_mode migration runs the
+     * column reads as null, so the mode is derived from the legacy on/off
+     * toggle (off + URL → redirect, off without one → disabled).
+     */
+    public function landingMode(): string
+    {
+        $mode = $this->landing_mode ?? null;
+
+        if (in_array($mode, self::LANDING_MODES, true)) {
+            return $mode;
+        }
+
+        if ($this->landing_page_enabled ?? true) {
+            return self::LANDING_MODE_BUILTIN;
+        }
+
+        return trim((string) ($this->landing_redirect_url ?? '')) !== ''
+            ? self::LANDING_MODE_REDIRECT
+            : self::LANDING_MODE_DISABLED;
+    }
+
+    /** 301 or 302 — anything else reads as the safe temporary redirect. */
+    public function landingRedirectStatus(): int
+    {
+        return (int) ($this->landing_redirect_status ?? 302) === 301 ? 301 : 302;
+    }
+
+    /** 'login' or 'signup' — what the main domain shows while disabled. */
+    public function landingDisabledTarget(): string
+    {
+        return ($this->landing_disabled_target ?? null) === 'signup' ? 'signup' : 'login';
     }
 
     public function getBankDetails(): array
@@ -394,6 +581,23 @@ class GeneralSetting extends Model
         return null;
     }
 
+    /**
+     * Favicon for the public central pages (landing, blog, legal, checkout).
+     * A custom CMS > SEO favicon wins; the seeded default SEO value doesn't
+     * count as custom, so the General Settings favicon shows instead of it.
+     */
+    public function getPublicFaviconUrl(?LandingSeo $seo = null): string
+    {
+        $default = 'images/super/settings/favicon.ico';
+        $seoFavicon = trim((string) ($seo?->favicon ?? ''));
+
+        if ($seoFavicon !== '' && $seoFavicon !== $default) {
+            return asset($seoFavicon);
+        }
+
+        return $this->getFaviconUrl() ?: asset($default);
+    }
+
     public function getTenantLogoUrl(): ?string
     {
         return $this->tenant_logo_path ? asset($this->tenant_logo_path) : null;
@@ -404,6 +608,33 @@ class GeneralSetting extends Model
         return $this->tenant_favicon_path ? asset($this->tenant_favicon_path) : null;
     }
 
+    /** Built-in primary colours, used while no default is chosen in Settings > General. */
+    public const BUILTIN_SUPER_COLOR = '#018A00';
+    public const BUILTIN_TENANT_COLOR = '#6d28d9';
+
+    /** A stored colour when it is a valid #rrggbb hex, else null. */
+    public static function normalizeHexColor(?string $value): ?string
+    {
+        $value = trim((string) $value);
+        if ($value !== '' && $value[0] !== '#') {
+            $value = '#' . $value;
+        }
+
+        return preg_match('/^#[0-9a-fA-F]{6}$/', $value) ? strtolower($value) : null;
+    }
+
+    /** Super-admin panel default colour chosen by the admin (null = built-in). */
+    public function superPrimaryColor(): ?string
+    {
+        return static::normalizeHexColor($this->super_primary_color ?? null);
+    }
+
+    /** Tenant app default colour chosen by the admin (null = built-in). */
+    public function tenantPrimaryColor(): ?string
+    {
+        return static::normalizeHexColor($this->tenant_primary_color ?? null);
+    }
+
     /**
      * Default values used to seed new tenants. Each key has a sensible
      * fallback so existing installs keep working when no super-admin
@@ -411,18 +642,26 @@ class GeneralSetting extends Model
      */
     public function getTenantDefaults(): array
     {
+        $appName = $this->tenant_app_name ?: ($this->app_name ?: 'Stocky | Ultimate Inventory With POS');
+        // Brand part of "Name | tagline", for the fields below that would
+        // otherwise fall back to a hard-coded "Stocky".
+        $brand = trim(explode('|', $appName)[0]) ?: 'Stocky';
+        $companyName = $this->tenant_company_name ?: ($this->company_name ?: $brand);
+
         return [
-            'app_name'          => $this->tenant_app_name ?: ($this->app_name ?: 'Stocky | Ultimate Inventory With POS'),
-            'company_name'      => $this->tenant_company_name ?: ($this->company_name ?: 'Stocky'),
+            'app_name'          => $appName,
+            'company_name'      => $companyName,
             'email'             => $this->tenant_email ?: ($this->email ?: 'admin@example.com'),
             'phone'             => $this->tenant_phone ?: ($this->phone ?: ''),
             'address'           => $this->tenant_address ?: ($this->address ?: ''),
             'currency_code'     => strtoupper($this->tenant_currency_code ?: ($this->currency_code ?: 'USD')),
             'currency_symbol'   => $this->tenant_currency_symbol ?: ($this->currency_symbol ?: '$'),
             'default_language'  => $this->tenant_default_language ?: null,
-            'footer_text'       => $this->tenant_footer_text ?: 'Stocky - Ultimate Inventory With POS',
+            // null = every language in App\Support\TenantLanguages
+            'enabled_languages' => is_array($this->tenant_enabled_languages) ? $this->tenant_enabled_languages : null,
+            'footer_text'       => $this->tenant_footer_text ?: $brand . ' - Ultimate Inventory With POS',
             'page_title_suffix' => $this->tenant_page_title_suffix ?: 'Ultimate Inventory With POS',
-            'developed_by'      => $this->tenant_developed_by ?: 'Stocky',
+            'developed_by'      => $this->tenant_developed_by ?: $companyName,
             'logo_path'         => $this->tenant_logo_path,
             'favicon_path'      => $this->tenant_favicon_path,
         ];

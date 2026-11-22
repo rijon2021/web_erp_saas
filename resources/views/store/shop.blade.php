@@ -4,7 +4,7 @@
 @php
   $currency   = store_currency()['symbol'];
   $total      = $products->total();
-  $hasFilters = filled($q ?? null) || filled($cat ?? null) || filled($collection ?? null) || filled($min ?? null) || filled($max ?? null);
+  $hasFilters = filled($q ?? null) || filled($cat ?? null) || filled($collection ?? null) || filled($min ?? null) || filled($max ?? null) || !empty($sizes) || !empty($colors);
 @endphp
 
 {{-- ===== Top bar ===== --}}
@@ -22,12 +22,10 @@
       </div>
 
       <form method="get" action="{{ route('store.shop') }}" class="flex items-end gap-2 flex-wrap">
-        @foreach(request()->except(['sort','page']) as $k => $v)
-          @if(is_array($v))
-            @foreach($v as $vv)<input type="hidden" name="{{ $k }}[]" value="{{ $vv }}">@endforeach
-          @else
-            <input type="hidden" name="{{ $k }}" value="{{ $v }}">
-          @endif
+        {{-- Keep the other filters; flattened so nested ones (spec[Storage][]) survive too. --}}
+        @foreach(array_filter(explode('&', http_build_query(request()->except(['sort','page'])))) as $pair)
+          @php [$hk, $hv] = array_pad(explode('=', $pair, 2), 2, ''); @endphp
+          <input type="hidden" name="{{ urldecode($hk) }}" value="{{ urldecode($hv) }}">
         @endforeach
 
         <div class="flex items-end gap-2">
@@ -60,7 +58,8 @@
       @include('store.partials.filters-card', [
         'q' => $q, 'cat' => $cat, 'collection' => $collection,
         'min' => $min, 'max' => $max, 'sort' => $sort,
-        'categories' => $categories, 'collections' => $collections
+        'categories' => $categories, 'collections' => $collections,
+        'facets' => $facets ?? [], 'sizes' => $sizes ?? [], 'colors' => $colors ?? []
       ])
     </aside>
 
@@ -109,6 +108,7 @@
         'q' => $q, 'cat' => $cat, 'collection' => $collection,
         'min' => $min, 'max' => $max, 'sort' => $sort,
         'categories' => $categories, 'collections' => $collections,
+        'facets' => $facets ?? [], 'sizes' => $sizes ?? [], 'colors' => $colors ?? [],
         'isDrawer' => true
       ])
     </div>

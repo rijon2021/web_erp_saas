@@ -51,12 +51,15 @@ class CommissionProgramController extends BaseController
             'is_active' => 'boolean',
             'valid_from' => 'nullable|date',
             'valid_to' => 'nullable|date|after_or_equal:valid_from',
+            'rule_mode' => 'nullable|in:all,highest_priority',
         ]);
 
         $program = CommissionProgram::create([
             'name' => $request->name,
             'description' => $request->description,
             'is_active' => $request->boolean('is_active', true),
+            // New programs: only the highest-priority qualifying rule pays.
+            'rule_mode' => $request->rule_mode ?: CommissionProgram::MODE_HIGHEST_PRIORITY,
             'valid_from' => $request->valid_from,
             'valid_to' => $request->valid_to,
         ]);
@@ -80,6 +83,7 @@ class CommissionProgramController extends BaseController
             'is_active' => 'boolean',
             'valid_from' => 'nullable|date',
             'valid_to' => 'nullable|date|after_or_equal:valid_from',
+            'rule_mode' => 'nullable|in:all,highest_priority',
         ]);
 
         $program = CommissionProgram::findOrFail($id);
@@ -87,6 +91,7 @@ class CommissionProgramController extends BaseController
             'name' => $request->name,
             'description' => $request->description,
             'is_active' => $request->boolean('is_active', true),
+            'rule_mode' => $request->rule_mode ?: $program->rule_mode,
             'valid_from' => $request->valid_from,
             'valid_to' => $request->valid_to,
         ]);

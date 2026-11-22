@@ -13,11 +13,11 @@ class Setting extends Model
         'sidebar_show_logo', 'sidebar_logo_width', 'sidebar_logo_height',
         'vat_number', 'company_name_ar', 'zatca_enabled', 'default_tax', 'default_dashboard_date_range', 'dashboard_section_order', 'dashboard_grid_layout', 'dashboard_font_size', 'dashboard_font_family', 'date_format',
         'sale_return_prefix', 'purchase_return_prefix',
-        'price_format', 'dark_mode', 'rtl', 'sms_gateway',
+        'price_format', 'currency_position', 'dark_mode', 'rtl', 'sms_gateway',
         // Login page appearance
         'login_hero_title', 'login_hero_subtitle', 'login_panel_title', 'login_panel_subtitle',
         'login_hero_badge', 'login_hero_feature_1', 'login_hero_feature_2', 'login_hero_feature_3',
-        'login_btn_text', 'login_footer_text',
+        'login_btn_text', 'login_footer_text', 'login_bg_color', 'login_page_options', 'login_bg_image',
         // Cloud backup settings
         'backup_cloud_enabled', 'backup_keep_local', 'backup_cloud_provider', 'backup_cloud_path',
         'backup_s3_bucket', 'backup_s3_region', 'backup_s3_access_key', 'backup_s3_secret_key',
@@ -27,12 +27,35 @@ class Setting extends Model
         'backup_dropbox_path', 'backup_dropbox_access_token',
         'google_calendar_refresh_token', 'google_calendar_calendar_id', 'timezone',
         'google_calendar_client_id', 'google_calendar_client_secret', 'google_calendar_redirect_uri',
-        'offline_sync_enabled', 'enable_3_decimal_pricing', 'show_product_gtin', 'show_serial_tracking',
+        'offline_sync_enabled', 'enable_3_decimal_pricing', 'hide_zero_decimals', 'show_product_gtin', 'show_serial_tracking',
         'enable_kitchen_display', 'enable_multi_pack_selling', 'allow_overselling', 'enable_multi_currency',
         'accounting_auto_generate_journals',
+        'require_payment_account',
         // Settings → Modules: JSON map of switched-off business modules
         'module_flags',
         'purchase_extra_charges_enabled', 'purchase_custom_fields_enabled',
+        // Settings → Features: warehouse-scoped master data + customer rating
+        'restrict_master_data_by_warehouse', 'customer_performance_enabled', 'product_supplier_enabled',
+        // Settings → Features: products belong to the warehouse they were created for
+        'restrict_products_by_warehouse',
+        // Settings → Features: Supplier Wallet (prepaid balances held with suppliers)
+        'supplier_wallet_enabled', 'supplier_wallet_allow_negative',
+        // Settings → Features: Customer Wallet (stored-value balance per customer)
+        'customer_wallet_enabled', 'customer_wallet_allow_negative', 'customer_wallet_checkout_enabled',
+        'customer_wallet_refund_destination', 'customer_wallet_withdrawal_enabled', 'customer_wallet_min_withdrawal',
+        'customer_wallet_payment_method_id',
+        // Settings → Features: selling price editable on purchase lines (written back to the product)
+        'purchase_update_selling_price',
+        // Settings → Features: a received purchase sets the product's cost to the line's net base-unit cost
+        'purchase_update_product_cost',
+        // Settings → Features: different prices per store (product_warehouse_prices)
+        'warehouse_prices_enabled',
+        // Settings → Features: Angola AGT / DR Congo DGI e-invoicing switches
+        'agt_einvoice_enabled', 'dgi_einvoice_enabled',
+        // Settings → Features: combo availability comes from its components
+        'virtual_combo_stock',
+        // Settings → Features: product image downscaling, POS salesperson picker, export defaults
+        'product_image_resize', 'product_image_max_size', 'enable_pos_salesperson_switch', 'export_settings',
         // PWA manifest overrides (empty = fall back to app_name / built-in default)
         'pwa_enabled', 'pwa_name', 'pwa_short_name', 'pwa_description', 'pwa_start_url',
         'pwa_display', 'pwa_orientation', 'pwa_theme_color', 'pwa_background_color',
@@ -62,17 +85,56 @@ class Setting extends Model
         'backup_s3_path_style' => 'boolean',
         'offline_sync_enabled' => 'boolean',
         'enable_3_decimal_pricing' => 'boolean',
+        'hide_zero_decimals' => 'boolean',
+        'supplier_wallet_enabled' => 'boolean',
+        'supplier_wallet_allow_negative' => 'boolean',
+        'customer_wallet_enabled' => 'boolean',
+        'customer_wallet_allow_negative' => 'boolean',
+        'customer_wallet_checkout_enabled' => 'boolean',
+        'customer_wallet_withdrawal_enabled' => 'boolean',
+        'customer_wallet_min_withdrawal' => 'double',
+        'purchase_update_selling_price' => 'boolean',
+        'purchase_update_product_cost' => 'boolean',
+        'warehouse_prices_enabled' => 'boolean',
         'show_product_gtin' => 'boolean',
         'show_serial_tracking' => 'boolean',
         'enable_kitchen_display' => 'boolean',
         'enable_multi_pack_selling' => 'boolean',
         'allow_overselling' => 'boolean',
         'enable_multi_currency' => 'boolean',
+        'restrict_master_data_by_warehouse' => 'boolean',
+        'restrict_products_by_warehouse' => 'boolean',
+        'agt_einvoice_enabled' => 'boolean',
+        'dgi_einvoice_enabled' => 'boolean',
+        'virtual_combo_stock' => 'boolean',
+        'product_image_resize' => 'boolean',
+        'product_image_max_size' => 'integer',
+        'enable_pos_salesperson_switch' => 'boolean',
+        'customer_performance_enabled' => 'boolean',
+        'product_supplier_enabled' => 'boolean',
         'accounting_auto_generate_journals' => 'boolean',
         'purchase_extra_charges_enabled' => 'boolean',
         'purchase_custom_fields_enabled' => 'boolean',
         'google_calendar_client_secret' => 'encrypted',
         'google_calendar_refresh_token' => 'encrypted',
+        // Cloud backup credentials: encrypted at rest, legacy plaintext still readable
+        'backup_s3_secret_key' => \App\Casts\EncryptedOrPlain::class,
+        'backup_gdrive_access_token' => \App\Casts\EncryptedOrPlain::class,
+        'backup_gdrive_refresh_token' => \App\Casts\EncryptedOrPlain::class,
+        'backup_gdrive_client_secret' => \App\Casts\EncryptedOrPlain::class,
+        'backup_dropbox_access_token' => \App\Casts\EncryptedOrPlain::class,
+    ];
+
+    /**
+     * Never serialized: endpoints that return the whole Setting model (e.g. the
+     * POS receipt payload) must not leak cloud-backup or Google credentials.
+     * SettingsController reads them by property, gated by the backup permission.
+     */
+    protected $hidden = [
+        'backup_s3_access_key', 'backup_s3_secret_key',
+        'backup_gdrive_access_token', 'backup_gdrive_refresh_token', 'backup_gdrive_client_secret',
+        'backup_dropbox_access_token',
+        'google_calendar_client_secret', 'google_calendar_refresh_token',
     ];
 
     /**
@@ -130,6 +192,46 @@ class Setting extends Model
             && array_key_exists($family, self::DASHBOARD_GOOGLE_FONTS);
     }
 
+    /**
+     * The tenant's settings row, read once per request (or per queued job)
+     * instead of at every call site. Keyed by tenant so a queue worker serving
+     * several tenants never hands one tenant another's row. Cleared whenever a
+     * Setting is saved or deleted, and before every queued job.
+     *
+     * The instance is shared: read from it, but write through a fresh query
+     * (Setting::first()) so an unsaved change can't leak to other readers.
+     */
+    public static function current(): ?self
+    {
+        $key = function_exists('tenant') && tenant() ? (string) tenant()->getTenantKey() : '__central';
+
+        if (! array_key_exists($key, self::$currentMemo)) {
+            self::$currentMemo[$key] = static::whereNull('deleted_at')->first();
+        }
+
+        return self::$currentMemo[$key];
+    }
+
+    public static function forgetCurrent(): void
+    {
+        self::$currentMemo = [];
+    }
+
+    /** @var array<string, self|null> */
+    private static array $currentMemo = [];
+
+    protected static function booted(): void
+    {
+        static::saved(function () {
+            static::forgetCurrent();
+            Product::forgetStorefrontWarehouses();
+        });
+        static::deleted(function () {
+            static::forgetCurrent();
+            Product::forgetStorefrontWarehouses();
+        });
+    }
+
     /** Every value update_settings accepts for dashboard_font_family. */
     public static function dashboardFontKeys(): array
     {
@@ -137,6 +239,66 @@ class Setting extends Model
             array_keys(self::DASHBOARD_GOOGLE_FONTS),
             array_keys(self::DASHBOARD_SYSTEM_FONTS)
         );
+    }
+
+    /**
+     * Option lists for the font pickers on System Settings (dashboard font) and
+     * Store Settings (storefront font). Google families carry an `arabic` flag
+     * so the UI can group them; system entries are raw CSS stacks. Served as
+     * `font_options` by get_Settings_data_api and admin/store/settings.
+     */
+    public static function fontOptions(): array
+    {
+        $google = [];
+        foreach (self::DASHBOARD_GOOGLE_FONTS as $family => $meta) {
+            $google[] = ['value' => $family, 'label' => $meta['label'], 'arabic' => (bool) $meta['arabic']];
+        }
+        $system = [];
+        foreach (self::DASHBOARD_SYSTEM_FONTS as $stack => $label) {
+            $system[] = ['value' => $stack, 'label' => $label];
+        }
+
+        return ['google' => $google, 'system' => $system];
+    }
+
+    /**
+     * White-labeling: only plans with the `remove_branding` feature may replace
+     * the platform footer line and "developed by" credit. No active plan means
+     * no white-labeling.
+     */
+    public static function canRemoveBranding(): bool
+    {
+        try {
+            return app(\App\Services\TenantLimitsService::class)->hasFeature('remove_branding');
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Footer + "developed by" as the tenant UI should show them: the tenant's
+     * own values when its plan allows white-labeling, otherwise the Super
+     * Admin's platform branding (Tenant Settings defaults) — so a custom value
+     * saved before a downgrade stops showing. Also returns the entitlement
+     * (can_remove_branding) so callers resolve the plan only once.
+     */
+    public function effectiveBranding(): array
+    {
+        if (self::canRemoveBranding()) {
+            return ['footer' => $this->footer ?? '', 'developed_by' => $this->developed_by ?? '', 'can_remove_branding' => true];
+        }
+
+        try {
+            $defaults = \App\Models\Central\GeneralSetting::instance()->getTenantDefaults();
+        } catch (\Throwable) {
+            $defaults = [];
+        }
+
+        return [
+            'footer' => $defaults['footer_text'] ?? 'Stocky - Ultimate Inventory With POS',
+            'developed_by' => $defaults['developed_by'] ?? 'Stocky',
+            'can_remove_branding' => false,
+        ];
     }
 
     public function Currency()

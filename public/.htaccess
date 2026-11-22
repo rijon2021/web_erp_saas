@@ -5,6 +5,15 @@
 
     RewriteEngine On
 
+    # Upload folders hold data, never code or pages: refuse scripts and HTML
+    # there even if one ever slips past upload validation. Matched on the full
+    # request URI so path-info ("x.php/a.jpg") and double extensions
+    # ("x.php.pdf", run as PHP by AddHandler setups) are caught too. Covers
+    # every tenant's upload tree (images/tenants/<id>/...) and images/super.
+    RewriteCond %{REQUEST_URI} /(images|flags)/.*\.(php[0-9]?|phtml|pht|phar|phps|cgi|pl|py|sh)(\.|/|$) [NC,OR]
+    RewriteCond %{REQUEST_URI} /(images|flags)/.*\.(html?|xhtml|xht|shtml|xml|xsl|xsd|htaccess)$ [NC]
+    RewriteRule ^ - [F,L]
+
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
@@ -12,8 +21,7 @@
     # Redirect Trailing Slashes If Not A Folder...
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_URI} (.+)/$
-    # RewriteRule ^ %1 [L,R=301]
-    RewriteRule ^ ^$1 [N]
+    RewriteRule ^ %1 [L,R=301]
 
     # Send Requests To Front Controller...
     RewriteCond %{REQUEST_FILENAME} !-d
@@ -154,4 +162,14 @@
         # DEFLATE by extension
         AddOutputFilter DEFLATE js css htm html xml
     </IfModule>
+</IfModule>
+
+# Security headers for files Apache serves directly (uploads, assets).
+# Laravel responses get theirs from App\Http\Middleware\SetSecurityHeaders.
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    # An SVG opened directly must not run script on this origin.
+    <FilesMatch "\.svgz?$">
+        Header set Content-Security-Policy "script-src 'none'; object-src 'none'"
+    </FilesMatch>
 </IfModule>

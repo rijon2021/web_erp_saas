@@ -89,7 +89,7 @@
             </a-form-item>
             <!-- Same note as legacy: SMTP itself comes from system Mail Settings. -->
             <p style="color: rgba(var(--ink-rgb), 0.45); font-size: 13px">
-              SMTP is taken from the system Mail Settings (Servers).
+              {{ $t('Marketing_SMTP_From_Mail_Settings') }}
             </p>
             <a-form-item :label="$t('From_Name')">
               <a-input v-model:value="settings.email_from_name" />

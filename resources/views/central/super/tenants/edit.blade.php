@@ -116,21 +116,49 @@
             </div>
             <div class="card-body-custom">
                 @if($tenant->domains->isNotEmpty())
+                    @php
+                        $customHosts = $tenant->customDomains->pluck('domain')->all();
+                        $toggleOn = \App\Support\TenantDomainStatus::supported();
+                        $offTarget = $toggleOn ? \App\Support\TenantDomainStatus::customDomainTarget((string) $tenant->id) : null;
+                    @endphp
                     <div class="d-flex flex-column gap-2 mb-4">
                         @foreach($tenant->domains as $d)
+                        @php
+                            $isCustomRow = in_array($d->domain, $customHosts, true);
+                            $isOn = \App\Support\TenantDomainStatus::isActive($d);
+                            $canOff = $toggleOn && $isOn && ! $isCustomRow && \App\Support\TenantDomainStatus::canDeactivate((string) $tenant->id, (int) $d->id);
+                        @endphp
                         <div class="d-flex align-items-center justify-content-between p-3 rounded-3 domain-row">
                             <div class="d-flex align-items-center gap-2">
                                 <i class="bi bi-link-45deg text-muted"></i>
-                                <span class="text-mono fw-500 fs-sm3">{{ $d->domain }}</span>
+                                <div>
+                                    <span class="text-mono fw-500 fs-sm3">{{ $d->domain }}</span>
+                                    @if(! $isOn && $offTarget)
+                                        <span class="text-muted d-block fs-xs2"><i class="bi bi-arrow-return-right"></i> {{ __('super.tenants.domain_off_hint', ['domain' => $offTarget]) }}</span>
+                                    @endif
+                                </div>
                             </div>
+                            <div class="d-flex align-items-center gap-2">
+                            @if(! $isOn)
+                                <span class="badge badge-suspended badge-sm">{{ __('super.tenants.domain_off') }}</span>
+                            @endif
+                            @if($toggleOn && ! $isCustomRow && (! $isOn || $canOff))
+                            <form method="POST" action="{{ route('super.tenants.domains.toggle', [$tenant, $d->id]) }}" @if($isOn) data-swal-confirm="{{ json_encode(['title' => __('super.tenants.domain_switch_off') . '?', 'text' => __('super.tenants.domain_switch_off_confirm', ['domain' => $d->domain]), 'icon' => 'question', 'confirmButtonText' => __('super.tenants.domain_switch_off'), 'confirmButtonColor' => '#f59e0b']) }}" @endif>
+                                @csrf
+                                <button type="submit" class="btn btn-xs btn-ghost" title="{{ $isOn ? __('super.tenants.domain_switch_off') : __('super.tenants.domain_switch_on') }}">
+                                    <i class="bi {{ $isOn ? 'bi-toggle-on text-success' : 'bi-toggle-off text-muted' }}"></i>
+                                </button>
+                            </form>
+                            @endif
                             @if($tenant->domains->count() > 1)
-                            <form method="POST" action="{{ route('super.tenants.domains.destroy', [$tenant, $d->id]) }}" data-swal-confirm="{{ json_encode(['title' => __('super.tenants.remove_domain'), 'text' => $d->domain, 'icon' => 'warning', 'confirmButtonText' => 'Yes, remove', 'confirmButtonColor' => '#ef4444']) }}">
+                            <form method="POST" action="{{ route('super.tenants.domains.destroy', [$tenant, $d->id]) }}" data-swal-confirm="{{ json_encode(['title' => __('super.tenants.remove_domain'), 'text' => $d->domain, 'icon' => 'warning', 'confirmButtonText' => __('super.common.yes_remove'), 'confirmButtonColor' => '#ef4444']) }}">
                                 @csrf @method('DELETE')
                                 <button type="submit" class="btn btn-xs btn-ghost btn-ghost-danger">
                                     <i class="bi bi-trash"></i>
                                 </button>
                             </form>
                             @endif
+                            </div>
                         </div>
                         @endforeach
                     </div>
@@ -146,7 +174,7 @@
                     @csrf
                     <div class="form-group">
                         <label class="form-label">{{ __('super.tenants.add_new_domain') }}</label>
-                        <input type="text" name="domain" class="form-control" placeholder="app.customer.com" required>
+                        <input type="text" name="domain" class="form-control" placeholder="{{ __('super.tenants.ph_custom_domain') }}" required>
                         <p class="form-hint">{{ __('super.tenants.domain_hint') }}</p>
                     </div>
                     <button type="submit" class="btn btn-primary btn-sm w-100">

@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHeader title="Maintenance" :breadcrumb="['Fleet Management', 'Maintenance']">
+    <PageHeader :title="$t('Fl_Maintenance')" :breadcrumb="[$t('Fl_Fleet_Management'), $t('Fl_Maintenance')]">
       <template #actions>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
@@ -12,24 +12,24 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search work or vendor…"
+          v-model:value="crud.search.value" :placeholder="$t('Fl_Search_Work_Or_Vendor')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.vehicle_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All vehicles"
+          option-filter-prop="label" :placeholder="$t('Fl_All_Vehicles')"
           :options="vehicleOptions" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.type" class="tb-item" allow-clear
-          placeholder="All types" :options="MAINTENANCE_TYPES" @change="crud.reload"
+          :placeholder="$t('Fl_All_Types')" :options="MAINTENANCE_TYPES" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item" allow-clear
-          placeholder="All statuses" :options="MAINTENANCE_STATUSES" @change="crud.reload"
+          :placeholder="$t('Fl_All_Statuses')" :options="MAINTENANCE_STATUSES" @change="crud.reload"
         />
         <a-range-picker v-model:value="filters.range" class="tb-range" value-format="YYYY-MM-DD" @change="crud.reload" />
-        <a-tag v-if="totalCost" color="purple" class="tb-total">Total: {{ money(totalCost) }}</a-tag>
+        <a-tag v-if="totalCost" color="purple" class="tb-total">{{ $t('Total') }}: {{ money(totalCost) }}</a-tag>
       </div>
     </a-card>
 
@@ -80,62 +80,62 @@
     </DataTable>
 
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit maintenance' : 'Record maintenance'" :width="640"
+      :open="formOpen" :title="editing ? $t('Fl_Edit_Maintenance') : $t('Fl_Record_Maintenance')" :width="640"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Vehicle *" name="vehicle_id">
+            <a-form-item :label="$t('Fl_Vehicle') + ' *'" name="vehicle_id">
               <a-select
                 v-model:value="form.vehicle_id" show-search option-filter-prop="label"
-                :options="vehicleOptions" placeholder="Select a vehicle" @change="onVehicleChange"
+                :options="vehicleOptions" :placeholder="$t('Fl_Select_A_Vehicle')" @change="onVehicleChange"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Work *" name="title">
-              <a-input v-model:value="form.title" placeholder="e.g. 60,000 km service" allow-clear />
+            <a-form-item :label="$t('Fl_Work') + ' *'" name="title">
+              <a-input v-model:value="form.title" :placeholder="$t('Fl_Work_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Type *" name="type">
+            <a-form-item :label="$t('Type') + ' *'" name="type">
               <a-select v-model:value="form.type" :options="MAINTENANCE_TYPES" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Status *" name="status">
+            <a-form-item :label="$t('Status') + ' *'" name="status">
               <a-select v-model:value="form.status" :options="MAINTENANCE_STATUSES" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Date *" name="service_date">
+            <a-form-item :label="$t('Date') + ' *'" name="service_date">
               <a-date-picker v-model:value="form.service_date" style="width: 100%" value-format="YYYY-MM-DD" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Odometer" name="odometer">
+            <a-form-item :label="$t('Fl_Odometer')" name="odometer">
               <a-input-number v-model:value="form.odometer" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Cost" name="cost">
+            <a-form-item :label="$t('Fl_Cost')" name="cost">
               <a-input-number v-model:value="form.cost" :min="0" :step="1" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Vendor / garage">
+            <a-form-item :label="$t('Fl_Vendor_Garage')">
               <a-input v-model:value="form.vendor" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Next service date" extra="Drives the dashboard alert">
+            <a-form-item :label="$t('Fl_Next_Service_Date')" :extra="$t('Fl_Drives_Dashboard_Alert')">
               <a-date-picker v-model:value="form.next_service_date" style="width: 100%" value-format="YYYY-MM-DD" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Next service odometer">
+            <a-form-item :label="$t('Fl_Next_Service_Odometer')">
               <a-input-number v-model:value="form.next_service_odometer" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
@@ -196,15 +196,15 @@ const crud = useCrudTable('fleet/maintenances', {
 const totalCost = computed(() => crud.payload.value?.total_cost || 0);
 
 const columns = computed(() => [
-  { title: 'Date', key: 'service_date', dataIndex: 'service_date', sorter: true, width: 110 },
-  { title: 'Vehicle', key: 'vehicle', dataIndex: 'vehicle_name', width: 200 },
-  { title: 'Work', dataIndex: 'title', key: 'title' },
-  { title: 'Type', key: 'type', dataIndex: 'type', sorter: true, width: 110 },
-  { title: 'Odometer', key: 'odometer', dataIndex: 'odometer', sorter: true, width: 100 },
-  { title: 'Vendor', dataIndex: 'vendor', key: 'vendor', width: 140 },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 120 },
-  { title: 'Next due', key: 'next', width: 140 },
-  { title: 'Cost', key: 'cost', dataIndex: 'cost', sorter: true, width: 110 },
+  { title: t('Date'), key: 'service_date', dataIndex: 'service_date', sorter: true, width: 110 },
+  { title: t('Fl_Vehicle'), key: 'vehicle', dataIndex: 'vehicle_name', width: 200 },
+  { title: t('Fl_Work'), dataIndex: 'title', key: 'title' },
+  { title: t('Type'), key: 'type', dataIndex: 'type', sorter: true, width: 110 },
+  { title: t('Fl_Odometer'), key: 'odometer', dataIndex: 'odometer', sorter: true, width: 100 },
+  { title: t('Fl_Vendor'), dataIndex: 'vendor', key: 'vendor', width: 140 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 120 },
+  { title: t('Fl_Next_Due'), key: 'next', width: 140 },
+  { title: t('Fl_Cost'), key: 'cost', dataIndex: 'cost', sorter: true, width: 110 },
   { title: '', key: 'actions', width: 90 },
 ]);
 

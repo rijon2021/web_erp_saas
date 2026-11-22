@@ -7,11 +7,12 @@
             <template #icon><ArrowLeftOutlined /></template>
             {{ $t('Back') }}
           </a-button>
-          <a-button @click="printSheet">
+          <AuditHistoryButton type="product" />
+          <a-button v-if="auth.canExportProducts" @click="printSheet">
             <template #icon><PrinterOutlined /></template>
             {{ $t('print') }}
           </a-button>
-          <a-button :loading="pdfExporting" @click="exportPdfSheet">
+          <a-button v-if="auth.canExportProducts" :loading="pdfExporting" @click="exportPdfSheet">
             <template #icon><FilePdfOutlined /></template>
             {{ $t('PDF') }}
           </a-button>
@@ -64,6 +65,9 @@
           <div class="pd-info">
             <div class="pd-title">{{ product.name }}</div>
             <div class="pd-code">{{ product.code }}</div>
+            <div v-if="product.barcodes && product.barcodes.length" class="pd-code" style="font-size: 12px; opacity: 0.75">
+              {{ $t('Additional_Barcodes') }}: {{ product.barcodes.join(' · ') }}
+            </div>
 
             <div class="pd-tags">
               <a-tag color="purple">{{ product.type_name || product.type }}</a-tag>
@@ -81,7 +85,7 @@
                   <div class="pd-stat-value">{{ money(product.price) }}</div>
                 </div>
               </div>
-              <div class="pd-stat">
+              <div v-if="auth.canSeeCost" class="pd-stat">
                 <div class="pd-stat-icon" style="background: rgba(22, 119, 255, 0.12); color: #1677ff"><TagOutlined /></div>
                 <div class="pd-stat-meta">
                   <div class="pd-stat-label">{{ $t('Cost') }}</div>
@@ -163,6 +167,23 @@
         />
       </a-card>
 
+      <!-- Different prices per store (blank = the normal price) -->
+      <a-card
+        v-if="(product.store_prices || []).length"
+        size="small" :title="$t('Store_Prices')" style="margin-bottom: 16px" :body-style="{ padding: 0 }"
+      >
+        <a-table
+          :columns="[
+            { title: t('warehouse'), dataIndex: 'warehouse', key: 'warehouse' },
+            ...(product.type === 'is_variant' ? [{ title: t('Variant'), dataIndex: 'variant', key: 'variant' }] : []),
+            { title: t('Price'), key: 'price', align: 'right', customRender: ({ record }) => spMoney(record.price) },
+            { title: t('Wholesale_Price'), key: 'wholesale_price', align: 'right', customRender: ({ record }) => spMoney(record.wholesale_price) },
+            { title: t('Min_Selling_Price'), key: 'min_price', align: 'right', customRender: ({ record }) => spMoney(record.min_price) },
+          ]"
+          :data-source="product.store_prices" :pagination="false" size="middle" :row-key="(r, i) => i"
+        />
+      </a-card>
+
       <!-- Warehouse stock per variant -->
       <a-card
         v-if="product.type === 'is_variant' && (product.CountQTY_variants || []).length"
@@ -186,12 +207,17 @@
         <a-table
           :columns="[
             { title: t('Name'), dataIndex: 'name', key: 'name' },
+            ...(product.options || []).map(o => ({ title: o.name, key: 'opt:' + o.name, optionName: o.name })),
             { title: t('Code'), dataIndex: 'code', key: 'code' },
-            { title: t('Cost'), dataIndex: 'cost', key: 'cost', align: 'right' },
+            ...(auth.canSeeCost ? [{ title: t('Cost'), dataIndex: 'cost', key: 'cost', align: 'right' }] : []),
             { title: t('Price'), dataIndex: 'price', key: 'price', align: 'right' },
           ]"
           :data-source="product.products_variants_data" :pagination="false" size="middle" :row-key="(r, i) => i"
-        />
+        >
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.optionName">{{ (record.option_values || {})[column.optionName] || '—' }}</template>
+          </template>
+        </a-table>
       </a-card>
 
       <!-- Combined products (combos) -->
@@ -257,12 +283,21 @@
         v-if="product.is_batch_tracked"
         size="small" :title="$t('Batches')" :body-style="{ padding: 0 }"
       >
+        <!-- Batches can carry different purchase costs; the stock-weighted
+             average is what the product is effectively worth per unit. -->
+        <template v-if="auth.canSeeCost && batchAvgCost !== null" #extra>
+          <span class="muted">{{ $t('Avg_Batch_Cost') }}:</span>
+          <strong style="margin-inline-start: 6px">{{ money(batchAvgCost) }}</strong>
+        </template>
         <a-table
           :columns="batchColumns" :data-source="batches" :loading="batchesLoading"
           :pagination="false" size="middle" :row-key="r => r.id" :scroll="{ x: 'max-content' }"
         >
           <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'expiry'">
+            <template v-if="column.key === 'unit_cost'">
+              {{ record.unit_cost === null || record.unit_cost === undefined ? '—' : money(record.unit_cost) }}
+            </template>
+            <template v-else-if="column.key === 'expiry'">
               <span :style="{ color: expiryColor(record) }">{{ record.expiry_date || '—' }}</span>
               <div v-if="record.days_to_expiry !== null && record.days_to_expiry !== undefined" class="muted">
                 {{ record.days_to_expiry < 0 ? $t('Expired') : `${$t('Expires_in')} ${record.days_to_expiry} ${$t('Days')}` }}
@@ -302,14 +337,18 @@ import {
   LeftOutlined, RightOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import AuditHistoryButton from '../../components/AuditHistoryButton.vue';
 import BarcodeSvg from '../../components/BarcodeSvg.vue';
 import { useAuthStore } from '../../stores/auth';
 import { useFormat } from '../../composables/useFormat';
 import http from '../../lib/http';
 import { uploadUrl } from '../../lib/uploadUrl';
+import { stripBidiIsolates } from '../../lib/priceFormat';
 
 const { t } = useI18n();
 const { money } = useFormat();
+// Store prices table: a blank figure means the normal price applies there.
+const spMoney = v => (v === null || v === undefined || v === '' ? '—' : money(v));
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
@@ -340,6 +379,9 @@ const gallery = computed(() => {
   return files.length ? files.map(f => uploadUrl('products', f)) : [NO_IMAGE];
 });
 const carouselRef = ref(null);
+// Template ref on the on-screen barcode — the print sheet clones its <svg>
+// and the PDF rasterizes it, so both need it declared here.
+const barcodeWrap = ref(null);
 const currentSlide = ref(0);
 // The image currently in view — the print sheet and PDF reuse it.
 const mainImage = computed(() => gallery.value[currentSlide.value] || gallery.value[0] || NO_IMAGE);
@@ -374,8 +416,9 @@ const infoRows = computed(() => {
     return arr.length ? arr.join(', ') : (single || '');
   };
   // API sends 'Exclusive'/'Inclusive' as strings; legacy rows may carry 1/2.
-  const taxMethod = String(p.tax_method) === '1' ? 'Exclusive'
-    : String(p.tax_method) === '2' ? 'Inclusive' : (p.tax_method || '');
+  const tm = String(p.tax_method);
+  const taxMethod = tm === '1' || tm === 'Exclusive' ? t('Tax_Exclusive')
+    : tm === '2' || tm === 'Inclusive' ? t('Tax_Inclusive') : (p.tax_method || '');
   const rows = [
     { label: t('CodeProduct'), value: p.code },
     { label: t('Barcode_GTIN'), value: p.gtin },
@@ -384,7 +427,8 @@ const infoRows = computed(() => {
     { label: t('Categories'), value: joinList(p.categories, p.category) },
     { label: t('SubCategorie'), value: joinList(p.subcategories, p.sub_category) },
     { label: t('Unit'), value: p.unit === '----' ? '' : p.unit },
-    { label: t('Cost'), value: money(p.cost) },
+    // Feeds the Details card, print sheet and PDF alike.
+    ...(auth.canSeeCost ? [{ label: t('Cost'), value: money(p.cost) }] : []),
     { label: t('Price'), value: money(p.price) },
     { label: t('Wholesale_Price'), value: p.wholesale_price ? money(p.wholesale_price) : '' },
     { label: t('Min_Selling_Price'), value: p.min_price ? money(p.min_price) : '' },
@@ -425,8 +469,10 @@ function buildSections() {
   if ((p.products_variants_data || []).length) {
     secs.push({
       title: t('Variants'),
-      head: [t('Name'), t('Code'), t('Cost'), t('Price')],
-      rows: p.products_variants_data.map(v => [v.name, v.code, v.cost, v.price]),
+      head: auth.canSeeCost ? [t('Name'), t('Code'), t('Cost'), t('Price')] : [t('Name'), t('Code'), t('Price')],
+      rows: p.products_variants_data.map(v => (auth.canSeeCost
+        ? [v.name, v.code, v.cost, v.price]
+        : [v.name, v.code, v.price])),
     });
   }
   if ((p.products_combo_data || []).length) {
@@ -462,7 +508,26 @@ function buildSections() {
 }
 
 // ---- Print ----
+// Product images are either a tenant upload path ("/images/products/x.png") or
+// an absolute remote URL — the print popup has no base URL, so relative paths
+// are resolved here while absolute ones are left alone.
+function absoluteUrl(src) {
+  try {
+    return new URL(src, window.location.href).href;
+  } catch (e) {
+    return src;
+  }
+}
+function isCrossOrigin(src) {
+  try {
+    return new URL(src, window.location.href).origin !== window.location.origin;
+  } catch (e) {
+    return false;
+  }
+}
+
 function printSheet() {
+  if (!auth.canExportProducts) return;
   const w = window.open('', '_blank', 'height=700,width=900');
   if (!w) {
     message.warning(t('Popup_blocked_allow_printing'));
@@ -475,7 +540,7 @@ function printSheet() {
   const svg = barcodeWrap.value?.querySelector('svg');
   const barcodeHtml = svg ? svg.outerHTML : '';
   const imgHtml = mainImage.value && !mainImage.value.endsWith('no-image.png')
-    ? `<img class="photo" src="${window.location.origin}${mainImage.value}" alt="" />`
+    ? `<img class="photo" src="${esc(absoluteUrl(mainImage.value))}" alt="" />`
     : '';
   const infoHtml = infoRows.value
     .map(r => `<tr><th>${esc(r.label)}</th><td>${esc(r.value)}</td></tr>`)
@@ -525,7 +590,16 @@ function printSheet() {
   w.document.close();
   w.focus();
   // Give the product image time to load before the dialog opens.
-  setTimeout(() => { w.print(); }, 600);
+  const photoEl = w.document.querySelector('img.photo');
+  if (photoEl && !photoEl.complete) {
+    let printed = false;
+    const go = () => { if (!printed) { printed = true; w.print(); } };
+    photoEl.addEventListener('load', go);
+    photoEl.addEventListener('error', go);
+    setTimeout(go, 5000);
+  } else {
+    setTimeout(() => { w.print(); }, 400);
+  }
 }
 
 // ---- PDF export ----
@@ -558,6 +632,9 @@ function imageToPng(src) {
   return new Promise((resolve) => {
     if (!src || src.endsWith('no-image.png')) return resolve(null);
     const img = new Image();
+    // Remote product images taint the canvas — and toDataURL() then throws —
+    // unless they are fetched with CORS.
+    if (isCrossOrigin(src)) img.crossOrigin = 'anonymous';
     img.onload = () => {
       try {
         const canvas = document.createElement('canvas');
@@ -578,7 +655,7 @@ function imageToPng(src) {
 }
 
 async function exportPdfSheet() {
-  if (pdfExporting.value) return;
+  if (pdfExporting.value || !auth.canExportProducts) return;
   pdfExporting.value = true;
   try {
     const [{ jsPDF }, autoTableMod] = await Promise.all([
@@ -623,7 +700,7 @@ async function exportPdfSheet() {
     y = (photo || bc) ? mediaBottom + 6 : y;
 
     autoTable(doc, {
-      body: infoRows.value.map(r => [r.label, String(r.value)]),
+      body: infoRows.value.map(r => [r.label, stripBidiIsolates(r.value)]),
       startY: y,
       styles: { fontSize: 9 },
       columnStyles: { 0: { fontStyle: 'bold', cellWidth: 60, fillColor: [245, 243, 255] } },
@@ -641,7 +718,7 @@ async function exportPdfSheet() {
       doc.setTextColor(0);
       autoTable(doc, {
         head: [s.head.map(h => String(h))],
-        body: s.rows.map(r => r.map(v => String(v ?? ''))),
+        body: s.rows.map(r => r.map(v => stripBidiIsolates(v))),
         startY: sy + 2,
         styles: { fontSize: 8 },
         headStyles: { fillColor: PURPLE },
@@ -660,9 +737,26 @@ const batchColumns = computed(() => [
   { title: t('Batch_No'), dataIndex: 'batch_no', key: 'batch_no' },
   { title: t('warehouse'), dataIndex: 'warehouse_name', key: 'warehouse_name' },
   { title: t('Quantity'), dataIndex: 'qty', key: 'qty', align: 'right' },
+  ...(auth.canSeeCost ? [{ title: t('UnitCost'), key: 'unit_cost', align: 'right' }] : []),
   { title: t('Mfg_Date'), dataIndex: 'mfg_date', key: 'mfg_date' },
   { title: t('Expiry_Date'), key: 'expiry' },
 ]);
+
+// Quantity-weighted average unit cost across the active batches still in
+// stock. Batches without a cost are left out of both sides of the division;
+// null when nothing priced is in stock, which hides the line.
+const batchAvgCost = computed(() => {
+  let qty = 0;
+  let value = 0;
+  for (const b of batches.value) {
+    const q = Number(b.qty);
+    const c = b.unit_cost === null || b.unit_cost === undefined ? NaN : Number(b.unit_cost);
+    if (b.status !== 'active' || !(q > 0) || !Number.isFinite(c)) continue;
+    qty += q;
+    value += q * c;
+  }
+  return qty > 0 ? value / qty : null;
+});
 
 function expiryColor(b) {
   const d = Number(b.days_to_expiry);

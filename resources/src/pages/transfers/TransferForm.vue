@@ -64,12 +64,15 @@
           size="middle"
           :row-key="(r, i) => r.detail_id"
           :scroll="{ x: 'max-content' }"
+          :expanded-row-keys="expandedKeys"
+          :expand-icon="() => null"
         >
           <template #bodyCell="{ column, record, index }">
             <template v-if="column.key === 'product'">
               <div style="font-weight: 500">{{ record.name }}</div>
               <div class="muted">{{ record.code }}</div>
-              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">Batch</a-tag>
+              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">{{ $t('Batch') }}</a-tag>
+              <a-tag v-if="record.is_imei || hasComboSerials(record)" color="processing" style="margin-top: 2px">{{ $t('Serial_Numbers') }}</a-tag>
             </template>
             <template v-else-if="column.key === 'net_cost'">{{ money(record.Net_cost) }}</template>
             <template v-else-if="column.key === 'stock'">{{ record.stock }} {{ record.unitPurchase }}</template>
@@ -89,6 +92,37 @@
                 <template #icon><DeleteOutlined /></template>
               </a-button>
             </template>
+          </template>
+          <!-- Source batches for batch-tracked lines and source serials for
+               serialized lines, picked from what the FROM warehouse holds.
+               Keyed by warehouse so they refetch on change. -->
+          <template #expandedRowRender="{ record }">
+            <BatchAllocator
+              v-if="record.is_batch_tracked"
+              :key="record.detail_id + '-' + (transfer.from_warehouse || 0)"
+              :line="record" :warehouse-id="transfer.from_warehouse" endpoint="batches_for_transfer"
+            />
+            <div v-if="record.is_imei" :style="{ marginTop: record.is_batch_tracked ? '12px' : 0 }">
+              <template v-if="serialTransfers">
+                <div class="muted" style="margin-bottom: 4px">{{ $t('Select_Serials') }}</div>
+                <SerialPicker
+                  :key="'sn-' + record.detail_id + '-' + (transfer.from_warehouse || 0)"
+                  :line="record" fetch-url="serials_for_transfer" :fetch-params="serialParams(record)"
+                />
+              </template>
+              <!-- Said out loud rather than hidden: without the database update
+                   the units can't be selected and stay at the source. -->
+              <a-alert v-else type="warning" show-icon :message="$t('Serial_Transfer_Update_Required')" />
+            </div>
+            <!-- Kit (combo) line: its components' units held in the kits being
+                 moved. Optional for kits assembled before serials were kept. -->
+            <div v-else-if="serialTransfers && hasComboSerials(record)" :style="{ marginTop: record.is_batch_tracked ? '12px' : 0 }">
+              <div class="muted" style="margin-bottom: 4px">{{ $t('Transfer_Kit_Serial_Hint') }}</div>
+              <ComboSerialPicker
+                :key="'sn-' + record.detail_id + '-' + (transfer.from_warehouse || 0)"
+                :line="record" fetch-url="serials_for_transfer" :base-params="kitSerialParams()"
+              />
+            </div>
           </template>
           <template #emptyText>
             <a-empty :description="$t('NodataAvailable')" style="padding: 24px 0" />
@@ -137,7 +171,9 @@
         </a-col>
 
         <a-col :xs="24" :lg="10">
-          <a-card size="small">
+          <!-- Every figure here is cost-derived (tax is a % of the cost total),
+               so the whole panel goes for roles with hide_product_cost. -->
+          <a-card v-if="auth.canSeeCost" size="small">
             <div class="sum-row"><span>{{ $t('Total') }}</span><span>{{ money(totals.total) }}</span></div>
             <div class="sum-row"><span>{{ $t('OrderTax') }}</span><span>{{ money(totals.TaxNet) }} ({{ Number(transfer.tax_rate) || 0 }}%)</span></div>
             <div class="sum-row">
@@ -149,7 +185,7 @@
           </a-card>
 
           <a-button
-            type="primary" block size="large" style="margin-top: 16px"
+            type="primary" block size="large" :style="{ marginTop: auth.canSeeCost ? '16px' : 0 }"
             :loading="submitting"
             @click="submit"
           >
@@ -173,7 +209,13 @@
  *   totals = computeSimpleTotals over recomputeCostLine
  * - validation = legacy: qty ALWAYS clamped at stock (LowStock + reset, no
  *   overselling switch); submit = AddProductToList → WarehouseIdentical →
- *   AddQuantity → batch gate (Select_Batch_Required_For, no picker in v1)
+ *   AddQuantity → batch picks (BatchAllocator ← batches_for_transfer,
+ *   validated by lib/batchValidation like the sale form) → serial picks
+ * - serialized (is_imei) lines pick their units with SerialPicker ←
+ *   serials_for_transfer; the count must equal the quantity on every save
+ *   (the units move with the stock once the transfer is approved). Off while
+ *   the backend reports serial_transfers=false (migration not run); lines
+ *   saved before the feature (no serials) may stay empty, never partial.
  * - payload NESTED under `transfer` key: POST/PUT transfers
  *   {transfer: {...header incl items}, details, GrandTotal}
  */
@@ -185,15 +227,24 @@ import { DeleteOutlined } from '@ant-design/icons-vue';
 import dayjs from 'dayjs';
 import PageHeader from '../../components/PageHeader.vue';
 import ProductScanModal from '../../components/ProductScanModal.vue';
+import BatchAllocator from '../../components/BatchAllocator.vue';
+import SerialPicker from '../../components/SerialPicker.vue';
+import ComboSerialPicker from '../../components/ComboSerialPicker.vue';
+import { hasComboSerials, comboSerialMismatch } from '../../lib/comboSerials';
+import { lineSerialUnits, loadUnitFactors } from '../../lib/serialUnits';
+import { hasBatchSelectErrors, firstBatchSelectError } from '../../lib/batchValidation';
 import { useFormat } from '../../composables/useFormat';
 import { recomputeCostLine, computeSimpleTotals } from '../../lib/lineCalc';
 import { resolveScan } from '../../lib/scanMatch';
+import { scaleConfig } from '../../lib/scaleBarcode';
 import http from '../../lib/http';
+import { useAuthStore } from '../../stores/auth';
 
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const { money } = useFormat();
+const auth = useAuthStore();
 
 const id = computed(() => route.params.id);
 const isEdit = computed(() => !!id.value);
@@ -254,14 +305,79 @@ const totals = computed(() =>
   }, recomputeCostLine)
 );
 
+// Lines still carry and post their cost; only the cost columns are hidden for
+// roles with hide_product_cost.
 const lineColumns = computed(() => [
   { title: t('ProductName'), key: 'product' },
-  { title: t('Net_Unit_Cost'), key: 'net_cost', align: 'right' },
+  { title: t('Net_Unit_Cost'), key: 'net_cost', align: 'right', cost: true },
   { title: t('Stock'), key: 'stock', align: 'right' },
   { title: t('Quantity'), key: 'quantity', align: 'center' },
-  { title: t('SubTotal'), key: 'subtotal', align: 'right' },
+  { title: t('SubTotal'), key: 'subtotal', align: 'right', cost: true },
   { title: t('Action'), key: 'actions', width: 70, align: 'center' },
-]);
+].filter(c => auth.canSeeCost || !c.cost));
+
+/** Batch-tracked and serialized lines stay expanded so their picker is always in view. */
+const expandedKeys = computed(() =>
+  lines.value.filter(l => l.is_batch_tracked || l.is_imei || (serialTransfers.value && hasComboSerials(l))).map(l => l.detail_id)
+);
+
+// Serials come from the FROM warehouse; on edit the transfer's own saved
+// serials stay selectable even though they may have moved already.
+const serialParams = line => ({
+  product_id: line.product_id,
+  warehouse_id: transfer.value.from_warehouse,
+  ...(line.product_variant_id ? { product_variant_id: line.product_variant_id } : {}),
+  ...(isEdit.value ? { transfer_id: id.value } : {}),
+});
+
+// A kit line's component pickers (product_id added per component): in-kit
+// units at the FROM warehouse.
+const kitSerialParams = () => ({
+  warehouse_id: transfer.value.from_warehouse,
+  in_kit: 1,
+  ...(isEdit.value ? { transfer_id: id.value } : {}),
+});
+
+// From transfers/create|edit: false until the backend can store transfer serials.
+const serialTransfers = ref(false);
+
+const serialCountMismatch = (line) => {
+  if (!serialTransfers.value) return false;
+  // Kit lines: optional (older kits hold no recorded units), never partial.
+  if (hasComboSerials(line)) return (line.serial_numbers || []).length > 0 && comboSerialMismatch(line);
+  if (!line.is_imei) return false;
+  const picked = (line.serial_numbers || []).length;
+  if (picked === 0 && line.serials_optional) return false;
+  return picked !== lineSerialUnits(line);
+};
+// One serial per base unit: quantity × the purchase unit's factor.
+loadUnitFactors();
+
+/**
+ * Saved allocations come back with qty_available 0, since the edit endpoint
+ * does not know current stock. Refetch availability so the picker can
+ * validate. A transfer that already moved stock gets its own quantity counted
+ * back in, because that stock has already left the source batch. A transfer
+ * still pending approval only holds its picks, so nothing has left yet.
+ */
+async function hydrateBatchAvailability() {
+  const moved = transfer.value.approval_status === 'approved'
+    && ['completed', 'sent'].includes(transfer.value.statut);
+  await Promise.all(lines.value
+    .filter(l => l.is_batch_tracked && (l.batches || []).length)
+    .map(async (l) => {
+      try {
+        const data = await http.get(
+          `batches_for_transfer/${l.product_id}/${transfer.value.from_warehouse}/${l.product_variant_id || 0}`
+        );
+        const available = Array.isArray(data?.batches) ? data.batches : [];
+        l.batches.forEach((b) => {
+          const found = available.find(a => a.id === b.product_batch_id);
+          b.qty_available = (found ? Number(found.qty_available) || 0 : 0) + (moved ? Number(b.qty) || 0 : 0);
+        });
+      } catch (e) { /* leave the saved rows as they are */ }
+    }));
+}
 
 async function loadProducts() {
   if (!transfer.value.from_warehouse) return;
@@ -286,7 +402,11 @@ function onFromWarehouseChange() {
 // Camera / handheld scan: legacy transfer search() shares the sale form's
 // weighing-scale handling, so match the same way and apply any embedded weight.
 async function onScan(code) {
-  const hit = resolveScan(products.value, code, { weighing: true });
+  const hit = resolveScan(products.value, code, {
+    weighing: true,
+    scale: scaleSettings.value,
+    priceOf: p => Number(p.Net_price),
+  });
   if (!hit) {
     message.warning(t('Product_Not_Found'));
     return;
@@ -297,10 +417,16 @@ async function onScan(code) {
     message.warning(t('LowStock'));
     return;
   }
+  const lineOf = () => p && lines.value.find(
+    l => l.product_id === p.id && (l.product_variant_id ?? 0) === (p.product_variant_id ?? 0)
+  );
+  // A second weighed pack of the same product adds its weight to the line.
+  const before = hit.weight != null ? lineOf() : null;
+  const prevQty = before ? Number(before.quantity) || 0 : 0;
   await onProductPicked(hit.idx);
   if (hit.weight != null && p) {
-    const line = lines.value.find(l => l.product_id === p.id);
-    if (line) setQty(line, hit.weight);
+    const line = lineOf();
+    if (line) setQty(line, Math.round((prevQty + hit.weight) * 1000) / 1000);
   }
 }
 
@@ -341,6 +467,10 @@ async function onProductPicked(idx) {
       purchase_unit_id: d.purchase_unit_id,
       is_batch_tracked: !!d.is_batch_tracked,
       batches: [],
+      is_imei: !!d.is_imei,
+      serial_numbers: [],
+      serial_components: d.serial_components || [],
+      serial_groups: {},
       subtotal: 0,
     };
     recomputeCostLine(line);
@@ -353,8 +483,13 @@ async function onProductPicked(idx) {
 // Global Allow Overselling (Settings > Features): when ON, stock clamps on
 // every transaction form are bypassed.
 const oversellingAllowed = ref(false);
+// Weighing-scale label formats (System Settings > Weighing scale) for scans.
+const scaleSettings = ref(scaleConfig(null));
 http.get('get_pos_Settings')
-  .then(d => { oversellingAllowed.value = !!d?.pos_settings?.allow_overselling; })
+  .then(d => {
+    oversellingAllowed.value = !!d?.pos_settings?.allow_overselling;
+    scaleSettings.value = scaleConfig(d?.pos_settings);
+  })
   .catch(() => {});
 
 // Legacy Verified_Qty: NaN → stock; qty > stock warns LowStock and RESETS to
@@ -388,9 +523,13 @@ function validateForm() {
     message.warning(t('AddQuantity'));
     return false;
   }
-  const missingBatch = lines.value.find(l => l.is_batch_tracked && !(l.batches || []).length);
-  if (missingBatch) {
-    message.warning(`${t('Select_Batch_Required_For')} ${missingBatch.name}`);
+  if (hasBatchSelectErrors(lines.value)) {
+    message.warning(firstBatchSelectError(lines.value, t));
+    return false;
+  }
+  const badSerials = lines.value.find(serialCountMismatch);
+  if (badSerials) {
+    message.warning(`${t('Serials_Count_Mismatch')} — ${badSerials.name || badSerials.code || ''}`);
     return false;
   }
   return true;
@@ -418,6 +557,7 @@ function detailsPayload() {
     tax_method: String(l.tax_method || '1'),
     subtotal: l.subtotal,
     batches: Array.isArray(l.batches) && l.batches.length ? l.batches : [],
+    serial_numbers: (l.is_imei || hasComboSerials(l)) && Array.isArray(l.serial_numbers) ? l.serial_numbers : [],
   }));
 }
 
@@ -465,12 +605,14 @@ onMounted(async () => {
       const data = await http.get(`transfers/${id.value}/edit`);
       warehouses.value = data.warehouses || [];
       toWarehouses.value = data.to_warehouses || [];
+      serialTransfers.value = !!data.serial_transfers;
       const tr = data.transfer || {};
       transfer.value = {
         date: tr.date,
         from_warehouse: tr.from_warehouse,
         to_warehouse: tr.to_warehouse,
         statut: tr.statut,
+        approval_status: tr.approval_status || 'approved',
         notes: tr.notes || '',
         tax_rate: Number(tr.tax_rate) || 0,
         discount: Number(tr.discount) || 0,
@@ -484,15 +626,23 @@ onMounted(async () => {
           tax_method: String(d.tax_method ?? '1'),
           is_batch_tracked: !!d.is_batch_tracked,
           batches: Array.isArray(d.batches) ? d.batches : [],
+          is_imei: !!d.is_imei,
+          serial_numbers: Array.isArray(d.serial_numbers) ? d.serial_numbers : [],
+          serial_components: d.serial_components || [],
+          serial_groups: d.serial_groups || {},
+          // Saved before serials travelled with transfers: picking is optional.
+          serials_optional: !!d.is_imei && !(Array.isArray(d.serial_numbers) && d.serial_numbers.length),
         };
         recomputeCostLine(line);
         return line;
       });
+      await hydrateBatchAvailability();
       await loadProducts();
     } else {
       const data = await http.get('transfers/create');
       warehouses.value = data.warehouses || [];
       toWarehouses.value = data.to_warehouses || [];
+      serialTransfers.value = !!data.serial_transfers;
     }
   } catch (e) {
     message.error(t('InvalidData'));

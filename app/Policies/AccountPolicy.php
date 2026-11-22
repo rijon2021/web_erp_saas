@@ -120,6 +120,13 @@ class AccountPolicy
         return $user->hasRole($permission->roles);
     }
 
+    public function accounting_reconciliation(User $user)
+    {
+        $permission = Permission::where('name', 'accounting_reconciliation')->first();
+
+        return $user->hasRole($permission->roles);
+    }
+
     public function check_record(User $user, $expenseCategory)
     {
         return $user->id === $expenseCategory->user_id;

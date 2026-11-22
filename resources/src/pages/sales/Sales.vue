@@ -11,6 +11,12 @@
             <template #icon><FileExcelOutlined /></template>
             EXCEL
           </a-button>
+          <a-tooltip :title="$t('Export_Items_Help')">
+            <a-button :loading="exporting === 'lines'" @click="exportList('lines')">
+              <template #icon><FileExcelOutlined /></template>
+              {{ $t('Export_Items') }}
+            </a-button>
+          </a-tooltip>
           <a-button v-if="auth.can('Sales_add')" type="primary" @click="$router.push('/sales/create')">
             <template #icon><PlusOutlined /></template>
             {{ $t('AddSale') }}
@@ -85,7 +91,16 @@
       </a-row>
     </a-card>
 
-    <DataTable :crud="crud" :columns="columns" :selectable="auth.can('Sales_delete')">
+    <DataTable
+      :crud="crud" :columns="columns"
+      :selectable="auth.can('Sales_delete') || canCourierBook" :bulk-delete="auth.can('Sales_delete')"
+    >
+      <template #toolbar>
+        <a-button v-if="canCourierBook && crud.selectedIds.value.length" @click="openCourierBulk">
+          <template #icon><CarOutlined /></template>
+          {{ $t('Cr_Send_To_Courier') }} ({{ crud.selectedIds.value.length }})
+        </a-button>
+      </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'date'">{{ dateTime(record.date) }}</template>
         <template v-else-if="column.key === 'Ref'">
@@ -146,6 +161,9 @@
                 <a-menu-item v-if="auth.can('payment_sales_add') && record.statut === 'completed'" key="pay">
                   <PlusOutlined /> {{ $t('AddPayment') }}
                 </a-menu-item>
+                <a-menu-item v-if="canCourierBook" key="courier">
+                  <SendOutlined /> {{ $t('Cr_Send_To_Courier') }}
+                </a-menu-item>
                 <a-menu-item v-if="auth.can('shipment')" key="shipment">
                   <CarOutlined /> {{ $t('Edit_Shipping') }}
                 </a-menu-item>
@@ -156,7 +174,7 @@
                   <FilePdfOutlined /> {{ $t('DownloadPdf') }}
                 </a-menu-item>
                 <a-menu-item key="whatsapp">
-                  <WhatsAppOutlined /> WhatsApp Notification
+                  <WhatsAppOutlined /> {{ $t('WhatsApp_Notification') }}
                 </a-menu-item>
                 <a-menu-item key="email">
                   <MailOutlined /> {{ $t('email_notification') }}
@@ -263,7 +281,14 @@
               <a-select v-model:value="payForm.payment_method_id" :options="paymentMethodOptions" />
             </a-form-item>
           </a-col>
-          <a-col :span="12">
+          <!-- Customer Wallet tender: paid from the customer's store credit, no account. -->
+          <a-col v-if="saleWallet.isWalletMethod(payForm.payment_method_id)" :span="24">
+            <a-alert
+              :type="saleWallet.frozen.value ? 'error' : 'info'" show-icon style="margin-bottom: 16px"
+              :message="saleWallet.frozen.value ? $t('CW_Err_wallet_frozen') : `${$t('CW_Pay_From_Wallet_Help')} — ${$t('SW_Wallet_Balance')}: ${money(saleWallet.balance.value)}`"
+            />
+          </a-col>
+          <a-col v-else :span="12">
             <a-form-item :label="$t('Account')">
               <a-select v-model:value="payForm.account_id" allow-clear :placeholder="$t('Choose_Account')" :options="accountOptions" />
             </a-form-item>
@@ -350,6 +375,9 @@
         </template>
       </a-list>
     </a-modal>
+
+    <CourierBookingModal v-model:open="courierBooking.open" :sale-id="courierBooking.saleId" @booked="onCourierBooked" />
+    <CourierBulkModal v-model:open="courierBulk.open" :sale-ids="courierBulk.saleIds" @done="onCourierBooked" />
   </div>
 </template>
 
@@ -387,26 +415,55 @@ import {
   FilePdfOutlined, FileExcelOutlined, FileTextOutlined, MailOutlined,
   MessageOutlined, WalletOutlined, CarOutlined, RollbackOutlined,
   PaperClipOutlined, UploadOutlined, DownloadOutlined, WhatsAppOutlined,
-  ExclamationCircleOutlined, ShoppingCartOutlined, DollarOutlined, CheckCircleOutlined,
+  ExclamationCircleOutlined, ShoppingCartOutlined, DollarOutlined, CheckCircleOutlined, SendOutlined,
 } from '@ant-design/icons-vue';
 import dayjs from 'dayjs';
 import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
+import { useCustomerWalletTender, customerWalletError } from '../../composables/useCustomerWallet';
 import { useAuthStore } from '../../stores/auth';
 import { docStatusColor, payStatusColor } from '../../lib/statusColors';
 import { exportExcel, exportPdf } from '../../lib/exporters';
+import { exportDocumentLines } from '../../lib/documentLinesExport';
 import {
   SALE_STATUSES, PAYMENT_STATUSES, SHIPPING_STATUSES, statusKey, shipStatusColor,
 } from './saleVocab';
 import http from '../../lib/http';
-import { receiptFontHeadTags, whenPrintFontsReady } from '../../lib/receiptFont';
-import { buildPosReceiptHtml } from '../../lib/posReceiptHtml';
+import { receiptFontHeadTags, receiptPageHeadTag, whenPrintReady } from '../../lib/receiptFont';
+import { buildPosReceiptHtml, normalizeReceiptLayout } from '../../lib/posReceiptHtml';
+import { refBarcodeSvg } from '../../lib/receiptBarcode';
+import { applyIssuer } from '../../lib/invoiceIssuer';
+import { usePlanStore } from '../../stores/plan';
+import CourierBookingModal from '../couriers/CourierBookingModal.vue';
+import CourierBulkModal from '../couriers/CourierBulkModal.vue';
 
 const { t } = useI18n();
-const { money, number, dateTime, roundMoney } = useFormat();
+const { money, number, dateTime, roundMoney, hideZeroDecimals } = useFormat();
 const auth = useAuthStore();
+
+// Courier booking (plan feature 'couriers'): one sale from the row menu,
+// several from the checked rows.
+const plan = usePlanStore();
+const canCourierBook = computed(() => plan.featureEnabled('couriers') && auth.can('courier_book'));
+const courierBooking = ref({ open: false, saleId: null });
+const courierBulk = ref({ open: false, saleIds: [] });
+function openCourierBooking(record) {
+  courierBooking.value = { open: true, saleId: record.id };
+}
+function openCourierBulk() {
+  // The bulk booking endpoints take at most 100 sales per run.
+  const ids = [...crud.selectedIds.value];
+  if (ids.length > 100) {
+    message.warning(t('Cr_Bulk_Max', { n: 100 }));
+    return;
+  }
+  courierBulk.value = { open: true, saleIds: ids };
+}
+function onCourierBooked() {
+  crud.reload();
+}
 const router = useRouter();
 
 const filters = ref({
@@ -500,7 +557,8 @@ async function exportList(kind) {
       ...filterParams(),
     });
     const rows = data.sales || [];
-    if (kind === 'xlsx') await exportExcel('sales', columns.value, rows);
+    if (kind === 'lines') await exportDocumentLines('sales', rows, 'sales_items');
+    else if (kind === 'xlsx') await exportExcel('sales', columns.value, rows);
     else await exportPdf(t('ListSales'), columns.value, rows);
   } catch (e) {
     message.error(t('InvalidData'));
@@ -523,6 +581,7 @@ function onAction(key, record) {
     payments: () => showPayments(record),
     pay: () => openAddPayment(record),
     shipment: () => openShipment(record),
+    courier: () => openCourierBooking(record),
     'invoice-pos': () => invoicePos(record),
     pdf: () => invoicePdf(record),
     whatsapp: () => sendWhatsApp(record),
@@ -615,14 +674,18 @@ async function invoicePos(record) {
   try {
     const data = await http.get(`sales_print_invoice/${record.id}`);
     const s = data.sale || {};
-    const setting = data.setting || {};
+    // Branch letterhead: the receipt header shows the warehouse that issued the
+    // sale, each field falling back to the company settings.
+    const setting = applyIssuer(data.setting || {}, data.issuer);
     const ps = data.pos_settings || {};
 
     // QR data URLs are rendered up-front — the popup document can't host the
     // Vue QR refs the POS uses. Skipped silently if the lib can't load.
     const onByDefault = f => Number(ps[f] ?? 1) !== 0;
     const wantZatca = setting.zatca_enabled && data.zatca_qr && onByDefault('show_zatca_qr');
-    const wantInvoiceQr = onByDefault('show_barcode') && s.Ref;
+    // Layout 6 prints a CODE128 barcode of the ref instead of the Invoice QR.
+    const wantInvoiceQr = onByDefault('show_barcode') && s.Ref
+      && !(normalizeReceiptLayout(ps.receipt_layout) === 6 && refBarcodeSvg(s.Ref));
     let zatcaUrl = null;
     let invoiceUrl = null;
     if (wantZatca || wantInvoiceQr) {
@@ -639,10 +702,14 @@ async function invoicePos(record) {
       setting,
       ps,
       symbol: data.symbol || '',
+      currencyPosition: auth.user?.currency_position,
+      hideZeroDecimals: hideZeroDecimals.value,
       details: data.details || [],
       payments: data.payments || [],
       formatPrice: v => number(v),
       qr: { zatca: zatcaUrl, invoice: invoiceUrl },
+      fiscal: data.fiscal || null,
+      licenseKeys: data.license_keys || [],
     });
 
     const paperSize = [58, 80, 88].includes(Number(ps.receipt_paper_size)) ? Number(ps.receipt_paper_size) : 80;
@@ -651,6 +718,7 @@ async function invoicePos(record) {
 
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <link rel="stylesheet" href="/css/pos_print.css">
+${receiptPageHeadTag(ps)}
 <style>
   #invoice-POS .receipt-qr-row{display:flex;flex-direction:row;flex-wrap:nowrap;justify-content:center;align-items:flex-start;gap:10px;width:100%;margin-top:8px;}
   #invoice-POS .receipt-qr-block{display:flex;flex-direction:column;align-items:center;flex:0 0 auto;width:100px;margin:0;}
@@ -665,7 +733,8 @@ async function invoicePos(record) {
     w.document.write(html);
     w.document.close();
     w.focus();
-    whenPrintFontsReady(w, () => { try { w.print(); } catch (e) {} });
+    // Fonts + stylesheet + logo/QR images, so the logo is never missing.
+    whenPrintReady(w, () => { try { w.print(); } catch (e) {} });
   } catch (e) {
     message.error(t('InvalidData'));
   }
@@ -753,11 +822,19 @@ const payMaxDue = computed(() => roundMoney(
     : activeSale.value?.due
 ));
 
+// Customer Wallet: which payment method is the wallet + the buyer's balance.
+const saleWallet = useCustomerWalletTender();
+function loadSaleWallet(sale) {
+  saleWallet.reset();
+  if (sale?.client_id) saleWallet.load(sale.client_id);
+}
+
 function openAddPayment(record) {
   if (record.payment_status === 'paid') {
     message.warning(t('PaymentComplete'));
     return;
   }
+  loadSaleWallet(record);
   payEditing.value = null;
   payForm.value = {
     date: dayjs().format('YYYY-MM-DD'),
@@ -771,6 +848,7 @@ function openAddPayment(record) {
 }
 
 function openEditPayment(payment) {
+  loadSaleWallet(activeSale.value);
   payEditing.value = payment;
   payForm.value = {
     date: payment.date,
@@ -799,6 +877,8 @@ async function submitPayment() {
     message.warning(t('Paying_amount_is_greater_than_Grand_Total'));
     return;
   }
+  // The wallet tender has no cash account (the server ignores it anyway).
+  const accountId = saleWallet.isWalletMethod(f.payment_method_id) ? null : (f.account_id || null);
   paySaving.value = true;
   try {
     if (payEditing.value) {
@@ -809,7 +889,7 @@ async function submitPayment() {
         received_amount: (Number(f.received_amount) || 0).toFixed(2),
         change: payChange.value.toFixed(2),
         payment_method_id: f.payment_method_id,
-        account_id: f.account_id || null,
+        account_id: accountId,
         notes: f.notes,
       });
       message.success(t('Successfully_Updated'));
@@ -820,13 +900,13 @@ async function submitPayment() {
         payments: [{
           montant: Number(f.montant) || 0,
           payment_method_id: f.payment_method_id,
-          account_id: f.account_id || null,
+          account_id: accountId,
         }],
         montant: (Number(f.montant) || 0).toFixed(2),
         received_amount: (Number(f.received_amount) || 0).toFixed(2),
         change: payChange.value.toFixed(2),
         payment_method_id: f.payment_method_id,
-        account_id: f.account_id || null,
+        account_id: accountId,
         notes: f.notes,
       });
       message.success(t('Successfully_Created'));
@@ -835,7 +915,7 @@ async function submitPayment() {
     crud.fetchRows();
     if (paymentsOpen.value) await loadPayments(activeSale.value.id);
   } catch (e) {
-    message.error(e?.data?.message || t('InvalidData'));
+    message.error(customerWalletError(e));
   } finally {
     paySaving.value = false;
   }

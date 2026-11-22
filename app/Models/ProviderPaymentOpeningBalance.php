@@ -15,6 +15,8 @@ class ProviderPaymentOpeningBalance extends Model
 
     protected $fillable = [
         'provider_id', 'date', 'montant', 'Ref', 'change', 'payment_method_id', 'user_id', 'notes', 'account_id',
+        // Set when the opening balance was settled from the supplier wallet.
+        'wallet_transaction_id',
     ];
 
     protected $casts = [

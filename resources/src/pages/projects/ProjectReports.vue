@@ -60,13 +60,17 @@
           />
         </template>
         <template v-else-if="column.key === 'title'">
-          <a class="link" @click="$router.push(`/projects/${record.id}`)">{{ record.title }}</a>
+          <a class="link" @click="$router.push(`/projects/${record.id}/edit`)">{{ record.title }}</a>
           <div v-if="record.client_name" class="cell-sub">{{ record.client_name }}</div>
         </template>
         <template v-else-if="column.key === 'status'">
           <a-tag :color="optionOf(PROJECT_STATUSES, record.status).color">
             {{ labelOf(PROJECT_STATUSES, record.status) }}
           </a-tag>
+        </template>
+        <template v-else-if="column.key === 'milestones_done'">
+          <span v-if="record.milestones">{{ record.milestones_done }} / {{ record.milestones }}</span>
+          <span v-else class="muted">—</span>
         </template>
         <template v-else-if="column.key === 'milestone_status'">
           <a-tag :color="optionOf(MILESTONE_STATUSES, record.status).color">
@@ -132,15 +136,24 @@ const status = ref(undefined);
 const range = ref(null);
 const endpoint = ref(REPORTS[0].endpoint);
 
+/**
+ * Only the filters the current tab shows. The status select holds PROJECT
+ * statuses and is Delivery-only; sending it to Milestones (which filters on
+ * milestone statuses) emptied that tab with no visible way to clear it.
+ */
+function filters() {
+  return {
+    project_id: report.value !== 'delivery' ? projectId.value || '' : '',
+    status: report.value === 'delivery' ? status.value || '' : '',
+    start_date: current.value.dateRange ? range.value?.[0] || '' : '',
+    end_date: current.value.dateRange ? range.value?.[1] || '' : '',
+  };
+}
+
 const crud = useCrudTable(() => endpoint.value, {
   sortField: 'logged_hours',
   select: p => ({ rows: p?.rows || [], total: p?.totalRows || 0 }),
-  params: () => ({
-    project_id: projectId.value || '',
-    status: status.value || '',
-    start_date: range.value?.[0] || '',
-    end_date: range.value?.[1] || '',
-  }),
+  params: filters,
 });
 
 function onReportChange() {
@@ -154,12 +167,12 @@ function onReportChange() {
 const COLUMNS = {
   delivery: [
     { title: t('Project', 'Project'), key: 'title', dataIndex: 'title', sorter: true },
-    { title: t('Status', 'Status'), key: 'status', dataIndex: 'status', width: 140 },
+    { title: t('Status', 'Status'), key: 'status', dataIndex: 'status', width: 140, exportValue: r => labelOf(PROJECT_STATUSES, r.status) },
     { title: t('Due', 'Due'), key: 'end_date', dataIndex: 'end_date', sorter: true, width: 190 },
     { title: t('Tasks', 'Tasks'), dataIndex: 'tasks', key: 'tasks', sorter: true, width: 90 },
     { title: t('Done', 'Done'), dataIndex: 'tasks_done', key: 'tasks_done', sorter: true, width: 90 },
     { title: t('Progress', 'Progress'), dataIndex: 'progress', key: 'progress', sorter: true, percent: true, width: 150 },
-    { title: t('Milestones', 'Milestones'), dataIndex: 'milestones_done', key: 'milestones_done', width: 110 },
+    { title: t('Milestones', 'Milestones'), dataIndex: 'milestones_done', key: 'milestones_done', width: 110, exportValue: r => (r.milestones ? `${r.milestones_done} / ${r.milestones}` : '') },
     { title: t('Est_Hours', 'Est. hours'), dataIndex: 'estimated_hours', key: 'estimated_hours', sorter: true, hours: true, width: 120 },
     { title: t('Logged', 'Logged'), dataIndex: 'logged_hours', key: 'logged_hours', sorter: true, hours: true, width: 110 },
     { title: t('Billable', 'Billable'), dataIndex: 'billable_amount', key: 'billable_amount', sorter: true, money: true, width: 130 },
@@ -177,9 +190,14 @@ const COLUMNS = {
     { title: t('Milestone', 'Milestone'), dataIndex: 'title', key: 'title_plain', sorter: true },
     { title: t('Project', 'Project'), dataIndex: 'project_title', key: 'project_title', width: 180 },
     { title: t('Due', 'Due'), key: 'due_date', dataIndex: 'due_date', sorter: true, width: 130 },
-    { title: t('Status', 'Status'), key: 'milestone_status', dataIndex: 'status', width: 140 },
+    { title: t('Status', 'Status'), key: 'milestone_status', dataIndex: 'status', width: 140, exportValue: r => labelOf(MILESTONE_STATUSES, r.status) },
     { title: t('Progress', 'Progress'), dataIndex: 'progress', key: 'progress', sorter: true, percent: true, width: 150 },
-    { title: t('Slippage', 'Slippage'), key: 'slippage', dataIndex: 'slippage', sorter: true, width: 140 },
+    {
+      title: t('Slippage', 'Slippage'), key: 'slippage', dataIndex: 'slippage', sorter: true, width: 140,
+      exportValue: r => (r.slippage === null || r.slippage === undefined
+        ? t('Open')
+        : r.slippage > 0 ? r.slippage + t('d_late') : Math.abs(r.slippage) + t('d_early')),
+    },
     { title: t('Budget', 'Budget'), dataIndex: 'budget', key: 'budget', money: true, width: 120 },
   ],
 };
@@ -222,10 +240,7 @@ async function doExport(kind) {
       SortField: crud.sortField.value,
       SortType: crud.sortType.value,
       search: crud.search.value,
-      project_id: projectId.value || '',
-      status: status.value || '',
-      start_date: range.value?.[0] || '',
-      end_date: range.value?.[1] || '',
+      ...filters(),
     });
     const rows = data?.rows || [];
     if (!rows.length) {

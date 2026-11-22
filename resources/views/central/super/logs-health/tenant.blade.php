@@ -3,7 +3,7 @@
 @section('title', __('super.logs_health.tenant_history'))
 
 @push('styles')
-<link href="{{ asset('assets_super/css/logs-health.css') }}?v={{ time() }}" rel="stylesheet">
+<link href="{{ \App\Support\SuperAsset::url('assets_super/css/logs-health.css') }}" rel="stylesheet">
 @endpush
 
 @section('content')
@@ -115,5 +115,5 @@
 @endsection
 
 @push('scripts')
-<script src="{{ asset('assets_super/js/logs-health.js') }}?v={{ time() }}"></script>
+<script src="{{ \App\Support\SuperAsset::url('assets_super/js/logs-health.js') }}"></script>
 @endpush

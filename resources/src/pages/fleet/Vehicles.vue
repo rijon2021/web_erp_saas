@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <PageHeader title="Vehicles" :breadcrumb="['Fleet Management', 'Vehicles']">
+    <PageHeader :title="$t('Fl_Vehicles')" :breadcrumb="[$t('Fl_Fleet_Management'), $t('Fl_Vehicles')]">
       <template #actions>
         <a-button @click="$router.push('/fleet/dashboard')">
           <template #icon><DashboardOutlined /></template>
-          Dashboard
+          {{ $t('Dashboard') }}
         </a-button>
         <a-button v-if="canAdd" type="primary" @click="$router.push('/fleet/vehicles/create')">
           <template #icon><PlusOutlined /></template>
@@ -17,25 +17,25 @@
       <div class="toolbar">
         <a-input-search
           v-model:value="crud.search.value"
-          placeholder="Search name, plate, VIN or model…"
+          :placeholder="$t('Fl_Search_Vehicle_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item" allow-clear
-          placeholder="All statuses" :options="VEHICLE_STATUSES" @change="crud.reload"
+          :placeholder="$t('Fl_All_Statuses')" :options="VEHICLE_STATUSES" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.type" class="tb-item" allow-clear
-          placeholder="All types" :options="VEHICLE_TYPES" @change="crud.reload"
+          :placeholder="$t('Fl_All_Types')" :options="VEHICLE_TYPES" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.warehouse_id" class="tb-item" allow-clear show-search
           option-filter-prop="label" :placeholder="$t('Warehouse')"
           :options="warehouseOptions" @change="crud.reload"
         />
-        <a-tooltip title="Insurance, registration or inspection due within 30 days">
+        <a-tooltip :title="$t('Fl_Needs_Attention_Hint')">
           <a-checkbox v-model:checked="filters.expiring" class="tb-check" @change="crud.reload">
-            Needs attention
+            {{ $t('Fl_Needs_Attention') }}
           </a-checkbox>
         </a-tooltip>
         <a-segmented v-model:value="view" :options="VIEW_OPTIONS" class="tb-view">
@@ -83,11 +83,11 @@
 
               <dl class="vcard-facts">
                 <div>
-                  <dt>Odometer</dt>
+                  <dt>{{ $t('Fl_Odometer') }}</dt>
                   <dd>{{ number(v.odometer, 0) }}</dd>
                 </div>
                 <div>
-                  <dt>Driver</dt>
+                  <dt>{{ $t('Fl_Driver') }}</dt>
                   <dd :title="v.driver_name || ''">{{ v.driver_name || '—' }}</dd>
                 </div>
                 <div>
@@ -112,12 +112,12 @@
         </div>
 
         <a-card v-else>
-          <a-empty :description="hasFilters ? 'No vehicles match these filters.' : 'No vehicles yet.'">
+          <a-empty :description="hasFilters ? $t('Fl_No_Vehicles_Match') : $t('Fl_No_Vehicles_Yet')">
             <a-button v-if="canAdd && !hasFilters" type="primary" @click="$router.push('/fleet/vehicles/create')">
               <template #icon><PlusOutlined /></template>
-              Add your first vehicle
+              {{ $t('Fl_Add_First_Vehicle') }}
             </a-button>
-            <a-button v-else-if="hasFilters" @click="clearFilters">Clear filters</a-button>
+            <a-button v-else-if="hasFilters" @click="clearFilters">{{ $t('Fl_Clear_Filters') }}</a-button>
           </a-empty>
         </a-card>
       </a-spin>
@@ -179,7 +179,7 @@
 
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
-            <a-tooltip title="Open">
+            <a-tooltip :title="$t('Fl_Open')">
               <a-button type="text" size="small" @click="open(record)">
                 <template #icon><EyeOutlined /></template>
               </a-button>
@@ -222,7 +222,9 @@ import { useFormat } from '../../composables/useFormat';
 import { useAuthStore } from '../../stores/auth';
 import { VEHICLE_TYPES, VEHICLE_STATUSES, labelOf, optionOf, expiryTone, typeIcon } from './fleetOptions';
 import http from '../../lib/http';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
@@ -233,10 +235,10 @@ const canEdit = computed(() => auth.can('fleet_vehicles_edit'));
 const canDelete = computed(() => auth.can('fleet_vehicles_delete'));
 
 const view = ref('grid');
-const VIEW_OPTIONS = [
-  { value: 'grid', label: 'Cards' },
-  { value: 'list', label: 'Table' },
-];
+const VIEW_OPTIONS = computed(() => [
+  { value: 'grid', label: t('Fl_Cards') },
+  { value: 'list', label: t('Fl_Table') },
+]);
 
 const filters = reactive({
   status: route.query.status || undefined,
@@ -283,22 +285,22 @@ const warehouses = ref([]);
 const warehouseOptions = computed(() => warehouses.value.map(w => ({ value: w.id, label: w.name })));
 
 const columns = computed(() => [
-  { title: 'Vehicle', key: 'name', dataIndex: 'name', sorter: true },
-  { title: 'Type', key: 'type', dataIndex: 'type', sorter: true, width: 110 },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 130 },
-  { title: 'Odometer', key: 'odometer', dataIndex: 'odometer', sorter: true, width: 110 },
-  { title: 'Driver', key: 'driver', width: 160 },
-  { title: 'Branch', dataIndex: 'warehouse_name', key: 'warehouse', width: 140 },
-  { title: 'Renewals', key: 'renewals', width: 220 },
+  { title: t('Fl_Vehicle'), key: 'name', dataIndex: 'name', sorter: true },
+  { title: t('Type'), key: 'type', dataIndex: 'type', sorter: true, width: 110 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 130 },
+  { title: t('Fl_Odometer'), key: 'odometer', dataIndex: 'odometer', sorter: true, width: 110 },
+  { title: t('Fl_Driver'), key: 'driver', width: 160 },
+  { title: t('Fl_Branch'), dataIndex: 'warehouse_name', key: 'warehouse', width: 140 },
+  { title: t('Fl_Renewals'), key: 'renewals', width: 220 },
   { title: '', key: 'actions', width: 120 },
 ]);
 
 /** Renewal dates that are due or overdue, as {label, date, tone}. */
 function renewals(v) {
   return [
-    { key: 'insurance', label: 'Insurance', days: v.days_to_insurance, date: v.insurance_expiry },
-    { key: 'registration', label: 'Registration', days: v.days_to_registration, date: v.registration_expiry },
-    { key: 'inspection', label: 'Inspection', days: v.days_to_inspection, date: v.inspection_expiry },
+    { key: 'insurance', label: t('Fl_Insurance'), days: v.days_to_insurance, date: v.insurance_expiry },
+    { key: 'registration', label: t('Fl_Registration'), days: v.days_to_registration, date: v.registration_expiry },
+    { key: 'inspection', label: t('Fl_Inspection'), days: v.days_to_inspection, date: v.inspection_expiry },
   ]
     .map(r => ({ ...r, tone: expiryTone(r.days) }))
     .filter(r => r.tone);

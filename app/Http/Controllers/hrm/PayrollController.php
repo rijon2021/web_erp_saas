@@ -82,7 +82,7 @@ class PayrollController extends Controller
 
         $accounts = Account::where('deleted_at', '=', null)->orderBy('id', 'desc')->get(['id', 'account_name']);
         $employees = Employee::where('deleted_at', '=', null)->orderBy('id', 'desc')->get(['id', 'username']);
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->exceptCustomerWallet()->where('deleted_at', '=', null)->get(['id', 'name']);
 
         return response()->json([
             'payrolls' => $data,
@@ -126,15 +126,7 @@ class PayrollController extends Controller
                 'payment_reference_number' => $request['payment_reference_number'] ?? null,
             ]);
 
-            $account = Account::where('id', $request['account_id'])->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($request['account_id']);
-                $account->update([
-                    'balance' => $account->balance - $request['amount'],
-                ]);
-            }
+            Account::adjustBalance($request['account_id'], -$request['amount']);
 
             return $payroll;
 
@@ -175,15 +167,7 @@ class PayrollController extends Controller
             $payroll = Payroll::findOrFail($id);
 
             // delete old balance
-            $account = Account::where('id', $payroll->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payroll->account_id);
-                $account->update([
-                    'balance' => $account->balance + $payroll->amount,
-                ]);
-            }
+            Account::adjustBalance($payroll->account_id, $payroll->amount);
 
             Payroll::whereId($id)->update([
                 'date' => $request['date'],
@@ -196,15 +180,7 @@ class PayrollController extends Controller
             ]);
 
             // update new account
-            $new_account = Account::where('id', $request['account_id'])->exists();
-
-            if ($new_account) {
-                // Account exists, perform the update
-                $new_account = Account::find($request['account_id']);
-                $new_account->update([
-                    'balance' => $new_account->balance - $request['amount'],
-                ]);
-            }
+            Account::adjustBalance($request['account_id'], -$request['amount']);
 
         }, 10);
 
@@ -223,15 +199,7 @@ class PayrollController extends Controller
                 'deleted_at' => Carbon::now(),
             ]);
 
-            $account = Account::where('id', $payroll->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payroll->account_id);
-                $account->update([
-                    'balance' => $account->balance + $payroll->amount,
-                ]);
-            }
+            Account::adjustBalance($payroll->account_id, $payroll->amount);
 
             // Delete attached documents
             $documents = DB::table('payroll_documents')
@@ -295,13 +263,20 @@ class PayrollController extends Controller
                 mkdir($uploadPath, 0755, true);
             }
 
-            foreach ($request->file('documents') as $file) {
+            // Refuse the whole batch before writing anything if one file is not an allowed type
+            $extensions = [];
+            foreach ($request->file('documents') as $i => $file) {
+                $extensions[$i] = \App\Support\SafeUpload::documentExtension($file, 'documents');
+            }
+
+            foreach ($request->file('documents') as $i => $file) {
                 // Capture metadata BEFORE moving the file (tmp file is still readable)
-                $originalName = $file->getClientOriginalName();
+                $originalName = \App\Support\SafeUpload::displayName($file);
                 $size = $file->getSize();
                 $mimeType = $file->getMimeType();
 
-                $filename = time() . '_' . Str::random(10) . '_' . $originalName;
+                // Never reuse the client name on disk: it decides how public/ serves the file
+                $filename = \App\Support\SafeUpload::name($extensions[$i], time() . '_');
 
                 // Move file to public/images/payroll_documents
                 $file->move($uploadPath, $filename);
@@ -401,10 +376,26 @@ class PayrollController extends Controller
         $last = DB::table('payrolls')->latest('id')->first();
 
         if ($last) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = $nwMsg[1] + 1;
-            $code = $nwMsg[0].'_'.$inMsg;
+            $item = (string) ($last->Ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[0], $nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $inMsg = $nwMsg[1] + 1;
+                $code = $nwMsg[0].$sep.$inMsg;
+            } else {
+                $code = 'PS_1';
+            }
         } else {
             $code = 'PS_1';
         }

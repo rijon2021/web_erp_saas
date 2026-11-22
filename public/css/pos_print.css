@@ -26,6 +26,9 @@
  
 
   @page {
+    /* Thermal roll, not the printer's default A4/Letter sheet. The print
+       documents override the width per Settings → POS Receipt paper size. */
+    size: 80mm auto;
     /* Extra safety margin so content never touches the paper edges */
     margin: 4mm;
   }
@@ -622,4 +625,228 @@ text-align: center;
 
 .quantity span {
   padding: 8px;
+}
+
+/* Warehouse Letterhead: the issuing branch's own invoice footer note. Sits
+   under the customer note in every layout; kept quieter than the customer
+   note so the two read as separate lines rather than one block. */
+#invoice-POS .receipt-branch-note {
+  font-size: 9px;
+  font-style: italic;
+  color: #555;
+  margin-top: 3px;
+  line-height: 1.5;
+  white-space: pre-line;
+  text-align: center;
+}
+#invoice-POS .receipt-layout-4 .receipt-branch-note {
+  text-align: inherit;
+}
+
+/* ====================================================================
+   Layout 6 - Tabular (cash/credit invoice: centred header, ruled title,
+   label/value info rows, fully boxed Description | Qty | Rate | Total
+   grid, TOTAL band, payment lines, signature boxes, ref barcode)
+   ==================================================================== */
+#invoice-POS .receipt-layout-6 {
+  font-size: 11px;
+  line-height: 1.3;
+  color: #000;
+}
+/* The base sheet sets a size on every element (`* { font-size: 14px }`, and
+   12px/18px in print); inside this layout untouched elements follow the
+   layout's own sizes instead. :where() keeps this at zero specificity so it
+   only beats those bare `*` rules (it comes later), never a real class rule
+   such as .receipt-qr-title. */
+:where(#invoice-POS .receipt-layout-6) * {
+  font-size: inherit;
+  line-height: inherit;
+}
+#invoice-POS .receipt-layout-6 .r6-head {
+  text-align: center;
+}
+#invoice-POS .receipt-layout-6 .r6-logo {
+  margin-bottom: 4px;
+}
+#invoice-POS .receipt-layout-6 .r6-store {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1.25;
+}
+#invoice-POS .receipt-layout-6 .r6-contact div {
+  font-size: 10px;
+  line-height: 1.3;
+}
+#invoice-POS .receipt-layout-6 .r6-title {
+  margin: 6px 0;
+  padding: 2px 0;
+  border-top: 1px solid #000;
+  border-bottom: 1px solid #000;
+  text-align: center;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+#invoice-POS .receipt-layout-6 table {
+  width: 100%;
+  border-collapse: collapse;
+}
+#invoice-POS .receipt-layout-6 table tr {
+  border-bottom: none;
+}
+#invoice-POS .receipt-layout-6 .r6-meta {
+  margin-bottom: 6px;
+}
+#invoice-POS .receipt-layout-6 .r6-meta td {
+  font-size: 10px;
+  line-height: 1.35;
+  padding: 0;
+  vertical-align: top;
+}
+#invoice-POS .receipt-layout-6 .r6-meta td:first-child {
+  font-weight: 700;
+  white-space: nowrap;
+  padding-right: 8px;
+}
+#invoice-POS .receipt-layout-6 .r6-meta td:last-child {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+#invoice-POS .receipt-layout-6 .r6-items {
+  border: 1px solid #000;
+}
+#invoice-POS .receipt-layout-6 .r6-items th,
+#invoice-POS .receipt-layout-6 .r6-items td {
+  border: 1px solid #000;
+  padding: 2px 3px;
+  vertical-align: top;
+  font-size: 10px;
+  line-height: 1.3;
+}
+#invoice-POS .receipt-layout-6 .r6-items th {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 9px;
+  text-align: left;
+}
+#invoice-POS .receipt-layout-6 .r6-desc { overflow-wrap: anywhere; }
+/* Number columns shrink to their content; Description takes the rest
+   and may break inside a long word on 58 mm paper. */
+#invoice-POS .receipt-layout-6 .r6-c-qty { width: 1%; white-space: nowrap; text-align: center; }
+#invoice-POS .receipt-layout-6 .r6-c-rate { width: 1%; white-space: nowrap; text-align: right; }
+#invoice-POS .receipt-layout-6 .r6-c-tot { width: 1%; white-space: nowrap; text-align: right; }
+#invoice-POS .receipt-layout-6 .r6-items th.r6-c-qty { text-align: center; }
+#invoice-POS .receipt-layout-6 .r6-items th.r6-c-rate,
+#invoice-POS .receipt-layout-6 .r6-items th.r6-c-tot { text-align: right; }
+#invoice-POS .receipt-layout-6 .r6-sub {
+  font-size: 9px;
+  color: #444;
+}
+#invoice-POS .receipt-layout-6 .r6-totals {
+  margin-top: 6px;
+}
+#invoice-POS .receipt-layout-6 .r6-totals td {
+  padding: 1px 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+#invoice-POS .receipt-layout-6 .r6-totals td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+#invoice-POS .receipt-layout-6 .r6-totals .r6-grand td {
+  font-weight: 800;
+  font-size: 13px;
+  border-top: 1px solid #000;
+  border-bottom: 1px solid #000;
+  padding: 3px 0;
+}
+#invoice-POS .receipt-layout-6 .r6-totals .r6-gap td {
+  padding-top: 4px;
+}
+#invoice-POS .receipt-layout-6 .r6-pay {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed #000;
+}
+#invoice-POS .receipt-layout-6 .r6-pay div {
+  font-size: 10px;
+  line-height: 1.35;
+}
+#invoice-POS .receipt-layout-6 .r6-pay .r6-pay-title {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+#invoice-POS .receipt-layout-6 .r6-sigs {
+  margin-top: 10px;
+  border: 1px solid #000;
+  table-layout: fixed;
+}
+#invoice-POS .receipt-layout-6 .r6-sigs td {
+  width: 50%;
+  height: 44px;
+  border: 1px solid #000;
+  vertical-align: bottom;
+  text-align: center;
+  font-size: 9px;
+  padding: 0 2px 2px;
+}
+#invoice-POS .receipt-layout-6 .r6-barcode {
+  margin-top: 10px;
+  text-align: center;
+}
+#invoice-POS .receipt-layout-6 .r6-barcode-svg {
+  display: block;
+  width: 100%;
+  height: 44px;
+}
+#invoice-POS .receipt-layout-6 .r6-ref {
+  font-family: monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+#invoice-POS .receipt-layout-6 .r6-legal {
+  text-align: center;
+  margin-top: 6px;
+}
+@media print {
+  #invoice-POS .receipt-layout-6,
+  #invoice-POS .receipt-layout-6 * {
+    color: #000 !important;
+  }
+  #invoice-POS .receipt-layout-6 .r6-head *,
+  #invoice-POS .receipt-layout-6 .r6-meta td,
+  #invoice-POS .receipt-layout-6 .r6-items td,
+  #invoice-POS .receipt-layout-6 .r6-items th,
+  #invoice-POS .receipt-layout-6 .r6-totals td,
+  #invoice-POS .receipt-layout-6 .r6-pay div {
+    line-height: 1.3;
+  }
+  /* Drop the dotted row border every layout inherits from the base print
+     rule; the grid draws its own lines. */
+  #invoice-POS .receipt-layout-6 table tr {
+    border-bottom: none;
+  }
+}
+
+/* Settings > POS Receipt > Show Signature Line: blank customer signature
+   line printed under every layout. */
+#invoice-POS .receipt-signature {
+  margin-top: 18px;
+}
+#invoice-POS .receipt-signature-line {
+  border-bottom: 1px solid #111;
+  height: 28px;
+  width: 70%;
+  margin: 0 auto;
+}
+#invoice-POS .receipt-signature-label {
+  text-align: center;
+  font-size: 9px;
+  color: #555;
+  margin-top: 3px;
 }

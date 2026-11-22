@@ -31,6 +31,7 @@
           <div id="qvVariantWrap" class="hidden mb-4">
             <div class="form-label">{{ __('messages.ChooseVariant') }}</div>
             <ul id="qvVariantList" class="divide-y divide-line-subtle border border-line-subtle rounded-md mb-2"></ul>
+            <div id="qvOptionGroups" class="hidden mb-2"></div>
             <div id="qvSelectedInfo" class="text-xs text-fg-muted">—</div>
           </div>
           <button type="button" id="qvAddBtn" class="btn btn-primary btn-block">
@@ -45,6 +46,84 @@
     </div>
   </div>
 </div>
+
+{{-- Shopify-style variant options (Color / Size): shared renderer used by the
+     product page, quick view and the variant picker. Products without options
+     (legacy flat list) never reach it. --}}
+<style>
+  .vo-group { margin-bottom: .75rem; }
+  .vo-label { font-size: .875rem; font-weight: 500; margin-bottom: .5rem; color: rgb(var(--color-fg-secondary)); }
+  .vo-label span { font-weight: 400; color: rgb(var(--color-fg-muted)); }
+  .vo-values { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .vo-btn.is-selected, .pdp-variant.is-selected { border-color: rgb(var(--color-accent-500)); background: rgb(var(--color-accent-500)); color: #fff; }
+  .vo-btn.is-unavailable { opacity: .35; text-decoration: line-through; cursor: not-allowed; }
+  .vo-btn.is-oos:not(.is-selected) { opacity: .6; text-decoration: line-through; }
+  .vo-swatch { display: inline-block; width: .9rem; height: .9rem; border-radius: 9999px; margin-inline-end: .35rem; border: 1px solid rgba(0,0,0,.15); vertical-align: -2px; }
+</style>
+<script>
+(function(){
+  if (window.StoreVariantOptions) return;
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+  function norm(v){ return String(v == null ? '' : v).trim().toLowerCase(); }
+  // data: { options: [{name, values: [{value, swatch}]}], map: {variantId: [v1, v2]}, variants: [payload rows] }
+  // opts: { preselectId, allowOversell, onChange(variant|null) }
+  function mount(container, data, opts){
+    opts = opts || {};
+    var options = (data && data.options) || [];
+    var map = (data && data.map) || {};
+    var variants = ((data && data.variants) || []).filter(function(v){ return !!map[String(v.id)]; });
+    var n = options.length;
+    var sel = new Array(n).fill(null);
+    function valuesOf(v){ return (map[String(v.id)] || []).map(norm); }
+    function matches(v, partial){
+      var vals = valuesOf(v);
+      for (var i = 0; i < n; i++){ if (partial[i] != null && vals[i] !== partial[i]) return false; }
+      return true;
+    }
+    function inStock(v){ return !!opts.allowOversell || v.stock == null || Number(v.stock) > 0; }
+    function resolve(){
+      if (sel.some(function(x){ return x == null; })) return null;
+      return variants.find(function(v){ return matches(v, sel); }) || null;
+    }
+    function render(){
+      var out = '';
+      options.forEach(function(opt, i){
+        var chosen = sel[i] != null ? ((opt.values || []).find(function(x){ return norm(x.value) === sel[i]; }) || {}).value : '';
+        out += '<div class="vo-group" data-option-index="' + i + '"><div class="vo-label">' + esc(opt.name) + (chosen ? ': <span>' + esc(chosen) + '</span>' : '') + '</div><div class="vo-values">';
+        (opt.values || []).forEach(function(val){
+          var key = norm(val.value);
+          var partial = sel.slice(); partial[i] = key;
+          var cands = variants.filter(function(v){ return matches(v, partial); });
+          var unavailable = cands.length === 0;                 // no such combination
+          var oos = !unavailable && !cands.some(inStock);       // exists, but nothing left to sell
+          var cls = 'btn btn-outline btn-sm vo-btn' + (sel[i] === key ? ' is-selected' : '') + (unavailable ? ' is-unavailable' : '') + (oos ? ' is-oos' : '');
+          var sw = val.swatch ? '<span class="vo-swatch" style="background:' + esc(val.swatch) + '"></span>' : '';
+          out += '<button type="button" class="' + cls + '" data-index="' + i + '" data-value="' + esc(val.value) + '"' + (unavailable ? ' disabled' : '') + '>' + sw + esc(val.value) + '</button>';
+        });
+        out += '</div></div>';
+      });
+      container.innerHTML = out;
+    }
+    // Re-mounting on the same container (quick view opens many products):
+    // drop the previous listener so stale closures don't fire.
+    if (container.__voHandler) container.removeEventListener('click', container.__voHandler);
+    container.__voHandler = function(e){
+      var btn = e.target.closest('.vo-btn'); if (!btn || btn.disabled || !container.contains(btn)) return;
+      sel[Number(btn.getAttribute('data-index'))] = norm(btn.getAttribute('data-value'));
+      render();
+      if (typeof opts.onChange === 'function') opts.onChange(resolve());
+    };
+    container.addEventListener('click', container.__voHandler);
+    if (opts.preselectId != null){
+      var pre = variants.find(function(v){ return Number(v.id) === Number(opts.preselectId); });
+      if (pre){ var pv = valuesOf(pre); for (var i = 0; i < n; i++) sel[i] = pv[i] != null ? pv[i] : null; }
+    }
+    render();
+    return { getSelected: resolve, reset: function(){ sel = new Array(n).fill(null); render(); } };
+  }
+  window.StoreVariantOptions = { mount: mount };
+})();
+</script>
 
 {{-- Variant Picker dialog --}}
 <div id="variantPickerModal" x-data="dialog()" @keydown.window="onEsc">
@@ -64,6 +143,7 @@
       <div class="dialog-body">
         <div id="vpProductTitle" class="font-semibold mb-3">—</div>
         <ul id="vpVariantList" class="divide-y divide-line-subtle border border-line-subtle rounded-md mb-4"></ul>
+        <div id="vpOptionGroups" class="hidden mb-4"></div>
         <div class="flex items-center justify-between">
           <div id="vpSelectedInfo" class="text-xs text-fg-muted">—</div>
           <button type="button" id="vpConfirmBtn" class="btn btn-primary" disabled>
@@ -93,7 +173,7 @@
   function formatPrice(amount, currency) {
     const sym = currency || CURRENCY;
     const num = Number(amount || 0) * CURRENCY_RATE;
-    return sym + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return storeWithCurrency(sym, storeFmtNumber(num));
   }
   const money = (v, c) => formatPrice(v, c);
   const html = (s) => String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -206,6 +286,7 @@
       currency: trigger.dataset.currency || CURRENCY,
       description: trigger.dataset.description || '',
       variants: Array.isArray(variants) ? variants : [],
+      options: (function(){ const o = safeParse(trigger.dataset.options); return (o && o.options) ? o : null; })(),
       stock: simpleStock,
       is_preorder: isPreorder
     };
@@ -228,22 +309,35 @@
 
     if ((qvProduct.variants || []).length) {
       wrapEl.classList.remove('hidden');
-      (qvProduct.variants || []).forEach(v => {
-        const priceShow = (typeof v.display_price !== 'undefined') ? v.display_price : v.price;
-        const vStock = (typeof v.stock !== 'undefined' && v.stock !== null) ? Number(v.stock) : null;
-        const outOfStock = !ALLOW_OVERSELLING && vStock !== null && vStock <= 0;
-        const stockLabel = (SHOW_STOCK && outOfStock) ? ' <span class="text-danger text-xs">— ' + html(OUT_OF_STOCK_MSG) + '</span>' : '';
-        const li = document.createElement('li');
-        li.className = 'flex items-center justify-between p-3' + (outOfStock ? ' opacity-60' : '');
-        li.innerHTML =
-          '<div><div class="font-medium">'+html(v.name || '')+stockLabel+'</div>' +
-          '<div class="text-xs text-fg-muted font-mono">'+(HIDE_PRICES ? '' : money(priceShow, qvProduct.currency))+'</div></div>' +
-          '<div><input class="radio" type="radio" name="qvChoice" value="'+v.id+'"></div>';
-        listEl.appendChild(li);
-      });
+      const qvGroupsEl = document.getElementById('qvOptionGroups');
+      if (qvProduct.options && qvGroupsEl && window.StoreVariantOptions) {
+        // Options mode: Color / Size button groups resolved to a variant.
+        listEl.classList.add('hidden');
+        qvGroupsEl.classList.remove('hidden');
+        window.StoreVariantOptions.mount(qvGroupsEl,
+          { options: qvProduct.options.options, map: qvProduct.options.map, variants: qvProduct.variants },
+          { allowOversell: ALLOW_OVERSELLING || qvProduct.is_preorder, onChange: applyQvSelection });
+      } else {
+        // Legacy flat list: one radio per variant.
+        listEl.classList.remove('hidden');
+        if (qvGroupsEl) { qvGroupsEl.classList.add('hidden'); qvGroupsEl.innerHTML = ''; }
+        (qvProduct.variants || []).forEach(v => {
+          const priceShow = (typeof v.display_price !== 'undefined') ? v.display_price : v.price;
+          const vStock = (typeof v.stock !== 'undefined' && v.stock !== null) ? Number(v.stock) : null;
+          const outOfStock = !ALLOW_OVERSELLING && vStock !== null && vStock <= 0;
+          const stockLabel = (SHOW_STOCK && outOfStock) ? ' <span class="text-danger text-xs">— ' + html(OUT_OF_STOCK_MSG) + '</span>' : '';
+          const li = document.createElement('li');
+          li.className = 'flex items-center justify-between p-3' + (outOfStock ? ' opacity-60' : '');
+          li.innerHTML =
+            '<div><div class="font-medium">'+html(v.name || '')+stockLabel+'</div>' +
+            '<div class="text-xs text-fg-muted font-mono">'+(HIDE_PRICES ? '' : money(priceShow, qvProduct.currency))+'</div></div>' +
+            '<div><input class="radio" type="radio" name="qvChoice" value="'+v.id+'"></div>';
+          listEl.appendChild(li);
+        });
+        listEl.addEventListener('change', onQVChange, { once:true });
+      }
       infoEl.textContent = SELECT_VARIANT_MSG;
       addBtn.disabled = true || HIDE_PRICES;
-      listEl.addEventListener('change', onQVChange, { once:true });
       priceEl.textContent = HIDE_PRICES ? '' : money(qvProduct.price, qvProduct.currency);
     } else {
       wrapEl.classList.add('hidden');
@@ -265,28 +359,30 @@
     window.StoreUI.open('quickViewModal');
   });
 
-  function onQVChange(){
-    const chosen = listEl.querySelector('input[name="qvChoice"]:checked');
-    if (!chosen) {
-      qvSelected = null;
+  // Shared by the legacy radio list and the option groups.
+  function applyQvSelection(v){
+    qvSelected = v || null;
+    if (!qvSelected) {
       infoEl.textContent = SELECT_VARIANT_MSG;
       addBtn.disabled = true;
       statusEl.textContent = '';
-    } else {
-      const id = Number(chosen.value);
-      qvSelected = (qvProduct.variants || []).find(v => Number(v.id) === id) || null;
-      if (qvSelected) {
-        const priceShow = (typeof qvSelected.display_price !== 'undefined') ? qvSelected.display_price : qvSelected.price;
-        const vStock = (typeof qvSelected.stock !== 'undefined' && qvSelected.stock !== null) ? Number(qvSelected.stock) : null;
-        const outOfStock = !ALLOW_OVERSELLING && vStock !== null && vStock <= 0;
-        infoEl.textContent = (qvSelected.name || '')
-          + (HIDE_PRICES ? '' : ' — ' + money(priceShow, qvProduct.currency))
-          + (SHOW_STOCK && outOfStock ? ' (' + OUT_OF_STOCK_MSG + ')' : '');
-        priceEl.textContent = HIDE_PRICES ? '' : money(priceShow, qvProduct.currency);
-        addBtn.disabled = outOfStock || HIDE_PRICES;
-        statusEl.textContent = (SHOW_STOCK && outOfStock) ? OUT_OF_STOCK_MSG : '';
-      }
+      priceEl.textContent = HIDE_PRICES ? '' : money(qvProduct.price, qvProduct.currency);
+      return;
     }
+    const priceShow = (typeof qvSelected.display_price !== 'undefined') ? qvSelected.display_price : qvSelected.price;
+    const vStock = (typeof qvSelected.stock !== 'undefined' && qvSelected.stock !== null) ? Number(qvSelected.stock) : null;
+    const outOfStock = !ALLOW_OVERSELLING && !qvProduct.is_preorder && vStock !== null && vStock <= 0;
+    infoEl.textContent = (qvSelected.name || '')
+      + (HIDE_PRICES ? '' : ' — ' + money(priceShow, qvProduct.currency))
+      + (SHOW_STOCK && outOfStock ? ' (' + OUT_OF_STOCK_MSG + ')' : '');
+    priceEl.textContent = HIDE_PRICES ? '' : money(priceShow, qvProduct.currency);
+    addBtn.disabled = outOfStock || HIDE_PRICES;
+    statusEl.textContent = (SHOW_STOCK && outOfStock) ? OUT_OF_STOCK_MSG : '';
+  }
+  function onQVChange(){
+    const chosen = listEl.querySelector('input[name="qvChoice"]:checked');
+    const id = chosen ? Number(chosen.value) : null;
+    applyQvSelection(id ? ((qvProduct.variants || []).find(v => Number(v.id) === id) || null) : null);
     listEl.addEventListener('change', onQVChange, { once:true });
   }
 
@@ -374,40 +470,59 @@
     vpSelected = null;
     vpTitle.textContent = vpProduct.name || '';
     vpList.innerHTML = '';
-    (vpProduct.variants || []).forEach(v => {
-      const priceShow = (typeof v.display_price !== 'undefined') ? v.display_price : v.price;
-      const vStock = (typeof v.stock !== 'undefined' && v.stock !== null) ? Number(v.stock) : null;
-      const outOfStock = !ALLOW_OVERSELLING && vStock !== null && vStock <= 0;
-      const stockLabel = (SHOW_STOCK && outOfStock) ? ' <span class="text-danger text-xs">— ' + html(OUT_OF_STOCK_MSG) + '</span>' : '';
-      const li = document.createElement('li');
-      li.className = 'flex items-center justify-between p-3' + (outOfStock ? ' opacity-60' : '');
-      li.innerHTML =
-        '<div><div class="font-medium">'+html(v.name || '')+stockLabel+'</div>' +
-        '<div class="text-xs text-fg-muted font-mono">'+(HIDE_PRICES ? '' : money(priceShow, vpProduct.currency))+'</div></div>' +
-        '<div><input class="radio" type="radio" name="vpChoice" value="'+v.id+'"></div>';
-      vpList.appendChild(li);
-    });
+    const optData = safeParse(source.dataset.options);
+    const vpGroups = document.getElementById('vpOptionGroups');
+    if (optData && optData.options && vpGroups && window.StoreVariantOptions) {
+      // Options mode: Color / Size button groups resolved to a variant.
+      vpList.classList.add('hidden');
+      vpGroups.classList.remove('hidden');
+      window.StoreVariantOptions.mount(vpGroups,
+        { options: optData.options, map: optData.map, variants: vpProduct.variants },
+        { allowOversell: ALLOW_OVERSELLING, onChange: applyVpSelection });
+    } else {
+      // Legacy flat list: one radio per variant.
+      vpList.classList.remove('hidden');
+      if (vpGroups) { vpGroups.classList.add('hidden'); vpGroups.innerHTML = ''; }
+      (vpProduct.variants || []).forEach(v => {
+        const priceShow = (typeof v.display_price !== 'undefined') ? v.display_price : v.price;
+        const vStock = (typeof v.stock !== 'undefined' && v.stock !== null) ? Number(v.stock) : null;
+        const outOfStock = !ALLOW_OVERSELLING && vStock !== null && vStock <= 0;
+        const stockLabel = (SHOW_STOCK && outOfStock) ? ' <span class="text-danger text-xs">— ' + html(OUT_OF_STOCK_MSG) + '</span>' : '';
+        const li = document.createElement('li');
+        li.className = 'flex items-center justify-between p-3' + (outOfStock ? ' opacity-60' : '');
+        li.innerHTML =
+          '<div><div class="font-medium">'+html(v.name || '')+stockLabel+'</div>' +
+          '<div class="text-xs text-fg-muted font-mono">'+(HIDE_PRICES ? '' : money(priceShow, vpProduct.currency))+'</div></div>' +
+          '<div><input class="radio" type="radio" name="vpChoice" value="'+v.id+'"></div>';
+        vpList.appendChild(li);
+      });
+      vpList.addEventListener('change', onVPChange, { once:true, passive:false });
+    }
     vpInfo.textContent = SELECT_VARIANT_MSG;
     vpBtn.disabled = true || HIDE_PRICES;
-    vpList.addEventListener('change', onVPChange, { once:true, passive:false });
     window.StoreUI.open('variantPickerModal');
   }
 
-  function onVPChange(){
-    const chosen = vpList.querySelector('input[name="vpChoice"]:checked');
-    if (!chosen){
-      vpSelected = null;
+  // Shared by the legacy radio list and the option groups.
+  function applyVpSelection(v){
+    vpSelected = v || null;
+    if (!vpSelected){
       vpBtn.disabled = true;
       vpInfo.textContent = SELECT_VARIANT_MSG;
-    } else {
-      const id = Number(chosen.value);
-      vpSelected = (vpProduct.variants || []).find(v => Number(v.id) === id) || null;
-      if (vpSelected){
-        const priceShow = (typeof vpSelected.display_price !== 'undefined') ? vpSelected.display_price : vpSelected.price;
-        vpInfo.textContent = (vpSelected.name || '') + (HIDE_PRICES ? '' : ' — ' + money(priceShow, vpProduct.currency));
-        vpBtn.disabled = HIDE_PRICES;
-      }
+      return;
     }
+    const priceShow = (typeof vpSelected.display_price !== 'undefined') ? vpSelected.display_price : vpSelected.price;
+    const vStock = (typeof vpSelected.stock !== 'undefined' && vpSelected.stock !== null) ? Number(vpSelected.stock) : null;
+    const outOfStock = !ALLOW_OVERSELLING && vStock !== null && vStock <= 0;
+    vpInfo.textContent = (vpSelected.name || '')
+      + (HIDE_PRICES ? '' : ' — ' + money(priceShow, vpProduct.currency))
+      + (SHOW_STOCK && outOfStock ? ' (' + OUT_OF_STOCK_MSG + ')' : '');
+    vpBtn.disabled = HIDE_PRICES || outOfStock;
+  }
+  function onVPChange(){
+    const chosen = vpList.querySelector('input[name="vpChoice"]:checked');
+    const id = chosen ? Number(chosen.value) : null;
+    applyVpSelection(id ? ((vpProduct.variants || []).find(v => Number(v.id) === id) || null) : null);
     vpList.addEventListener('change', onVPChange, { once:true, passive:false });
   }
 

@@ -90,7 +90,7 @@
   const CURRENCY_RATE = parseFloat(document.querySelector('meta[name="currency-rate"]')?.content) || 1;
   function money(val, currency) {
     const sym = currency || CURRENCY;
-    return sym + (Number(val || 0) * CURRENCY_RATE).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return storeWithCurrency(sym, storeFmtNumber(Number(val || 0) * CURRENCY_RATE));
   }
 
   function escapeHtml(s){
@@ -102,9 +102,14 @@
     if (it.variant_name && String(it.variant_name).trim()) {
       return pill(escapeHtml(it.variant_name));
     }
+    // Restaurant add-ons ("Extra cheese · Large") instead of a variant.
+    if (it.options_label && String(it.options_label).trim()) {
+      return pill(escapeHtml(it.options_label));
+    }
     if (it.product_variant_id) {
       return pill(`${T_VARIANT} #${String(it.product_variant_id)}`);
     }
+    if (Array.isArray(it.option_ids) && it.option_ids.length) return '';
     if (typeof it.id === 'string' && it.id.includes(':')) {
       const parts = it.id.split(':');
       if (parts[1]) return pill(`${T_VARIANT} #${parts[1]}`);

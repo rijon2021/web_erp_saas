@@ -8,6 +8,7 @@
             <template #icon><FilterOutlined /></template>
             {{ $t('Filter') }}
           </a-button>
+          <template v-if="exportAllowed">
           <a-button :loading="exporting === 'excel'" @click="doExport('excel')">
             <template #icon><FileExcelOutlined /></template>
             {{ $t('Export') }} Excel
@@ -20,6 +21,7 @@
             <template #icon><PrinterOutlined /></template>
             {{ $t('print') }}
           </a-button>
+          </template>
         </a-space>
       </template>
     </PageHeader>
@@ -36,7 +38,7 @@
     <!-- Optional trend chart for reports that return a timeseries -->
     <slot name="chart" />
 
-    <DataTable :crud="crud" :columns="columns" :row-key="rowKey">
+    <DataTable :crud="crud" :columns="shownColumns" :row-key="rowKey">
       <template #bodyCell="slotProps">
         <slot name="bodyCell" v-bind="slotProps" />
       </template>
@@ -45,6 +47,9 @@
         <slot name="summary" />
       </template>
     </DataTable>
+
+    <!-- Optional extra content under the table (e.g. a per-method summary) -->
+    <slot name="after" />
 
     <!-- Filters (date range, warehouse, …) supplied per report — opened from the
          Filter button, shown in a right drawer like the legacy reports. Controls
@@ -72,7 +77,7 @@
  * refetches with limit=-1 (the legacy "All" convention) so a 10-row view still
  * exports every matching row.
  */
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import { FileExcelOutlined, FilePdfOutlined, PrinterOutlined, FilterOutlined } from '@ant-design/icons-vue';
@@ -81,6 +86,8 @@ import DataTable from './DataTable.vue';
 import { exportExcel, exportPdf, printRows, totalsRow, exportPrefs } from '../lib/exporters';
 import { useFormat } from '../composables/useFormat';
 import http from '../lib/http';
+import { refuseBigExport } from '../lib/rowLimit';
+import { useAuthStore } from '../stores/auth';
 
 const props = defineProps({
   title: { type: String, required: true },
@@ -98,18 +105,27 @@ const props = defineProps({
   // For nested payloads (mirrors useCrudTable's `select`), e.g.
   //   :export-select="p => p?.data?.rows || []"
   exportSelect: { type: Function, default: null },
+  // Product / stock data: export + print hide for roles carrying
+  // disable_product_export (auth.canExportProducts).
+  productData: { type: Boolean, default: false },
 });
 
 const { t } = useI18n();
 const { money, number } = useFormat();
 const exporting = ref('');
 const filterOpen = ref(false);
+const auth = useAuthStore();
+
+// Columns flagged `cost: true` (cost price, stock value at cost, profit…) drop
+// out of the table, totals, exports and print for roles with hide_product_cost.
+const shownColumns = computed(() => (auth.canSeeCost ? props.columns : props.columns.filter(c => !c.cost)));
+const exportAllowed = computed(() => !props.productData || auth.canExportProducts);
 
 // Totals footer over the full exported set — same `sum` flags and formatting
 // as DataTable's on-screen footer. Null when no column is flagged or the
 // admin turned totals off (Settings → Export).
 const footFor = rows => (exportPrefs().totals ? totalsRow(
-  props.columns,
+  shownColumns.value,
   rows,
   (col, total) => (col.sum === 'money' ? money(total) : number(total, Number.isInteger(total) ? 0 : 2)),
   t('Total'),
@@ -120,6 +136,8 @@ async function allRows() {
   // screen, skipping the full refetch; 'all' (default) exports everything.
   if (exportPrefs().scope === 'page') return props.crud.rows.value;
   if (!props.exportEndpoint) return props.crud.rows.value;
+  // Checked here too: a report's export endpoint can differ from its list's.
+  if (refuseBigExport(props.crud.total?.value)) throw new Error('List too big to export at once');
   const data = await http.get(props.exportEndpoint, {
     page: 1,
     limit: -1, // legacy convention for "all rows"
@@ -145,8 +163,8 @@ async function doExport(kind) {
       return;
     }
     const foot = footFor(rows);
-    if (kind === 'excel') await exportExcel(props.title, props.columns, rows, { foot });
-    else await exportPdf(props.title, props.columns, rows, { foot });
+    if (kind === 'excel') await exportExcel(props.title, shownColumns.value, rows, { foot });
+    else await exportPdf(props.title, shownColumns.value, rows, { foot });
   } catch (e) {
     console.error('[report-export]', e);
     message.error(t('InvalidData'));
@@ -163,7 +181,7 @@ async function doExport(kind) {
 async function doPrint() {
   const win = window.open('', '_blank');
   if (!win) {
-    message.warning('Please allow popups to print');
+    message.warning(t('Allow_Popups_To_Print'));
     return;
   }
   win.document.write('<p style="font-family:sans-serif;padding:16px;color:#666">…</p>');
@@ -175,7 +193,7 @@ async function doPrint() {
       message.warning(t('NodataAvailable'));
       return;
     }
-    printRows(props.title, props.columns, rows, { win, foot: footFor(rows) });
+    printRows(props.title, shownColumns.value, rows, { win, foot: footFor(rows) });
   } catch (e) {
     console.error('[report-print]', e);
     win.close();

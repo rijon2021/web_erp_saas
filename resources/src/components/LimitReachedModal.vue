@@ -12,8 +12,13 @@
       <div class="limit-icon"><WarningOutlined /></div>
       <h3 class="limit-title">{{ limitReachedKind === 'feature' ? tf('UpgradeRequired', 'Upgrade Required') : tf('Plan_Limit_Reached', 'Plan Limit Reached') }}</h3>
       <p class="limit-message">{{ limitReachedMessage }}</p>
-      <a-space>
-        <a-button type="primary" @click="goToUpgrade">
+      <a-space wrap style="justify-content: center">
+        <!-- For sale as an add-on: buy just that instead of a bigger plan. -->
+        <a-button v-if="limitReachedAddon" type="primary" @click="goToAddon">
+          <template #icon><AppstoreAddOutlined /></template>
+          {{ tf('Addons_Buy_Addon', 'Buy add-on') }}
+        </a-button>
+        <a-button :type="limitReachedAddon ? 'default' : 'primary'" @click="goToUpgrade">
           <template #icon><ArrowUpOutlined /></template>
           {{ tf('Upgrade_Plan', 'Upgrade Plan') }}
         </a-button>
@@ -29,14 +34,20 @@
  * lib/limitReached.js (fed by the 403 handler in lib/http.js). Upgrade goes to
  * the billing plan page — legacy until Phase 8 migrates billing, hence goTo().
  */
-import { WarningOutlined, ArrowUpOutlined } from '@ant-design/icons-vue';
-import { limitReachedVisible, limitReachedMessage, limitReachedKind, hideLimitReached } from '../lib/limitReached';
+import { WarningOutlined, ArrowUpOutlined, AppstoreAddOutlined } from '@ant-design/icons-vue';
+import { limitReachedVisible, limitReachedMessage, limitReachedKind, limitReachedAddon, hideLimitReached } from '../lib/limitReached';
 import { t as tf } from '../i18n';
 import { goTo } from '../lib/nav';
 
 function goToUpgrade() {
   hideLimitReached();
   goTo('/app/billing/change-plan');
+}
+
+function goToAddon() {
+  const key = limitReachedAddon.value;
+  hideLimitReached();
+  goTo('/app/billing/addons?feature=' + encodeURIComponent(key));
 }
 </script>
 

@@ -1,3 +1,11 @@
+@php $pdfT = \App\Models\PdfTemplate::settingsFor('purchase'); @endphp
+@php
+    // Branch letterhead: the warehouse that issued this document supplies the
+    // name, address, phone, email and logo below. Each field falls back to the
+    // global company settings on its own, and documents with no warehouse get
+    // the plain company block.
+    $issuer = $issuer ?? \App\Services\InvoiceIssuerService::company($setting ?? null);
+@endphp
 @php
     $pdfLocale = app()->getLocale();
     $isRtl = $pdfLocale === 'ar';
@@ -12,22 +20,15 @@
     @php
         $priceFormat = $setting['price_format'] ?? null;
         function formatPrice($number, $decimals = 2, $priceFormat = null) {
-            $number = (float) $number;
-            $decimals = (int) $decimals;
-            if (empty($priceFormat)) { return number_format($number, $decimals, '.', ','); }
-            switch ($priceFormat) {
-                case 'comma_dot': return number_format($number, $decimals, '.', ',');
-                case 'dot_comma': return number_format($number, $decimals, ',', '.');
-                case 'space_comma': return number_format($number, $decimals, ',', ' ');
-                default: return number_format($number, $decimals, '.', ',');
-            }
+            // Shared formatter: Price Format separators + the Hide Zero Decimals setting (100.00 => 100).
+            return \App\utils\helpers::format_price($number, $decimals, $priceFormat === null ? '' : $priceFormat);
         }
     @endphp
     <style>
-        @page { size: A4; margin: 10mm 15mm; }
+        @page { size: A4; margin: {{ $pdfT['margin_v'] }}mm {{ $pdfT['margin_h'] }}mm; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body, body * { font-family: 'DejaVu Sans', sans-serif !important; }
-        body { font-size: 9pt; color: #1f2937; line-height: 1.4; padding: 15px 20px; max-width: 100%; }
+        body, body * { font-family: '{{ $pdfT['font_family'] }}', sans-serif !important; }
+        body { font-size: {{ $pdfT['font_size'] }}pt; color: {{ $pdfT['text_color'] }}; background: {{ $pdfT['background_color'] }}; line-height: 1.4; padding: 15px 20px; max-width: 100%; }
         body.rtl { direction: rtl; text-align: right; }
         body.rtl table { direction: rtl; }
     </style>
@@ -38,12 +39,12 @@
             <td style="width: 30%; vertical-align: top;">
                 @php
                     $logoSrc = null;
-                    if (!empty($setting['logo'])) {
+                    if (!empty($issuer['logo'])) {
                         // Tenant-aware upload location (images/tenants/{id}/settings or images/super/settings),
                         // falling back to the legacy shared path for old files like logo-default.png.
-                        $logoPath = upload_public_path('settings/'.$setting['logo']);
+                        $logoPath = upload_public_path('settings/'.$issuer['logo']);
                         if (!is_file($logoPath)) {
-                            $logoPath = public_path('images/'.$setting['logo']);
+                            $logoPath = public_path('images/'.$issuer['logo']);
                         }
                         if (file_exists($logoPath) && is_readable($logoPath)) {
                             $logoData = @file_get_contents($logoPath);
@@ -57,17 +58,17 @@
                         }
                     }
                 @endphp
-                @if($logoSrc)
-                    <img src="{{ $logoSrc }}" alt="Logo" style="max-height: 60px; max-width: 180px;">
+                @if($pdfT['logo_show'] && $logoSrc)
+                    <img src="{{ $logoSrc }}" alt="Logo" style="max-height: {{ $pdfT['logo_height'] }}px; max-width: {{ $pdfT['logo_width'] }}px;">
                 @endif
             </td>
             <td style="width: 70%; vertical-align: top; text-align: {{ $isRtl ? 'right' : 'right' }};">
-                <div style="font-size: 18pt; font-weight: bold; color: #1a56db; margin-bottom: 6px; letter-spacing: 0.5px;">{{ __('pdf.purchase_order') }}</div>
+                <div style="font-size: 18pt; font-weight: bold; color: {{ $pdfT['primary_color'] }}; margin-bottom: 6px; letter-spacing: 0.5px;">{{ $pdfT['labels']['title'] !== '' ? $pdfT['labels']['title'] : __('pdf.purchase_order') }}</div>
                 <div style="display: inline-block; background: #f3f4f6; padding: 5px 12px; border-radius: 4px; font-size: 10pt; font-weight: bold; color: #4b5563; margin-bottom: 8px;">{{$purchase['Ref']}}</div>
                 <table style="width: 100%; font-size: 8pt; margin-top: 6px;" cellpadding="3" cellspacing="0">
                     <tr>
                         <td style="text-align: right; color: #6b7280; font-weight: 600;">{{ __('pdf.date') }}{{ $isRtl ? '' : ':' }}</td>
-                        <td style="text-align: right; color: #1f2937; font-weight: 500;">
+                        <td style="text-align: right; color: {{ $pdfT['text_color'] }}; font-weight: 500;">
                             @php
                                 $dateFormat = $setting['date_format'] ?? 'YYYY-MM-DD';
                                 $dateTime = \Carbon\Carbon::parse($purchase['date']);
@@ -83,9 +84,15 @@
                     </tr>
                     <tr>
                         <td style="text-align: right; color: #6b7280; font-weight: 600;">{{ __('pdf.order_no') }}{{ $isRtl ? '' : ':' }}</td>
-                        <td style="text-align: right; color: #1f2937; font-weight: 500;">{{$purchase['Ref']}}</td>
+                        <td style="text-align: right; color: {{ $pdfT['text_color'] }}; font-weight: 500;">{{$purchase['Ref']}}</td>
                     </tr>
+                    @if(!empty($purchase['order_reference']))
                     <tr>
+                        <td style="text-align: right; color: #6b7280; font-weight: 600;">{{ __('pdf.order_reference') }}{{ $isRtl ? '' : ':' }}</td>
+                        <td style="text-align: right; color: {{ $pdfT['text_color'] }}; font-weight: 500;">{{ $purchase['order_reference'] }}</td>
+                    </tr>
+                    @endif
+                    <tr style="{{ $pdfT['show_status'] ? '' : 'display:none;' }}">
                         <td style="text-align: right; color: #6b7280; font-weight: 600;">{{ __('pdf.status') }}{{ $isRtl ? '' : ':' }}</td>
                         <td style="text-align: right;">
                             @php
@@ -96,7 +103,7 @@
                             <span style="background: {{$statusStyle['bg']}}; color: {{$statusStyle['color']}}; padding: 3px 8px; border-radius: 3px; font-size: 7pt; font-weight: bold; text-transform: uppercase;">{{$purchase['statut']}}</span>
                         </td>
                     </tr>
-                    <tr>
+                    <tr style="{{ $pdfT['show_status'] ? '' : 'display:none;' }}">
                         <td style="text-align: right; color: #6b7280; font-weight: 600;">{{ __('pdf.payment') }}{{ $isRtl ? '' : ':' }}</td>
                         <td style="text-align: right;">
                             @php $paymentKey = strtolower($purchase['payment_status']); $paymentStyle = $statusColors[$paymentKey] ?? ['bg' => '#e5e7eb', 'color' => '#374151']; @endphp
@@ -108,32 +115,32 @@
         </tr>
     </table>
 
-    <div style="height: 2px; background: #1a56db; margin: 8px 0 10px 0;"></div>
+    <div style="height: 2px; background: {{ $pdfT['primary_color'] }}; margin: 8px 0 10px 0;"></div>
 
     <!-- Supplier / Company: RTL = value left, label right -->
     <table style="width: 100%; margin-bottom: 12px;" cellpadding="0" cellspacing="0" {{ $isRtl ? 'dir="rtl"' : '' }}>
         <tr>
             <td style="width: 48%; vertical-align: top;">
-                <div style="border: 1px solid #e5e7eb; border-radius: 4px; overflow: hidden;">
-                    <div style="background: #1a56db; padding: 5px 10px; border-bottom: 1px solid #3b82f6; text-align: {{ $isRtl ? 'right' : 'left' }};">
+                <div style="border: 1px solid #e5e7eb; border-radius: 4px; overflow: hidden; {{ $pdfT['show_customer'] ? '' : 'display:none;' }}">
+                    <div style="background: {{ $pdfT['primary_color'] }}; padding: 5px 10px; border-bottom: 1px solid {{ $pdfT['secondary_color'] }}; text-align: {{ $isRtl ? 'right' : 'left' }};">
                         <div style="color: #ffffff; font-size: 9pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.3px;">{{ __('pdf.supplier_info') }}</div>
                     </div>
-                    <div style="padding: 8px 10px; background: #f9fafb;">
-                        <div style="font-size: 10pt; font-weight: bold; color: #1f2937; margin-bottom: 4px; text-align: {{ $isRtl ? 'right' : 'left' }};">{{$purchase['supplier_name']}}</div>
+                    <div style="padding: 8px 10px; background: {{ $pdfT['table_striped'] ? '#f9fafb' : '#ffffff' }};">
+                        <div style="font-size: 10pt; font-weight: bold; color: {{ $pdfT['text_color'] }}; margin-bottom: 4px; text-align: {{ $isRtl ? 'right' : 'left' }};">{{$purchase['supplier_name']}}</div>
                         <table style="width: 100%; font-size: 7.5pt; color: #6b7280; line-height: 1.5;" cellpadding="0" cellspacing="0">
                             @if($isRtl)
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$purchase['supplier_phone']}}</td><td style="width: 32%; padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: #1f2937;">{{ __('pdf.phone') }}</strong></td></tr>
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$purchase['supplier_email']}}</td><td style="padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: #1f2937;">{{ __('pdf.email') }}</strong></td></tr>
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$purchase['supplier_adr']}}</td><td style="padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: #1f2937;">{{ __('pdf.address') }}</strong></td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$purchase['supplier_phone']}}</td><td style="width: 32%; padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.phone') }}</strong></td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$purchase['supplier_email']}}</td><td style="padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.email') }}</strong></td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$purchase['supplier_adr']}}</td><td style="padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.address') }}</strong></td></tr>
                             @if($purchase['supplier_tax'])
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$purchase['supplier_tax']}}</td><td style="padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: #1f2937;">{{ __('pdf.tax_no') }}</strong></td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$purchase['supplier_tax']}}</td><td style="padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.tax_no') }}</strong></td></tr>
                             @endif
                             @else
-                            <tr><td style="width: 28%; padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: #1f2937;">{{ __('pdf.phone') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$purchase['supplier_phone']}}</td></tr>
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: #1f2937;">{{ __('pdf.email') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$purchase['supplier_email']}}</td></tr>
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: #1f2937;">{{ __('pdf.address') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$purchase['supplier_adr']}}</td></tr>
+                            <tr><td style="width: 28%; padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.phone') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$purchase['supplier_phone']}}</td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.email') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$purchase['supplier_email']}}</td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.address') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$purchase['supplier_adr']}}</td></tr>
                             @if($purchase['supplier_tax'])
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: #1f2937;">{{ __('pdf.tax_no') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$purchase['supplier_tax']}}</td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.tax_no') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$purchase['supplier_tax']}}</td></tr>
                             @endif
                             @endif
                         </table>
@@ -142,21 +149,21 @@
             </td>
             <td style="width: 4%;"></td>
             <td style="width: 48%; vertical-align: top;">
-                <div style="border: 1px solid #e5e7eb; border-radius: 4px; overflow: hidden;">
-                    <div style="background: #1a56db; padding: 5px 10px; border-bottom: 1px solid #3b82f6; text-align: {{ $isRtl ? 'right' : 'left' }};">
+                <div style="border: 1px solid #e5e7eb; border-radius: 4px; overflow: hidden; {{ $pdfT['show_company'] ? '' : 'display:none;' }}">
+                    <div style="background: {{ $pdfT['primary_color'] }}; padding: 5px 10px; border-bottom: 1px solid {{ $pdfT['secondary_color'] }}; text-align: {{ $isRtl ? 'right' : 'left' }};">
                         <div style="color: #ffffff; font-size: 9pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.3px;">{{ __('pdf.company_info') }}</div>
                     </div>
-                    <div style="padding: 8px 10px; background: #f9fafb;">
-                        <div style="font-size: 10pt; font-weight: bold; color: #1f2937; margin-bottom: 4px; text-align: {{ $isRtl ? 'right' : 'left' }};">{{$setting['CompanyName']}}</div>
+                    <div style="padding: 8px 10px; background: {{ $pdfT['table_striped'] ? '#f9fafb' : '#ffffff' }};">
+                        <div style="font-size: 10pt; font-weight: bold; color: {{ $pdfT['text_color'] }}; margin-bottom: 4px; text-align: {{ $isRtl ? 'right' : 'left' }};">{{$issuer['name']}}</div>
                         <table style="width: 100%; font-size: 7.5pt; color: #6b7280; line-height: 1.5;" cellpadding="0" cellspacing="0">
                             @if($isRtl)
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$setting['CompanyPhone']}}</td><td style="width: 32%; padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: #1f2937;">{{ __('pdf.phone') }}</strong></td></tr>
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$setting['email']}}</td><td style="padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: #1f2937;">{{ __('pdf.email') }}</strong></td></tr>
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$setting['CompanyAdress']}}</td><td style="padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: #1f2937;">{{ __('pdf.address') }}</strong></td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$issuer['phone']}}</td><td style="width: 32%; padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.phone') }}</strong></td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$issuer['email']}}</td><td style="padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.email') }}</strong></td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left; direction: ltr;">{{$issuer['full_address']}}</td><td style="padding: 1px 0; vertical-align: top; text-align: right; direction: rtl;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.address') }}</strong></td></tr>
                             @else
-                            <tr><td style="width: 28%; padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: #1f2937;">{{ __('pdf.phone') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$setting['CompanyPhone']}}</td></tr>
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: #1f2937;">{{ __('pdf.email') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$setting['email']}}</td></tr>
-                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: #1f2937;">{{ __('pdf.address') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$setting['CompanyAdress']}}</td></tr>
+                            <tr><td style="width: 28%; padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.phone') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$issuer['phone']}}</td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.email') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$issuer['email']}}</td></tr>
+                            <tr><td style="padding: 1px 0; vertical-align: top; text-align: left;"><strong style="color: {{ $pdfT['text_color'] }};">{{ __('pdf.address') }}:</strong></td><td style="padding: 1px 0; vertical-align: top; text-align: left;">{{$issuer['full_address']}}</td></tr>
                             @endif
                         </table>
                     </div>
@@ -165,9 +172,9 @@
         </tr>
     </table>
 
-    <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid #e5e7eb;" cellpadding="0" cellspacing="0" {{ $isRtl ? 'dir="rtl"' : '' }}>
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px; border: {{ $pdfT['table_borders'] ? '1px solid #e5e7eb' : 'none' }};" cellpadding="0" cellspacing="0" {{ $isRtl ? 'dir="rtl"' : '' }}>
         <thead>
-            <tr style="background: #1a56db;">
+            <tr style="background: {{ $pdfT['primary_color'] }};">
                 <th style="padding: 6px 5px; text-align: {{ $isRtl ? 'right' : 'left' }}; font-size: 8pt; font-weight: bold; color: #ffffff; text-transform: uppercase; border-right: 1px solid rgba(255,255,255,0.2);">{{ __('pdf.product') }}</th>
                 <th style="padding: 6px 5px; text-align: right; font-size: 8pt; font-weight: bold; color: #ffffff; text-transform: uppercase; border-right: 1px solid rgba(255,255,255,0.2);">{{ __('pdf.cost') }}</th>
                 <th style="padding: 6px 5px; text-align: right; font-size: 8pt; font-weight: bold; color: #ffffff; text-transform: uppercase; border-right: 1px solid rgba(255,255,255,0.2);">{{ __('pdf.qty') }}</th>
@@ -190,17 +197,17 @@
             @foreach ($details as $detail)
             <tr style="border-bottom: 1px solid #e5e7eb; background: {{$rowIndex % 2 == 0 ? '#ffffff' : '#f9fafb'}};">
                 <td style="padding: 5px; vertical-align: top;">
-                    <div style="font-weight: 600; font-size: 8.5pt; color: #1f2937; margin-bottom: 1px;">{{$detail['name']}}</div>
+                    <div style="font-weight: 600; font-size: 8.5pt; color: {{ $pdfT['text_color'] }}; margin-bottom: 1px;">{{$detail['name']}}</div>
                     <div style="font-size: 7pt; color: #6b7280;">{{ __('pdf.code') }} {{$detail['code']}}</div>
                     @if($detail['is_imei'] && $detail['imei_number'] !==null)
-                        <div style="font-size: 7pt; color: #3b82f6; margin-top: 1px;">{{ __('pdf.sn') }} {{$detail['imei_number']}}</div>
+                        <div style="font-size: 7pt; color: {{ $pdfT['secondary_color'] }}; margin-top: 1px;">{{ __('pdf.sn') }} {{$detail['imei_number']}}</div>
                     @endif
                 </td>
-                <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: #1f2937;">{{$detail['cost']}}</td>
-                <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: #1f2937;">{{$detail['quantity']}} {{$detail['unit_purchase']}}</td>
+                <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: {{ $pdfT['text_color'] }};">{{$detail['cost']}}</td>
+                <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: {{ $pdfT['text_color'] }};">{{$detail['quantity']}} {{$detail['unit_purchase']}}</td>
                 <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: #ef4444;">{{$detail['DiscountNet']}}</td>
-                <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: #1f2937;">{{$detail['taxe']}}</td>
-                <td style="padding: 5px; text-align: right; font-size: 9pt; font-weight: bold; color: #1a56db;">{{$detail['total']}}</td>
+                <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: {{ $pdfT['text_color'] }};">{{$detail['taxe']}}</td>
+                <td style="padding: 5px; text-align: right; font-size: 9pt; font-weight: bold; color: {{ $pdfT['primary_color'] }};">{{$detail['total']}}</td>
             </tr>
             @if(!empty($detail['is_batch_tracked']) && !empty($detail['batches']))
             <tr style="background: #ffffff;">
@@ -240,14 +247,14 @@
                                         }
                                         $qtyStr = number_format((float)($b['qty'] ?? 0), 2, '.', '');
                                         $unitCost = isset($b['unit_cost']) && $b['unit_cost'] !== null
-                                            ? $symbol.' '.formatPrice((float)$b['unit_cost'], 2, $priceFormat)
+                                            ? \App\utils\helpers::with_currency($symbol, formatPrice((float)$b['unit_cost'], 2, $priceFormat))
                                             : '—';
                                         $rowBg = $bIdx % 2 === 1 ? '#f8faff' : '#ffffff';
                                         $mfgFormatted = $formatBatchDate($b['mfg_date'] ?? null);
                                         $expFormatted = $formatBatchDate($b['expiry_date'] ?? null);
                                     @endphp
                                     <tr style="background: {{ $rowBg }}; border-top: 1px solid #e0e7ff;">
-                                        <td style="padding: 5px 8px; text-align: {{ $isRtl ? 'right' : 'left' }}; font-weight: bold; color: #1f2937;">
+                                        <td style="padding: 5px 8px; text-align: {{ $isRtl ? 'right' : 'left' }}; font-weight: bold; color: {{ $pdfT['text_color'] }};">
                                             @if(!empty($b['batch_no']))
                                                 {{ $b['batch_no'] }}
                                             @else
@@ -268,7 +275,7 @@
                                                 <span style="color: #9ca3af;">—</span>
                                             @endif
                                         </td>
-                                        <td style="padding: 5px 8px; text-align: right; color: #1f2937; font-weight: bold;">{{ $qtyStr }} {{ $detail['unit_purchase'] }}</td>
+                                        <td style="padding: 5px 8px; text-align: right; color: {{ $pdfT['text_color'] }}; font-weight: bold;">{{ $qtyStr }} {{ $detail['unit_purchase'] }}</td>
                                         <td style="padding: 5px 8px; text-align: right; color: #4f46e5; font-weight: bold;">{{ $unitCost }}</td>
                                     </tr>
                                 @endforeach
@@ -299,74 +306,74 @@
             <td style="width: 42%; vertical-align: top; text-align: {{ $isRtl ? 'right' : 'left' }};">
                 <table style="width: 100%; border: 1px solid #e5e7eb; border-radius: 4px; border-collapse: collapse;" cellpadding="0" cellspacing="0">
                     @if($isRtl)
-                    <tr style="background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
-                        <td style="{{ $tdAmountLeft }} color: #1f2937;">{{$symbol}} {{formatPrice((float)($purchase['GrandTotal'] - $purchase['TaxNet'] + $purchase['discount'] - $purchase['shipping'] - $extraChargesTotal), 2, $priceFormat)}}</td>
+                    <tr style="background: {{ $pdfT['table_striped'] ? '#f9fafb' : '#ffffff' }}; border-bottom: 1px solid #e5e7eb;">
+                        <td style="{{ $tdAmountLeft }} color: {{ $pdfT['text_color'] }};">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)($purchase['GrandTotal'] - $purchase['TaxNet'] + $purchase['discount'] - $purchase['shipping'] - $extraChargesTotal), 2, $priceFormat)) }}</td>
                         <td style="{{ $tdLabelRight }} color: #6b7280;">{{ __('pdf.subtotal') }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
                     <tr style="background: #ffffff; border-bottom: 1px solid #e5e7eb;">
-                        <td style="{{ $tdAmountLeft }} color: #1f2937;">{{$symbol}} {{formatPrice((float)$purchase['TaxNet'], 2, $priceFormat)}}</td>
+                        <td style="{{ $tdAmountLeft }} color: {{ $pdfT['text_color'] }};">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['TaxNet'], 2, $priceFormat)) }}</td>
                         <td style="{{ $tdLabelRight }} color: #6b7280;">{{ __('pdf.order_tax') }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
-                    <tr style="background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
-                        <td style="{{ $tdAmountLeft }} color: #ef4444;">- {{$symbol}} {{formatPrice((float)$purchase['discount'], 2, $priceFormat)}}</td>
+                    <tr style="background: {{ $pdfT['table_striped'] ? '#f9fafb' : '#ffffff' }}; border-bottom: 1px solid #e5e7eb;">
+                        <td style="{{ $tdAmountLeft }} color: #ef4444;">- {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['discount'], 2, $priceFormat)) }}</td>
                         <td style="{{ $tdLabelRight }} color: #6b7280;">{{ __('pdf.discount') }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
                     <tr style="background: #ffffff; border-bottom: 1px solid #e5e7eb;">
-                        <td style="{{ $tdAmountLeft }} color: #1f2937;">{{$symbol}} {{formatPrice((float)$purchase['shipping'], 2, $priceFormat)}}</td>
+                        <td style="{{ $tdAmountLeft }} color: {{ $pdfT['text_color'] }};">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['shipping'], 2, $priceFormat)) }}</td>
                         <td style="{{ $tdLabelRight }} color: #6b7280;">{{ __('pdf.shipping') }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
                     @foreach($extraCharges as $extraCharge)
-                    <tr style="background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
-                        <td style="{{ $tdAmountLeft }} color: #1f2937;">{{$symbol}} {{formatPrice((float)$extraCharge['amount'], 2, $priceFormat)}}</td>
+                    <tr style="background: {{ $pdfT['table_striped'] ? '#f9fafb' : '#ffffff' }}; border-bottom: 1px solid #e5e7eb;">
+                        <td style="{{ $tdAmountLeft }} color: {{ $pdfT['text_color'] }};">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$extraCharge['amount'], 2, $priceFormat)) }}</td>
                         <td style="{{ $tdLabelRight }} color: #6b7280;">{{ $extraCharge['name'] }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
                     @endforeach
-                    <tr style="background: #1a56db;">
-                        <td style="padding: 8px 10px; font-size: 11pt; font-weight: bold; color: #ffffff; text-align: left; direction: ltr;">{{$symbol}} {{formatPrice((float)$purchase['GrandTotal'], 2, $priceFormat)}}</td>
+                    <tr style="background: {{ $pdfT['primary_color'] }};">
+                        <td style="padding: 8px 10px; font-size: 11pt; font-weight: bold; color: #ffffff; text-align: left; direction: ltr;">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['GrandTotal'], 2, $priceFormat)) }}</td>
                         <td style="padding: 8px 10px; font-size: 10pt; font-weight: bold; color: #ffffff; text-align: right; direction: rtl;">{{ __('pdf.total_label') }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
                     <tr style="background: #d1fae5; border-bottom: 1px solid #a7f3d0;">
-                        <td style="padding: 6px 10px; font-size: 9pt; font-weight: bold; color: #065f46; text-align: left; direction: ltr;">{{$symbol}} {{formatPrice((float)$purchase['paid_amount'], 2, $priceFormat)}}</td>
+                        <td style="padding: 6px 10px; font-size: 9pt; font-weight: bold; color: #065f46; text-align: left; direction: ltr;">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['paid_amount'], 2, $priceFormat)) }}</td>
                         <td style="padding: 6px 10px; font-size: 8.5pt; font-weight: bold; color: #065f46; text-align: right; direction: rtl;">{{ __('pdf.paid_amount') }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
                     <tr style="background: #fef3c7;">
-                        <td style="padding: 6px 10px; font-size: 9pt; font-weight: bold; color: #92400e; text-align: left; direction: ltr;">{{$symbol}} {{formatPrice((float)$purchase['due'], 2, $priceFormat)}}</td>
+                        <td style="padding: 6px 10px; font-size: 9pt; font-weight: bold; color: #92400e; text-align: left; direction: ltr;">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['due'], 2, $priceFormat)) }}</td>
                         <td style="padding: 6px 10px; font-size: 8.5pt; font-weight: bold; color: #92400e; text-align: right; direction: rtl;">{{ __('pdf.amount_due') }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
                     @else
-                    <tr style="background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
+                    <tr style="background: {{ $pdfT['table_striped'] ? '#f9fafb' : '#ffffff' }}; border-bottom: 1px solid #e5e7eb;">
                         <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">{{ __('pdf.subtotal') }}</td>
-                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: #1f2937;">{{$symbol}} {{formatPrice((float)($purchase['GrandTotal'] - $purchase['TaxNet'] + $purchase['discount'] - $purchase['shipping'] - $extraChargesTotal), 2, $priceFormat)}}</td>
+                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: {{ $pdfT['text_color'] }};">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)($purchase['GrandTotal'] - $purchase['TaxNet'] + $purchase['discount'] - $purchase['shipping'] - $extraChargesTotal), 2, $priceFormat)) }}</td>
                     </tr>
                     <tr style="background: #ffffff; border-bottom: 1px solid #e5e7eb;">
                         <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">{{ __('pdf.order_tax') }}</td>
-                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: #1f2937;">{{$symbol}} {{formatPrice((float)$purchase['TaxNet'], 2, $priceFormat)}}</td>
+                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: {{ $pdfT['text_color'] }};">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['TaxNet'], 2, $priceFormat)) }}</td>
                     </tr>
-                    <tr style="background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
+                    <tr style="background: {{ $pdfT['table_striped'] ? '#f9fafb' : '#ffffff' }}; border-bottom: 1px solid #e5e7eb;">
                         <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">{{ __('pdf.discount') }}</td>
-                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: #ef4444;">- {{$symbol}} {{formatPrice((float)$purchase['discount'], 2, $priceFormat)}}</td>
+                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: #ef4444;">- {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['discount'], 2, $priceFormat)) }}</td>
                     </tr>
                     <tr style="background: #ffffff; border-bottom: 1px solid #e5e7eb;">
                         <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">{{ __('pdf.shipping') }}</td>
-                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: #1f2937;">{{$symbol}} {{formatPrice((float)$purchase['shipping'], 2, $priceFormat)}}</td>
+                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: {{ $pdfT['text_color'] }};">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['shipping'], 2, $priceFormat)) }}</td>
                     </tr>
                     @foreach($extraCharges as $extraCharge)
-                    <tr style="background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
+                    <tr style="background: {{ $pdfT['table_striped'] ? '#f9fafb' : '#ffffff' }}; border-bottom: 1px solid #e5e7eb;">
                         <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">{{ $extraCharge['name'] }}</td>
-                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: #1f2937;">{{$symbol}} {{formatPrice((float)$extraCharge['amount'], 2, $priceFormat)}}</td>
+                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: {{ $pdfT['text_color'] }};">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$extraCharge['amount'], 2, $priceFormat)) }}</td>
                     </tr>
                     @endforeach
-                    <tr style="background: #1a56db;">
+                    <tr style="background: {{ $pdfT['primary_color'] }};">
                         <td style="padding: 8px 10px; font-size: 10pt; font-weight: bold; color: #ffffff;">{{ __('pdf.total_label') }}</td>
-                        <td style="padding: 8px 10px; text-align: right; font-size: 11pt; font-weight: bold; color: #ffffff;">{{$symbol}} {{formatPrice((float)$purchase['GrandTotal'], 2, $priceFormat)}}</td>
+                        <td style="padding: 8px 10px; text-align: right; font-size: 11pt; font-weight: bold; color: #ffffff;">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['GrandTotal'], 2, $priceFormat)) }}</td>
                     </tr>
                     <tr style="background: #d1fae5; border-bottom: 1px solid #a7f3d0;">
                         <td style="padding: 6px 10px; font-size: 8.5pt; font-weight: bold; color: #065f46;">{{ __('pdf.paid_amount') }}</td>
-                        <td style="padding: 6px 10px; text-align: right; font-size: 9pt; font-weight: bold; color: #065f46;">{{$symbol}} {{formatPrice((float)$purchase['paid_amount'], 2, $priceFormat)}}</td>
+                        <td style="padding: 6px 10px; text-align: right; font-size: 9pt; font-weight: bold; color: #065f46;">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['paid_amount'], 2, $priceFormat)) }}</td>
                     </tr>
                     <tr style="background: #fef3c7;">
                         <td style="padding: 6px 10px; font-size: 8.5pt; font-weight: bold; color: #92400e;">{{ __('pdf.amount_due') }}</td>
-                        <td style="padding: 6px 10px; text-align: right; font-size: 9pt; font-weight: bold; color: #92400e;">{{$symbol}} {{formatPrice((float)$purchase['due'], 2, $priceFormat)}}</td>
+                        <td style="padding: 6px 10px; text-align: right; font-size: 9pt; font-weight: bold; color: #92400e;">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$purchase['due'], 2, $priceFormat)) }}</td>
                     </tr>
                     @endif
                 </table>
@@ -376,12 +383,12 @@
 
     @if(count($customFields) > 0)
     <div style="margin-top: 10px; text-align: {{ $isRtl ? 'right' : 'left' }};">
-        <p style="font-size: 8.5pt; font-weight: bold; color: #1f2937; margin: 0 0 4px 0;">{{ __('pdf.additional_info') }}</p>
+        <p style="font-size: 8.5pt; font-weight: bold; color: {{ $pdfT['text_color'] }}; margin: 0 0 4px 0;">{{ __('pdf.additional_info') }}</p>
         <table style="width: 42%; border: 1px solid #e5e7eb; border-collapse: collapse;" cellpadding="0" cellspacing="0">
             @foreach($customFields as $customField)
             <tr style="background: {{ $loop->odd ? '#f9fafb' : '#ffffff' }}; border-bottom: 1px solid #e5e7eb;">
                 <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">{{ $customField['name'] }}</td>
-                <td style="padding: 5px 10px; text-align: {{ $isRtl ? 'left' : 'right' }}; font-size: 8.5pt; font-weight: 600; color: #1f2937;">{{ $customField['value'] }}</td>
+                <td style="padding: 5px 10px; text-align: {{ $isRtl ? 'left' : 'right' }}; font-size: 8.5pt; font-weight: 600; color: {{ $pdfT['text_color'] }};">{{ $customField['value'] }}</td>
             </tr>
             @endforeach
         </table>
@@ -389,12 +396,16 @@
     @endif
 
     <div style="margin-top: 15px; padding-top: 10px; border-top: 2px solid #e5e7eb; text-align: {{ $isRtl ? 'right' : 'left' }};">
-        @if($setting['is_invoice_footer'] && $setting['invoice_footer'] !==null)
-            <div style="padding: 8px 10px; background: #f9fafb; border-{{ $isRtl ? 'right' : 'left' }}: 3px solid #1a56db; border-radius: 3px; margin-bottom: 10px;">
-                <p style="font-size: 7.5pt; color: #6b7280; line-height: 1.5; margin: 0;">{{$setting['invoice_footer']}}</p>
+        @php
+            // A branch note wins; otherwise the Invoice PDF footer text, then the global invoice footer.
+            $footerText = $issuer['footer'] !== '' ? $issuer['footer'] : ($pdfT['footer_text'] !== '' ? $pdfT['footer_text'] : ((! empty($setting['is_invoice_footer']) && $setting['invoice_footer'] !== null) ? $setting['invoice_footer'] : ''));
+        @endphp
+        @if($pdfT['show_footer_text'] && $footerText !== '')
+            <div style="padding: 8px 10px; background: {{ $pdfT['table_striped'] ? '#f9fafb' : '#ffffff' }}; border-{{ $isRtl ? 'right' : 'left' }}: 3px solid {{ $pdfT['primary_color'] }}; border-radius: 3px; margin-bottom: 10px;">
+                <p style="font-size: 7.5pt; color: #6b7280; line-height: 1.5; margin: 0;">{{ $footerText }}</p>
             </div>
         @endif
-        <p style="font-size: 10pt; font-weight: bold; color: #1a56db; margin: 0; letter-spacing: 0.3px;">{{ __('pdf.thank_you') }}</p>
+        <p style="font-size: 10pt; font-weight: bold; color: {{ $pdfT['primary_color'] }}; margin: 0; letter-spacing: 0.3px; {{ $pdfT['show_thank_you'] ? '' : 'display:none;' }}">{{ $pdfT['labels']['thank_you'] !== '' ? $pdfT['labels']['thank_you'] : __('pdf.thank_you') }}</p>
     </div>
 </body>
 </html>

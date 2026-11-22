@@ -32,7 +32,7 @@ const d = () => dayjs();
 // Recomputed per open state isn't needed — a computed on locale keeps labels
 // live on language switch; values are rebuilt on each re-render anyway.
 const presets = computed(() => [
-  ...(props.allowAllTime ? [{ label: tf('All_Time', 'All time'), value: [null, null] }] : []),
+  ...(props.allowAllTime ? [{ label: tf('All_time', 'All time'), value: [null, null] }] : []),
   { label: tf('Today', 'Today'), value: [d().startOf('day'), d()] },
   { label: tf('Yesterday', 'Yesterday'), value: [d().subtract(1, 'day').startOf('day'), d().subtract(1, 'day').endOf('day')] },
   { label: tf('This_Week', 'This week'), value: [d().startOf('week'), d()] },

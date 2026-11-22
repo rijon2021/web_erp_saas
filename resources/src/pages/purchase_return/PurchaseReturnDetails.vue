@@ -59,8 +59,9 @@
             <tr>
               <td>{{ $t('Status') }}</td>
               <td>
-                <a-tag :color="ret.statut === 'received' ? 'success' : 'processing'">
-                  {{ ret.statut === 'received' ? $t('Received') : $t('Pending') }}
+                <!-- Purchase returns are 'completed' | 'pending', not 'received'. -->
+                <a-tag :color="ret.statut === 'completed' ? 'success' : 'processing'">
+                  {{ ret.statut === 'completed' ? $t('complete') : $t('Pending') }}
                 </a-tag>
               </td>
             </tr>
@@ -109,7 +110,7 @@
           <template v-if="column.key === 'product'">
             <div style="font-weight: 500">{{ record.name }}</div>
             <div class="muted">{{ record.code }}</div>
-            <div v-if="record.is_imei && record.imei_number" class="muted">SN: {{ record.imei_number }}</div>
+            <div v-if="record.is_imei && record.imei_number" class="muted">{{ $t('SN') }}: {{ record.imei_number }}</div>
             <div v-if="(record.batches || []).length">
               <a-tag v-for="(b, i) in record.batches" :key="i" style="margin-top: 2px">
                 {{ b.batch_number || b.batch_no || b }}
@@ -130,13 +131,13 @@
       <div class="inv-summary">
         <!-- Summary labels hardcoded English in legacy's invoice too. -->
         <table>
-          <tr><td>Subtotal:</td><td>{{ docMoney(subtotal) }}</td></tr>
-          <tr><td>Order Tax:</td><td>{{ docMoney(ret.TaxNet) }}</td></tr>
+          <tr><td>{{ $t('Subtotal') }}:</td><td>{{ docMoney(subtotal) }}</td></tr>
+          <tr><td>{{ $t('OrderTax') }}:</td><td>{{ docMoney(ret.TaxNet) }}</td></tr>
           <tr v-if="Number(ret.discount) > 0">
-            <td>Discount:</td>
+            <td>{{ $t('Discount') }}:</td>
             <td class="neg">- {{ docMoney(ret.discount) }}</td>
           </tr>
-          <tr v-if="Number(ret.shipping) > 0"><td>Shipping:</td><td>{{ docMoney(ret.shipping) }}</td></tr>
+          <tr v-if="Number(ret.shipping) > 0"><td>{{ $t('Shipping') }}:</td><td>{{ docMoney(ret.shipping) }}</td></tr>
           <tr class="grand"><td>{{ $t('Total') }}:</td><td>{{ docMoney(ret.GrandTotal) }}</td></tr>
           <tr><td>{{ $t('Paid') }}:</td><td style="color: #52c41a">{{ docMoney(ret.paid_amount) }}</td></tr>
           <tr><td>{{ $t('Due') }}:</td><td style="color: #ff4d4f">{{ docMoney(ret.due) }}</td></tr>
@@ -158,6 +159,7 @@ import { ref, computed, createVNode, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message, Modal } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
+import { applyIssuer } from '../../lib/invoiceIssuer';
 import {
   ArrowLeftOutlined, PrinterOutlined, EditOutlined, DeleteOutlined,
   FilePdfOutlined, ExclamationCircleOutlined,
@@ -245,7 +247,9 @@ onMounted(async () => {
     const data = await http.get(`returns/purchase/${route.params.id}`);
     ret.value = data.purchase_return || {};
     details.value = data.details || [];
-    company.value = data.company || {};
+    // Branch letterhead: the invoice header shows the warehouse that issued
+    // the document, each field falling back to the company settings.
+    company.value = applyIssuer(data.company || {}, data.issuer);
   } catch (e) {
     message.error(t('InvalidData'));
     router.push('/purchase-returns');

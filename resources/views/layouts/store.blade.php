@@ -9,6 +9,7 @@
   $storeTheme = $s->theme ?? 'default';
   $skinTheme = in_array($storeTheme, \App\Support\StoreThemes::SKINS, true) ? $storeTheme : null;
   $isElectronics = $skinTheme !== null;
+  $darkFirst = \App\Support\StoreThemes::isDarkFirst($skinTheme);
   $primary   = $s->primary_color   ?? '#3B82F6';
   $secondary = $s->secondary_color ?? '#22D3EE';
   $title     = $s->seo_meta_title  ?? ($s->store_name ?? __('messages.Store'));
@@ -42,6 +43,13 @@
   };
 
   $client = Auth::guard('store')->user();
+  // Customer Wallet link (account menus here and in the themed headers):
+  // a signed-in shopper, the wallet routes present and the feature on.
+  $walletNav = $client && Route::has('account.wallet')
+      && app(\App\Services\CustomerWallet\CustomerWalletService::class)->enabled();
+  // Software License Keys link: a signed-in shopper who holds at least one key.
+  $licenseNav = $client && Route::has('account.licenses')
+      && \App\Http\Controllers\Api\Store\LicenseStoreController::hasKeys($client->client_id ?? null);
 
   $accountUrl   = store_base_url('account');
   $ordersUrl    = store_base_url('account/orders');
@@ -99,6 +107,9 @@
   $accent500Rgb = $hexToRgbTriplet($primary);
 
   $modalRegEnabled = $s->registration_enabled ?? true;
+  // Guest checkout (Store Settings): the sign-in dialog every checkout button
+  // opens for signed-out shoppers also offers to skip the account.
+  $modalGuestCheckout = \App\Models\StoreSetting::guestCheckoutEnabled();
   $modalInviteRequired = $s->require_invite_code ?? false;
   $hidePrices = !$client && ($s->hide_prices_for_guests ?? false);
 
@@ -130,7 +141,7 @@
   <meta name="twitter:image" content="{{ $ogImage }}" />
   @endif
   @if($jsonLd)
-  <script type="application/ld+json">{!! json_encode($jsonLd, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) !!}</script>
+  <script type="application/ld+json">{!! json_encode($jsonLd, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) !!}</script>
   @endif
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="csrf-token" content="{{ csrf_token() }}">
@@ -140,6 +151,11 @@
   <meta name="currency" content="{{ $activeCurrency['symbol'] ?: ($s->currency_code ?? '$') }}">
   <meta name="currency-rate" content="{{ $activeCurrency['rate'] }}">
   <meta name="currency-code" content="{{ $activeCurrency['code'] }}">
+  {{-- Monetary precision (2|3) and the Hide Zero Decimals switch, read by window.storeFmtNumber. --}}
+  <meta name="price-decimals" content="{{ \App\utils\helpers::price_decimals() }}">
+  <meta name="hide-zero-decimals" content="{{ \App\utils\helpers::hide_zero_decimals() ? 1 : 0 }}">
+  {{-- System Settings → Currency Position (before | before_nospace | after | after_nospace), read by window.storeWithCurrency. --}}
+  <meta name="currency-position" content="{{ \App\utils\helpers::currency_position() }}">
   <script>window.__LOGGED_IN__ = @json(Auth::guard('store')->check());</script>
   <script>window.__ALLOW_OVERSELLING__ = @json($s->allow_overselling ?? true);</script>
   <script>window.__HIDE_PRICES__ = @json($hidePrices);</script>
@@ -150,6 +166,68 @@
     window.__MSG_ALREADY_MAX__  = @json(__('messages.Already_max_in_cart'));
     window.__MSG_ADDED__        = @json(__('messages.Added'));
   </script>
+  {{-- Symbol + amount per System Settings → Currency Position (meta
+       currency-position): 'before' "$ 100", 'before_nospace' "$100",
+       'after' "100 $", 'after_nospace' "100$". An Arabic/Hebrew symbol is
+       wrapped in bidi isolates so the order holds on LTR pages. Mirrors
+       store_with_currency() / helpers::with_currency() in PHP. --}}
+  <script>
+    window.storeCurrencyPosition = function () {
+      var m = document.querySelector('meta[name="currency-position"]');
+      var v = m ? m.content : '';
+      return ['before', 'before_nospace', 'after', 'after_nospace'].indexOf(v) >= 0 ? v : 'before';
+    };
+    window.storeWithCurrency = function (sym, formatted) {
+      sym = sym == null ? '' : String(sym).trim();
+      if (!sym) return String(formatted);
+      var pos = window.storeCurrencyPosition();
+      var C = String.fromCharCode; // Arabic/Hebrew symbol -> bidi isolates (FSI/PDI)
+      var rtl = new RegExp('[' + C(0x0590) + '-' + C(0x08FF) + C(0xFB1D) + '-' + C(0xFDFF) + C(0xFE70) + '-' + C(0xFEFF) + ']').test(sym);
+      var shown = rtl ? C(0x2068) + sym + C(0x2069) : sym;
+      var sep = pos.slice(-8) === '_nospace' ? '' : ' ';
+      return pos.indexOf('after') === 0 ? String(formatted) + sep + shown : shown + sep + String(formatted);
+    };
+    // Prefix-only join kept for old cached views (letter symbols get a
+    // non-breaking space, signs stay attached); new code uses storeWithCurrency.
+    window.storeCurrencyPrefix = function (sym) {
+      sym = sym == null ? '' : String(sym);
+      try { return /\p{L}$/u.test(sym) ? sym + ' ' : sym; } catch (e) { return /[A-Za-z]$/.test(sym) ? sym + ' ' : sym; }
+    };
+    // Amount without symbol: en-US grouping at the configured precision
+    // (meta price-decimals); with Hide Zero Decimals (meta hide-zero-decimals)
+    // a whole number drops its ".00" while 100.50 keeps its decimals. Mirrors
+    // store_money() in PHP and the admin's formatPriceDisplay().
+    window.storeHideZeroDecimals = function () {
+      var m = document.querySelector('meta[name="hide-zero-decimals"]');
+      return !!(m && m.content === '1');
+    };
+    window.storeFmtNumber = function (n, dec) {
+      var m = document.querySelector('meta[name="price-decimals"]');
+      var d = Number.isInteger(dec) ? dec : (m && Number(m.content) === 3 ? 3 : 2);
+      var num = Number(n || 0);
+      if (!isFinite(num)) num = 0;
+      var s = num.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+      if (window.storeHideZeroDecimals() && /\.0+$/.test(s)) s = s.replace(/\.0+$/, '');
+      return s;
+    };
+  </script>
+  {{-- Cart & compare list live in localStorage, so they would outlive a
+       storefront theme switch (whose demo catalog hides the old products).
+       Remember the theme they were built under and start empty when it
+       changes. Inline + in <head> so it runs before any page reads them. --}}
+  <script>
+    window.__CART_AVAILABILITY_URL__ = @json(route('store.cart.availability'));
+    (function () {
+      try {
+        var scope = @json((string) $storeTheme);
+        var prev = localStorage.getItem('shop.scope.v1');
+        if (prev !== null && prev !== scope) {
+          ['shop.cart.v1', 'shop.cart.backup', 'shop.compare.v1'].forEach(function (k) { localStorage.removeItem(k); });
+        }
+        localStorage.setItem('shop.scope.v1', scope);
+      } catch (e) { /* storage blocked: nothing to clear */ }
+    })();
+  </script>
 
   {{-- Theme bootstrap — runs before paint to avoid FOUC --}}
   <script>
@@ -159,14 +237,22 @@
       try {
         var stored = localStorage.getItem('store.theme');
         var allowDark = @json(! $isElectronics || (bool) ($electronicsOpts['show_theme_toggle'] ?? false));
-        if (stored === 'dark' && allowDark) document.documentElement.classList.add('dark');
+        // Dark-first skins (Electronics Premium) are dark unless the visitor
+        // picked light and the theme offers the toggle.
+        if (@json($darkFirst)) {
+          if (stored === 'light' && allowDark) document.documentElement.classList.remove('dark');
+          else document.documentElement.classList.add('dark');
+        }
+        else if (stored === 'dark' && allowDark) document.documentElement.classList.add('dark');
         else document.documentElement.classList.remove('dark');
-      } catch (e) { document.documentElement.classList.remove('dark'); }
+      } catch (e) { document.documentElement.classList.toggle('dark', @json($darkFirst)); }
     })();
   </script>
 
   @if(!empty($s->favicon_path))
     <link rel="icon" href="{{ $assetPath($s->favicon_path) }}" />
+  @elseif($fallbackFavicon = tenant_favicon_url())
+    <link rel="icon" href="{{ $fallbackFavicon }}" />
   @endif
 
   {{-- PWA --}}
@@ -204,6 +290,9 @@
     .dark { --color-accent-glow: rgba({{ $accent500Rgb }}, 0.45); }
 
     body { font-family: {{ $s->font_family ?? 'Inter, system-ui, sans-serif' }}; }
+    /* Never let a stray wide element side-scroll the page on phones. clip (not
+       hidden) creates no scroll container, so sticky headers keep working. */
+    html, body { overflow-x: clip; }
 
     .mega-panel { box-shadow: 0 24px 48px -12px rgba(0,0,0,0.5); }
 
@@ -213,7 +302,12 @@
        sits on the text baseline and reads a couple of pixels low next to a
        label; this puts it on the optical centre instead and keeps flex parents
        from squashing it. Shared by every theme that extends this layout. */
-    .store-ico { display: inline-block; vertical-align: middle; flex: 0 0 auto; }
+    .store-ico { vertical-align: middle; flex: 0 0 auto; }
+    /* display sits at element weight (0,0,1): later than preflight's
+       svg { display: block } so it still wins there, but any display utility
+       the caller adds (hidden, dark:inline, md:block ...) beats it. As a plain
+       class rule it overrode .hidden and both theme-toggle glyphs showed. */
+    svg:where(.store-ico) { display: inline-block; }
     /* Zero-specificity floor: an svg with no width or height resolves to the
        replaced-element default (300x150), so if a size utility is ever missing
        from the build the icon still comes out 20px. Any width utility or theme
@@ -223,14 +317,16 @@
        Hebrew, Farsi and Urdu. Circular arrows and the magnifier keep their
        shape, and brand marks are never mirrored -- see $directional. */
     [dir="rtl"] .store-ico-flip { transform: scaleX(-1); }
-
-    {!! $s->custom_css ?? '' !!}
   </style>
   @if($isElectronics)
     @include('store.'.$skinTheme.'.partials.head')
   @elseif($storeTheme === 'default')
     @include('store.partials.theme-default-style')
   @endif
+  {{-- Tenant-selected Google font; after the theme head so it wins over the theme body font. --}}
+  @include('store.partials.store-font')
+  {{-- Google tag / Meta Pixel (Store Settings → Tracking & Analytics) --}}
+  @include('store.partials.tracking')
 </head>
 <body x-data class="bg-bg-base text-fg-primary antialiased min-h-screen flex flex-col">
 
@@ -335,7 +431,7 @@
                     <div class="text-sm font-medium truncate" x-text="p.name"></div>
                     <div class="text-xs text-fg-muted" x-text="p.code || ''"></div>
                     <div class="text-sm font-mono text-accent-500"
-                         x-text="window.__HIDE_PRICES__ ? '' : ('{{ $s->currency_code ?? '$' }}' + p.display_price)"></div>
+                         x-text="window.__HIDE_PRICES__ ? '' : window.storeWithCurrency('{{ $s->currency_code ?? '$' }}', p.display_price)"></div>
                   </div>
                 </a>
               </template>
@@ -422,6 +518,16 @@
                 <a class="flex items-center gap-2 px-3 py-2 text-sm text-fg-primary hover:bg-bg-muted" href="{{ route('account.returns') }}">
                   <x-store.icon name="rotate-ccw" class="w-4 h-4" />{{ __('messages.MyReturns') }}
                 </a>
+                @if($walletNav)
+                <a class="flex items-center gap-2 px-3 py-2 text-sm text-fg-primary hover:bg-bg-muted" href="{{ route('account.wallet') }}">
+                  <x-store.icon name="wallet" class="w-4 h-4" />{{ __('messages.MyWallet') }}
+                </a>
+                @endif
+                @if($licenseNav)
+                <a class="flex items-center gap-2 px-3 py-2 text-sm text-fg-primary hover:bg-bg-muted" href="{{ route('account.licenses') }}">
+                  <x-store.icon name="key" class="w-4 h-4" />{{ __('messages.License_My_Licenses') }}
+                </a>
+                @endif
                 <div class="border-t border-line-subtle my-1"></div>
                 <form method="POST" action="{{ $logoutUrl }}">
                   @csrf
@@ -537,7 +643,7 @@
                       <div class="flex-1 min-w-0">
                         <div class="text-sm font-medium truncate" x-text="p.name"></div>
                         <div class="text-sm font-mono text-accent-500"
-                             x-text="window.__HIDE_PRICES__ ? '' : ('{{ $s->currency_code ?? '$' }}' + p.display_price)"></div>
+                             x-text="window.__HIDE_PRICES__ ? '' : window.storeWithCurrency('{{ $s->currency_code ?? '$' }}', p.display_price)"></div>
                       </div>
                     </a>
                   </template>
@@ -608,7 +714,7 @@
                     <div class="flex-1 min-w-0">
                       <div class="text-sm font-medium truncate" x-text="p.name"></div>
                       <div class="text-sm font-mono text-accent-500"
-                           x-text="window.__HIDE_PRICES__ ? '' : ('{{ $s->currency_code ?? '$' }}' + p.display_price)"></div>
+                           x-text="window.__HIDE_PRICES__ ? '' : window.storeWithCurrency('{{ $s->currency_code ?? '$' }}', p.display_price)"></div>
                     </div>
                   </a>
                 </template>
@@ -644,8 +750,36 @@
       <a href="{{ route('store.shop') }}"
          class="flex flex-col items-center justify-center gap-0.5 {{ $isShop ? 'text-accent-500' : 'text-fg-secondary' }}">
         <x-store.icon name="grid" class="w-5 h-5" />
-        <span class="text-[10px] font-medium">{{ __('messages.Shop') }}</span>
+        <span class="text-[10px] font-medium">{{ $storeTheme === 'rental' ? __('messages.RntBrowse') : ($storeTheme === 'booking' ? __('messages.BkmServices') : __('messages.Shop')) }}</span>
       </a>
+      @if($storeTheme === 'booking')
+        {{-- Booking theme: no cart — bookings and contact instead. --}}
+        @php $isMyAppointments = request()->routeIs('account.appointments'); @endphp
+        <a href="{{ Route::has('account.appointments') ? ($client ? route('account.appointments') : $loginUrl.'?redirect='.urlencode((string) parse_url(route('account.appointments'), PHP_URL_PATH))) : $loginUrl }}"
+           class="flex flex-col items-center justify-center gap-0.5 {{ $isMyAppointments ? 'text-accent-500' : 'text-fg-secondary' }}">
+          <x-store.icon name="calendar" class="w-5 h-5" />
+          <span class="text-[10px] font-medium">{{ __('messages.BkmMyBookings') }}</span>
+        </a>
+        <a href="{{ Route::has('store.booking.book') ? route('store.booking.book') : route('store.index') }}"
+           class="flex flex-col items-center justify-center gap-0.5 text-fg-secondary">
+          <x-store.icon name="calendar-check" class="w-5 h-5" />
+          <span class="text-[10px] font-medium">{{ __('messages.BkmBookNow') }}</span>
+        </a>
+      @elseif($storeTheme === 'rental')
+        {{-- Rental theme: no cart — bookings and contact instead. --}}
+        @php $isMyRentals = request()->routeIs('account.rentals'); @endphp
+        {{-- Guests sign in and come back to their bookings (the login page only accepts "/…" redirects). --}}
+        <a href="{{ Route::has('account.rentals') ? ($client ? route('account.rentals') : $loginUrl.'?redirect='.urlencode((string) parse_url(route('account.rentals'), PHP_URL_PATH))) : $loginUrl }}"
+           class="flex flex-col items-center justify-center gap-0.5 {{ $isMyRentals ? 'text-accent-500' : 'text-fg-secondary' }}">
+          <x-store.icon name="calendar" class="w-5 h-5" />
+          <span class="text-[10px] font-medium">{{ __('messages.RntMyBookings') }}</span>
+        </a>
+        <a href="{{ $s->contact_phone ? 'tel:'.preg_replace('/\s+/', '', $s->contact_phone) : route('store.contact') }}"
+           class="flex flex-col items-center justify-center gap-0.5 text-fg-secondary">
+          <x-store.icon name="phone" class="w-5 h-5" />
+          <span class="text-[10px] font-medium">{{ __('messages.ContactUs') }}</span>
+        </a>
+      @else
       <button type="button"
               class="flex flex-col items-center justify-center gap-0.5 text-fg-secondary"
               @click="window.StoreUI.open('mobileSearchOverlay')">
@@ -659,6 +793,7 @@
         <span class="cart-count absolute top-1 end-4 min-w-4 h-4 px-1 rounded-full bg-danger text-white text-[10px] font-bold inline-flex items-center justify-center">0</span>
         <span class="text-[10px] font-medium">{{ __('messages.Cart') }}</span>
       </button>
+      @endif
       @if($client)
         <a href="{{ $accountUrl }}"
            class="flex flex-col items-center justify-center gap-0.5 {{ $isAcct ? 'text-accent-500' : 'text-fg-secondary' }}">
@@ -768,6 +903,10 @@
       <div class="mt-10 pt-6 border-t border-line-subtle flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-fg-muted">
         <span>© {{ date('Y') }} {{ $s->store_name ?? __('messages.Store') }}. {{ __('messages.AllRightsReserved') }}</span>
         <div class="flex items-center gap-3">
+          @if($s->cookie_consent_enabled ?? true)
+            <button type="button" class="text-fg-secondary hover:text-accent-500" onclick="window.openCookieSettings && window.openCookieSettings()">{{ __('messages.CookieSettings') }}</button>
+            <span class="text-line-subtle">•</span>
+          @endif
           <x-store.icon name="shield-check" class="w-4 h-4 text-success" />{{ __('messages.SecurePayment') }}
           <span class="text-line-subtle">•</span>
           <x-store.icon name="truck" class="w-4 h-4 text-info" />{{ __('messages.FastShipping') }}
@@ -814,7 +953,7 @@
                   <img :src="it.image || '{{ global_asset(upload_path('products') . '/no-image.png') }}'" :alt="it.name"
                        class="w-[72px] h-[72px] rounded-lg object-cover border border-line-subtle shrink-0">
                   <div class="flex-1 min-w-0">
-                    <div class="text-sm font-semibold truncate" x-text="it.name"></div>
+                    <div class="text-sm font-semibold truncate" x-text="it.name"></div><div x-show="it.options_label" class="text-xs opacity-70 truncate" x-text="it.options_label"></div>
                     <div class="text-xs text-fg-muted font-mono" x-text="hidePrices ? '' : money(it.price)"></div>
                     <div class="qty-stepper mt-1.5">
                       <button type="button" @click="dec(it)"><x-store.icon name="minus" class="w-3 h-3" /></button>
@@ -1056,6 +1195,16 @@
             </div>
           @endif
 
+          @if($modalGuestCheckout)
+            <div class="auth-body" style="padding-top:0">
+              <div class="text-center text-xs text-fg-muted mb-2">{{ __('messages.OrCheckoutAsGuest') }}</div>
+              <a href="{{ route('checkout') }}" class="btn btn-outline btn-block">
+                <x-store.icon name="bag" class="w-4 h-4" />
+                <span>{{ __('messages.ContinueAsGuest') }}</span>
+              </a>
+            </div>
+          @endif
+
           <div class="auth-foot">
             <span class="inline-flex items-center gap-1.5 text-xs text-fg-muted">
               <x-store.icon name="shield-check" class="w-3.5 h-3.5 text-success" />
@@ -1173,12 +1322,22 @@
 
   {{-- Storefront bundle (Alpine + theme + cart + UI components) --}}
   <script src="{{ $jsStore }}" defer></script>
-  @if(!$isElectronics || empty($electronicsOpts['show_theme_toggle']))
+  @if($darkFirst)
+    <script>
+      // Dark-first skin: keep the dark class unless the visitor chose light (and the toggle is offered).
+      (function () { try { var allow = @json((bool) ($electronicsOpts['show_theme_toggle'] ?? false)); var keep = function () { if (!(allow && localStorage.getItem('store.theme') === 'light')) document.documentElement.classList.add('dark'); }; keep(); document.addEventListener('DOMContentLoaded', keep); } catch (e) {} })();
+    </script>
+  @else
     <script>
       // storefront.js boots dark-first when nothing is stored; undo that unless
-      // the visitor explicitly picked dark (and the theme allows it).
-      (function () { try { var allow = @json(! $isElectronics); if (!(allow && localStorage.getItem('store.theme') === 'dark')) { document.documentElement.classList.remove('dark'); document.addEventListener('DOMContentLoaded', function () { if (!(allow && localStorage.getItem('store.theme') === 'dark')) document.documentElement.classList.remove('dark'); }); } } catch (e) {} })();
+      // the visitor explicitly picked dark (and the theme allows it). Skins with
+      // the light/dark toggle on are light until the visitor picks dark.
+      (function () { try { var allow = @json(! $isElectronics || (bool) ($electronicsOpts['show_theme_toggle'] ?? false)); if (!(allow && localStorage.getItem('store.theme') === 'dark')) { document.documentElement.classList.remove('dark'); document.addEventListener('DOMContentLoaded', function () { if (!(allow && localStorage.getItem('store.theme') === 'dark')) document.documentElement.classList.remove('dark'); }); } } catch (e) {} })();
     </script>
+  @endif
+
+  @if($s->cookie_consent_enabled ?? true)
+    @include('store.partials.cookie-consent')
   @endif
 
   {{-- Admin-managed marketing popups + "Request a Quotation" modal --}}
@@ -1186,7 +1345,5 @@
     @include('store.partials.popups')
   @endif
   @include('store.partials.quote-request')
-
-  {!! $s->custom_js ?? '' !!}
 </body>
 </html>

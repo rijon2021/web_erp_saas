@@ -229,17 +229,14 @@ class ProductGalleryService
             $filename = rand(11111111, 99999999).'.'.$ext;
 
             $imageResize = Image::make($file->getRealPath());
-            $imageResize->resize(800, 800, function ($constraint) {
-                $constraint->aspectRatio();
-                $constraint->upsize();
-            })->save($path.'/'.$filename);
+            \App\utils\helpers::apply_product_image_resize($imageResize)->save($path.'/'.$filename);
 
             ProductImage::create(['product_id' => $product->id, 'image_path' => $filename, 'is_main' => false, 'sort_order' => $sort++]);
         }
     }
 
     /** Absolute http(s) URL, max 255 chars (column size), else null. */
-    protected static function sanitizeRemoteImageUrl($url): ?string
+    public static function sanitizeRemoteImageUrl($url): ?string
     {
         $url = trim((string) $url);
         if ($url === '' || strlen($url) > 255 || ! preg_match('#^https?://\S+$#i', $url)) {

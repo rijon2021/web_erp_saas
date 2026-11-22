@@ -230,6 +230,12 @@ class OnlineReturnService
         $amount = $refundOverride !== null ? round(max(0, $refundOverride), 2) : (float) $return->refund_amount;
 
         return DB::transaction(function () use ($return, $order, $adminUserId, $adminNote, $amount) {
+            // Two admins approving at once must not refund / restock twice.
+            $locked = OnlineOrderReturn::whereKey($return->id)->lockForUpdate()->first();
+            if (! $locked || ! $locked->isOpen()) {
+                throw new CheckoutException(__('messages.ReturnNotOpen'), 422);
+            }
+
             $reference = $this->processRefund($order, $amount);
 
             // Restock physically-returned items (returns only; cancellations
@@ -256,6 +262,11 @@ class OnlineReturnService
             $return->refunded_at = now();
             $return->refund_reference = $reference;
             $return->save();
+
+            // Software License keys of the returned units (uploaded → Returned, generated → revoked).
+            if ($return->type === 'return') {
+                \App\Services\LicenseKeys\LicenseFulfilment::afterReturnWrite($order->sale_id ? (int) $order->sale_id : null);
+            }
 
             return $return;
         });
@@ -284,6 +295,15 @@ class OnlineReturnService
     {
         if ($amount <= 0) {
             return null;
+        }
+
+        // Customer Wallet: orders paid from the wallet are always refunded to
+        // it; other orders too when Customer Wallet > Refunds go to = wallet.
+        $wallets = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+        if ($wallets->shouldRefundToWallet($order)) {
+            $tx = $wallets->refundOrder($order, $amount, \Illuminate\Support\Facades\Auth::id());
+
+            return 'wallet'.($tx ? ':'.$tx->id : '');
         }
 
         $stripeSecret = null;
@@ -315,6 +335,12 @@ class OnlineReturnService
     private function restockReturnItems(OnlineOrderReturn $return, OnlineOrder $order): void
     {
         foreach ($return->items as $ri) {
+            // Virtual combo: its components go back instead of its own row.
+            if (! $ri->product_variant_id
+                && app(ComboStockService::class)->moveComponents((int) $ri->product_id, (int) $order->warehouse_id, (float) $ri->qty)) {
+                continue;
+            }
+
             $query = product_warehouse::where('warehouse_id', $order->warehouse_id)
                 ->where('product_id', $ri->product_id)
                 ->whereNull('deleted_at');

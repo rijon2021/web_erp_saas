@@ -11,7 +11,7 @@ class PendingCustomersController extends Controller
 {
     public function index(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_pending_customers', StoreSetting::class);
 
         $query = EcommerceClient::with('client', 'inviteCode')
             ->where('status', 0)
@@ -36,7 +36,7 @@ class PendingCustomersController extends Controller
 
     public function approve(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_pending_customers', StoreSetting::class);
 
         $ecomClient = EcommerceClient::findOrFail($id);
         $ecomClient->status = 1;
@@ -51,7 +51,7 @@ class PendingCustomersController extends Controller
 
     public function reject(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_pending_customers', StoreSetting::class);
 
         $ecomClient = EcommerceClient::findOrFail($id);
         $ecomClient->delete();
@@ -64,7 +64,7 @@ class PendingCustomersController extends Controller
 
     public function approveAll(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_pending_customers', StoreSetting::class);
 
         $count = EcommerceClient::where('status', 0)
             ->whereNull('deleted_at')

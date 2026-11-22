@@ -27,7 +27,9 @@ class PaymentController extends Controller
     {
         $payments = TenantBillingPayment::on('central');
 
-        $totalRevenue = (clone $payments)->where('status', 'paid')->sum('amount');
+        // In the main currency (base_amount) so payments in other currencies
+        // (multi-currency pricing) add up correctly.
+        $totalRevenue = (clone $payments)->where('status', 'paid')->sum(DB::raw(TenantBillingPayment::revenueSql()));
         $totalTax     = (clone $payments)->where('status', 'paid')->sum('tax');
         $totalTransactions = (clone $payments)->count();
         $paidCount    = (clone $payments)->where('status', 'paid')->count();
@@ -38,14 +40,14 @@ class PaymentController extends Controller
         $monthlyRevenue = TenantBillingPayment::on('central')
             ->where('status', 'paid')
             ->where('paid_at', '>=', Carbon::now()->startOfMonth())
-            ->sum('amount');
+            ->sum(DB::raw(TenantBillingPayment::revenueSql()));
 
         $revenueChart = TenantBillingPayment::on('central')
             ->where('status', 'paid')
             ->where('paid_at', '>=', Carbon::now()->subMonths(11)->startOfMonth())
             ->select(
                 DB::raw("DATE_FORMAT(paid_at, '%Y-%m') as month"),
-                DB::raw('SUM(amount) as revenue'),
+                DB::raw('SUM(' . TenantBillingPayment::revenueSql() . ') as revenue'),
                 DB::raw('COUNT(*) as count')
             )
             ->groupBy('month')
@@ -65,7 +67,7 @@ class PaymentController extends Controller
 
         $gatewayBreakdown = TenantBillingPayment::on('central')
             ->where('status', 'paid')
-            ->select('gateway', DB::raw('SUM(amount) as total'), DB::raw('COUNT(*) as count'))
+            ->select('gateway', DB::raw('SUM(' . TenantBillingPayment::revenueSql() . ') as total'), DB::raw('COUNT(*) as count'))
             ->groupBy('gateway')
             ->get();
 
@@ -136,15 +138,37 @@ class PaymentController extends Controller
 
     // ── Manual payment form ─────────────────────────────────────────
 
-    public function create(): View
+    public function create(Request $request): View
     {
-        $tenants = Tenant::with('subscription.plan')->orderBy('id')->get();
+        $tenants = Tenant::with(['subscription.plan', 'domains'])->orderByDesc('created_at')->get();
         $plans = Plan::on('central')->where('is_active', true)->orderBy('name')->get();
+        $selectedTenantId = (string) $request->query('tenant_id', '');
 
-        return view('central.super.payments.create', compact('tenants', 'plans'));
+        // Pre-fill plan / cycle / amount from the selected tenant's current subscription.
+        $prefill = null;
+        if ($selectedTenantId !== '' && ($selectedTenant = $tenants->firstWhere('id', $selectedTenantId))) {
+            $current = $selectedTenant->currentSubscription();
+            if ($current) {
+                $prefill = [
+                    'plan_id'       => $current->plan_id,
+                    'billing_cycle' => $current->billing_cycle ?: 'monthly',
+                    'amount'        => $current->plan ? $current->plan->getPriceForCycle($current->billing_cycle ?: 'monthly') : (float) $current->amount,
+                ];
+            }
+        }
+
+        return view('central.super.payments.create', compact('tenants', 'plans', 'selectedTenantId', 'prefill'));
     }
 
-    public function store(Request $request): RedirectResponse
+    /**
+     * Record a payment taken outside the gateways (cash, bank, cheque…).
+     *
+     * A "paid" payment applied to the subscription goes through the same
+     * lifecycle as a gateway payment: it renews an active subscription by one
+     * cycle or re-activates a lapsed one, lifts a non-payment suspension and
+     * emails the receipt. Plan / cycle on the form become the subscription's.
+     */
+    public function store(Request $request, SubscriptionLifecycleService $lifecycle): RedirectResponse
     {
         $validated = $request->validate([
             'tenant_id'    => ['required', 'string', 'exists:central.tenants,id'],
@@ -161,19 +185,63 @@ class PaymentController extends Controller
         ]);
 
         $tenant = Tenant::find($validated['tenant_id']);
-        $subscription = $tenant?->subscription;
+        $subscription = $tenant?->currentSubscription();
+        $apply = $request->boolean('apply_to_subscription') && $subscription !== null;
 
         $validated['tenant_subscription_id'] = $subscription?->id;
         $validated['plan_id'] = $validated['plan_id'] ?? $subscription?->plan_id;
         $validated['tax'] = $validated['tax'] ?? 0;
-        $validated['paid_at'] = $validated['status'] === 'paid'
-            ? ($validated['paid_at'] ?? now())
-            : $validated['paid_at'];
+        $paidAt = $validated['paid_at'] ?? null;
+        $validated['paid_at'] = $validated['status'] === 'paid' ? ($paidAt ?? now()) : $paidAt;
 
-        TenantBillingPayment::create($validated);
+        $applyPaid = $apply && $validated['status'] === TenantBillingPayment::STATUS_PAID;
+        if ($applyPaid) {
+            // Created pending, then settled by the lifecycle service below.
+            $validated['status'] = TenantBillingPayment::STATUS_PENDING;
+            $validated['paid_at'] = null;
 
-        return redirect()->route('super.payments.index')
-            ->with('success', 'Payment recorded successfully.');
+            $plan = Plan::find($validated['plan_id']);
+            if ($plan && ((int) $plan->id !== (int) $subscription->plan_id || $validated['billing_cycle'] !== $subscription->billing_cycle)) {
+                $subscription->update([
+                    'plan_id'       => $plan->id,
+                    'billing_cycle' => $validated['billing_cycle'],
+                    'amount'        => $plan->getPriceForCycle($validated['billing_cycle']),
+                ]);
+            }
+        }
+
+        $payment = TenantBillingPayment::create($validated);
+        $message = __('super.flash.payment_recorded');
+
+        if ($applyPaid) {
+            $result = $lifecycle->markPaid($payment, ['transaction_id' => $validated['transaction_id'] ?? null]);
+            if ($paidAt) {
+                $payment->update(['paid_at' => Carbon::parse($paidAt)]);
+            }
+            if ($result['subscription_activated']) {
+                $message .= __('super.flash.sub_activated_extra');
+            } elseif ($result['subscription_renewed']) {
+                $message .= __('super.flash.sub_renewed_extra');
+            }
+            if ($result['provisioning_dispatched']) {
+                $message .= __('super.flash.provisioning_extra');
+            }
+
+            $subscription->refresh();
+            \App\Models\Central\SubscriptionEvent::record($subscription, \App\Models\Central\SubscriptionEvent::ACTION_PAYMENT_RECORDED, [
+                'payment_id' => $payment->id,
+                'amount'     => (string) $payment->amount,
+                'gateway'    => $payment->gateway,
+                'ends_at'    => $subscription->ends_at?->toDateTimeString(),
+            ], $validated['notes'] ?? null);
+        }
+
+        // Back to the tenant when the form was opened from its page.
+        if ($request->input('return_to') === 'tenant' && $tenant) {
+            return redirect()->route('super.tenants.show', $tenant)->with('success', $message);
+        }
+
+        return redirect()->route('super.payments.index')->with('success', $message);
     }
 
     // ── Status changes ──────────────────────────────────────────────
@@ -181,23 +249,23 @@ class PaymentController extends Controller
     public function markPaid(TenantBillingPayment $payment, SubscriptionLifecycleService $lifecycle): RedirectResponse
     {
         if ($payment->isPaid()) {
-            return back()->with('info', 'Payment is already marked as paid.');
+            return back()->with('info', __('super.flash.payment_already_paid'));
         }
 
         if ($payment->status !== TenantBillingPayment::STATUS_PENDING) {
-            return back()->with('error', 'Only pending payments can be marked as paid. This payment is ' . $payment->status . '.');
+            return back()->with('error', __('super.flash.payment_only_pending_paid', ['status' => $payment->status]));
         }
 
         $result = $lifecycle->markPaid($payment);
 
-        $message = 'Payment marked as paid.';
+        $message = __('super.flash.payment_marked_paid');
         if ($result['subscription_activated']) {
-            $message .= ' Subscription activated.';
+            $message .= __('super.flash.sub_activated_extra');
         } elseif ($result['subscription_renewed']) {
-            $message .= ' Subscription renewed.';
+            $message .= __('super.flash.sub_renewed_extra');
         }
         if ($result['provisioning_dispatched']) {
-            $message .= ' Tenant workspace provisioning dispatched.';
+            $message .= __('super.flash.provisioning_extra');
         }
 
         return back()->with('success', $message);
@@ -206,19 +274,19 @@ class PaymentController extends Controller
     public function markFailed(TenantBillingPayment $payment, SubscriptionLifecycleService $lifecycle): RedirectResponse
     {
         if ($payment->status !== TenantBillingPayment::STATUS_PENDING) {
-            return back()->with('error', 'Only pending payments can be marked as failed.');
+            return back()->with('error', __('super.flash.payment_only_pending_failed'));
         }
 
         $lifecycle->markFailed($payment);
 
-        return back()->with('success', 'Payment marked as failed.');
+        return back()->with('success', __('super.flash.payment_marked_failed'));
     }
 
     public function markRefunded(TenantBillingPayment $payment, SubscriptionLifecycleService $lifecycle): RedirectResponse
     {
         $lifecycle->markRefunded($payment);
 
-        return back()->with('success', 'Payment marked as refunded.');
+        return back()->with('success', __('super.flash.payment_marked_refunded'));
     }
 
     // ── Invoice PDF ─────────────────────────────────────────────────
@@ -248,7 +316,7 @@ class PaymentController extends Controller
     public function approveRegistration(PendingRegistration $registration, Request $request): RedirectResponse|JsonResponse
     {
         if ($registration->gateway !== 'offline' || $registration->status !== PendingRegistration::STATUS_PROCESSING) {
-            $msg = 'This registration cannot be approved.';
+            $msg = __('super.flash.reg_cannot_approve');
             return $request->wantsJson()
                 ? response()->json(['success' => false, 'message' => $msg], 422)
                 : back()->with('error', $msg);
@@ -265,7 +333,7 @@ class PaymentController extends Controller
             $webhook = app(WebhookController::class);
             $webhook->provisionFromRegistration($registration, 'offline', skipProvisioning: true);
 
-            $successMsg = "Payment approved for {$registration->company_name}. The tenant is now pending workspace configuration on the dashboard.";
+            $successMsg = __('super.flash.reg_approved', ['company' => $registration->company_name]);
 
             if ($request->wantsJson()) {
                 return response()->json([
@@ -278,7 +346,7 @@ class PaymentController extends Controller
             return back()->with('success', $successMsg);
         } catch (\Throwable $e) {
             Log::error("Failed to approve offline registration {$registration->id}: {$e->getMessage()}", ['exception' => $e]);
-            $msg = 'Failed to approve registration: ' . $e->getMessage();
+            $msg = __('super.flash.reg_approve_failed', ['error' => $e->getMessage()]);
             return $request->wantsJson()
                 ? response()->json(['success' => false, 'message' => $msg], 500)
                 : back()->with('error', $msg);
@@ -288,14 +356,21 @@ class PaymentController extends Controller
     public function rejectRegistration(PendingRegistration $registration): RedirectResponse
     {
         if ($registration->gateway !== 'offline' || $registration->status !== PendingRegistration::STATUS_PROCESSING) {
-            return back()->with('error', 'This registration cannot be rejected.');
+            return back()->with('error', __('super.flash.reg_cannot_reject'));
         }
 
         $registration->update([
             'status' => PendingRegistration::STATUS_FAILED,
         ]);
 
-        return back()->with('success', "Registration for {$registration->company_name} has been rejected.");
+        \App\Services\EmailNotificationService::paymentProofRejected(
+            (string) $registration->admin_email,
+            $registration->company_name ?: $registration->subdomain,
+            $registration->amount,
+            Plan::find($registration->plan_id)?->name ?? ''
+        );
+
+        return back()->with('success', __('super.flash.reg_rejected', ['company' => $registration->company_name]));
     }
 
     // ── Invoices list ───────────────────────────────────────────────

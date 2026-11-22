@@ -49,8 +49,8 @@ const { number } = useFormat();
 const kpi = ref({ accounts: 0, journals: 0, income: 0, expense: 0 });
 const chartLabels = ref([]);
 const chartSeries = ref([
-  { name: 'Income', data: [] },
-  { name: 'Expense', data: [] },
+  { name: t('Income_30d'), data: [] },
+  { name: t('Expense_30d'), data: [] },
 ]);
 const chartKey = ref(0);
 

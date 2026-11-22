@@ -96,7 +96,11 @@ class WebhookController extends Controller
         }
 
         if ($order->payment_status === 'paid') {
-            return; // Already settled by the return leg.
+            // Already settled by the return leg — which also ran auto-confirm;
+            // retrying here is a no-op unless that attempt failed transiently.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+
+            return;
         }
 
         $order->update([
@@ -112,6 +116,9 @@ class WebhookController extends Controller
         });
 
         Log::info("Store webhook ({$gateway}): order {$order->id} marked paid.");
+
+        // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+        app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
     }
 
     protected function handleRefunded(string $gateway, array $result): void

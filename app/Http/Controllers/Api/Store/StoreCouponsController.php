@@ -12,7 +12,7 @@ class StoreCouponsController extends Controller
 {
     public function index(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_coupons', StoreSetting::class);
 
         $query = StoreCoupon::withCount('redemptions')->orderByDesc('id');
 
@@ -27,7 +27,7 @@ class StoreCouponsController extends Controller
 
     public function store(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_coupons', StoreSetting::class);
 
         $data = $this->validateData($request, null);
         $coupon = StoreCoupon::create($data);
@@ -37,7 +37,7 @@ class StoreCouponsController extends Controller
 
     public function update(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_coupons', StoreSetting::class);
 
         $coupon = StoreCoupon::findOrFail($id);
         $coupon->update($this->validateData($request, $coupon->id));
@@ -47,7 +47,7 @@ class StoreCouponsController extends Controller
 
     public function destroy(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_coupons', StoreSetting::class);
 
         StoreCoupon::findOrFail($id)->delete();
 

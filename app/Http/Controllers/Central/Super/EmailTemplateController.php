@@ -26,6 +26,13 @@ class EmailTemplateController extends Controller
             EmailTemplate::TRIGGER_TENANT_UNDER_REVIEW   => 'Under Review',
             EmailTemplate::TRIGGER_TENANT_APPROVED       => 'Tenant Approved',
             EmailTemplate::TRIGGER_TENANT_REJECTED       => 'Tenant Rejected',
+            EmailTemplate::TRIGGER_PAYMENT_LINK          => 'Payment Link',
+            EmailTemplate::TRIGGER_TRIAL_ENDING          => 'Trial Ending',
+            EmailTemplate::TRIGGER_WORKSPACE_READY       => 'Workspace Ready (Welcome)',
+            EmailTemplate::TRIGGER_PAYMENT_PROOF_RECEIVED => 'Bank Proof Received',
+            EmailTemplate::TRIGGER_PAYMENT_PROOF_REJECTED => 'Bank Proof Rejected',
+            EmailTemplate::TRIGGER_ADMIN_PAYMENT_PROOF    => 'Admin: New Bank Proof',
+            EmailTemplate::TRIGGER_ADMIN_PROVISIONING_FAILED => 'Admin: Provisioning Failed',
         ];
 
         $triggerIcons = [
@@ -38,6 +45,13 @@ class EmailTemplateController extends Controller
             EmailTemplate::TRIGGER_TENANT_UNDER_REVIEW   => 'bi-search',
             EmailTemplate::TRIGGER_TENANT_APPROVED       => 'bi-person-check',
             EmailTemplate::TRIGGER_TENANT_REJECTED       => 'bi-person-x',
+            EmailTemplate::TRIGGER_PAYMENT_LINK          => 'bi-link-45deg',
+            EmailTemplate::TRIGGER_TRIAL_ENDING          => 'bi-hourglass-bottom',
+            EmailTemplate::TRIGGER_WORKSPACE_READY       => 'bi-rocket-takeoff',
+            EmailTemplate::TRIGGER_PAYMENT_PROOF_RECEIVED => 'bi-receipt',
+            EmailTemplate::TRIGGER_PAYMENT_PROOF_REJECTED => 'bi-receipt-cutoff',
+            EmailTemplate::TRIGGER_ADMIN_PAYMENT_PROOF    => 'bi-bank',
+            EmailTemplate::TRIGGER_ADMIN_PROVISIONING_FAILED => 'bi-exclamation-octagon',
         ];
 
         $triggerColors = [
@@ -50,6 +64,13 @@ class EmailTemplateController extends Controller
             EmailTemplate::TRIGGER_TENANT_UNDER_REVIEW   => '#f59e0b',
             EmailTemplate::TRIGGER_TENANT_APPROVED       => '#10b981',
             EmailTemplate::TRIGGER_TENANT_REJECTED       => '#ef4444',
+            EmailTemplate::TRIGGER_PAYMENT_LINK          => '#6366f1',
+            EmailTemplate::TRIGGER_TRIAL_ENDING          => '#f59e0b',
+            EmailTemplate::TRIGGER_WORKSPACE_READY       => '#10b981',
+            EmailTemplate::TRIGGER_PAYMENT_PROOF_RECEIVED => '#6366f1',
+            EmailTemplate::TRIGGER_PAYMENT_PROOF_REJECTED => '#ef4444',
+            EmailTemplate::TRIGGER_ADMIN_PAYMENT_PROOF    => '#0ea5e9',
+            EmailTemplate::TRIGGER_ADMIN_PROVISIONING_FAILED => '#ef4444',
         ];
 
         $languages = CentralLanguage::active();
@@ -101,7 +122,7 @@ class EmailTemplateController extends Controller
 
             return redirect()
                 ->route('super.email-templates.edit', ['template' => $template->id, 'locale' => $locale])
-                ->with('success', "Translation for \"{$locale}\" saved successfully.");
+                ->with('success', __('super.flash.translation_saved', ['locale' => $locale]));
         }
 
         // Saving the default (English) template
@@ -119,7 +140,7 @@ class EmailTemplateController extends Controller
 
         return redirect()
             ->route('super.email-templates.edit', $template)
-            ->with('success', "Template \"{$template->name}\" updated successfully.");
+            ->with('success', __('super.flash.template_updated', ['name' => $template->name]));
     }
 
     /**
@@ -133,7 +154,7 @@ class EmailTemplateController extends Controller
 
         return redirect()
             ->route('super.email-templates.edit', $template)
-            ->with('success', "Translation for \"{$locale}\" removed.");
+            ->with('success', __('super.flash.translation_removed', ['locale' => $locale]));
     }
 
     public function preview(EmailTemplate $template, Request $request)
@@ -179,9 +200,9 @@ class EmailTemplateController extends Controller
                     ->html($template->render($sampleVars, $locale));
             });
 
-            return back()->with('success', "Test email{$localeSuffix} sent to {$request->test_email}.");
+            return back()->with('success', __('super.flash.test_email_sent', ['suffix' => $localeSuffix, 'email' => $request->test_email]));
         } catch (\Throwable $e) {
-            return back()->withErrors(['test_email' => 'Failed to send test email: ' . $e->getMessage()]);
+            return back()->withErrors(['test_email' => __('super.flash.test_email_failed', ['error' => $e->getMessage()])]);
         }
     }
 
@@ -201,6 +222,10 @@ class EmailTemplateController extends Controller
             '{{login_url}}'        => 'https://demo-company.' . preg_replace('/^www\./i', '', parse_url(config('app.url', 'http://localhost'), PHP_URL_HOST)) . '/login',
             '{{registered_at}}'    => now()->format('M d, Y H:i'),
             '{{rejection_reason}}' => 'Your application did not meet the requirements at this time.',
+            '{{review_url}}'       => config('app.url', 'http://localhost') . '/super/payments',
+            '{{admin_url}}'        => config('app.url', 'http://localhost') . '/super/tenants',
+            '{{error_message}}'    => 'SQLSTATE[HY000] [1045] Access denied for user',
+            '{{trial_end_date}}'   => now()->addDays(3)->format('M d, Y'),
         ];
     }
 }

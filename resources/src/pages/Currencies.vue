@@ -18,7 +18,7 @@
           <span v-else>{{ record.exchange_rate ?? 1 }}</span>
         </template>
         <template v-else-if="column.key === 'is_default'">
-          <a-tooltip :title="record.id === defaultCurrencyId ? $t('Default') : 'Set as default'">
+          <a-tooltip :title="record.id === defaultCurrencyId ? $t('Default') : $t('Set_As_Default')">
             <a-switch
               :checked="record.id === defaultCurrencyId"
               :disabled="record.id === defaultCurrencyId || settingDefault !== null"

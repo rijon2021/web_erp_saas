@@ -1,6 +1,9 @@
 import {
     Package, Boxes, Users, ReceiptText, LayoutGrid, Truck,
 } from 'lucide-vue-next';
+import { i18n } from '../../i18n';
+
+const tr = (k) => i18n.global.t(k);
 
 /**
  * Shared vocabulary for the Shopify module: the values the API stores, the
@@ -9,9 +12,9 @@ import {
  */
 
 export const STORE_STATUSES = [
-    { value: 'connected', label: 'Connected', color: 'success' },
-    { value: 'error', label: 'Error', color: 'error' },
-    { value: 'disconnected', label: 'Not connected', color: 'default' },
+    { value: 'connected', get label() { return tr('Connected'); }, color: 'success' },
+    { value: 'error', get label() { return tr('Cr_Log_Error'); }, color: 'error' },
+    { value: 'disconnected', get label() { return tr('Not_connected'); }, color: 'default' },
 ];
 
 /**
@@ -23,45 +26,45 @@ export const STORE_STATUSES = [
 export const ENTITIES = [
     {
         value: 'products',
-        label: 'Products',
+        get label() { return tr('Products'); },
         icon: Package,
         directions: ['push', 'pull'],
-        hint: 'Catalogue, prices and variants.',
+        get hint() { return tr('Shp_Hint_Products'); },
     },
     {
         value: 'inventory',
-        label: 'Inventory',
+        get label() { return tr('Inventory'); },
         icon: Boxes,
         directions: ['push', 'pull'],
-        hint: 'Stock on hand for the mapped warehouse and location.',
+        get hint() { return tr('Shp_Hint_Inventory'); },
     },
     {
         value: 'customers',
-        label: 'Customers',
+        get label() { return tr('Customers'); },
         icon: Users,
         directions: ['push', 'pull'],
-        hint: 'Matched on email — customers without one are skipped.',
+        get hint() { return tr('Shp_Hint_Customers'); },
     },
     {
         value: 'orders',
-        label: 'Orders',
+        get label() { return tr('Orders'); },
         icon: ReceiptText,
         directions: ['pull'],
-        hint: 'Imported as sales. Stock moves only for fulfilled orders.',
+        get hint() { return tr('Shp_Hint_Orders'); },
     },
     {
         value: 'collections',
-        label: 'Collections',
+        get label() { return tr('Collections'); },
         icon: LayoutGrid,
         directions: ['push', 'pull'],
-        hint: 'Mapped to ERP categories.',
+        get hint() { return tr('Shp_Hint_Collections'); },
     },
     {
         value: 'fulfillments',
-        label: 'Fulfillments',
+        get label() { return tr('Shp_Fulfillments'); },
         icon: Truck,
         directions: ['push', 'pull'],
-        hint: 'Push marks shipped orders fulfilled; pull refreshes their status.',
+        get hint() { return tr('Shp_Hint_Fulfillments'); },
     },
 ];
 
@@ -90,46 +93,46 @@ export function stepLabel(step) {
 }
 
 export const RUN_STATUSES = [
-    { value: 'pending', label: 'Pending', color: 'default' },
-    { value: 'running', label: 'Running', color: 'processing' },
-    { value: 'completed', label: 'Completed', color: 'success' },
-    { value: 'failed', label: 'Failed', color: 'error' },
-    { value: 'cancelled', label: 'Cancelled', color: 'warning' },
+    { value: 'pending', get label() { return tr('Pending'); }, color: 'default' },
+    { value: 'running', get label() { return tr('Running'); }, color: 'processing' },
+    { value: 'completed', get label() { return tr('Completed'); }, color: 'success' },
+    { value: 'failed', get label() { return tr('Failed'); }, color: 'error' },
+    { value: 'cancelled', get label() { return tr('Cancelled'); }, color: 'warning' },
     // Not a stored status: a run whose worker stopped sending heartbeats.
-    { value: 'stale', label: 'Stalled', color: 'error' },
+    { value: 'stale', get label() { return tr('Shp_Stalled'); }, color: 'error' },
 ];
 
 export const DIRECTIONS = [
-    { value: 'push', label: 'ERP → Shopify', short: 'Push', color: 'blue' },
-    { value: 'pull', label: 'Shopify → ERP', short: 'Pull', color: 'purple' },
+    { value: 'push', label: 'ERP → Shopify', get short() { return tr('Shp_Push'); }, color: 'blue' },
+    { value: 'pull', label: 'Shopify → ERP', get short() { return tr('Shp_Pull'); }, color: 'purple' },
 ];
 
 export const LOG_LEVELS = [
-    { value: 'info', label: 'Info', color: 'default' },
-    { value: 'warning', label: 'Warning', color: 'warning' },
-    { value: 'error', label: 'Error', color: 'error' },
+    { value: 'info', get label() { return tr('Info'); }, color: 'default' },
+    { value: 'warning', get label() { return tr('Warning'); }, color: 'warning' },
+    { value: 'error', get label() { return tr('Cr_Log_Error'); }, color: 'error' },
 ];
 
 export const LINK_TYPES = [
-    { value: 'product', label: 'Product' },
-    { value: 'variant', label: 'Variant' },
-    { value: 'inventory_item', label: 'Inventory item' },
-    { value: 'customer', label: 'Customer' },
-    { value: 'order', label: 'Order' },
-    { value: 'collection', label: 'Collection' },
+    { value: 'product', get label() { return tr('Product'); } },
+    { value: 'variant', get label() { return tr('Variant'); } },
+    { value: 'inventory_item', get label() { return tr('Shp_Inventory_Item'); } },
+    { value: 'customer', get label() { return tr('Customer'); } },
+    { value: 'order', get label() { return tr('Order'); } },
+    { value: 'collection', get label() { return tr('Collection'); } },
 ];
 
 export const PRICE_FIELDS = [
-    { value: 'price', label: 'Retail price' },
-    { value: 'wholesale_price', label: 'Wholesale price' },
-    { value: 'min_price', label: 'Minimum price' },
+    { value: 'price', get label() { return tr('Shp_Retail_Price'); } },
+    { value: 'wholesale_price', get label() { return tr('Wholesale_Price'); } },
+    { value: 'min_price', get label() { return tr('Shp_Minimum_Price'); } },
 ];
 
 export const WEBHOOK_STATUSES = [
-    { value: 'pending', label: 'Pending', color: 'processing' },
-    { value: 'processed', label: 'Processed', color: 'success' },
-    { value: 'failed', label: 'Failed', color: 'error' },
-    { value: 'ignored', label: 'Ignored', color: 'default' },
+    { value: 'pending', get label() { return tr('Pending'); }, color: 'processing' },
+    { value: 'processed', get label() { return tr('Processed'); }, color: 'success' },
+    { value: 'failed', get label() { return tr('Failed'); }, color: 'error' },
+    { value: 'ignored', get label() { return tr('Status_Ignored'); }, color: 'default' },
 ];
 
 /**

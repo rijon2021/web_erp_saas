@@ -88,6 +88,10 @@ class AccountPagesController extends Controller
         DB::transaction(function () use ($user, $data) {
             // Update EcommerceClient
             $user->username = $data['username'];
+            // A new address has to be verified again (license keys wait for it).
+            if (strcasecmp(trim((string) $user->email), trim((string) $data['email'])) !== 0) {
+                $user->email_verified_at = null;
+            }
             $user->email = $data['email'];
             if (! empty($data['password'])) {
                 $user->password = Hash::make($data['password']);

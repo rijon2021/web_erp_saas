@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Models\UserLoginSession;
 use App\Support\LoginSessionKey;
+use App\Support\Security\ForceLogout;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -15,6 +16,11 @@ class LogoutRevokedWebSession
         $user = Auth::guard('web')->user();
         if (! $user) {
             return $next($request);
+        }
+
+        // Super admin "force logout": this session signed in before the cutoff.
+        if (ForceLogout::webSessionIsStale($request, $user)) {
+            return $this->hardLogout($request, $user);
         }
 
         $sessionId = $request->session()->getId();
@@ -50,6 +56,11 @@ class LogoutRevokedWebSession
             return $next($request);
         }
 
+        return $this->hardLogout($request, $user);
+    }
+
+    private function hardLogout(Request $request, $user)
+    {
         // 🔥 HARD LOGOUT
         // Prevent "remember me" from re-authenticating and causing redirect loops.
         try {

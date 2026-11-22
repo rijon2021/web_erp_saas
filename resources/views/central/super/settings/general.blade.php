@@ -3,7 +3,7 @@
 @section('title', __('super.general_settings.title'))
 
 @push('styles')
-<link href="{{ asset('assets_super/css/settings-general.css') }}?v={{ time() }}" rel="stylesheet">
+<link href="{{ \App\Support\SuperAsset::url('assets_super/css/settings-general.css') }}" rel="stylesheet">
 @endpush
 
 @section('content')
@@ -11,10 +11,6 @@
     <h1>{{ __('super.general_settings.title') }}</h1>
     <p class="page-subtitle">{{ __('super.general_settings.subtitle') }}</p>
 </div>
-
-<form method="POST" action="{{ route('super.settings.general.update') }}" enctype="multipart/form-data" id="generalSettingsForm">
-    @csrf
-    @method('PUT')
 
     <div class="settings-shell">
         {{-- ── Side navigation ───────────────────────────────────────── --}}
@@ -31,6 +27,10 @@
                 <button type="button" class="settings-nav-item" role="tab" data-tab="appearance" aria-selected="false" aria-controls="panel-appearance">
                     <i class="bi bi-brush"></i>
                     <span>{{ __('super.general_settings.tab_appearance') }}</span>
+                </button>
+                <button type="button" class="settings-nav-item" role="tab" data-tab="dashboard" aria-selected="false" aria-controls="panel-dashboard">
+                    <i class="bi bi-grid-1x2"></i>
+                    <span>{{ __('super.dash_custom.tab_title') }}</span>
                 </button>
                 <button type="button" class="settings-nav-item" role="tab" data-tab="company" aria-selected="false" aria-controls="panel-company">
                     <i class="bi bi-building"></i>
@@ -64,6 +64,18 @@
                     <i class="bi bi-cloud-arrow-down"></i>
                     <span>{{ __('super.general_settings.tab_update') }}</span>
                 </button>
+                <button type="button" class="settings-nav-item" role="tab" data-tab="security" aria-selected="false" aria-controls="panel-security">
+                    <i class="bi bi-shield-lock"></i>
+                    <span>{{ __('super.sidebar.security_settings') }}</span>
+                </button>
+                <button type="button" class="settings-nav-item" role="tab" data-tab="einvoicing" aria-selected="false" aria-controls="panel-einvoicing">
+                    <i class="bi bi-receipt-cutoff"></i>
+                    <span>{{ __('super.sidebar.einvoicing_settings') }}</span>
+                </button>
+                <button type="button" class="settings-nav-item" role="tab" data-tab="features" aria-selected="false" aria-controls="panel-features">
+                    <i class="bi bi-toggles"></i>
+                    <span>{{ __('super.platform_features.tab') }}</span>
+                </button>
             </nav>
         </aside>
 
@@ -75,11 +87,15 @@
                     <p class="settings-actionbar-sub" id="settingsActionSub">{{ __('super.general_settings.tab_general_desc') }}</p>
                 </div>
                 <div class="settings-actionbar-actions">
-                    <button type="submit" class="btn btn-primary">
+                    <button type="submit" class="btn btn-primary" form="generalSettingsForm">
                         <i class="bi bi-check-lg"></i> {{ __('super.general_settings.save_settings') }}
                     </button>
                 </div>
             </div>
+
+            <form method="POST" action="{{ route('super.settings.general.update') }}" enctype="multipart/form-data" id="generalSettingsForm">
+            @csrf
+            @method('PUT')
 
             {{-- ── Panel: General ─────────────────────────────────── --}}
             <section class="settings-panel is-active" id="panel-general" role="tabpanel" data-panel="general"
@@ -92,7 +108,7 @@
                         name="app_name"
                         class="form-control @error('app_name') is-invalid @enderror"
                         value="{{ old('app_name', $setting->app_name) }}"
-                        placeholder="e.g. Stocky"
+                        placeholder="{{ __('super.general_settings.ph_app_name') }}"
                         required
                     >
                     @error('app_name')
@@ -109,7 +125,7 @@
                                 name="currency_code"
                                 class="form-control text-upper-currency @error('currency_code') is-invalid @enderror"
                                 value="{{ old('currency_code', $setting->currency_code ?? 'USD') }}"
-                                placeholder="e.g. USD, NGN, EUR"
+                                placeholder="{{ __('super.general_settings.ph_currency_code') }}"
                                 maxlength="3"
                                 required
                             >
@@ -127,7 +143,7 @@
                                 name="currency_symbol"
                                 class="form-control max-w-120 @error('currency_symbol') is-invalid @enderror"
                                 value="{{ old('currency_symbol', $setting->currency_symbol ?? '$') }}"
-                                placeholder="e.g. $, €, ₦, £"
+                                placeholder="{{ __('super.general_settings.ph_currency_symbol') }}"
                                 maxlength="5"
                                 required
                             >
@@ -139,59 +155,13 @@
                     </div>
                 </div>
 
+                {{-- Languages (default, on/off, RTL, translations) live on Super admin > Languages --}}
                 <div class="form-group mt-4">
-                    <label class="form-label">{{ __('super.general_settings.default_language') }}</label>
-                    <select
-                        name="default_language"
-                        class="form-select max-w-360 @error('default_language') is-invalid @enderror"
-                    >
-                        @foreach($languages as $language)
-                            <option
-                                value="{{ $language->locale }}"
-                                {{ old('default_language', $defaultLocale) === $language->locale ? 'selected' : '' }}
-                            >
-                                {{ $language->name }} ({{ strtoupper($language->locale) }})
-                            </option>
-                        @endforeach
-                    </select>
-                    <p class="form-hint mt-1">{{ __('super.general_settings.default_language_hint') }}</p>
-                    @error('default_language')
-                        <div class="invalid-feedback">{{ $message }}</div>
-                    @enderror
-                </div>
-
-                {{-- Enable / disable languages shown in the language selector --}}
-                <div class="form-group mt-4">
-                    <label class="form-label">{{ __('super.general_settings.manage_languages') }}</label>
-                    <p class="form-hint mb-2">{{ __('super.general_settings.manage_languages_hint') }}</p>
-                    @php $oldActive = old('languages_active'); @endphp
-                    <div class="d-flex flex-wrap gap-3">
-                        @foreach($allLanguages as $language)
-                            @php
-                                $isDefault = $language->locale === $defaultLocale;
-                                $checked = $oldActive !== null
-                                    ? in_array($language->locale, $oldActive, true)
-                                    : $language->is_active;
-                            @endphp
-                            <label class="form-switch-label d-flex align-items-center gap-2" @if($isDefault) title="{{ __('super.general_settings.language_default_badge') }}" @endif>
-                                <input type="checkbox" name="languages_active[]" value="{{ $language->locale }}"
-                                       class="form-check-input"
-                                       {{ $checked || $isDefault ? 'checked' : '' }}
-                                       {{ $isDefault ? 'disabled' : '' }}>
-                                @if($language->flag)
-                                    <img src="{{ asset('flags/' . $language->flag) }}" alt="" width="18" height="13" style="border-radius:2px;object-fit:cover;">
-                                @endif
-                                <span>{{ $language->name }} ({{ strtoupper($language->locale) }})</span>
-                                @if($isDefault)
-                                    <span class="badge bg-secondary">{{ __('super.general_settings.language_default_badge') }}</span>
-                                @endif
-                            </label>
-                            @if($isDefault)
-                                {{-- Default stays active even though its checkbox is disabled --}}
-                                <input type="hidden" name="languages_active[]" value="{{ $language->locale }}">
-                            @endif
-                        @endforeach
-                    </div>
+                    <label class="form-label">{{ __('super.languages.moved_title') }}</label>
+                    <p class="form-hint mb-2">{{ __('super.languages.moved_text') }}</p>
+                    <a href="{{ route('super.languages.index') }}" class="btn btn-outline btn-sm">
+                        <i class="bi bi-globe2"></i> {{ __('super.languages.open_languages') }}
+                    </a>
                 </div>
             </section>
 
@@ -280,6 +250,14 @@
                     <p class="form-hint mt-1">{{ __('super.general_settings.show_customizer_hint') }}</p>
                 </div>
 
+                @include('central.super.settings.partials.default-color-field', [
+                    'name'    => 'super_primary_color',
+                    'value'   => $setting->superPrimaryColor(),
+                    'builtin' => \App\Models\Central\GeneralSetting::BUILTIN_SUPER_COLOR,
+                    'label'   => __('super.general_settings.super_primary_color'),
+                    'hint'    => __('super.general_settings.super_primary_color_hint'),
+                ])
+
                 <div class="form-group">
                     <label class="form-label" for="dashboard_footer_text">
                         <i class="bi bi-layout-text-window-reverse me-1"></i>{{ __('super.general_settings.dashboard_footer_text') }}
@@ -298,44 +276,6 @@
                     @enderror
                     <p class="form-hint mt-1">{{ __('super.general_settings.dashboard_footer_text_hint') }}</p>
                 </div>
-
-                {{-- Landing page on/off + custom redirect URL --}}
-                <div class="form-group mt-4">
-                    <label class="form-switch-label d-flex align-items-center gap-2">
-                        <input type="checkbox" id="landing_page_enabled" name="landing_page_enabled" value="1" class="form-check-input" {{ old('landing_page_enabled', $setting->landing_page_enabled ?? true) ? 'checked' : '' }}>
-                        <span><i class="bi bi-window me-1"></i>{{ __('super.general_settings.landing_page_enabled') }}</span>
-                    </label>
-                    <p class="form-hint mt-1">{{ __('super.general_settings.landing_page_enabled_hint') }}</p>
-                </div>
-
-                <div class="form-group" id="landing_redirect_url_group">
-                    <label class="form-label" for="landing_redirect_url">
-                        <i class="bi bi-box-arrow-up-right me-1"></i>{{ __('super.general_settings.landing_redirect_url') }}
-                    </label>
-                    <input
-                        type="url"
-                        id="landing_redirect_url"
-                        name="landing_redirect_url"
-                        class="form-control @error('landing_redirect_url') is-invalid @enderror"
-                        value="{{ old('landing_redirect_url', $setting->landing_redirect_url) }}"
-                        maxlength="500"
-                        placeholder="https://www.your-company.com"
-                    >
-                    @error('landing_redirect_url')
-                        <div class="invalid-feedback">{{ $message }}</div>
-                    @enderror
-                    <p class="form-hint mt-1">{{ __('super.general_settings.landing_redirect_url_hint') }}</p>
-                </div>
-                <script>
-                    (function () {
-                        var toggle = document.getElementById('landing_page_enabled');
-                        var group = document.getElementById('landing_redirect_url_group');
-                        if (!toggle || !group) return;
-                        var sync = function () { group.style.display = toggle.checked ? 'none' : ''; };
-                        toggle.addEventListener('change', sync);
-                        sync();
-                    })();
-                </script>
 
                 {{-- Landing fonts (applied across all landing layouts) --}}
                 @php
@@ -418,6 +358,9 @@
                 <p class="form-hint mt-1">{{ __('super.general_settings.custom_font_hint') }}</p>
             </section>
 
+            {{-- ── Panel: Dashboard (super-admin dashboard layout) ── --}}
+            @include('central.super.settings.partials.dashboard-tab')
+
             {{-- ── Panel: Company Info ────────────────────────────── --}}
             <section class="settings-panel" id="panel-company" role="tabpanel" data-panel="company"
                      data-title="{{ __('super.general_settings.tab_company') }}"
@@ -431,7 +374,7 @@
                                 name="company_name"
                                 class="form-control @error('company_name') is-invalid @enderror"
                                 value="{{ old('company_name', $setting->company_name) }}"
-                                placeholder="e.g. Acme Inc."
+                                placeholder="{{ __('super.general_settings.ph_company_name') }}"
                             >
                             @error('company_name')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -446,7 +389,7 @@
                                 name="phone"
                                 class="form-control @error('phone') is-invalid @enderror"
                                 value="{{ old('phone', $setting->phone) }}"
-                                placeholder="e.g. +1 (555) 123-4567"
+                                placeholder="{{ __('super.general_settings.ph_phone') }}"
                             >
                             @error('phone')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -464,7 +407,7 @@
                                 name="email"
                                 class="form-control @error('email') is-invalid @enderror"
                                 value="{{ old('email', $setting->email) }}"
-                                placeholder="e.g. info@company.com"
+                                placeholder="{{ __('super.general_settings.ph_email') }}"
                             >
                             @error('email')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -479,7 +422,7 @@
                                 name="website"
                                 class="form-control @error('website') is-invalid @enderror"
                                 value="{{ old('website', $setting->website) }}"
-                                placeholder="e.g. https://company.com"
+                                placeholder="{{ __('super.general_settings.ph_website') }}"
                             >
                             @error('website')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -495,7 +438,7 @@
                         name="address"
                         class="form-control @error('address') is-invalid @enderror"
                         value="{{ old('address', $setting->address) }}"
-                        placeholder="e.g. 123 Main Street, New York, NY 10001"
+                        placeholder="{{ __('super.general_settings.ph_address') }}"
                     >
                     @error('address')
                         <div class="invalid-feedback">{{ $message }}</div>
@@ -526,7 +469,7 @@
                         name="tenant_app_name"
                         class="form-control @error('tenant_app_name') is-invalid @enderror"
                         value="{{ old('tenant_app_name', $setting->tenant_app_name) }}"
-                        placeholder="e.g. Acme Inventory"
+                        placeholder="{{ __('super.general_settings.ph_tenant_app_name') }}"
                         maxlength="255"
                     >
                     <p class="form-hint mt-1">{{ __('super.general_settings.tenant_app_name_hint') }}</p>
@@ -595,6 +538,68 @@
                     @enderror
                 </div>
 
+                {{-- Default tenant colour: read live by every tenant app (not copied
+                     into tenants), so it reaches existing workspaces too. --}}
+                @include('central.super.settings.partials.default-color-field', [
+                    'name'    => 'tenant_primary_color',
+                    'value'   => $setting->tenantPrimaryColor(),
+                    'builtin' => \App\Models\Central\GeneralSetting::BUILTIN_TENANT_COLOR,
+                    'label'   => __('super.general_settings.tenant_primary_color'),
+                    'hint'    => __('super.general_settings.tenant_primary_color_hint'),
+                ])
+
+                {{-- Apply to existing workspaces (the fields above only brand new ones).
+                     Inputs belong to #applyTenantBrandingForm, outside the main form. --}}
+                <div class="form-group mb-4">
+                    <label class="form-label">{{ __('super.general_settings.apply_branding_title') }}</label>
+                    <p class="form-hint mb-2">{{ __('super.general_settings.apply_branding_hint') }}</p>
+                    <div class="d-flex flex-column gap-2 mb-3">
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="parts[]" value="logo" form="applyTenantBrandingForm" class="form-check-input"
+                                   {{ $setting->tenant_logo_path ? 'checked' : 'disabled' }}>
+                            <span>{{ __('super.general_settings.tenant_logo') }}</span>
+                            @unless($setting->tenant_logo_path)
+                                <span class="text-muted fs-xs3">{{ __('super.general_settings.apply_branding_upload_first') }}</span>
+                            @endunless
+                        </label>
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="parts[]" value="favicon" form="applyTenantBrandingForm" class="form-check-input"
+                                   {{ $setting->tenant_favicon_path ? 'checked' : 'disabled' }}>
+                            <span>{{ __('super.general_settings.tenant_favicon') }}</span>
+                            @unless($setting->tenant_favicon_path)
+                                <span class="text-muted fs-xs3">{{ __('super.general_settings.apply_branding_upload_first') }}</span>
+                            @endunless
+                        </label>
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="parts[]" value="app_name" form="applyTenantBrandingForm" class="form-check-input" checked>
+                            <span>{{ __('super.general_settings.apply_branding_app_name', ['name' => $setting->getTenantDefaults()['app_name']]) }}</span>
+                        </label>
+                        @php $brandingDefaults = $setting->getTenantDefaults(); @endphp
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="parts[]" value="footer" form="applyTenantBrandingForm" class="form-check-input">
+                            <span>{{ __('super.general_settings.apply_branding_footer', ['value' => $brandingDefaults['footer_text']]) }}</span>
+                        </label>
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="parts[]" value="developed_by" form="applyTenantBrandingForm" class="form-check-input">
+                            <span>{{ __('super.general_settings.apply_branding_developed_by', ['value' => $brandingDefaults['developed_by']]) }}</span>
+                        </label>
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="parts[]" value="page_title_suffix" form="applyTenantBrandingForm" class="form-check-input">
+                            <span>{{ __('super.general_settings.apply_branding_page_title_suffix', ['value' => $brandingDefaults['page_title_suffix']]) }}</span>
+                        </label>
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="parts[]" value="company_name" form="applyTenantBrandingForm" class="form-check-input">
+                            <span>{{ __('super.general_settings.apply_branding_company_name', ['value' => $brandingDefaults['company_name']]) }}</span>
+                        </label>
+                    </div>
+                    @error('parts')
+                        <div class="text-danger mb-2 fs-sm2">{{ $message }}</div>
+                    @enderror
+                    <button type="button" class="btn btn-outline-primary btn-sm" id="applyTenantBrandingBtn">
+                        <i class="bi bi-arrow-repeat me-1"></i>{{ __('super.general_settings.apply_branding_button') }}
+                    </button>
+                </div>
+
                 <hr class="settings-divider">
 
                 {{-- Company info --}}
@@ -607,7 +612,7 @@
                                 name="tenant_company_name"
                                 class="form-control @error('tenant_company_name') is-invalid @enderror"
                                 value="{{ old('tenant_company_name', $setting->tenant_company_name) }}"
-                                placeholder="e.g. Acme Inc."
+                                placeholder="{{ __('super.general_settings.ph_company_name') }}"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_company_name_hint') }}</p>
                             @error('tenant_company_name')
@@ -623,7 +628,7 @@
                                 name="tenant_email"
                                 class="form-control @error('tenant_email') is-invalid @enderror"
                                 value="{{ old('tenant_email', $setting->tenant_email) }}"
-                                placeholder="e.g. admin@company.com"
+                                placeholder="{{ __('super.general_settings.ph_admin_email') }}"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_email_hint') }}</p>
                             @error('tenant_email')
@@ -642,7 +647,7 @@
                                 name="tenant_phone"
                                 class="form-control @error('tenant_phone') is-invalid @enderror"
                                 value="{{ old('tenant_phone', $setting->tenant_phone) }}"
-                                placeholder="e.g. +1 (555) 123-4567"
+                                placeholder="{{ __('super.general_settings.ph_phone') }}"
                             >
                             @error('tenant_phone')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -657,7 +662,7 @@
                                 name="tenant_address"
                                 class="form-control @error('tenant_address') is-invalid @enderror"
                                 value="{{ old('tenant_address', $setting->tenant_address) }}"
-                                placeholder="e.g. 123 Main Street, New York"
+                                placeholder="{{ __('super.general_settings.ph_address_short') }}"
                             >
                             @error('tenant_address')
                                 <div class="invalid-feedback">{{ $message }}</div>
@@ -678,7 +683,7 @@
                                 name="tenant_currency_code"
                                 class="form-control text-upper-currency @error('tenant_currency_code') is-invalid @enderror"
                                 value="{{ old('tenant_currency_code', $setting->tenant_currency_code) }}"
-                                placeholder="e.g. USD"
+                                placeholder="{{ __('super.general_settings.ph_currency_code_1') }}"
                                 maxlength="3"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_currency_code_hint') }}</p>
@@ -695,7 +700,7 @@
                                 name="tenant_currency_symbol"
                                 class="form-control @error('tenant_currency_symbol') is-invalid @enderror"
                                 value="{{ old('tenant_currency_symbol', $setting->tenant_currency_symbol) }}"
-                                placeholder="e.g. $, €, ₦"
+                                placeholder="{{ __('super.general_settings.ph_currency_sym_1') }}"
                                 maxlength="5"
                             >
                             @error('tenant_currency_symbol')
@@ -728,6 +733,42 @@
                     </div>
                 </div>
 
+                {{-- Languages enabled in new tenants (null = all) --}}
+                @php
+                    $tenantEnabledLanguages = old(
+                        'tenant_enabled_languages',
+                        is_array($setting->tenant_enabled_languages) ? $setting->tenant_enabled_languages : \App\Support\TenantLanguages::locales()
+                    );
+                @endphp
+                <div class="form-group mt-3" data-tenant-languages>
+                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-1">
+                        <label class="form-label mb-0">{{ __('super.general_settings.tenant_enabled_languages') }}</label>
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn btn-sm btn-light" data-tenant-languages-toggle="1">{{ __('super.general_settings.tenant_enabled_languages_all') }}</button>
+                            <button type="button" class="btn btn-sm btn-light" data-tenant-languages-toggle="0">{{ __('super.general_settings.tenant_enabled_languages_none') }}</button>
+                        </div>
+                    </div>
+                    <p class="form-hint mb-2">{{ __('super.general_settings.tenant_enabled_languages_hint') }}</p>
+                    <div class="row g-2">
+                        @foreach(\App\Support\TenantLanguages::ALL as $tenantLanguage)
+                            <div class="col-6 col-md-4 col-lg-3">
+                                <label class="form-check d-flex align-items-center gap-2 mb-0">
+                                    <input type="checkbox" class="form-check-input mt-0" name="tenant_enabled_languages[]"
+                                           value="{{ $tenantLanguage['locale'] }}"
+                                           {{ in_array($tenantLanguage['locale'], (array) $tenantEnabledLanguages, true) ? 'checked' : '' }}>
+                                    <span>{{ $tenantLanguage['name'] }} <span class="text-muted">({{ $tenantLanguage['locale'] }})</span></span>
+                                </label>
+                            </div>
+                        @endforeach
+                    </div>
+                    @error('tenant_enabled_languages')
+                        <div class="invalid-feedback d-block">{{ $message }}</div>
+                    @enderror
+                    @error('tenant_enabled_languages.*')
+                        <div class="invalid-feedback d-block">{{ $message }}</div>
+                    @enderror
+                </div>
+
                 <hr class="settings-divider">
 
                 {{-- Footer / suffix / developed by --}}
@@ -740,7 +781,7 @@
                                 name="tenant_footer_text"
                                 class="form-control @error('tenant_footer_text') is-invalid @enderror"
                                 value="{{ old('tenant_footer_text', $setting->tenant_footer_text) }}"
-                                placeholder="e.g. Stocky - Ultimate Inventory With POS"
+                                placeholder="{{ __('super.general_settings.ph_meta_title') }}"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_footer_text_hint') }}</p>
                             @error('tenant_footer_text')
@@ -756,7 +797,7 @@
                                 name="tenant_page_title_suffix"
                                 class="form-control @error('tenant_page_title_suffix') is-invalid @enderror"
                                 value="{{ old('tenant_page_title_suffix', $setting->tenant_page_title_suffix) }}"
-                                placeholder="e.g. Ultimate Inventory With POS"
+                                placeholder="{{ __('super.general_settings.ph_meta_desc') }}"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_page_title_suffix_hint') }}</p>
                             @error('tenant_page_title_suffix')
@@ -772,7 +813,7 @@
                                 name="tenant_developed_by"
                                 class="form-control @error('tenant_developed_by') is-invalid @enderror"
                                 value="{{ old('tenant_developed_by', $setting->tenant_developed_by) }}"
-                                placeholder="e.g. Acme Inc."
+                                placeholder="{{ __('super.general_settings.ph_company_name') }}"
                             >
                             <p class="form-hint mt-1">{{ __('super.general_settings.tenant_developed_by_hint') }}</p>
                             @error('tenant_developed_by')
@@ -801,7 +842,7 @@
                         name="reserved_subdomains"
                         rows="5"
                         class="form-control @error('reserved_subdomains') is-invalid @enderror"
-                        placeholder="admin&#10;server&#10;webmail&#10;mail"
+                        placeholder="{{ __('super.general_settings.ph_reserved_subs') }}"
                         maxlength="5000"
                     >{{ $reservedValue }}</textarea>
                     <p class="form-hint mt-1">
@@ -965,6 +1006,54 @@
                     @enderror
                 </div>
 
+                <hr class="settings-divider">
+
+                {{-- After expiry: grace period, auto-suspend, auto-delete --}}
+                <h3 class="fs-md2 fw-700 mb-1"><i class="bi bi-shield-exclamation me-1"></i>{{ __('central.AfterExpiryTitle') }}</h3>
+                <p class="form-hint mb-3">{{ __('central.AfterExpiryHint') }}</p>
+
+                <div class="row g-3 mb-4">
+                    <div class="col-sm-6">
+                        <label class="form-label" for="subscription_grace_days">{{ __('central.GraceDays') }}</label>
+                        <input type="number" id="subscription_grace_days" name="subscription_grace_days"
+                               class="form-control w-auto @error('subscription_grace_days') is-invalid @enderror"
+                               value="{{ old('subscription_grace_days', $setting->subscriptionGraceDays()) }}" min="0" max="60">
+                        <p class="form-hint mt-1">{{ __('central.GraceDaysHint') }}</p>
+                        @error('subscription_grace_days')
+                            <div class="invalid-feedback d-block">{{ $message }}</div>
+                        @enderror
+                    </div>
+                    <div class="col-sm-6">
+                        <label class="form-label" for="subscription_grace_mode">{{ __('central.GraceMode') }}</label>
+                        @php $graceMode = old('subscription_grace_mode', $setting->subscriptionGraceMode()); @endphp
+                        <select id="subscription_grace_mode" name="subscription_grace_mode" class="form-control filter-select w-auto">
+                            <option value="full" {{ $graceMode === 'full' ? 'selected' : '' }}>{{ __('central.GraceModeFull') }}</option>
+                            <option value="read_only" {{ $graceMode === 'read_only' ? 'selected' : '' }}>{{ __('central.GraceModeReadOnly') }}</option>
+                        </select>
+                        <p class="form-hint mt-1">{{ __('central.GraceModeHint') }}</p>
+                    </div>
+                    <div class="col-sm-6">
+                        <label class="form-label" for="suspend_unpaid_after_days">{{ __('central.SuspendUnpaidAfter') }}</label>
+                        <input type="number" id="suspend_unpaid_after_days" name="suspend_unpaid_after_days"
+                               class="form-control w-auto @error('suspend_unpaid_after_days') is-invalid @enderror"
+                               value="{{ old('suspend_unpaid_after_days', (int) ($setting->suspend_unpaid_after_days ?? 7)) }}" min="0" max="365">
+                        <p class="form-hint mt-1">{{ __('central.SuspendUnpaidAfterHint') }}</p>
+                        @error('suspend_unpaid_after_days')
+                            <div class="invalid-feedback d-block">{{ $message }}</div>
+                        @enderror
+                    </div>
+                    <div class="col-sm-6">
+                        <label class="form-label" for="delete_inactive_after_days">{{ __('central.DeleteInactiveAfter') }}</label>
+                        <input type="number" id="delete_inactive_after_days" name="delete_inactive_after_days"
+                               class="form-control w-auto @error('delete_inactive_after_days') is-invalid @enderror"
+                               value="{{ old('delete_inactive_after_days', $setting->deleteInactiveAfterDays()) }}" min="0" max="3650">
+                        <p class="form-hint mt-1">{{ __('central.DeleteInactiveAfterHint') }}</p>
+                        @error('delete_inactive_after_days')
+                            <div class="invalid-feedback d-block">{{ $message }}</div>
+                        @enderror
+                    </div>
+                </div>
+
                 <p class="form-hint">
                     <i class="bi bi-info-circle me-1"></i>{!! __('super.general_settings.reminder_log_note', ['url' => route('super.subscriptions.reminders')]) !!}
                 </p>
@@ -974,6 +1063,134 @@
             <section class="settings-panel" id="panel-landing" role="tabpanel" data-panel="landing"
                      data-title="{{ __('super.general_settings.tab_landing') }}"
                      data-desc="{{ __('super.general_settings.tab_landing_desc') }}">
+                {{-- Landing page mode: built-in / external redirect / disabled --}}
+                @php
+                    $landingMode = old('landing_mode', $setting->landingMode());
+                    $landingModes = [
+                        'builtin'  => ['bi-window', 'text-primary'],
+                        'redirect' => ['bi-box-arrow-up-right', 'text-warning'],
+                        'disabled' => ['bi-slash-circle', 'text-muted'],
+                    ];
+                @endphp
+                <div class="form-group mb-4">
+                    <label class="form-label d-flex align-items-center gap-2 mb-2">
+                        <i class="bi bi-window text-muted"></i>{{ __('super.general_settings.landing_mode') }}
+                    </label>
+                    <p class="form-hint mb-3">{{ __('super.general_settings.landing_mode_hint') }}</p>
+                    <div class="hosting-mode-options">
+                        @foreach ($landingModes as $mode => [$icon, $tone])
+                        <label class="hosting-mode-option {{ $landingMode === $mode ? 'active' : '' }}">
+                            <input type="radio" name="landing_mode" value="{{ $mode }}" {{ $landingMode === $mode ? 'checked' : '' }}>
+                            <div class="hosting-mode-content">
+                                <div class="d-flex align-items-center gap-2 mb-1">
+                                    <i class="bi {{ $icon }} {{ $tone }} hosting-mode-icon"></i>
+                                    <span class="fw-700 fs-md2">{{ __('super.general_settings.landing_mode_' . $mode) }}</span>
+                                </div>
+                                <p class="text-muted mb-0 fs-sm">{{ __('super.general_settings.landing_mode_' . $mode . '_desc') }}</p>
+                            </div>
+                        </label>
+                        @endforeach
+                    </div>
+                </div>
+
+                {{-- Redirect: external URL + status code --}}
+                <div data-landing-mode="redirect">
+                    <div class="form-group">
+                        <label class="form-label" for="landing_redirect_url">
+                            <i class="bi bi-box-arrow-up-right me-1"></i>{{ __('super.general_settings.landing_redirect_url') }}
+                        </label>
+                        <input
+                            type="url"
+                            id="landing_redirect_url"
+                            name="landing_redirect_url"
+                            class="form-control @error('landing_redirect_url') is-invalid @enderror"
+                            value="{{ old('landing_redirect_url', $setting->landing_redirect_url) }}"
+                            maxlength="500"
+                            pattern="https://.+"
+                            placeholder="https://www.example.com"
+                        >
+                        @error('landing_redirect_url')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                        <p class="form-hint mt-1">{{ __('super.general_settings.landing_redirect_url_hint') }}</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="landing_redirect_status">
+                            <i class="bi bi-signpost-split me-1"></i>{{ __('super.general_settings.landing_redirect_status') }}
+                        </label>
+                        @php $redirectStatus = (int) old('landing_redirect_status', $setting->landingRedirectStatus()); @endphp
+                        <select id="landing_redirect_status" name="landing_redirect_status" class="form-select @error('landing_redirect_status') is-invalid @enderror">
+                            <option value="302" {{ $redirectStatus === 302 ? 'selected' : '' }}>{{ __('super.general_settings.landing_redirect_302') }}</option>
+                            <option value="301" {{ $redirectStatus === 301 ? 'selected' : '' }}>{{ __('super.general_settings.landing_redirect_301') }}</option>
+                        </select>
+                        @error('landing_redirect_status')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                        <p class="form-hint mt-1">{{ __('super.general_settings.landing_redirect_status_hint') }}</p>
+                    </div>
+                </div>
+
+                {{-- Disabled: what the main domain shows instead --}}
+                <div data-landing-mode="disabled">
+                    <div class="form-group">
+                        <label class="form-label" for="landing_disabled_target">
+                            <i class="bi bi-door-open me-1"></i>{{ __('super.general_settings.landing_disabled_target') }}
+                        </label>
+                        @php $disabledTarget = old('landing_disabled_target', $setting->landingDisabledTarget()); @endphp
+                        <select id="landing_disabled_target" name="landing_disabled_target" class="form-select @error('landing_disabled_target') is-invalid @enderror">
+                            <option value="login" {{ $disabledTarget === 'login' ? 'selected' : '' }}>{{ __('super.general_settings.landing_disabled_login') }}</option>
+                            <option value="signup" {{ $disabledTarget === 'signup' ? 'selected' : '' }}>{{ __('super.general_settings.landing_disabled_signup') }}</option>
+                        </select>
+                        @error('landing_disabled_target')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                        <p class="form-hint mt-1">{{ __('super.general_settings.landing_disabled_target_hint') }}</p>
+                    </div>
+                </div>
+
+                {{-- Links the owner's own website needs (the built-in pricing section is gone in these modes) --}}
+                <div data-landing-mode="redirect disabled">
+                    <div class="form-group">
+                        <label class="form-label">
+                            <i class="bi bi-link-45deg me-1"></i>{{ __('super.general_settings.landing_links') }}
+                        </label>
+                        <p class="form-hint mb-2">{{ __('super.general_settings.landing_links_hint') }}</p>
+                        @php
+                            $landingLinks = [
+                                [__('super.general_settings.landing_link_signin'), route('central.workspace.login')],
+                                [__('super.general_settings.landing_link_signup'), route('central.register')],
+                            ];
+                            foreach ($publicPlans as $plan) {
+                                $landingLinks[] = [__('super.general_settings.landing_link_plan', ['plan' => $plan->name]), route('central.register', ['plan' => $plan->id])];
+                            }
+                        @endphp
+                        {{-- Multi-currency pricing: links that open the register page in one currency. --}}
+                        @php $linkCurrencies = \App\Support\SellingCurrencies::active(); @endphp
+                        @if(count($linkCurrencies) > 1)
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <label class="form-label form-label-sm mb-0" for="signupLinkCurrency">{{ __('super.currencies.link_currency') }}</label>
+                            <select id="signupLinkCurrency" class="form-select form-select-sm" style="max-width: 180px">
+                                <option value="">{{ __('super.currencies.link_currency_any') }}</option>
+                                @foreach($linkCurrencies as $lc)
+                                    <option value="{{ $lc }}">{{ $lc }} — {{ \App\Support\SellingCurrencies::symbol($lc) }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        @endif
+                        @foreach ($landingLinks as $linkIndex => [$linkLabel, $linkUrl])
+                        <div class="input-group mb-2">
+                            <span class="input-group-text">{{ $linkLabel }}</span>
+                            <input type="text" class="form-control" value="{{ $linkUrl }}" readonly aria-label="{{ $linkLabel }}"
+                                   @if($linkIndex > 0) data-signup-link="{{ $linkUrl }}" @endif>
+                            <button type="button" class="btn btn-outline js-copy-link" data-url="{{ $linkUrl }}" @if($linkIndex > 0) data-signup-link="{{ $linkUrl }}" @endif title="{{ __('super.general_settings.landing_link_copy') }}"><i class="bi bi-clipboard"></i></button>
+                        </div>
+                        @endforeach
+                    </div>
+                </div>
+
+                <hr class="settings-divider">
+
                 <div class="form-group">
                     <label class="form-switch-label d-flex align-items-center gap-2">
                         <input type="checkbox" name="show_admin_login" value="1" class="form-check-input" {{ old('show_admin_login', $footer->show_admin_login ?? false) ? 'checked' : '' }}>
@@ -989,13 +1206,34 @@
                      data-desc="{{ __('super.general_settings.tab_payments_desc') }}">
                 @php $bank = $setting->getBankDetails(); @endphp
 
+                {{-- Billing cycles offered to customers --}}
+                <div class="form-group mb-4">
+                    <label class="form-label">
+                        <i class="bi bi-calendar-range me-1"></i>{{ __('super.general_settings.billing_cycles') }}
+                    </label>
+                    <p class="form-hint mb-2">{{ __('super.general_settings.billing_cycles_hint') }}</p>
+                    @php $activeCycles = old('billing_cycles', \App\Models\Central\GeneralSetting::enabledBillingCycles()); @endphp
+                    <div class="d-flex flex-wrap gap-3">
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="billing_cycles[]" value="monthly" class="form-check-input"
+                                   {{ in_array('monthly', $activeCycles) ? 'checked' : '' }}>
+                            <span><i class="bi bi-calendar-month me-1"></i>{{ __('super.general_settings.billing_cycle_monthly') }}</span>
+                        </label>
+                        <label class="form-switch-label d-flex align-items-center gap-2">
+                            <input type="checkbox" name="billing_cycles[]" value="yearly" class="form-check-input"
+                                   {{ in_array('yearly', $activeCycles) ? 'checked' : '' }}>
+                            <span><i class="bi bi-calendar3 me-1"></i>{{ __('super.general_settings.billing_cycle_yearly') }}</span>
+                        </label>
+                    </div>
+                </div>
+
                 <div class="row g-3 mb-4">
                     <div class="col-md-6">
                         <div class="form-group">
                             <label class="form-label">{{ __('super.general_settings.bank_name') }}</label>
                             <input type="text" name="bank_details[bank_name]" class="form-control"
                                    value="{{ old('bank_details.bank_name', $bank['bank_name'] ?? '') }}"
-                                   placeholder="e.g. Chase Bank, Barclays">
+                                   placeholder="{{ __('super.general_settings.ph_bank_name') }}">
                         </div>
                     </div>
                     <div class="col-md-6">
@@ -1003,7 +1241,7 @@
                             <label class="form-label">{{ __('super.general_settings.account_holder') }}</label>
                             <input type="text" name="bank_details[account_holder]" class="form-control"
                                    value="{{ old('bank_details.account_holder', $bank['account_holder'] ?? '') }}"
-                                   placeholder="e.g. Acme Inc.">
+                                   placeholder="{{ __('super.general_settings.ph_company_name') }}">
                         </div>
                     </div>
                 </div>
@@ -1014,7 +1252,7 @@
                             <label class="form-label">{{ __('super.general_settings.account_number') }}</label>
                             <input type="text" name="bank_details[account_number]" class="form-control"
                                    value="{{ old('bank_details.account_number', $bank['account_number'] ?? '') }}"
-                                   placeholder="e.g. 1234567890">
+                                   placeholder="{{ __('super.general_settings.ph_account_number') }}">
                         </div>
                     </div>
                     <div class="col-md-6">
@@ -1022,7 +1260,7 @@
                             <label class="form-label">{{ __('super.general_settings.iban') }}</label>
                             <input type="text" name="bank_details[iban]" class="form-control"
                                    value="{{ old('bank_details.iban', $bank['iban'] ?? '') }}"
-                                   placeholder="e.g. GB29 NWBK 6016 1331 9268 19">
+                                   placeholder="{{ __('super.general_settings.ph_iban') }}">
                         </div>
                     </div>
                 </div>
@@ -1033,7 +1271,7 @@
                             <label class="form-label">{{ __('super.general_settings.swift_code') }}</label>
                             <input type="text" name="bank_details[swift]" class="form-control"
                                    value="{{ old('bank_details.swift', $bank['swift'] ?? '') }}"
-                                   placeholder="e.g. NWBKGB2L">
+                                   placeholder="{{ __('super.general_settings.ph_swift') }}">
                         </div>
                     </div>
                     <div class="col-md-6">
@@ -1041,7 +1279,7 @@
                             <label class="form-label">{{ __('super.general_settings.branch') }}</label>
                             <input type="text" name="bank_details[branch]" class="form-control"
                                    value="{{ old('bank_details.branch', $bank['branch'] ?? '') }}"
-                                   placeholder="e.g. Main Branch, New York">
+                                   placeholder="{{ __('super.general_settings.ph_branch') }}">
                         </div>
                     </div>
                 </div>
@@ -1049,7 +1287,7 @@
                 <div class="form-group">
                     <label class="form-label">{{ __('super.general_settings.payment_instructions') }}</label>
                     <textarea name="bank_details[instructions]" class="form-control" rows="3"
-                              placeholder="e.g. Please include your company name as the payment reference. Payments are verified within 24-48 hours.">{{ old('bank_details.instructions', $bank['instructions'] ?? '') }}</textarea>
+                              placeholder="{{ __('super.general_settings.ph_bank_instructions') }}">{{ old('bank_details.instructions', $bank['instructions'] ?? '') }}</textarea>
                     <p class="form-hint mt-1">{{ __('super.general_settings.payment_instructions_hint') }}</p>
                 </div>
             </section>
@@ -1157,16 +1395,16 @@
 
                 <div class="form-group mb-4">
                     <label class="form-label d-flex align-items-center gap-2 mb-2">
-                        <i class="bi bi-terminal text-muted"></i>Environment (.env)
+                        <i class="bi bi-terminal text-muted"></i>{{ __('super.general_settings.env_section') }}
                     </label>
                     <p class="form-hint mb-3">
-                        These values are written to the <code>.env</code> file. Incorrect values can take the site offline &mdash; change with care.
+                        {!! __('super.general_settings.env_warning', ['file' => '<code>.env</code>']) !!}
                     </p>
 
                     <div class="row g-3">
                         <div class="col-md-6">
                             <div class="form-group">
-                                <label class="form-label">Select Environment</label>
+                                <label class="form-label">{{ __('super.general_settings.env_select') }}</label>
                                 <select
                                     name="app_env"
                                     class="form-control form-select @error('app_env') is-invalid @enderror"
@@ -1176,7 +1414,7 @@
                                     <option value="staging"    {{ $currentEnv === 'staging' ? 'selected' : '' }}>staging</option>
                                     <option value="production" {{ $currentEnv === 'production' ? 'selected' : '' }}>production</option>
                                 </select>
-                                <p class="form-hint mt-1">Use <strong>production</strong> on live sites.</p>
+                                <p class="form-hint mt-1">{!! __('super.general_settings.env_hint', ['mode' => '<strong>' . __('super.general_settings.env_production') . '</strong>']) !!}</p>
                                 @error('app_env')
                                     <div class="invalid-feedback">{{ $message }}</div>
                                 @enderror
@@ -1185,16 +1423,16 @@
 
                         <div class="col-md-6">
                             <div class="form-group">
-                                <label class="form-label">App Debug Mode</label>
+                                <label class="form-label">{{ __('super.general_settings.debug_mode') }}</label>
                                 <select
                                     name="app_debug"
                                     class="form-control form-select @error('app_debug') is-invalid @enderror"
                                 >
                                     @php $currentDebug = old('app_debug', $env['APP_DEBUG'] ?? 'false'); @endphp
-                                    <option value="false" {{ $currentDebug === 'false' ? 'selected' : '' }}>Off (false)</option>
-                                    <option value="true"  {{ $currentDebug === 'true'  ? 'selected' : '' }}>On (true)</option>
+                                    <option value="false" {{ $currentDebug === 'false' ? 'selected' : '' }}>{{ __('super.general_settings.debug_off') }}</option>
+                                    <option value="true"  {{ $currentDebug === 'true'  ? 'selected' : '' }}>{{ __('super.general_settings.debug_on') }}</option>
                                 </select>
-                                <p class="form-hint mt-1">Keep <strong>Off</strong> on production to avoid leaking stack traces.</p>
+                                <p class="form-hint mt-1">{!! __('super.general_settings.debug_hint', ['mode' => '<strong>' . __('super.general_settings.debug_off_word') . '</strong>']) !!}</p>
                                 @error('app_debug')
                                     <div class="invalid-feedback">{{ $message }}</div>
                                 @enderror
@@ -1203,15 +1441,15 @@
 
                         <div class="col-12">
                             <div class="form-group">
-                                <label class="form-label">Application URL</label>
+                                <label class="form-label">{{ __('super.general_settings.app_url') }}</label>
                                 <input
                                     type="url"
                                     name="app_url"
                                     class="form-control @error('app_url') is-invalid @enderror"
                                     value="{{ old('app_url', $env['APP_URL'] ?? '') }}"
-                                    placeholder="https://example.com"
+                                    placeholder="{{ __('super.general_settings.ph_example_url') }}"
                                 >
-                                <p class="form-hint mt-1">The canonical URL of your app (no trailing slash). Used for links in emails, OAuth, and tenant URLs.</p>
+                                <p class="form-hint mt-1">{{ __('super.general_settings.app_url_hint') }}</p>
                                 @error('app_url')
                                     <div class="invalid-feedback">{{ $message }}</div>
                                 @enderror
@@ -1339,9 +1577,30 @@
                     <span>{{ __('super.general_settings.update_note_blank_page') }}</span>
                 </div>
             </section>
+            </form>
+
+            {{-- ── Panel: Security (own form) ─────────────────────── --}}
+            <section class="settings-panel" id="panel-security" role="tabpanel" data-panel="security" data-nosave="1"
+                     data-title="{{ __('super.security_settings.title') }}"
+                     data-desc="{{ __('super.security_settings.subtitle') }}">
+                @include('central.super.settings.partials.security-panel', ['security' => $security])
+            </section>
+
+            {{-- ── Panel: E-Invoicing (own forms) ─────────────────── --}}
+            <section class="settings-panel" id="panel-einvoicing" role="tabpanel" data-panel="einvoicing" data-nosave="1"
+                     data-title="{{ __('super.einvoicing.title') }}"
+                     data-desc="{{ __('super.einvoicing.subtitle') }}">
+                @include('central.super.settings.partials.einvoicing-panel', ['einv' => $einv])
+            </section>
+
+            {{-- ── Panel: Features — optional platform features on/off (own form) ── --}}
+            <section class="settings-panel" id="panel-features" role="tabpanel" data-panel="features" data-nosave="1"
+                     data-title="{{ __('super.platform_features.title') }}"
+                     data-desc="{{ __('super.platform_features.subtitle') }}">
+                @include('central.super.settings.partials.features-panel')
+            </section>
         </div>
     </div>
-</form>
 
 {{-- Hidden helper forms --}}
 <form method="POST" action="{{ route('super.settings.general.clear-cache') }}" id="clearCacheForm" class="d-none">
@@ -1363,6 +1622,9 @@
     @csrf
     @method('DELETE')
 </form>
+<form method="POST" action="{{ route('super.settings.general.apply-tenant-branding') }}" id="applyTenantBrandingForm" class="d-none">
+    @csrf
+</form>
 
 @push('scripts')
 <script>
@@ -1371,6 +1633,9 @@ window.GeneralSettingsData = {
     removeFaviconConfirm: @json(__('super.general_settings.remove_favicon')),
     removeTenantLogoConfirm:    @json(__('super.general_settings.remove_tenant_logo')),
     removeTenantFaviconConfirm: @json(__('super.general_settings.remove_tenant_favicon')),
+    applyBrandingConfirm:       @json(__('super.general_settings.apply_branding_confirm')),
+    applyBrandingSaveFirst:     @json(__('super.general_settings.apply_branding_save_first')),
+    applyBrandingPickOne:       @json(__('super.general_settings.apply_branding_pick_one')),
     backupDeleteConfirm:  @json(__('super.general_settings.backup_delete_confirm')),
     backupDeleteTitle:    @json(__('super.general_settings.backup_delete_title')),
     backupYesDelete:      @json(__('super.general_settings.backup_yes_delete')),
@@ -1390,7 +1655,53 @@ window.GeneralSettingsData = {
     },
 };
 </script>
-<script src="{{ asset('assets_super/js/settings-general.js') }}?v={{ time() }}"></script>
+<script>
+document.querySelectorAll('[data-tenant-languages-toggle]').forEach(function (button) {
+    button.addEventListener('click', function () {
+        var checked = button.getAttribute('data-tenant-languages-toggle') === '1';
+        button.closest('[data-tenant-languages]').querySelectorAll('input[name="tenant_enabled_languages[]"]').forEach(function (box) {
+            box.checked = checked;
+        });
+    });
+});
+
+// Signup links in a chosen currency (?currency=XXX appended; empty = visitor's choice).
+document.getElementById('signupLinkCurrency')?.addEventListener('change', function () {
+    var code = this.value;
+    document.querySelectorAll('[data-signup-link]').forEach(function (el) {
+        var base = el.getAttribute('data-signup-link');
+        var url = code ? base + (base.indexOf('?') === -1 ? '?' : '&') + 'currency=' + encodeURIComponent(code) : base;
+        if (el.tagName === 'INPUT') { el.value = url; } else { el.setAttribute('data-url', url); }
+    });
+});
+
+// Default colour fields: the hex text input is what gets saved (empty = built-in);
+// swatches and the native picker just fill it in.
+document.querySelectorAll('[data-default-color]').forEach(function (field) {
+    var builtin = field.getAttribute('data-builtin');
+    var hex = field.querySelector('.default-color-hex');
+    var picker = field.querySelector('.default-color-picker');
+    var valid = function (v) { return /^#[0-9a-f]{6}$/i.test(v); };
+    var sync = function () {
+        var raw = hex.value.trim();
+        if (raw && raw[0] !== '#') raw = '#' + raw;
+        var effective = valid(raw) ? raw.toLowerCase() : builtin;
+        picker.value = effective;
+        field.querySelectorAll('.default-color-swatch').forEach(function (sw) {
+            sw.classList.toggle('is-active', sw.getAttribute('data-color') === effective);
+        });
+    };
+    var set = function (value) { hex.value = value ? value.toUpperCase() : ''; sync(); };
+
+    field.querySelectorAll('.default-color-swatch').forEach(function (sw) {
+        sw.addEventListener('click', function () { set(sw.getAttribute('data-color')); });
+    });
+    picker.addEventListener('input', function () { set(picker.value); });
+    hex.addEventListener('input', sync);
+    field.querySelector('.default-color-reset').addEventListener('click', function () { set(''); });
+});
+</script>
+<script src="{{ \App\Support\SuperAsset::url('assets_super/js/settings-general.js') }}"></script>
 @endpush
 
 @endsection

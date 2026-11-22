@@ -82,7 +82,7 @@
                             <label class="form-label fw-semibold text-capitalize">
                                 {{ str_replace('_', ' ', $field) }}
                             </label>
-                            <div class="text-muted small mb-1" title="Default language value">
+                            <div class="text-muted small mb-1" title="{{ __('super.cms.default_language_value') }}">
                                 <i class="bi bi-flag me-1"></i>{{ Str::limit($originalValue, 200) ?: '(empty)' }}
                             </div>
                             @if($isLong)

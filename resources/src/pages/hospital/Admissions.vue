@@ -1,14 +1,14 @@
 <template>
   <div class="page">
-    <PageHeader title="Admissions" :breadcrumb="['Hospital', 'Admissions']">
+    <PageHeader :title="$t('Hm_Admissions')" :breadcrumb="[$t('Hm_Hospital'), $t('Hm_Admissions')]">
       <template #actions>
         <a-button @click="$router.push('/hospital/wards')">
           <template #icon><HomeOutlined /></template>
-          Bed board
+          {{ $t('Hm_Bed_Board') }}
         </a-button>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
-          Admit patient
+          {{ $t('Hm_Admit_Patient') }}
         </a-button>
       </template>
     </PageHeader>
@@ -16,16 +16,16 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search patient, MRN or reference…"
+          v-model:value="crud.search.value" :placeholder="$t('Hm_Search_Patient_Ref_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item" allow-clear
-          placeholder="All statuses" :options="ADMISSION_STATUSES" @change="crud.reload"
+          :placeholder="$t('Hm_All_Statuses')" :options="ADMISSION_STATUSES" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.ward_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All wards" :options="wardOptions" @change="crud.reload"
+          option-filter-prop="label" :placeholder="$t('Hm_All_Wards')" :options="wardOptions" @change="crud.reload"
         />
         <a-range-picker v-model:value="filters.range" class="tb-range" value-format="YYYY-MM-DD" @change="crud.reload" />
       </div>
@@ -46,7 +46,7 @@
         <template v-else-if="column.key === 'admitted_at'">{{ dateTime(record.admitted_at) }}</template>
         <template v-else-if="column.key === 'discharged_at'">
           <span v-if="record.discharged_at">{{ dateTime(record.discharged_at) }}</span>
-          <span v-else class="muted">Still in</span>
+          <span v-else class="muted">{{ $t('Hm_Still_In') }}</span>
         </template>
         <template v-else-if="column.key === 'charge'">
           <div>{{ money(record.bed_charge) }}</div>
@@ -60,18 +60,18 @@
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
             <template v-if="record.status === 'admitted'">
-              <a-tooltip title="Transfer bed">
+              <a-tooltip :title="$t('Hm_Transfer_Bed')">
                 <a-button type="text" size="small" @click="openTransfer(record)">
                   <template #icon><SwapOutlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip title="Discharge">
+              <a-tooltip :title="$t('Hm_Discharge')">
                 <a-button type="text" size="small" @click="openDischarge(record)">
                   <template #icon><LogoutOutlined /></template>
                 </a-button>
               </a-tooltip>
             </template>
-            <a-tooltip title="Bill this stay">
+            <a-tooltip :title="$t('Hm_Bill_This_Stay')">
               <a-button type="text" size="small" @click="bill(record)">
                 <template #icon><DollarOutlined /></template>
               </a-button>
@@ -93,36 +93,36 @@
 
     <!-- Admit / edit -->
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit admission' : 'Admit patient'" :width="620"
+      :open="formOpen" :title="editing ? $t('Hm_Edit_Admission') : $t('Hm_Admit_Patient')" :width="620"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
-        <a-form-item label="Patient *" name="patient_id">
+        <a-form-item :label="$t('Hm_Patient') + ' *'" name="patient_id">
           <PatientPicker v-model="form.patient_id" :initial-option="editingPatient" />
         </a-form-item>
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item v-if="!editing" label="Bed *" name="bed_id">
+            <a-form-item v-if="!editing" :label="$t('Hm_Bed') + ' *'" name="bed_id">
               <a-select
                 v-model:value="form.bed_id" show-search option-filter-prop="label"
-                :options="bedOptions" placeholder="Pick a free bed" @change="onBedChange"
+                :options="bedOptions" :placeholder="$t('Hm_Pick_A_Free_Bed')" @change="onBedChange"
               />
             </a-form-item>
-            <a-form-item v-else label="Bed" extra="Use Transfer to move the patient">
+            <a-form-item v-else :label="$t('Hm_Bed')" :extra="$t('Hm_Use_Transfer_To_Move')">
               <a-input :value="`${editing.ward_name || ''} / ${editing.bed_number || ''}`" disabled />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Consultant">
+            <a-form-item :label="$t('Hm_Consultant')">
               <a-select
                 v-model:value="form.doctor_id" allow-clear show-search option-filter-prop="label"
-                :options="doctorOptions" placeholder="Select"
+                :options="doctorOptions" :placeholder="$t('Hm_Select')"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Admitted at *" name="admitted_at">
+            <a-form-item :label="$t('Hm_Admitted_At') + ' *'" name="admitted_at">
               <a-date-picker
                 v-model:value="form.admitted_at" show-time style="width: 100%"
                 value-format="YYYY-MM-DD HH:mm:ss"
@@ -130,17 +130,17 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Rate / night" extra="Defaults to the bed's rate">
+            <a-form-item :label="$t('Hm_Rate_Per_Night')" :extra="$t('Hm_Defaults_To_Bed_Rate')">
               <a-input-number v-model:value="form.daily_rate" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :span="24">
-            <a-form-item label="Reason for admission">
+            <a-form-item :label="$t('Hm_Reason_For_Admission')">
               <a-input v-model:value="form.reason" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :span="24">
-            <a-form-item label="Working diagnosis" style="margin-bottom: 0">
+            <a-form-item :label="$t('Hm_Working_Diagnosis')" style="margin-bottom: 0">
               <a-textarea v-model:value="form.diagnosis" :rows="2" />
             </a-form-item>
           </a-col>
@@ -150,19 +150,18 @@
 
     <!-- Discharge -->
     <a-modal
-      :open="dischargeOpen" title="Discharge patient" :width="520"
-      :confirm-loading="working" ok-text="Discharge" :cancel-text="$t('Cancel')"
+      :open="dischargeOpen" :title="$t('Hm_Discharge_Patient')" :width="520"
+      :confirm-loading="working" :ok-text="$t('Hm_Discharge')" :cancel-text="$t('Cancel')"
       @ok="submitDischarge" @cancel="dischargeOpen = false"
     >
       <p v-if="target" class="target">
-        {{ target.patient_name }} — {{ target.ward_name }} / {{ target.bed_number }},
-        {{ target.nights }} night(s) at {{ money(target.daily_rate) }}
+        {{ $t('Hm_Discharge_Stay_Line', { patient: target.patient_name, ward: target.ward_name, bed: target.bed_number, nights: target.nights, rate: money(target.daily_rate) }) }}
         = <b>{{ money(target.bed_charge) }}</b>
       </p>
       <a-form layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Discharged at">
+            <a-form-item :label="$t('Hm_Discharged_At')">
               <a-date-picker
                 v-model:value="dischargeForm.discharged_at" show-time style="width: 100%"
                 value-format="YYYY-MM-DD HH:mm:ss"
@@ -170,12 +169,12 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Outcome">
+            <a-form-item :label="$t('Hm_Outcome')">
               <a-select v-model:value="dischargeForm.status" :options="dischargeOutcomes" />
             </a-form-item>
           </a-col>
         </a-row>
-        <a-form-item label="Discharge summary" style="margin-bottom: 0">
+        <a-form-item :label="$t('Hm_Discharge_Summary')" style="margin-bottom: 0">
           <a-textarea v-model:value="dischargeForm.discharge_summary" :rows="4" />
         </a-form-item>
       </a-form>
@@ -183,21 +182,21 @@
 
     <!-- Transfer -->
     <a-modal
-      :open="transferOpen" title="Transfer to another bed" :width="460"
-      :confirm-loading="working" ok-text="Transfer" :cancel-text="$t('Cancel')"
+      :open="transferOpen" :title="$t('Hm_Transfer_To_Another_Bed')" :width="460"
+      :confirm-loading="working" :ok-text="$t('Hm_Transfer')" :cancel-text="$t('Cancel')"
       @ok="submitTransfer" @cancel="transferOpen = false"
     >
       <p v-if="target" class="target">
-        {{ target.patient_name }} is currently in {{ target.ward_name }} / {{ target.bed_number }}.
+        {{ $t('Hm_Patient_Currently_In', { patient: target.patient_name, ward: target.ward_name, bed: target.bed_number }) }}
       </p>
       <a-form layout="vertical">
-        <a-form-item label="New bed">
+        <a-form-item :label="$t('Hm_New_Bed')">
           <a-select
             v-model:value="transferForm.bed_id" show-search option-filter-prop="label"
-            :options="bedOptions" placeholder="Pick a free bed" @change="onTransferBedChange"
+            :options="bedOptions" :placeholder="$t('Hm_Pick_A_Free_Bed')" @change="onTransferBedChange"
           />
         </a-form-item>
-        <a-form-item label="Rate / night" style="margin-bottom: 0">
+        <a-form-item :label="$t('Hm_Rate_Per_Night')" style="margin-bottom: 0">
           <a-input-number v-model:value="transferForm.daily_rate" :min="0" style="width: 100%" />
         </a-form-item>
       </a-form>
@@ -246,13 +245,13 @@ const crud = useCrudTable('hospital/admissions', {
 });
 
 const columns = computed(() => [
-  { title: 'Patient', key: 'patient', dataIndex: 'patient_name' },
-  { title: 'Ward / bed', key: 'bed', width: 180 },
-  { title: 'Consultant', dataIndex: 'doctor_name', key: 'doctor_name', width: 150 },
-  { title: 'Admitted', key: 'admitted_at', dataIndex: 'admitted_at', sorter: true, width: 175 },
-  { title: 'Discharged', key: 'discharged_at', dataIndex: 'discharged_at', sorter: true, width: 175 },
-  { title: 'Bed charge', key: 'charge', width: 150 },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 130 },
+  { title: t('Hm_Patient'), key: 'patient', dataIndex: 'patient_name' },
+  { title: t('Hm_Ward_Bed'), key: 'bed', width: 180 },
+  { title: t('Hm_Consultant'), dataIndex: 'doctor_name', key: 'doctor_name', width: 150 },
+  { title: t('Hm_Admitted'), key: 'admitted_at', dataIndex: 'admitted_at', sorter: true, width: 175 },
+  { title: t('Hm_Discharged'), key: 'discharged_at', dataIndex: 'discharged_at', sorter: true, width: 175 },
+  { title: t('Hm_Bed_Charge'), key: 'charge', width: 150 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 130 },
   { title: '', key: 'actions', width: 170 },
 ]);
 
@@ -263,11 +262,11 @@ const doctorOptions = computed(() => doctors.value.map(d => ({ value: d.id, labe
 const wardOptions = computed(() => wards.value.map(w => ({ value: w.id, label: w.name })));
 const bedOptions = computed(() => beds.value.map(b => ({ value: b.id, label: b.label, bed: b })));
 
-const dischargeOutcomes = [
-  { value: 'discharged', label: 'Discharged' },
-  { value: 'transferred', label: 'Transferred out' },
-  { value: 'deceased', label: 'Deceased' },
-];
+const dischargeOutcomes = computed(() => [
+  { value: 'discharged', label: t('Hm_Discharged') },
+  { value: 'transferred', label: t('Hm_Transferred_Out') },
+  { value: 'deceased', label: t('Hm_Deceased') },
+]);
 
 // ---------------- admit / edit ----------------
 
@@ -375,7 +374,7 @@ async function submitDischarge() {
   working.value = true;
   try {
     await http.post(`hospital/admissions/${target.value.id}/discharge`, { ...dischargeForm });
-    message.success('Patient discharged.');
+    message.success(t('Hm_Patient_Discharged'));
     dischargeOpen.value = false;
     crud.fetchRows();
     loadBeds();
@@ -400,13 +399,13 @@ function onTransferBedChange(id) {
 
 async function submitTransfer() {
   if (!transferForm.bed_id) {
-    message.warning('Pick a bed to transfer into.');
+    message.warning(t('Hm_Pick_Bed_To_Transfer'));
     return;
   }
   working.value = true;
   try {
     await http.post(`hospital/admissions/${target.value.id}/transfer`, { ...transferForm });
-    message.success('Patient transferred.');
+    message.success(t('Hm_Patient_Transferred'));
     transferOpen.value = false;
     crud.fetchRows();
     loadBeds();

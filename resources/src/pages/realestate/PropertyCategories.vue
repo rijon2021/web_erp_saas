@@ -13,7 +13,7 @@
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'image'">
           <img
-            v-if="record.image" :src="'/' + record.image"
+            v-if="record.image" :src="publicUrl(record.image)" @error="onImageError"
             style="width: 48px; height: 38px; object-fit: cover; border-radius: 6px"
           />
           <span v-else style="color: rgba(var(--ink-rgb), 0.45)">—</span>
@@ -73,6 +73,7 @@ import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { uploadForm } from '../../lib/upload';
+import { publicUrl, onImageError } from '../../lib/uploadUrl';
 
 const { t } = useI18n();
 

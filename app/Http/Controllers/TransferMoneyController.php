@@ -95,24 +95,28 @@ class TransferMoneyController extends BaseController
             return response()->json(['error' => 'Account From and to account cannot be the same.'], 400);
         }
 
-        // Retrieve account balances
-        $from_account = Account::findOrFail($request->from_account_id);
-        $to_account = Account::findOrFail($request->to_account_id);
+        // 404 early on an unknown account, before any locking.
+        Account::findOrFail($request->from_account_id);
+        Account::findOrFail($request->to_account_id);
 
-        // Check if from_account has enough balance
-        if ($from_account->balance < $request->amount) {
-            return response()->json(['error' => 'Insufficient balance in the from account.'], 400);
-        }
+        $insufficient = false;
 
-        \DB::transaction(function () use ($request, $from_account, $to_account) {
+        \DB::transaction(function () use ($request, &$insufficient) {
 
-            $from_account->update([
-                'balance' => $from_account->balance - $request->amount,
-            ]);
+            // The sufficiency check has to read the balance, so the row is held
+            // for the rest of the transaction. Without the lock two transfers
+            // can each see enough funds, both pass the check, and together
+            // overdraw the account.
+            $from_account = Account::where('id', $request->from_account_id)->lockForUpdate()->first();
 
-            $to_account->update([
-                'balance' => $to_account->balance + $request->amount,
-            ]);
+            if (! $from_account || $from_account->balance < $request->amount) {
+                $insufficient = true;
+
+                return;
+            }
+
+            Account::adjustBalance($request->from_account_id, -$request->amount);
+            Account::adjustBalance($request->to_account_id, $request->amount);
 
             TransferMoney::create([
                 'from_account_id' => $request['from_account_id'],
@@ -122,6 +126,10 @@ class TransferMoneyController extends BaseController
             ]);
 
         }, 10);
+
+        if ($insufficient) {
+            return response()->json(['error' => 'Insufficient balance in the from account.'], 400);
+        }
 
         return response()->json(['success' => true], 200);
     }
@@ -142,41 +150,89 @@ class TransferMoneyController extends BaseController
 
         $transfer = TransferMoney::findOrFail($id);
 
+        // Editing a deleted transfer would adjust balances that destroy() has
+        // already put back.
+        if ($transfer->deleted_at !== null) {
+            return response()->json(['error' => 'This transfer has been deleted.'], 400);
+        }
+
         request()->validate([
             'amount' => 'required',
             'date' => 'required',
         ]);
 
-        // Retrieve account
-        $from_account = Account::findOrFail($transfer->from_account_id);
-        $to_account = Account::findOrFail($transfer->to_account_id);
+        // The accounts may be changed on an edit. When the request leaves them
+        // out the transfer keeps the ones it already has — previously the new
+        // ids were read for the checks below and then silently dropped, so a
+        // change appeared to save but never did.
+        $fromAccountId = (int) ($request->from_account_id ?: $transfer->from_account_id);
+        $toAccountId = (int) ($request->to_account_id ?: $transfer->to_account_id);
 
-        // Additional check if from_account_id and to_account_id are not the same
-        if ($request->from_account_id === $request->to_account_id) {
+        // 404 if any account involved, old or new, no longer exists.
+        $involved = array_unique([
+            (int) $transfer->from_account_id, (int) $transfer->to_account_id,
+            $fromAccountId, $toAccountId,
+        ]);
+        foreach ($involved as $accountId) {
+            Account::findOrFail($accountId);
+        }
+
+        // Compared as integers: the request carries strings, so the previous
+        // strict comparison never matched and let a same-account edit through.
+        if ($fromAccountId === $toAccountId) {
             return response()->json(['error' => 'Account From and to account cannot be the same.'], 400);
         }
 
-        // Check if from_account has enough balance
-        if (($from_account->balance + $transfer->amount) < $request->amount) {
-            return response()->json(['error' => 'Insufficient balance in the from account.'], 400);
-        }
+        $insufficient = false;
 
-        \DB::transaction(function () use ($request, $from_account, $to_account, $transfer) {
+        \DB::transaction(function () use ($request, $transfer, $fromAccountId, $toAccountId, &$insufficient) {
 
-            $from_account->update([
-                'balance' => $from_account->balance + $transfer->amount - $request->amount,
-            ]);
+            $accountsChanged = $fromAccountId !== (int) $transfer->from_account_id
+                || $toAccountId !== (int) $transfer->to_account_id;
 
-            $to_account->update([
-                'balance' => $to_account->balance - $transfer->amount + $request->amount,
-            ]);
+            // Same reasoning as store(): the check reads a balance, so the row
+            // stays locked until the adjustment below has been written.
+            $from_account = Account::where('id', $fromAccountId)->lockForUpdate()->first();
+
+            // What the source can afford: its balance, plus the old amount only
+            // when the source is unchanged, because that money is about to be
+            // handed back to it.
+            $available = $from_account
+                ? $from_account->balance + ($accountsChanged ? 0 : $transfer->amount)
+                : 0;
+
+            if (! $from_account || $available < $request->amount) {
+                $insufficient = true;
+
+                return;
+            }
+
+            if ($accountsChanged) {
+                // Undo the whole transfer on the accounts that were actually
+                // charged, then apply the new one to the accounts being saved.
+                Account::adjustBalance($transfer->from_account_id, $transfer->amount);
+                Account::adjustBalance($transfer->to_account_id, -$transfer->amount);
+                Account::adjustBalance($fromAccountId, -$request->amount);
+                Account::adjustBalance($toAccountId, $request->amount);
+            } else {
+                // Same accounts: move only the difference, so the balance is
+                // never momentarily wrong.
+                Account::adjustBalance($fromAccountId, $transfer->amount - $request->amount);
+                Account::adjustBalance($toAccountId, $request->amount - $transfer->amount);
+            }
 
             $transfer->update([
+                'from_account_id' => $fromAccountId,
+                'to_account_id' => $toAccountId,
                 'amount' => $request['amount'],
                 'date' => $request['date'],
             ]);
 
         }, 10);
+
+        if ($insufficient) {
+            return response()->json(['error' => 'Insufficient balance in the from account.'], 400);
+        }
 
         return response()->json(['success' => true], 200);
 
@@ -188,27 +244,37 @@ class TransferMoneyController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'delete', TransferMoney::class);
 
-        \DB::transaction(function () use ($id) {
+        $alreadyDeleted = false;
 
-            $transfer = TransferMoney::findOrFail($id);
+        \DB::transaction(function () use ($id, &$alreadyDeleted) {
 
-            // Retrieve account
-            $from_account = Account::findOrFail($transfer->from_account_id);
-            $to_account = Account::findOrFail($transfer->to_account_id);
+            // Locked, because the check and the reversal below must be one step:
+            // two concurrent deletes would otherwise both pass the check and
+            // reverse the balances twice.
+            $transfer = TransferMoney::where('id', $id)->lockForUpdate()->firstOrFail();
 
-            $from_account->update([
-                'balance' => $from_account->balance + $transfer->amount,
-            ]);
+            if ($transfer->deleted_at !== null) {
+                $alreadyDeleted = true;
 
-            $to_account->update([
-                'balance' => $to_account->balance - $transfer->amount,
-            ]);
+                return;
+            }
+
+            // 404 if either side of the transfer no longer exists.
+            Account::findOrFail($transfer->from_account_id);
+            Account::findOrFail($transfer->to_account_id);
+
+            Account::adjustBalance($transfer->from_account_id, $transfer->amount);
+            Account::adjustBalance($transfer->to_account_id, -$transfer->amount);
 
             $transfer->update([
                 'deleted_at' => Carbon::now(),
             ]);
 
         }, 10);
+
+        if ($alreadyDeleted) {
+            return response()->json(['error' => 'This transfer has already been deleted.'], 400);
+        }
 
         return response()->json(['success' => true], 200);
     }

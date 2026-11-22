@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Central\EInvoicingProviderSetting;
 use App\Models\FbrDocument;
 use App\Models\FbrLog;
 use App\Models\FbrSetting;
@@ -34,6 +35,7 @@ class FbrController extends Controller
 
         return response()->json([
             'settings' => $this->publicSettings($fbr),
+            'platform_enabled' => EInvoicingProviderSetting::platformEnabled('fbr'),
             'company' => [
                 'name' => $setting->CompanyName ?? null,
                 'address' => $setting->CompanyAdress ?? null,

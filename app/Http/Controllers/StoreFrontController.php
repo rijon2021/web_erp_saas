@@ -12,6 +12,8 @@ use App\Models\Collection;
 use App\Models\Product;
 use App\Models\StoreBanner;
 use App\Models\StoreSetting;
+use App\Services\CheckoutService;
+use App\Services\ComboStockService;
 use Illuminate\Support\Facades\Schema;
 use DB;
 use Illuminate\Http\Request;
@@ -39,6 +41,25 @@ class StoreFrontController extends Controller
         }
         if (($s->theme ?? 'default') === 'grocery') {
             return app(GroceryStoreController::class)->home($request);
+        }
+        if (($s->theme ?? 'default') === 'fashion') {
+            return app(FashionStoreController::class)->home($request);
+        }
+        if (($s->theme ?? 'default') === 'cars') {
+            return app(CarsStoreController::class)->home($request);
+        }
+        if (($s->theme ?? 'default') === 'restaurant') {
+            return app(RestaurantStoreController::class)->home($request);
+        }
+        if (($s->theme ?? 'default') === 'rental') {
+            return app(RentalStoreController::class)->home($request);
+        }
+        if (($s->theme ?? 'default') === 'booking') {
+            return app(BookingStoreController::class)->home($request);
+        }
+        // Electronics Premium ($s->theme already fell back to 'electronics' when the plan lost it).
+        if (($s->theme ?? 'default') === \App\Support\PremiumElectronicsTheme::KEY) {
+            return app(PremiumElectronicsStoreController::class)->home($request);
         }
 
         // 1) Load lineup (already cast to array by StoreSetting::$casts)
@@ -173,7 +194,7 @@ class StoreFrontController extends Controller
                     $defaultTitle = __('messages.YouMayAlsoLike');
                 }
 
-                $this->attachStockToProducts($products, $s->default_warehouse_id);
+                $this->attachStockToProducts($products, $s->activeWarehouseIds());
                 if ($s->hide_out_of_stock ?? false) {
                     $products = $products->filter(fn ($p) => $this->productHasStock($p))->values();
                 }
@@ -209,9 +230,10 @@ class StoreFrontController extends Controller
                 // === Use the same SQL pipeline as shop(), scoped to this collection ===
                 $products = Product::query()
                     ->where('products.is_active', 1)
-                    ->where('products.hide_from_online_store', 0)
+                    ->where('products.hide_from_online_store', 0)->forStorefrontWarehouses()
                     ->with([
                         'variants:id,product_id,name,price,image',
+                        ...\App\Services\ProductOptionService::storefrontRelations(),
                         'images:id,product_id,image_path,is_main,sort_order',
                     ]) // QuickView / gallery + variant picker
                     ->join('collection_product', 'collection_product.product_id', '=', 'products.id')
@@ -260,7 +282,7 @@ class StoreFrontController extends Controller
                     }
                 }
 
-                $this->attachStockToProducts($products, $s->default_warehouse_id);
+                $this->attachStockToProducts($products, $s->activeWarehouseIds());
 
                 if ($s->hide_out_of_stock ?? false) {
                     $products = $products->filter(fn ($p) => $this->productHasStock($p));
@@ -336,6 +358,25 @@ class StoreFrontController extends Controller
     {
         $s = StoreSetting::firstOrFail();
 
+        // Car Dealership theme: vehicle inventory with spec filters.
+        if (($s->theme ?? 'default') === 'cars') {
+            return app(CarsStoreController::class)->inventory($request);
+        }
+        // Restaurant theme: the menu on the homepage is the shop (a search goes along).
+        if (($s->theme ?? 'default') === 'restaurant') {
+            $q = trim((string) $request->input('q', ''));
+
+            return redirect(store_base_url('').($q !== '' ? '?q='.rawurlencode(mb_substr($q, 0, 100)) : '').'#menu');
+        }
+        // Rental theme: the rental catalogue (Rental module items, not products).
+        if (($s->theme ?? 'default') === 'rental') {
+            return app(RentalStoreController::class)->catalog($request);
+        }
+        // Booking theme: the services list lives on the homepage.
+        if (($s->theme ?? 'default') === 'booking') {
+            return redirect(store_base_url('').'#services');
+        }
+
         $q = trim((string) $request->get('q', ''));
         $cat = $request->get('category');
         $subCat = $request->get('sub_category');
@@ -343,6 +384,9 @@ class StoreFrontController extends Controller
         $maxPrice = $request->get('max');
         $sort = $request->get('sort', 'latest');   // latest|price_asc|price_desc
         $coll = $request->get('collection');       // id or slug
+        // Size / colour filters (?size[]=M&color[]=Red), see App\Support\StoreFacets.
+        $sizes = \App\Support\StoreFacets::selected($request->query('size'));
+        $colors = \App\Support\StoreFacets::selected($request->query('color'));
 
         // 1) Subquery: MIN(variant.price) per product
         $minVariantSub = DB::table('product_variants')
@@ -374,10 +418,11 @@ class StoreFrontController extends Controller
         $productsQuery = Product::query()
             ->where('deleted_at', '=', null)
             ->where('is_active', 1)
-            ->where('hide_from_online_store', 0)
+            ->where('hide_from_online_store', 0)->forStorefrontWarehouses()
             // Note: product_variants table doesn't have a `qty` column; stock comes from product_warehouse.qte
             ->with([
                 'variants:id,product_id,name,price,image',
+                ...\App\Services\ProductOptionService::storefrontRelations(),
                 'images:id,product_id,image_path,is_main,sort_order',
             ]) // Quick View / gallery + picker
             ->leftJoinSub($minVariantSub, 'pvmin', function ($join) {
@@ -390,8 +435,8 @@ class StoreFrontController extends Controller
                 DB::raw("$finalExpr AS final_display_price")   // <= final price for filter/sort/UI
             );
 
-        if ($s->hide_out_of_stock && $s->default_warehouse_id) {
-            $inStockIds = $this->getInStockProductIds((int) $s->default_warehouse_id);
+        if ($s->hide_out_of_stock && ($storeWarehouseIds = $s->activeWarehouseIds())) {
+            $inStockIds = $this->getInStockProductIds($storeWarehouseIds);
             $productsQuery->whereIn('products.id', $inStockIds);
         }
 
@@ -448,6 +493,40 @@ class StoreFrontController extends Controller
                 });
             });
 
+        \App\Support\StoreFacets::apply($products, $sizes, $colors, $s);
+
+        // Brand (?brand=<id>) and deals (?deals=1: discounted or in a running
+        // flash sale) — linked from the themed headers, footers and brand strips.
+        $brandId = (int) $request->query('brand', 0);
+        if ($brandId > 0) {
+            $products->where('products.brand_id', $brandId);
+        }
+        if ($request->boolean('deals')) {
+            $flashIds = store_flash_ids();
+            $products->where(function ($q) use ($flashIds) {
+                $q->where('products.discount', '>', 0);
+                if ($flashIds) {
+                    $q->orWhereIn('products.id', $flashIds);
+                }
+            });
+        }
+
+        // Electronics Premium: spec filters (?spec[Storage][]=256 GB). Facet
+        // values come from the results before the spec filters narrow them.
+        $specFacets = [];
+        $specSelected = [];
+        $pxShop = ($s->theme ?? 'default') === \App\Support\PremiumElectronicsTheme::KEY && \App\Support\StoreSpecs::ready();
+        if ($pxShop) {
+            $specLabels = \App\Support\StoreSpecs::filterLabels(\App\Support\PremiumElectronicsTheme::options($s));
+            if ($specLabels) {
+                $specSelected = \App\Support\StoreSpecs::selected($request->query('spec'), $specLabels);
+                // Facets read the newest 5,000 matches (enough for any one listing).
+                $facetIds = (clone $products)->reorder()->orderByDesc('products.id')->limit(5000)->pluck('products.id')->map(fn ($id) => (int) $id)->all();
+                $specFacets = \App\Support\StoreSpecs::facets($facetIds, $specLabels);
+                \App\Support\StoreSpecs::apply($products, $specSelected);
+            }
+        }
+
         // Sort
         if ($sort === 'price_asc') {
             $products->orderByRaw("$finalExpr ASC");
@@ -471,10 +550,15 @@ class StoreFrontController extends Controller
         foreach ($products as $p) {
             $p->display_price = (float) ($p->final_display_price ?? 0);
         }
-        $this->attachStockToProducts($products, $s->default_warehouse_id);
+        $this->attachStockToProducts($products, $s->activeWarehouseIds());
         $this->attachRatings($products->getCollection());
+        if ($pxShop) {
+            $products->getCollection()->loadMissing('brand:id,name'); // premium cards print the brand
+        }
 
         return view('store.shop', [
+            'specFacets' => $specFacets,
+            'specSelected' => $specSelected,
             's' => $s,
             'products' => $products,
             'categories' => $categories,
@@ -485,6 +569,9 @@ class StoreFrontController extends Controller
             'max' => $maxPrice,
             'sort' => $sort,
             'collection' => $coll,
+            'sizes' => $sizes,
+            'colors' => $colors,
+            'facets' => \App\Support\StoreFacets::facets(),
             'showCategoryBar' => true,
         ]);
     }
@@ -517,7 +604,7 @@ class StoreFrontController extends Controller
      *
      * Ported from the standalone Stocky storefront. The features that page
      * carries but this product does not have — vehicle fitment, wholesale
-     * quantity tiers, size guides, wishlist and compare — are left out rather
+     * quantity tiers, wishlist and compare — are left out rather
      * than stubbed; everything else (gallery, variants, pricing, stock,
      * reviews, related products, SEO) uses this codebase's own helpers.
      */
@@ -525,16 +612,34 @@ class StoreFrontController extends Controller
     {
         $s = StoreSetting::firstOrFail();
 
+        // Car Dealership theme: vehicle page (specs, finance, lead forms).
+        if (($s->theme ?? 'default') === 'cars') {
+            return app(CarsStoreController::class)->show($request, $id);
+        }
+        // Restaurant theme: a dish opens in its dialog on the menu.
+        if (($s->theme ?? 'default') === 'restaurant') {
+            return redirect(store_base_url('').'#dish-'.(int) $id);
+        }
+        // Rental theme: products are not listed — send old product links to the catalogue.
+        if (($s->theme ?? 'default') === 'rental') {
+            return redirect(store_route_or('store.shop'));
+        }
+        // Booking theme: a service product opens the booking steps; anything else goes home.
+        if (($s->theme ?? 'default') === 'booking') {
+            return redirect(store_base_url('book').'?service='.(int) $id);
+        }
+
         [$minVariantSub, $baseExpr, $afterDiscountExpr, $finalExpr] = $this->priceSqlParts();
         $defaultTaxRate = (float) ($s->default_tax_rate ?? 0);
 
         $product = Product::query()
             ->whereNull('products.deleted_at')
             ->where('products.is_active', 1)
-            ->where('products.hide_from_online_store', 0)
+            ->where('products.hide_from_online_store', 0)->forStorefrontWarehouses()
             ->where('products.id', (int) $id)
             ->with([
                 'variants:id,product_id,name,price,image,code,qty',
+                ...\App\Services\ProductOptionService::storefrontRelations(),
                 'images:id,product_id,image_path,is_main,sort_order',
                 'brand:id,name,description,image',
                 'category:id,name',
@@ -557,7 +662,7 @@ class StoreFrontController extends Controller
 
         $bundle = collect([$product]);
         $this->applyDisplayPrices($bundle, $defaultTaxRate);
-        $this->attachStockToProducts($bundle, $s->default_warehouse_id);
+        $this->attachStockToProducts($bundle, $s->activeWarehouseIds());
         $this->attachRatings($bundle);
 
         $related = $this->buildRelatedProducts(
@@ -611,10 +716,16 @@ class StoreFrontController extends Controller
             ];
         }
 
+        // Electronics Premium adds spec table, bundle and compare blocks to this page.
+        $premium = ($s->theme ?? 'default') === \App\Support\PremiumElectronicsTheme::KEY
+            ? app(PremiumElectronicsStoreController::class)->productExtras($s, $product)
+            : null;
+
         return view('store.product', [
             's' => $s,
             'product' => $product,
             'related' => $related,
+            'premium' => $premium,
             'reviewStats' => $reviewStats,
             'categories' => $this->storeCategories(),
             'showCategoryBar' => true,
@@ -641,10 +752,11 @@ class StoreFrontController extends Controller
         $base = fn () => Product::query()
             ->whereNull('products.deleted_at')
             ->where('products.is_active', 1)
-            ->where('products.hide_from_online_store', 0)
+            ->where('products.hide_from_online_store', 0)->forStorefrontWarehouses()
             ->where('products.id', '!=', $product->id)
             ->with([
                 'variants:id,product_id,name,price,image,qty',
+                ...\App\Services\ProductOptionService::storefrontRelations(),
                 'images:id,product_id,image_path,is_main,sort_order',
             ])
             ->leftJoinSub($minVariantSub, 'pvmin', function ($join) {
@@ -674,7 +786,7 @@ class StoreFrontController extends Controller
         }
 
         $this->applyDisplayPrices($products, $defaultTaxRate);
-        $this->attachStockToProducts($products, $s->default_warehouse_id);
+        $this->attachStockToProducts($products, $s->activeWarehouseIds());
         $this->attachRatings($products);
 
         if ($s->hide_out_of_stock ?? false) {
@@ -733,10 +845,11 @@ class StoreFrontController extends Controller
 
         $query = Product::query()
             ->where('products.is_active', 1)
-            ->where('products.hide_from_online_store', 0)
+            ->where('products.hide_from_online_store', 0)->forStorefrontWarehouses()
             ->whereIn('products.id', array_keys($rules))
             ->with([
                 'variants:id,product_id,name,price,image',
+                ...\App\Services\ProductOptionService::storefrontRelations(),
                 'images:id,product_id,image_path,is_main,sort_order',
             ])
             ->leftJoinSub($minVariantSub, 'pvmin', function ($join) {
@@ -790,7 +903,7 @@ class StoreFrontController extends Controller
             }
         }
 
-        $this->attachStockToProducts($products, $s->default_warehouse_id ? (int) $s->default_warehouse_id : null);
+        $this->attachStockToProducts($products, $s->activeWarehouseIds());
 
         if ($s->hide_out_of_stock ?? false) {
             $products = $products->filter(fn ($p) => $this->productHasStock($p))->values();
@@ -807,12 +920,14 @@ class StoreFrontController extends Controller
     }
 
     /**
-     * Attach stock (qty) to each product and its variants from product_warehouse for the given warehouse.
+     * Attach stock (qty) to each product and its variants from product_warehouse, summed across the given warehouses.
      * Product without variants: $p->stock. Variants: $v->stock (fallback to $v->qty if no warehouse row).
+     *
+     * @param  int[]  $warehouseIds
      */
-    protected function attachStockToProducts($products, ?int $warehouseId): void
+    protected function attachStockToProducts($products, array $warehouseIds): void
     {
-        if (! $warehouseId || ! $products) {
+        if (! $warehouseIds || ! $products) {
             foreach ($products as $p) {
                 $p->stock = 0;
                 if ($p->relationLoaded('variants') && $p->variants) {
@@ -842,7 +957,7 @@ class StoreFrontController extends Controller
         $variantIds = array_values(array_unique(array_filter($variantIds)));
 
         $q = DB::table('product_warehouse')
-            ->where('warehouse_id', $warehouseId)
+            ->whereIn('warehouse_id', $warehouseIds)
             ->whereIn('product_id', $productIds);
         if (count($variantIds) > 0) {
             $q->where(function ($qb) use ($variantIds) {
@@ -861,7 +976,23 @@ class StoreFrontController extends Controller
             $pid = (int) $r->product_id;
             $vid = $r->product_variant_id !== null ? (int) $r->product_variant_id : null;
             $key = $vid !== null ? "{$pid}:{$vid}" : "{$pid}:p";
-            $stockMap[$key] = (float) $r->qte;
+            $stockMap[$key] = ($stockMap[$key] ?? 0.0) + (float) $r->qte;
+        }
+
+        // Virtual combo stock: a combo shows what its components can still
+        // fill; one whose components never run out is flagged always-in-stock
+        // (in memory only).
+        if (ComboStockService::enabled()) {
+            $combos = collect($items)->filter(fn ($p) => ($p->type ?? null) === 'is_combo')->keyBy('id');
+            if ($combos->isNotEmpty()) {
+                $available = app(ComboStockService::class)->availability($combos->keys()->map(fn ($v) => (int) $v)->all(), $warehouseIds);
+                foreach ($available as $pid => $qty) {
+                    $stockMap["{$pid}:p"] = $qty ?? 0.0;
+                    if ($qty === null) {
+                        $combos[$pid]->always_in_stock = true;
+                    }
+                }
+            }
         }
 
         foreach ($items as $p) {
@@ -906,19 +1037,24 @@ class StoreFrontController extends Controller
     }
 
     /**
-     * Product IDs that have at least one unit in stock in the given warehouse.
+     * Product IDs that have at least one unit in stock across the given warehouses.
      * Used when hide_out_of_stock is enabled.
+     *
+     * @param  int[]  $warehouseIds
      */
-    private function getInStockProductIds(int $warehouseId): array
+    protected function getInStockProductIds(array $warehouseIds): array
     {
         $q = DB::table('product_warehouse')
-            ->where('warehouse_id', $warehouseId)
-            ->where('qte', '>', 0);
+            ->whereIn('warehouse_id', $warehouseIds);
         if (Schema::hasColumn('product_warehouse', 'deleted_at')) {
             $q->whereNull('deleted_at');
         }
 
-        $inStockIds = $q->distinct()->pluck('product_id')->all();
+        $inStockIds = $q->select('product_id')
+            ->groupBy('product_id')
+            ->havingRaw('SUM(qte) > 0')
+            ->pluck('product_id')
+            ->all();
 
         // Include pre-order and "Always in stock" products even when out of stock
         $preorderIds = DB::table('products')
@@ -933,11 +1069,40 @@ class StoreFrontController extends Controller
             ->pluck('id')
             ->all();
 
-        return array_values(array_unique(array_merge($inStockIds, $preorderIds)));
+        // Virtual combo stock: the combo's own row is ignored — list the combos
+        // their components can still fill instead.
+        $comboIds = [];
+        if (ComboStockService::enabled()) {
+            $allCombos = DB::table('products')
+                ->where('type', 'is_combo')
+                ->where('is_active', 1)
+                ->whereNull('deleted_at')
+                ->pluck('id')
+                ->map(fn ($v) => (int) $v)
+                ->all();
+            $inStockIds = array_values(array_diff(array_map('intval', $inStockIds), $allCombos));
+            if ($allCombos) {
+                foreach (app(ComboStockService::class)->availability($allCombos, $warehouseIds) as $pid => $qty) {
+                    if ($qty === null || $qty > 0) {
+                        $comboIds[] = $pid;
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique(array_merge($inStockIds, $preorderIds, $comboIds)));
     }
     /**
      * Search suggestions for autocomplete.
      */
+    /** The Car Dealership theme's reservation-deposit product id, when that theme is active. */
+    protected function carsDepositId(): ?int
+    {
+        $s = StoreSetting::first();
+
+        return $s && $s->theme === \App\Support\CarsTheme::KEY ? \App\Support\CarsTheme::options($s)['reserve_product_id'] : null;
+    }
+
     public function searchSuggestions(Request $request)
     {
         $q = trim((string) $request->get('q', ''));
@@ -945,17 +1110,16 @@ class StoreFrontController extends Controller
             return response()->json([]);
         }
 
-        $s = StoreSetting::first();
-        $warehouseId = $s->default_warehouse_id ?? null;
-
         $products = Product::query()
             ->where('is_active', 1)
-            ->where('hide_from_online_store', 0)
+            ->where('hide_from_online_store', 0)->forStorefrontWarehouses()
             ->where(function ($query) use ($q) {
                 $query->where('name', 'like', "%{$q}%")
                     ->orWhere('code', 'like', "%{$q}%")
                     ->orWhere('note', 'like', "%{$q}%");
             })
+            // Car Dealership theme: the reservation-deposit product is never listed.
+            ->when(($depositId = $this->carsDepositId()) !== null, fn ($query) => $query->where('id', '!=', $depositId))
             ->take(8)
             ->get(['id', 'name', 'code', 'image', 'price', 'tax_method', 'TaxNet', 'discount', 'discount_method']);
 
@@ -964,10 +1128,36 @@ class StoreFrontController extends Controller
             $fn = $p->primaryProductImageFilename();
             $p->image_url = product_image_url($fn);
             $p->display_price = $p->computeFinalPrice()['final'];
-            $p->url = route('store.shop', ['q' => $p->name]); 
+            $p->url = route('store.shop', ['q' => $p->name]);
         }
 
         return response()->json($products);
+    }
+
+    /**
+     * Which of the cart's products / variants the store still sells, so the
+     * browser-held cart can drop lines hidden, deactivated or deleted since
+     * they were added. Same rule checkout enforces.
+     */
+    public function cartAvailability(Request $request)
+    {
+        $parse = fn (string $key) => collect(explode(',', (string) $request->query($key, '')))
+            ->map(fn ($v) => (int) trim($v))
+            ->filter(fn ($v) => $v > 0)
+            ->unique()
+            ->take(200)
+            ->values();
+
+        $ids = $parse('ids');
+        $variantIds = $parse('variants');
+
+        $products = $ids->isEmpty() ? [] : CheckoutService::sellableProducts()
+            ->whereIn('id', $ids)->pluck('id')->map(fn ($id) => (string) $id)->all();
+        $variants = $variantIds->isEmpty() ? [] : CheckoutService::sellableVariants()
+            ->whereIn('id', $variantIds)->pluck('id')->map(fn ($id) => (string) $id)->all();
+
+        return response()->json(['products' => $products, 'variants' => $variants])
+            ->header('Cache-Control', 'no-store');
     }
 
     /**
@@ -1041,9 +1231,10 @@ class StoreFrontController extends Controller
         $query = Product::query()
             ->whereNull('products.deleted_at')
             ->where('products.is_active', 1)
-            ->where('products.hide_from_online_store', 0)
+            ->where('products.hide_from_online_store', 0)->forStorefrontWarehouses()
             ->with([
                 'variants:id,product_id,name,price,image',
+                ...\App\Services\ProductOptionService::storefrontRelations(),
                 'images:id,product_id,image_path,is_main,sort_order',
             ])
             ->joinSub($soldSub, 'sold', function ($join) {
@@ -1068,7 +1259,7 @@ class StoreFrontController extends Controller
 
         $products = $query->get();
         $this->applyDisplayPrices($products, $defaultTaxRate);
-        $this->attachStockToProducts($products, $s->default_warehouse_id ? (int) $s->default_warehouse_id : null);
+        $this->attachStockToProducts($products, $s->activeWarehouseIds());
 
         if ($s->hide_out_of_stock ?? false) {
             $products = $products->filter(fn ($p) => $this->productHasStock($p))->values();
@@ -1114,9 +1305,10 @@ class StoreFrontController extends Controller
         return Product::query()
             ->whereNull('products.deleted_at')
             ->where('products.is_active', 1)
-            ->where('products.hide_from_online_store', 0)
+            ->where('products.hide_from_online_store', 0)->forStorefrontWarehouses()
             ->with([
                 'variants:id,product_id,name,price,image',
+                ...\App\Services\ProductOptionService::storefrontRelations(),
                 'images:id,product_id,image_path,is_main,sort_order',
             ]);
     }
@@ -1161,7 +1353,7 @@ class StoreFrontController extends Controller
             }
         }
 
-        $this->attachStockToProducts($products, $s->default_warehouse_id ? (int) $s->default_warehouse_id : null);
+        $this->attachStockToProducts($products, $s->activeWarehouseIds());
 
         if ($s->hide_out_of_stock ?? false) {
             $products = $products->filter(fn ($p) => $this->productHasStock($p))->values();
@@ -1209,11 +1401,11 @@ class StoreFrontController extends Controller
      */
     protected function buildAutoSections(StoreSetting $s, array $blocks, $categories, float $defaultTaxRate, bool $lineupIsEmpty = true): array
     {
-        $visible = Product::query()->where('is_active', 1)->where('hide_from_online_store', 0);
+        $visible = Product::query()->where('is_active', 1)->where('hide_from_online_store', 0)->forStorefrontWarehouses();
         $counts = (clone $visible)->select('category_id', DB::raw('COUNT(*) AS c'))->groupBy('category_id')->pluck('c', 'category_id');
 
         $tiles = $categories->map(function ($c) use ($counts) {
-            $img = Product::query()->where('category_id', $c->id)->where('is_active', 1)->where('hide_from_online_store', 0)
+            $img = Product::query()->where('category_id', $c->id)->where('is_active', 1)->where('hide_from_online_store', 0)->forStorefrontWarehouses()
                 ->whereNotNull('image')->where('image', '!=', '')->where('image', '!=', 'no-image.png')
                 ->orderByDesc('is_featured')->orderByDesc('created_at')->value('image');
 

@@ -1,9 +1,9 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="store.name || 'Store'"
+      :title="store.name || $t('Store')"
       :subtitle="store.shop_domain"
-      :breadcrumb="['Shopify', 'Stores', store.shop_domain || '']"
+      :breadcrumb="['Shopify', $t('Stores'), store.shop_domain || '']"
     >
       <template #actions>
         <a-button @click="$router.push('/shopify/stores')">
@@ -12,15 +12,15 @@
         </a-button>
         <a-button :loading="testing" @click="test">
           <template #icon><ApiOutlined /></template>
-          Test connection
+          {{ $t('Test_Connection') }}
         </a-button>
         <a-button @click="edit()">
           <template #icon><EditOutlined /></template>
-          Edit store
+          {{ $t('Edit_Store') }}
         </a-button>
         <a-button type="primary" @click="$router.push(`/shopify/sync?store_id=${id}`)">
           <template #icon><SyncOutlined /></template>
-          Sync
+          {{ $t('Sync') }}
         </a-button>
       </template>
     </PageHeader>
@@ -29,49 +29,49 @@
       <a-alert
         v-if="store.status === 'error'"
         type="error" show-icon style="margin-bottom: 16px"
-        message="This store is not reachable"
+        :message="$t('Shp_Store_Not_Reachable')"
         :description="store.last_error"
       />
 
       <div class="kpis">
         <div class="kpi">
-          <span class="kpi-label">Status</span>
+          <span class="kpi-label">{{ $t('Status') }}</span>
           <span class="kpi-value">
             <a-tag :color="optionOf(STORE_STATUSES, store.status).color">
               {{ labelOf(STORE_STATUSES, store.status) }}
             </a-tag>
           </span>
-          <span class="kpi-sub">{{ store.last_connected_at ? dateTime(store.last_connected_at) : 'Never verified' }}</span>
+          <span class="kpi-sub">{{ store.last_connected_at ? dateTime(store.last_connected_at) : $t('Shp_Never_Verified') }}</span>
         </div>
         <div class="kpi">
-          <span class="kpi-label">Shop</span>
+          <span class="kpi-label">{{ $t('Shop') }}</span>
           <span class="kpi-value kpi-value--sm">{{ store.shop_name || '—' }}</span>
           <span class="kpi-sub">{{ store.currency || '' }} {{ store.shop_email || '' }}</span>
         </div>
         <div class="kpi">
-          <span class="kpi-label">Warehouse</span>
-          <span class="kpi-value kpi-value--sm">{{ store.warehouse_name || 'Not set' }}</span>
-          <span class="kpi-sub">Shopify location {{ store.location_id || '—' }}</span>
+          <span class="kpi-label">{{ $t('Warehouse') }}</span>
+          <span class="kpi-value kpi-value--sm">{{ store.warehouse_name || $t('Shp_Not_Set') }}</span>
+          <span class="kpi-sub">{{ $t('Shp_Shopify_Location_N', { id: store.location_id || '—' }) }}</span>
         </div>
         <div class="kpi">
-          <span class="kpi-label">Linked records</span>
+          <span class="kpi-label">{{ $t('Shp_Linked_Records') }}</span>
           <span class="kpi-value">{{ number(totalLinked, 0) }}</span>
-          <span class="kpi-sub">{{ links.order || 0 }} orders imported</span>
+          <span class="kpi-sub">{{ $t('Shp_N_Orders_Imported', { n: links.order || 0 }) }}</span>
         </div>
         <div class="kpi">
-          <span class="kpi-label">Last sync</span>
-          <span class="kpi-value kpi-value--sm">{{ store.last_sync_at ? dateTime(store.last_sync_at) : 'Never' }}</span>
-          <span class="kpi-sub">{{ store.auto_sync ? `Auto every ${store.sync_interval_minutes} min` : 'Manual only' }}</span>
+          <span class="kpi-label">{{ $t('Last_Sync') }}</span>
+          <span class="kpi-value kpi-value--sm">{{ store.last_sync_at ? dateTime(store.last_sync_at) : $t('Shp_Never') }}</span>
+          <span class="kpi-sub">{{ store.auto_sync ? $t('Shp_Auto_Every_N_Min_Cap', { n: store.sync_interval_minutes }) : $t('Shp_Manual_Only') }}</span>
         </div>
       </div>
 
       <a-card size="small">
         <a-tabs v-model:activeKey="tab">
           <!-- ------------------------------------------------ overview -->
-          <a-tab-pane key="overview" tab="Overview">
+          <a-tab-pane key="overview" :tab="$t('Shp_Overview')">
             <a-row :gutter="16">
               <a-col :xs="24" :xl="10">
-                <a-descriptions bordered size="small" :column="1" title="Mapped records">
+                <a-descriptions bordered size="small" :column="1" :title="$t('Shp_Mapped_Records')">
                   <a-descriptions-item v-for="(count, type) in links" :key="type" :label="linkLabel(type)">
                     <a class="link" @click="$router.push(`/shopify/mappings?store_id=${id}&entity_type=${type}`)">
                       {{ number(count, 0) }}
@@ -80,13 +80,13 @@
                 </a-descriptions>
               </a-col>
               <a-col :xs="24" :xl="14">
-                <a-card size="small" title="What this store syncs" class="inner">
+                <a-card size="small" :title="$t('Shp_What_Store_Syncs')" class="inner">
                   <div class="ent-list">
                     <div v-for="entity in ENTITIES" :key="entity.value" class="ent-row">
                       <component :is="entity.icon" :size="15" class="ent-ic" />
                       <span class="ent-name">{{ entity.label }}</span>
                       <a-tag :color="store[`sync_${entity.value}`] ? 'success' : 'default'">
-                        {{ store[`sync_${entity.value}`] ? 'On' : 'Off' }}
+                        {{ store[`sync_${entity.value}`] ? $t('Shp_On') : $t('Shp_Off') }}
                       </a-tag>
                     </div>
                   </div>
@@ -97,18 +97,18 @@
             <!-- what the scheduler will do next, whether or not it is switched on -->
             <a-card size="small" class="inner" style="margin-top: 16px">
               <template #title>
-                Automatic sync
+                {{ $t('Shp_Automatic_Sync') }}
                 <a-tag :color="auto.enabled ? 'success' : 'default'" style="margin-inline-start: 6px">
-                  {{ auto.enabled ? 'On' : 'Off' }}
+                  {{ auto.enabled ? $t('Shp_On') : $t('Shp_Off') }}
                 </a-tag>
-                <a-tag v-if="auto.using_default_plan" color="default">Default plan</a-tag>
-                <a-tag v-if="store.instant_stock_push" color="blue">Stock pushed on change</a-tag>
-                <a class="link edit-link" @click="edit('auto')">Change</a>
+                <a-tag v-if="auto.using_default_plan" color="default">{{ $t('Shp_Default_Plan') }}</a-tag>
+                <a-tag v-if="store.instant_stock_push" color="blue">{{ $t('Shp_Stock_Pushed_On_Change') }}</a-tag>
+                <a class="link edit-link" @click="edit('auto')">{{ $t('Change') }}</a>
               </template>
 
               <a-empty
                 v-if="!auto.steps.length" :image="simpleImage"
-                description="Nothing is scheduled — every entity in this store's plan is switched off."
+                :description="$t('Shp_Nothing_Scheduled')"
               />
               <template v-else>
                 <a-table
@@ -122,9 +122,9 @@
                         {{ labelOf(DIRECTIONS, record.direction) }}
                       </a-tag>
                     </template>
-                    <template v-else-if="column.key === 'every'">every {{ record.every }} min</template>
+                    <template v-else-if="column.key === 'every'">{{ $t('Shp_Every_N_Min', { n: record.every }) }}</template>
                     <template v-else-if="column.key === 'last_run_at'">
-                      {{ record.last_run_at ? dateTime(record.last_run_at) : 'never' }}
+                      {{ record.last_run_at ? dateTime(record.last_run_at) : $t('Shp_Never_Lc') }}
                     </template>
                     <template v-else-if="column.key === 'next_due_at'">
                       {{ record.blocked ? '—' : dateTime(record.next_due_at) }}
@@ -138,11 +138,10 @@
                 </a-table>
                 <p class="foot-note">
                   <template v-if="!auto.enabled">
-                    Switched off — these steps only run when someone presses Sync.
+                    {{ $t('Shp_Auto_Off_Note') }}
                   </template>
                   <template v-else>
-                    Run for you by the scheduler, every five minutes — nothing to install.
-                    A manual sync counts as a run: it pushes the next one out by the step's interval.
+                    {{ $t('Shp_Auto_On_Note') }}
                   </template>
                 </p>
               </template>
@@ -153,19 +152,18 @@
               <a-alert
                 v-if="store.sync_inventory && !store.instant_stock_push"
                 type="info" show-icon style="margin-top: 14px"
-                message="Stock reaches Shopify only when the Inventory push step runs"
+                :message="$t('Shp_Stock_Only_On_Push')"
               >
                 <template #description>
-                  A sale at the counter stays invisible to the shop until then — up to
-                  {{ inventoryEvery }} minutes, so the last unit can still be sold online twice.
-                  Switch on <strong>Push stock the moment it changes</strong> and every sale,
-                  return and adjustment is sent within seconds instead.
-                  <a class="link" @click="edit('auto')">Turn it on</a>
+                  <i18n-t keypath="Shp_Stock_Lag_Desc" tag="span">
+                    <template #n>{{ inventoryEvery }}</template>
+                    <template #setting><strong>{{ $t('Shp_Push_Stock_On_Change') }}</strong></template>
+                  </i18n-t>
+                  <a class="link" @click="edit('auto')">{{ $t('Shp_Turn_It_On') }}</a>
                 </template>
               </a-alert>
               <p v-else-if="store.instant_stock_push" class="foot-note">
-                Stock is also pushed within seconds of any sale, return or adjustment, without
-                waiting for a step above.
+                {{ $t('Shp_Instant_Push_Note') }}
               </p>
             </a-card>
           </a-tab-pane>
@@ -173,9 +171,9 @@
           <!-- ------------------------------------------------ runs -->
           <a-tab-pane key="runs">
             <template #tab>
-              <span>Sync history <a-badge :count="runs.length" :number-style="badgeStyle" /></span>
+              <span>{{ $t('Shp_Sync_History') }} <a-badge :count="runs.length" :number-style="badgeStyle" /></span>
             </template>
-            <a-empty v-if="!runs.length" :image="simpleImage" description="Nothing has run for this store" />
+            <a-empty v-if="!runs.length" :image="simpleImage" :description="$t('Shp_Nothing_Run_For_Store')" />
             <a-table
               v-else size="small" :columns="runColumns" :data-source="runs" row-key="id"
               :pagination="false" :scroll="{ x: 820 }"
@@ -193,8 +191,8 @@
                   </a-tag>
                 </template>
                 <template v-else-if="column.key === 'result'">
-                  +{{ record.created }} · {{ record.updated }} upd · {{ record.skipped }} skip
-                  <template v-if="record.failed"> · <span class="bad">{{ record.failed }} fail</span></template>
+                  {{ $t('Shp_Counts_Short', { created: record.created, updated: record.updated, skipped: record.skipped }) }}
+                  <template v-if="record.failed"> · <span class="bad">{{ $t('Shp_N_Fail', { n: record.failed }) }}</span></template>
                 </template>
                 <template v-else-if="column.key === 'started_at'">
                   {{ record.started_at ? dateTime(record.started_at) : '—' }}
@@ -204,31 +202,29 @@
           </a-tab-pane>
 
           <!-- ------------------------------------------------ webhooks -->
-          <a-tab-pane key="webhooks" tab="Webhooks">
+          <a-tab-pane key="webhooks" :tab="$t('Webhooks')">
             <a-alert
               type="info" show-icon style="margin-bottom: 14px"
               :message="store.auth_mode === 'client_credentials'
-                ? 'Click “Register webhooks” below — nothing needs to be entered in Shopify.'
-                : 'Click “Register webhooks” below, and paste the app\'s API secret key into the store settings as the signing secret.'"
+                ? $t('Shp_Hook_Register_Cc')
+                : $t('Shp_Hook_Register_Token')"
             >
               <template #description>
                 <p class="hook-note">
-                  Registering creates the subscriptions in Shopify and points them at this address automatically.
-                  Do not add it by hand under Shopify → Settings → Notifications → Webhooks: those are signed with a
-                  different secret and every delivery would be refused.
+                  {{ $t('Shp_Hook_Note_Register') }}
                 </p>
                 <div class="hook-url">
                   <code>{{ webhookUrl }}</code>
-                  <a-button size="small" @click="copyUrl">Copy</a-button>
+                  <a-button size="small" @click="copyUrl">{{ $t('Copy') }}</a-button>
                 </div>
                 <p class="hook-note">
                   <template v-if="store.auth_mode === 'client_credentials'">
-                    Deliveries are verified with the app's client secret, which is already stored.
+                    {{ $t('Shp_Hook_Verified_Cc') }}
                   </template>
                   <template v-else>
-                    Deliveries without a valid signature are refused, so the secret must be set before webhooks do anything.
+                    {{ $t('Shp_Hook_Verified_Token') }}
                   </template>
-                  Shopify retries until it gets a 2xx, and each delivery is recorded once — a repeated event is a no-op, not a duplicate order.
+                  {{ $t('Shp_Hook_Retries') }}
                 </p>
               </template>
             </a-alert>
@@ -236,29 +232,29 @@
             <a-alert
               v-if="!store.has_webhook_secret"
               type="warning" show-icon style="margin-bottom: 14px"
-              message="No signing secret stored"
-              description="Subscriptions can be created without one, but every delivery will be refused until the app's API secret key is saved on this store (a Dev Dashboard app's client secret already covers this)."
+              :message="$t('Shp_No_Signing_Secret')"
+              :description="$t('Shp_No_Signing_Secret_Desc')"
             />
 
             <div class="hook-actions">
               <a-button type="primary" :loading="registering" @click="registerHooks(false)">
                 <template #icon><ThunderboltOutlined /></template>
-                Register in Shopify
+                {{ $t('Shp_Register_In_Shopify') }}
               </a-button>
               <a-button :loading="loadingHooks" @click="loadHooks">
                 <template #icon><ReloadOutlined /></template>
-                Refresh list
+                {{ $t('Refresh_List') }}
               </a-button>
               <a-popconfirm
-                title="Remove our subscriptions for entities this store no longer syncs?"
-                ok-text="Remove" cancel-text="Cancel" @confirm="registerHooks(true)"
+                :title="$t('Shp_Tidy_Confirm')"
+                :ok-text="$t('Remove')" :cancel-text="$t('Cancel')" @confirm="registerHooks(true)"
               >
                 <a-button :disabled="!hookState.stale.length">
-                  Tidy up{{ hookState.stale.length ? ` (${hookState.stale.length})` : '' }}
+                  {{ $t('Shp_Tidy_Up') }}{{ hookState.stale.length ? ` (${hookState.stale.length})` : '' }}
                 </a-button>
               </a-popconfirm>
               <span class="hook-count">
-                {{ hookState.mine }} of {{ hookState.wanted.length }} topics subscribed
+                {{ $t('Shp_Topics_Subscribed', { mine: hookState.mine, total: hookState.wanted.length }) }}
               </span>
             </div>
 
@@ -268,7 +264,7 @@
             />
 
             <div class="topics">
-              <span class="topics-label">Topics this ERP handles:</span>
+              <span class="topics-label">{{ $t('Shp_Topics_Handled') }}</span>
               <a-tooltip
                 v-for="topic in WEBHOOK_TOPICS" :key="topic"
                 :title="topicHint(topic)"
@@ -285,14 +281,14 @@
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'address'">
                   <span :class="{ 'muted': !record.mine }">{{ record.address }}</span>
-                  <a-tag v-if="!record.mine" color="default" style="margin-inline-start: 6px">another app</a-tag>
+                  <a-tag v-if="!record.mine" color="default" style="margin-inline-start: 6px">{{ $t('Shp_Another_App') }}</a-tag>
                 </template>
                 <template v-else-if="column.key === 'actions'">
                   <a-popconfirm
-                    title="Delete this subscription in Shopify?" ok-text="Delete" cancel-text="Cancel"
+                    :title="$t('Shp_Delete_Subscription_Confirm')" :ok-text="$t('Delete')" :cancel-text="$t('Cancel')"
                     @confirm="deleteHook(record)"
                   >
-                    <a-button type="link" danger size="small" :loading="deletingHook === record.id">Delete</a-button>
+                    <a-button type="link" danger size="small" :loading="deletingHook === record.id">{{ $t('Delete') }}</a-button>
                   </a-popconfirm>
                 </template>
               </template>
@@ -317,7 +313,7 @@
                     v-if="record.status === 'failed'" type="link" size="small"
                     :loading="replaying === record.id" @click="replay(record)"
                   >
-                    Replay
+                    {{ $t('Shp_Replay') }}
                   </a-button>
                 </template>
               </template>
@@ -325,7 +321,7 @@
           </a-tab-pane>
 
           <!-- ------------------------------------------------ setup guide -->
-          <a-tab-pane key="guide" tab="Setup guide">
+          <a-tab-pane key="guide" :tab="$t('Shp_Setup_Guide')">
             <ShopifyGuide
               :store="store" :cron="cron" :webhook-url="webhookUrl" can-edit
               @goto="tab = $event" @edit="edit"
@@ -335,9 +331,9 @@
           <!-- ------------------------------------------------ errors -->
           <a-tab-pane key="errors">
             <template #tab>
-              <span>Errors <a-badge :count="errors.length" :number-style="badgeStyle" /></span>
+              <span>{{ $t('Errors') }} <a-badge :count="errors.length" :number-style="badgeStyle" /></span>
             </template>
-            <a-empty v-if="!errors.length" :image="simpleImage" description="No errors recorded" />
+            <a-empty v-if="!errors.length" :image="simpleImage" :description="$t('Shp_No_Errors_Recorded')" />
             <a-list v-else size="small" :data-source="errors">
               <template #renderItem="{ item }">
                 <a-list-item>
@@ -349,7 +345,7 @@
               </template>
             </a-list>
             <div style="margin-top: 12px">
-              <a-button size="small" @click="$router.push(`/shopify/logs?store_id=${id}`)">All logs for this store</a-button>
+              <a-button size="small" @click="$router.push(`/shopify/logs?store_id=${id}`)">{{ $t('Shp_All_Logs_For_Store') }}</a-button>
             </div>
           </a-tab-pane>
         </a-tabs>
@@ -377,6 +373,7 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { message, Empty } from 'ant-design-vue';
+import { useI18n } from 'vue-i18n';
 import {
   ArrowLeftOutlined, ApiOutlined, SyncOutlined, ThunderboltOutlined, ReloadOutlined, EditOutlined,
 } from '@ant-design/icons-vue';
@@ -391,6 +388,7 @@ import {
 import http from '../../lib/http';
 
 const route = useRoute();
+const { t } = useI18n();
 const { number, dateTime } = useFormat();
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE;
 const badgeStyle = { backgroundColor: 'rgba(128,128,128,0.25)', color: 'inherit', boxShadow: 'none' };
@@ -409,18 +407,18 @@ const webhookUrl = ref('');
 const totalLinked = computed(() => Object.values(links.value).reduce((sum, n) => sum + (n || 0), 0));
 
 const runColumns = [
-  { title: 'Entity', key: 'entity', dataIndex: 'entity', width: 130 },
-  { title: 'Direction', key: 'direction', dataIndex: 'direction', width: 150 },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 130 },
-  { title: 'Result', key: 'result', width: 250 },
-  { title: 'Started', key: 'started_at', dataIndex: 'started_at', width: 160 },
+  { title: t('Shp_Entity'), key: 'entity', dataIndex: 'entity', width: 130 },
+  { title: t('Direction'), key: 'direction', dataIndex: 'direction', width: 150 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 130 },
+  { title: t('Shp_Result'), key: 'result', width: 250 },
+  { title: t('Shp_Started'), key: 'started_at', dataIndex: 'started_at', width: 160 },
 ];
 
 const eventColumns = [
-  { title: 'Topic', dataIndex: 'topic', key: 'topic', width: 180 },
-  { title: 'Event', dataIndex: 'event_id', key: 'event_id' },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 120 },
-  { title: 'Received', key: 'created_at', dataIndex: 'created_at', width: 160 },
+  { title: t('Shp_Topic'), dataIndex: 'topic', key: 'topic', width: 180 },
+  { title: t('Event'), dataIndex: 'event_id', key: 'event_id' },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 120 },
+  { title: t('Received'), key: 'created_at', dataIndex: 'created_at', width: 160 },
   { title: '', key: 'actions', width: 90, align: 'center' },
 ];
 
@@ -433,10 +431,10 @@ function linkLabel(type) {
 const auto = ref({ enabled: false, using_default_plan: true, steps: [] });
 
 const autoColumns = [
-  { title: 'Step', key: 'step', width: 230 },
-  { title: 'Interval', key: 'every', width: 110 },
-  { title: 'Last run', key: 'last_run_at', width: 160 },
-  { title: 'Next due', key: 'next_due_at', width: 160 },
+  { title: t('Shp_Step'), key: 'step', width: 230 },
+  { title: t('Shp_Interval'), key: 'every', width: 110 },
+  { title: t('Shp_Last_Run'), key: 'last_run_at', width: 160 },
+  { title: t('Shp_Next_Due'), key: 'next_due_at', width: 160 },
   { title: '', key: 'state', width: 120 },
 ];
 
@@ -446,10 +444,10 @@ const autoColumns = [
  * saying something about even when it is also overdue.
  */
 function stepState(row) {
-  if (row.running) return 'Running';
-  if (row.blocked) return 'Blocked';
-  if (!auto.value.enabled) return 'Manual';
-  return row.due ? 'Due now' : 'Waiting';
+  if (row.running) return t('Running');
+  if (row.blocked) return t('Blocked');
+  if (!auto.value.enabled) return t('Shp_Manual');
+  return row.due ? t('Shp_Due_Now') : t('Shp_Waiting');
 }
 
 function stepColor(row) {
@@ -488,17 +486,17 @@ async function replay(record) {
   replaying.value = record.id;
   try {
     await http.post(`shopify/webhook-events/${record.id}/replay`);
-    message.success('Replayed');
+    message.success(t('Shp_Replayed'));
     loadEvents();
     load();
   } catch (e) {
-    message.error(e?.data?.message || 'Replay failed');
+    message.error(e?.data?.message || t('Shp_Replay_Failed'));
   } finally {
     replaying.value = null;
   }
 }
 
-function copy(text, label = 'Copied') {
+function copy(text, label = t('Cr_Copied')) {
   if (!text) return;
   navigator.clipboard?.writeText(text)
     .then(() => message.success(label))
@@ -508,12 +506,14 @@ function copy(text, label = 'Copied') {
 }
 
 function copyUrl() {
-  copy(webhookUrl.value, 'URL copied');
+  copy(webhookUrl.value, t('Shp_URL_Copied'));
 }
 
 // ---------------- setup guide ----------------
 
-const cron = ref({ managed: false, base_path: '', sync: '', queue: '' });
+// The platform always runs the scheduler (ShopifyStoreController::cronLines
+// returns managed: true), so a failed request must not fall back to cron steps.
+const cron = ref({ managed: true, base_path: '', sync: '', queue: '' });
 
 // ---------------- editing ----------------
 
@@ -544,8 +544,8 @@ const deletingHook = ref(null);
 const hooksLoaded = ref(false);
 
 const hookColumns = [
-  { title: 'Topic', dataIndex: 'topic', key: 'topic', width: 190 },
-  { title: 'Delivers to', key: 'address' },
+  { title: t('Shp_Topic'), dataIndex: 'topic', key: 'topic', width: 190 },
+  { title: t('Shp_Delivers_To'), key: 'address' },
   { title: 'API', dataIndex: 'api_version', key: 'api_version', width: 100 },
   { title: '', key: 'actions', width: 90, align: 'center' },
 ];
@@ -558,10 +558,10 @@ function topicColor(topic) {
 }
 
 function topicHint(topic) {
-  if (!hooksLoaded.value) return 'Press "Refresh list" to see whether this shop is subscribed';
-  if (!hookState.value.wanted.includes(topic)) return 'Not needed — its entity is switched off for this store';
+  if (!hooksLoaded.value) return t('Shp_Hint_Press_Refresh');
+  if (!hookState.value.wanted.includes(topic)) return t('Shp_Hint_Not_Needed');
 
-  return hookState.value.missing.includes(topic) ? 'Not subscribed yet' : 'Subscribed';
+  return hookState.value.missing.includes(topic) ? t('Shp_Not_Subscribed_Yet') : t('Shp_Subscribed');
 }
 
 async function loadHooks() {
@@ -581,7 +581,7 @@ async function loadHooks() {
   } catch (e) {
     hookState.value = {
       ...hookState.value,
-      error: e?.data?.error || 'Could not read this shop\'s webhooks',
+      error: e?.data?.error || t('Shp_Could_Not_Read_Webhooks'),
     };
   } finally {
     loadingHooks.value = false;
@@ -596,16 +596,17 @@ async function registerHooks(prune) {
     const deleted = res?.deleted?.length || 0;
 
     if (res?.failed?.length) {
-      message.warning(`${created} created, ${res.failed.length} failed — see the logs`);
+      message.warning(t('Shp_Hooks_Created_Failed', { created, failed: res.failed.length }));
     } else if (created || deleted) {
-      message.success(`${created} subscription${created === 1 ? '' : 's'} created${deleted ? `, ${deleted} removed` : ''}`);
+      message.success(t(created === 1 ? 'Shp_Hooks_Created_One' : 'Shp_Hooks_Created_Many', { n: created })
+        + (deleted ? t('Shp_Hooks_Removed_Suffix', { n: deleted }) : ''));
     } else {
-      message.info('Already subscribed to everything this store needs');
+      message.info(t('Shp_Already_Subscribed'));
     }
 
     if (res?.warning) message.warning(res.warning, 8);
   } catch (e) {
-    message.error(e?.data?.error || 'Could not register webhooks');
+    message.error(e?.data?.error || t('Shp_Could_Not_Register_Webhooks'));
   } finally {
     registering.value = false;
     loadHooks();
@@ -616,9 +617,9 @@ async function deleteHook(record) {
   deletingHook.value = record.id;
   try {
     await http.delete(`shopify/stores/${id}/webhooks/${record.id}`);
-    message.success('Subscription removed');
+    message.success(t('Shp_Subscription_Removed'));
   } catch (e) {
-    message.error(e?.data?.error || 'Could not remove that subscription');
+    message.error(e?.data?.error || t('Shp_Could_Not_Remove_Subscription'));
   } finally {
     deletingHook.value = null;
     loadHooks();
@@ -636,9 +637,9 @@ async function test() {
   testing.value = true;
   try {
     const res = await http.post(`shopify/stores/${id}/test`);
-    message.success(`Connected to ${res?.shop?.name || store.value.shop_domain}`);
+    message.success(t('Shp_Connected_To', { name: res?.shop?.name || store.value.shop_domain }));
   } catch (e) {
-    message.error(e?.data?.error || 'Could not reach that shop');
+    message.error(e?.data?.error || t('Shp_Could_Not_Reach_Shop'));
   } finally {
     testing.value = false;
     load();
@@ -654,9 +655,9 @@ async function load() {
     runs.value = res?.runs || [];
     errors.value = res?.errors || [];
     auto.value = res?.auto_sync || { enabled: false, using_default_plan: true, steps: [] };
-    cron.value = res?.cron || { managed: false, base_path: '', sync: '', queue: '' };
+    cron.value = res?.cron || { managed: true, base_path: '', sync: '', queue: '' };
   } catch (e) {
-    message.error('Could not load this store');
+    message.error(t('Shp_Could_Not_Load_Store'));
   } finally {
     loading.value = false;
   }

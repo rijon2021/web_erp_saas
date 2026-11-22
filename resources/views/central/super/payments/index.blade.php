@@ -8,6 +8,9 @@
         <h1>{{ __('super.payments.transactions_title') }}</h1>
         <p class="page-subtitle">{{ __('super.payments.transactions_sub') }}</p>
     </div>
+    <a href="{{ route('super.payments.create') }}" class="btn btn-primary btn-sm">
+        <i class="bi bi-plus-lg"></i> {{ __('super.payments.record_payment') }}
+    </a>
 </div>
 
 {{-- Filters --}}
@@ -90,7 +93,7 @@
                     <td>
                         <span class="fw-600 fs-sm3">{{ $payment->tenant->company_name ?? $payment->tenant_id }}</span>
                     </td>
-                    <td class="fs-sm3">{{ $payment->plan->name ?? '—' }}</td>
+                    <td class="fs-sm3">{{ $payment->plan->name ?? ($payment->payment_link_id ? ($payment->metadata['checkout_name'] ?? '—') : '—') }}</td>
                     <td class="fs-sm2">
                         {{ $payment->gateway_label }}
                         @if($payment->gateway === 'manual' && isset($payment->metadata['offline_method']))
@@ -98,15 +101,15 @@
                         @endif
                     </td>
                     <td class="fw-700 fs-sm3">
-                        {{ $payment->currency }} {{ $currencySymbol }}{{ number_format($payment->amount, 2) }}
+                        {{ $payment->formatMoney($payment->amount) }}
                         @if($payment->tax > 0)
-                            <span class="text-muted fs-2xs">+{{ $currencySymbol }}{{ number_format($payment->tax, 2) }}</span>
+                            <span class="text-muted fs-2xs">+{{ $payment->formatMoney($payment->tax, false) }}</span>
                         @endif
                         @if($payment->gateway_amount && $payment->gateway_currency && strtoupper($payment->gateway_currency) !== strtoupper($payment->currency ?? ''))
                             <span class="text-muted fs-2xs d-block">{{ strtoupper($payment->gateway_currency) }} {{ number_format($payment->gateway_amount, 2) }}</span>
                         @endif
                     </td>
-                    <td><span class="text-muted fs-sm2">{{ ucfirst($payment->billing_cycle) }}</span></td>
+                    <td><span class="text-muted fs-sm2">{{ $payment->payment_link_id ? __('super.payment_links.one_time') : ucfirst($payment->billing_cycle) }}</span></td>
                     <td>
                         @php
                             $badgeClass = match($payment->status) {

@@ -24,7 +24,13 @@ class MessageController extends Controller
             return response()->json(['ok' => true, 'message' => __('Thanks! If needed, we will get back to you.')]);
         }
 
-        Message::create($data);
+        $msg = Message::create($data);
+
+        // CRM: a contact message can become a lead (CRM Settings → Lead capture).
+        \App\Services\Crm\CrmCaptureService::hook('capture_store_messages', fn ($crm) => $crm->capture('store_message', [
+            'name' => $data['name'], 'email' => $data['email'], 'phone' => $data['phone'] ?? null,
+            'subject' => $data['subject'] ?? null, 'message' => $data['message'],
+        ], ['ref_id' => $msg->id]));
 
         // Always JSON for this endpoint when used via fetch
         return response()->json(['ok' => true, 'message' => __('Your message has been sent successfully!')]);

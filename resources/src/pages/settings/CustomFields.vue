@@ -23,7 +23,7 @@
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'field_type'">
-            <a-tag>{{ record.field_type }}</a-tag>
+            <a-tag>{{ fieldTypeLabel(record.field_type) }}</a-tag>
           </template>
           <template v-else-if="column.key === 'is_required'">
             <a-tag :color="record.is_required ? 'error' : 'default'">
@@ -67,7 +67,7 @@
             <a-form-item :label="$t('FieldType')" name="field_type">
               <a-select
                 v-model:value="form.field_type"
-                :options="['text', 'textarea', 'number', 'date', 'select', 'checkbox'].map(v => ({ value: v, label: v }))"
+                :options="['text', 'textarea', 'number', 'date', 'select', 'checkbox'].map(v => ({ value: v, label: fieldTypeLabel(v) }))"
               />
             </a-form-item>
           </a-col>
@@ -80,7 +80,7 @@
         <a-form-item v-if="form.field_type === 'select'" :label="$t('EnterOptionsOnePerLine')">
           <a-textarea v-model:value="optionsText" :rows="3" />
         </a-form-item>
-        <a-form-item :label="$t('DefaultValue')">
+        <a-form-item v-else :label="$t('DefaultValue')">
           <a-input v-model:value="form.default_value" />
         </a-form-item>
         <a-form-item>
@@ -107,6 +107,9 @@ import http from '../../lib/http';
 
 const { t } = useI18n();
 
+const FIELD_TYPE_KEYS = { text: 'Text', textarea: 'Textarea', number: 'Number', date: 'Date', select: 'Select', checkbox: 'Checkbox' };
+const fieldTypeLabel = v => (FIELD_TYPE_KEYS[v] ? t(FIELD_TYPE_KEYS[v]) : v);
+
 const entityTab = ref('client');
 const loading = ref(true);
 const fields = ref([]);
@@ -115,7 +118,7 @@ const columns = computed(() => [
   { title: t('FieldName'), dataIndex: 'name', key: 'name' },
   { title: t('FieldType'), dataIndex: 'field_type', key: 'field_type' },
   { title: t('Required'), dataIndex: 'is_required', key: 'is_required' },
-  { title: 'Sort', dataIndex: 'sort_order', key: 'sort_order', align: 'right' },
+  { title: t('SortOrder'), dataIndex: 'sort_order', key: 'sort_order', align: 'right' },
   { title: t('Action'), key: 'actions', width: 110, align: 'center' },
 ]);
 
@@ -157,16 +160,25 @@ function openCreate() {
   modalOpen.value = true;
 }
 
+/** Select options live in default_value: an array, or a JSON string from legacy rows. */
+function selectOptions(record) {
+  let opts = record.default_value;
+  if (typeof opts === 'string') {
+    try { opts = JSON.parse(opts); } catch (e) { opts = []; }
+  }
+  return Array.isArray(opts) ? opts.map(String) : [];
+}
+
 function openEdit(record) {
   editing.value = record;
   form.value = {
     name: record.name,
     field_type: record.field_type,
     is_required: !!record.is_required,
-    default_value: record.default_value || '',
+    default_value: record.field_type === 'select' ? '' : (record.default_value ?? ''),
     sort_order: record.sort_order || 0,
   };
-  optionsText.value = Array.isArray(record.options) ? record.options.join('\n') : '';
+  optionsText.value = record.field_type === 'select' ? selectOptions(record).join('\n') : '';
   modalOpen.value = true;
 }
 
@@ -187,6 +199,7 @@ async function save() {
   };
   if (form.value.field_type === 'select') {
     payload.options = optionsText.value.split('\n').map(s => s.trim()).filter(Boolean);
+    payload.default_value = null;
   }
   try {
     if (editing.value) {

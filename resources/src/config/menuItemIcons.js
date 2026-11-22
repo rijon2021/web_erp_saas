@@ -12,6 +12,7 @@ import {
     // Manual additions for reports that don't exist in the legacy reference sidebar:
     ArrowLeftRight, Award, CalendarClock, FilePen, ListChecks, PackageX, Percent, SlidersHorizontal, TrendingDown, Truck,
     // Manual additions for other items not in the reference sidebar:
+    Sparkles,
     ChefHat, CircleDollarSign, Gift, PackageCheck,
     // Fleet module — without these, every row under Fleet Management inherits
     // the group's truck icon and the six items look identical.
@@ -34,10 +35,13 @@ import {
     Factory, FileStack, Cog,
     // ZATCA e-invoicing
     QrCode,
+    // Software License Keys
+    KeyRound,
 } from 'lucide-vue-next';
 
 export const MENU_ITEM_ICONS = {
     "/app/dashboard": BarChart,
+    "/app/ai_assistant": Sparkles,
     "/app/sale_return/list": ChevronRight,
     "/app/purchase_return/list": ChevronLeft,
     "/app/subscription_product/list": DollarSign,
@@ -64,6 +68,7 @@ export const MENU_ITEM_ICONS = {
     "/app/Store/Reviews": Star,
     "/app/Store/Popups": Megaphone,
     "/app/Store/QuoteRequests": Quote,
+    "/app/Store/VehicleLeads": Car,
     "/app/Store/Returns": CornerUpLeft,
     "/app/Store/Pages": FileText,
     "/app/Store/Menus": Menu,
@@ -80,12 +85,14 @@ export const MENU_ITEM_ICONS = {
     "/app/products/opening_stock_import": FilePlus,
     "/app/products/barcode": Barcode,
     "/app/products/count_stock": CheckCheck,
+    "/app/products/price_check": ScanBarcode,
     "/app/products/Categories": Copy,
     "/app/products/SubCategories": Library,
     "/app/products/Brands": Bookmark,
     "/app/products/SizeGuides": Ruler,
     "/app/products/Units": Quote,
     "/app/products/Batches": HeartPulse,
+    "/app/products/license-keys": KeyRound,
     "/app/serial_numbers/list": ScanBarcode,
     "/app/accounting-v2/dashboard": TrendingUp,
     "/app/accounting-v2/chart-of-accounts": Database,
@@ -136,6 +143,7 @@ export const MENU_ITEM_ICONS = {
     "/app/commissions/rules": Settings,
     "/app/commissions/receipts": Receipt,
     "/app/commissions/report": TrendingUp,
+    "/app/commissions/guide": Book,
     "/app/quotations/store": FilePlus,
     "/app/quotations/list": Files,
     "/app/hrm/company": BriefcaseBusiness,
@@ -167,14 +175,18 @@ export const MENU_ITEM_ICONS = {
     "/app/marketing/templates/email": Mail,
     "/app/marketing/reports": BarChart3,
     "/app/marketing/settings": Settings,
+    "/app/marketing/guide": Book,
     "/app/People/Customers": ShieldCheck,
     "/app/People/Customers/create": Plus,
     "/app/People/Customers_import": Download,
+    "/app/People/CustomerWallets": Wallet,
+    "/app/People/GiftCards": CreditCard,
     "/app/People/Customers_without_ecommerce": ShieldCheck,
     "/app/People/Customers_ecommerce": ShieldCheck,
     "/app/People/Suppliers": ShieldCheck,
     "/app/People/Suppliers/create": Plus,
     "/app/People/Suppliers_import": Download,
+    "/app/People/SupplierWallets": Wallet,
     "/app/User_Management/Users": ShieldCheck,
     "/app/User_Management/permissions": Key,
     "/app/settings/System_settings": Settings,
@@ -259,6 +271,8 @@ export const MENU_ITEM_ICONS = {
     "/app/reports/stock_transfer_report": ArrowLeftRight,
     "/app/reports/stock_adjustment_report": SlidersHorizontal,
     "/app/reports/discount_summary_report": Percent,
+    "/app/reports/due_collection_report": Banknote,
+    "/app/reports/pos_sales_report": ShoppingCart,
     "/app/reports/customer_loyalty_points_report": Award,
     "/app/reports/tax_summary_report": ReceiptText,
     "/app/reports/draft_invoices_report": FilePen,

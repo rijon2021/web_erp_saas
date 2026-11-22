@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHeader title="Milestones" subtitle="The plan each project is measured against." :breadcrumb="['Projects Management', 'Milestones']">
+    <PageHeader :title="$t('Pm_Milestones')" :subtitle="$t('Pm_Milestones_Subtitle')" :breadcrumb="[$t('Pm_Projects_Management'), $t('Pm_Milestones')]">
       <template #actions>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
@@ -12,20 +12,20 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search milestone…"
+          v-model:value="crud.search.value" :placeholder="$t('Pm_Search_Milestone')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.project_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All projects"
+          option-filter-prop="label" :placeholder="$t('Pm_All_Projects')"
           :options="projectOptions" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item-sm" allow-clear
-          placeholder="Status" :options="MILESTONE_STATUSES" @change="crud.reload"
+          :placeholder="$t('Status')" :options="MILESTONE_STATUSES" @change="crud.reload"
         />
         <a-checkbox v-model:checked="filters.overdue" class="tb-check" @change="crud.reload">
-          Overdue only
+          {{ $t('Pm_Overdue_Only') }}
         </a-checkbox>
       </div>
     </a-card>
@@ -37,7 +37,7 @@
           <div v-if="record.description" class="cell-sub">{{ record.description }}</div>
         </template>
         <template v-else-if="column.key === 'project'">
-          <a class="link" @click="$router.push(`/projects/${record.project_id}`)">{{ record.project_title }}</a>
+          <a class="link" @click="$router.push(`/projects/${record.project_id}/edit`)">{{ record.project_title }}</a>
         </template>
         <template v-else-if="column.key === 'due_date'">
           <div v-if="record.due_date">
@@ -79,42 +79,42 @@
     </DataTable>
 
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit milestone' : 'New milestone'" :width="600"
+      :open="formOpen" :title="editing ? $t('Pm_Edit_Milestone') : $t('Pm_New_Milestone')" :width="600"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-alert
         type="info" show-icon banner
-        message="Marking a milestone complete sets progress to 100% and stamps today as the completion date — that stamp is what the slippage report measures."
+        :message="$t('Pm_Milestone_Complete_Note')"
         style="margin-bottom: 16px"
       />
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <a-row :gutter="16">
           <a-col :span="24">
-            <a-form-item label="Project *" name="project_id">
+            <a-form-item :label="$t('Pm_Project') + ' *'" name="project_id">
               <a-select
                 v-model:value="form.project_id" show-search option-filter-prop="label"
-                :options="projectOptions" placeholder="Select a project"
+                :options="projectOptions" :placeholder="$t('Pm_Select_A_Project')"
               />
             </a-form-item>
           </a-col>
           <a-col :span="24">
-            <a-form-item label="Title *" name="title">
-              <a-input v-model:value="form.title" placeholder="e.g. Beta release" allow-clear />
+            <a-form-item :label="$t('Title') + ' *'" name="title">
+              <a-input v-model:value="form.title" :placeholder="$t('Pm_Milestone_Title_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Due date">
+            <a-form-item :label="$t('Due_Date')">
               <a-date-picker v-model:value="form.due_date" style="width: 100%" value-format="YYYY-MM-DD" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Status *" name="status">
+            <a-form-item :label="$t('Status') + ' *'" name="status">
               <a-select v-model:value="form.status" :options="MILESTONE_STATUSES" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Progress %">
+            <a-form-item :label="$t('Pm_Progress_Pct')">
               <a-input-number
                 v-model:value="form.progress" :min="0" :max="100"
                 :disabled="form.status === 'completed'" style="width: 100%"
@@ -122,12 +122,12 @@
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Budget">
+            <a-form-item :label="$t('Pm_Budget')">
               <a-input-number v-model:value="form.budget" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Order" extra="Position in the plan">
+            <a-form-item :label="$t('Pm_Order')" :extra="$t('Pm_Position_In_Plan')">
               <a-input-number v-model:value="form.position" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
@@ -178,19 +178,19 @@ const projects = ref([]);
 const projectOptions = computed(() => projects.value.map(p => ({ value: p.id, label: p.title })));
 
 const columns = computed(() => [
-  { title: 'Milestone', key: 'title', dataIndex: 'title', sorter: true },
-  { title: 'Project', key: 'project', dataIndex: 'project_title', width: 180 },
-  { title: 'Due', key: 'due_date', dataIndex: 'due_date', sorter: true, width: 200 },
-  { title: 'Progress', key: 'progress', dataIndex: 'progress', sorter: true, width: 150 },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 160 },
-  { title: 'Budget', key: 'budget', dataIndex: 'budget', width: 120 },
+  { title: t('Pm_Milestone'), key: 'title', dataIndex: 'title', sorter: true },
+  { title: t('Pm_Project'), key: 'project', dataIndex: 'project_title', width: 180 },
+  { title: t('Due'), key: 'due_date', dataIndex: 'due_date', sorter: true, width: 200 },
+  { title: t('Pm_Progress'), key: 'progress', dataIndex: 'progress', sorter: true, width: 150 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 160 },
+  { title: t('Pm_Budget'), key: 'budget', dataIndex: 'budget', width: 120 },
   { title: '', key: 'actions', width: 90 },
 ]);
 
 async function setStatus(record, status) {
   try {
     await http.post(`project_milestones/${record.id}/status`, { status });
-    message.success('Milestone updated.');
+    message.success(t('Pm_Milestone_Updated'));
     crud.fetchRows();
   } catch (e) {
     message.error(e?.data?.message || t('InvalidData', 'Could not update this milestone'));

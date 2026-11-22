@@ -3,7 +3,9 @@
     <PageHeader :title="$t('Profit_Loss_Title')" :breadcrumb="[$t('Accounting'), $t('Profit_Loss_Title')]" />
 
     <a-alert type="info" show-icon closable style="margin-bottom: 16px" :message="$t('Accounting_PL_Notice')">
-      <template #description>
+      <!-- The hint ends "open Reports:" before the link to the cost-based
+           report, which hide_product_cost roles can't open: drop both. -->
+      <template v-if="auth.canSeeCost" #description>
         {{ $t('Accounting_PL_Full_Hint') }}
         <router-link :to="{ name: 'profit-and-loss-report' }">{{ $t('Profit_Loss_Title') }}</router-link>
       </template>
@@ -56,7 +58,7 @@
     <DataTable :crud="crud" :columns="columns">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'type'">
-          <span style="text-transform: capitalize">{{ record.type }}</span>
+          <span style="text-transform: capitalize">{{ typeLabel(record.type) }}</span>
         </template>
         <template v-else-if="column.key === 'amount'">{{ number(record.amount) }}</template>
       </template>
@@ -88,9 +90,13 @@ import PageHeader from '../../../components/PageHeader.vue';
 import DataTable from '../../../components/DataTable.vue';
 import { useCrudTable } from '../../../composables/useCrudTable';
 import { useFormat } from '../../../composables/useFormat';
+import { useAuthStore } from '../../../stores/auth';
 
 const { t } = useI18n();
 const { number } = useFormat();
+const TYPE_LABEL_KEYS = { asset: 'Asset', liability: 'Liability', equity: 'Equity', income: 'Income', expense: 'Expense' };
+const typeLabel = type => (TYPE_LABEL_KEYS[type] ? t(TYPE_LABEL_KEYS[type]) : type);
+const auth = useAuthStore();
 
 const filters = ref({ from: '', to: '', type: '' });
 const summary = ref({ income: 0, expense: 0, net_profit: 0 });

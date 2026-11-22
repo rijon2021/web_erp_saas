@@ -261,6 +261,7 @@ import PageHeader from '../../components/PageHeader.vue';
 import http from '../../lib/http';
 import { uploadForm } from '../../lib/upload';
 import { useAuthStore } from '../../stores/auth';
+import { meetingLabel } from './meetingLabels';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -299,11 +300,11 @@ const noteRules = computed(() => ({
   content: [{ required: true, message: t('Field_is_required') }],
 }));
 
-function formatLabel(v) { return v ? String(v).replace(/_/g, ' ') : '-'; }
+function formatLabel(v) { return meetingLabel(v); }
 function formatDatetime(v) { return v ? String(v).replace('T', ' ').substring(0, 16) : '-'; }
 function shortTime(x) { return x ? String(x).substring(0, 5) : ''; }
 function platformLabel(p) {
-  return { zoom: 'Zoom', google_meet: 'Google Meet', teams: 'Microsoft Teams', other: 'Other' }[p] || p;
+  return { zoom: 'Zoom', google_meet: 'Google Meet', teams: 'Microsoft Teams', other: t('Other') }[p] || p;
 }
 function userName(u) {
   if (!u) return '-';

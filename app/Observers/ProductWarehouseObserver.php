@@ -3,7 +3,9 @@
 namespace App\Observers;
 
 use App\Models\product_warehouse;
+use App\Services\Opencart\AutoSync as OpencartAutoSync;
 use App\Services\Shopify\StockWatcher as ShopifyStockWatcher;
+use App\Services\WooCommerce\AutoSync as WooAutoSync;
 
 /**
  * Every stock movement in the ERP lands on a product_warehouse row, whoever
@@ -30,5 +32,11 @@ class ProductWarehouseObserver
         // Shopify decides for itself whether this matters: instant push is off
         // by default and costs one cached lookup to say no.
         ShopifyStockWatcher::record($row);
+
+        // Same for WooCommerce: off unless auto stock sync is switched on.
+        WooAutoSync::stockChanged($row);
+
+        // And OpenCart: off unless its stock push is switched on.
+        OpencartAutoSync::stockChanged($row);
     }
 }

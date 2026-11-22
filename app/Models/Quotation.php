@@ -2,10 +2,15 @@
 
 namespace App\Models;
 
+use App\Traits\HasShareToken;
 use Illuminate\Database\Eloquent\Model;
 
 class Quotation extends Model
 {
+    use HasShareToken;
+
+    const SHARE_TYPE = 'quote';
+
     protected $dates = ['deleted_at'];
 
     protected $fillable = [
@@ -54,5 +59,12 @@ class Quotation extends Model
     public function warehouse()
     {
         return $this->belongsTo('App\Models\Warehouse');
+    }
+
+    // Set when the quotation has been turned into a sale — drives the
+    // "Already Converted" link on the list and the detail page.
+    public function convertedSale()
+    {
+        return $this->belongsTo('App\Models\Sale', 'converted_sale_id');
     }
 }

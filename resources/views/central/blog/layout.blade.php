@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 @php
-    $isRtl = in_array(app()->getLocale(), ['ar', 'he', 'fa', 'ur']);
+    $isRtl = \App\Models\Central\CentralLanguage::isRtl(app()->getLocale());
     $generalSettings = \App\Models\Central\GeneralSetting::instance();
     $appName = $generalSettings->app_name ?: 'Stocky';
     $logoUrl = $generalSettings->getLogoUrl();
-    $faviconUrl = ($seo && $seo->favicon) ? asset($seo->favicon) : $generalSettings->getFaviconUrl();
+    $faviconUrl = $generalSettings->getPublicFaviconUrl($seo);
 @endphp
 <html lang="{{ app()->getLocale() }}" @if($isRtl) dir="rtl" @endif>
 <head>

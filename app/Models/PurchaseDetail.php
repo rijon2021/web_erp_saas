@@ -9,6 +9,8 @@ class PurchaseDetail extends Model
     protected $fillable = [
         'id', 'purchase_id', 'purchase_unit_id', 'quantity', 'product_id', 'total', 'product_variant_id',
         'cost', 'TaxNet', 'discount', 'discount_method', 'tax_method',
+        // Selling price decided on the purchase line (base currency, NULL = product price untouched)
+        'price',
     ];
 
     protected $casts = [

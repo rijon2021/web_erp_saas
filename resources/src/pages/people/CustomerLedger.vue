@@ -40,7 +40,10 @@
       <!-- KPI tiles -->
       <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
         <a-col v-for="kpi in kpis" :key="kpi.label" :xs="12" :sm="8" :md="6" :xl="6">
-          <a-card :bordered="false" class="kpi-card">
+          <a-card
+            :bordered="false" class="kpi-card" :class="{ 'kpi-link': kpi.to }"
+            @click="kpi.to && $router.push(kpi.to)"
+          >
             <div class="kpi-inner">
               <div class="kpi-icon" :style="{ background: kpi.tint, color: kpi.color }">
                 <component :is="kpi.icon" />
@@ -48,6 +51,7 @@
               <div class="kpi-text">
                 <div class="kpi-label">{{ $t(kpi.label) }}</div>
                 <div class="kpi-value" :style="kpi.style">{{ kpi.text }}</div>
+                <div v-if="kpi.to" class="kpi-link-text">{{ $t('CW_Open_Ledger') }} →</div>
               </div>
             </div>
           </a-card>
@@ -141,10 +145,12 @@ import {
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import { useFormat } from '../../composables/useFormat';
+import { useAuthStore } from '../../stores/auth';
 import http from '../../lib/http';
 
 const { t } = useI18n();
 const { money } = useFormat();
+const auth = useAuthStore();
 const route = useRoute();
 const id = route.params.id;
 
@@ -181,7 +187,7 @@ const kpis = computed(() => {
   const c = client.value;
   const n = k => Number(c[k]) || 0;
   const sign = v => (v > 0 ? RED : GREEN);
-  const tile = (label, text, color, extra = {}) => ({ label, text, icon: extra.icon, color: color[0], tint: color[1], style: extra.style });
+  const tile = (label, text, color, extra = {}) => ({ label, text, icon: extra.icon, color: color[0], tint: color[1], style: extra.style, to: extra.to });
   const tiles = [
     tile('Sales_Grand', money(n('salesGrand')), C.blue, { icon: ShoppingOutlined }),
     tile('Sales_Paid', money(n('salesPaid')), C.green, { icon: CheckCircleOutlined }),
@@ -193,7 +199,12 @@ const kpis = computed(() => {
     tile('Credit_Limit', n('credit_limit') > 0 ? money(n('credit_limit')) : t('No_limit'), C.blue, { icon: CreditCardOutlined, style: { color: '#1677ff' } }),
   ];
   if (c.wallet_enabled) {
-    tiles.push(tile('WalletBalance', money(n('wallet_balance')), C.green, { icon: PayCircleOutlined, style: { color: n('wallet_balance') < 0 ? '#ff4d4f' : '#52c41a' } }));
+    // Customer Wallet (store credit): the tile opens the wallet ledger.
+    tiles.push(tile('WalletBalance', money(n('wallet_balance')), C.green, {
+      icon: PayCircleOutlined,
+      style: { color: n('wallet_balance') < 0 ? '#ff4d4f' : '#52c41a' },
+      to: auth.can('customer_wallet_view') ? `/customers/${id}/wallet` : null,
+    }));
   }
   tiles.push(tile('Loyalty_Points', String(n('points')), C.amber, { icon: StarOutlined, style: { color: '#faad14' } }));
   return tiles;
@@ -446,4 +457,7 @@ onMounted(async () => {
   text-align: right;
   font-size: 13px;
 }
+.kpi-link { cursor: pointer; transition: box-shadow 0.2s; }
+.kpi-link:hover { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08); }
+.kpi-link-text { font-size: 11px; color: #1677ff; margin-top: 2px; }
 </style>

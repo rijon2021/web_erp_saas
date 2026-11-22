@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 @php
-    $isRtl = in_array(app()->getLocale(), ['ar', 'he', 'fa', 'ur']);
+    $isRtl = \App\Models\Central\CentralLanguage::isRtl(app()->getLocale());
     $generalSettings = \App\Models\Central\GeneralSetting::instance();
     $appName = $generalSettings->app_name ?: 'Stocky';
 @endphp
@@ -142,6 +142,10 @@
                         </button>
                     </div>
                 </div>
+
+                @if (! empty($captcha))
+                    @include('partials.login-captcha', ['captcha' => $captcha, 'groupClass' => 'form-group', 'shellClass' => 'input-wrapper'])
+                @endif
 
                 <div class="form-options">
                     <label class="remember-check">

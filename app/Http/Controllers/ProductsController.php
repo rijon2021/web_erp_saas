@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Exports\StockExport;
 use App\Imports\OpeningStockRowsImport;
+use App\Services\ImportFingerprint;
+use App\Services\ProductBarcodes;
 use App\Imports\ProductImport;
 use App\Models\Brand;
 use App\Models\Adjustment;
@@ -25,6 +27,12 @@ use App\Models\Warehouse;
 use App\Models\WarehouseLocation;
 use App\Models\ProductWarehouseLocation;
 use App\Services\ProductGalleryService;
+use App\Services\ProductOptionService;
+use App\Services\ComboStockService;
+use App\Services\SerialNumberService;
+use App\Services\WarehousePrices;
+use App\Services\WooCommerce\AutoSync as WooAutoSync;
+use App\Services\Opencart\AutoSync as OpencartAutoSync;
 use App\utils\helpers;
 use Carbon\Carbon;
 use DB;
@@ -35,13 +43,18 @@ use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Intervention\Image\ImageManagerStatic as Image;
 
 class ProductsController extends BaseController
 {
+    /** Stock-count exports live on the private `local` disk, never under public/. */
+    private const COUNT_STOCK_DIR = 'count_stock';
+
     // ------------ Get ALL Products --------------\\
 
     public function index(Request $request)
@@ -72,11 +85,28 @@ class ProductsController extends BaseController
             $warehouseId = null;
         }
 
-        $columns = [0 => 'name', 1 => 'category_id', 2 => 'brand_id', 3 => 'code', 4 => 'sub_category_id'];
-        $param = [0 => 'like', 1 => '=', 2 => '=', 3 => 'like', 4 => '='];
+        // provider_id makes "everything I buy from this supplier" a one-click
+        // filter, which is what turns a stored supplier into a reorder list.
+        $columns = [0 => 'name', 1 => 'category_id', 2 => 'brand_id', 3 => 'code', 4 => 'sub_category_id', 5 => 'provider_id'];
+        $param = [0 => 'like', 1 => '=', 2 => '=', 3 => 'like', 4 => '=', 5 => '='];
 
-        $productsQuery = Product::with('unit', 'category', 'subCategory', 'brand', 'categories')
+        $productsQuery = Product::with('unit', 'category', 'subCategory', 'brand', 'categories', 'provider:id,name', 'warehouse:id,name')
             ->whereNull('deleted_at');
+
+        // Settings -> Features: optionally show only products stocked in one of
+        // this user's warehouses. Previously the whole catalogue was returned
+        // and only the QUANTITY column was scoped, so a warehouse A user still
+        // browsed warehouse B's products. A product stocked nowhere yet stays
+        // visible, so a newly created one is never hidden from its author.
+        $this->scopeMasterDataToWarehouses($productsQuery, fn ($ids) => DB::table('product_warehouse')
+            ->whereNull('product_warehouse.deleted_at')
+            ->whereColumn('product_warehouse.product_id', 'products.id')
+            ->when($ids !== null, fn ($q) => $q->whereIn('product_warehouse.warehouse_id', $ids)));
+
+        // Settings -> Features: products belong to a warehouse. A restricted
+        // user sees only products whose home warehouse is theirs or that
+        // hold stock in one of theirs (see Product::scopeVisibleInWarehouses).
+        $this->scopeProductsToWarehouses($productsQuery);
          
 
 
@@ -102,7 +132,9 @@ class ProductsController extends BaseController
                             $q->whereHas('brand', function ($bq) use ($s) {
                                 $bq->where('name', 'LIKE', "%{$s}%");
                             });
-                        });
+                        })
+                        // An additional barcode (manufacturer EAN …) finds its product too.
+                        ->when(ProductBarcodes::enabled(), fn ($q) => $q->orWhereIn('products.id', ProductBarcodes::productIdsLike($s)));
                 });
             });
 
@@ -116,15 +148,20 @@ class ProductsController extends BaseController
             }
         }
 
-        // Optional warehouse filter: only products that have stock rows in the given warehouse
+        // Optional warehouse filter. Every product has a stock row in every
+        // warehouse (they are created together), so "has a row there" matched
+        // the whole catalogue. A product is in a warehouse when it is its home
+        // or when it actually holds stock there.
         if ($warehouseId) {
-            $filtered->whereExists(function ($q) use ($warehouseId) {
-                $q->select(DB::raw(1))
-                    ->from('product_warehouse')
-                    ->whereColumn('product_warehouse.product_id', 'products.id')
-                    ->where('product_warehouse.warehouse_id', $warehouseId)
-                    ->whereNull('product_warehouse.deleted_at');
-            });
+            $filtered->visibleInWarehouses([$warehouseId]);
+        }
+
+        // Optional Software License filter: license=1 (any key source), pool, generated.
+        if ($request->filled('license') && \App\Services\LicenseKeys\LicenseFulfilment::ready()) {
+            $lic = (string) $request->license;
+            in_array($lic, ['pool', 'generated'], true)
+                ? $filtered->where('products.license_mode', $lic)
+                : $filtered->whereIn('products.license_mode', ['pool', 'generated']);
         }
 
         $totalRows = (clone $filtered)->count();
@@ -140,6 +177,27 @@ class ProductsController extends BaseController
         $hasVariantWholesale = Schema::hasColumn('product_variants', 'wholesale');
         $hasVariantMinPrice = Schema::hasColumn('product_variants', 'min_price');
 
+        // Stock and variants for the whole page in two queries, instead of a
+        // SUM per product and a variant lookup per variable product.
+        $qtyByProduct = product_warehouse::whereIn('product_id', $products->pluck('id'))
+            ->whereNull('deleted_at')
+            ->when($warehouseId,
+                fn ($q) => $q->where('warehouse_id', $warehouseId),
+                // ✅ if no warehouse filter selected, keep qty within allowed warehouses only
+                fn ($q) => $q->when(! $user_auth->is_all_warehouses, fn ($q) => $q->whereIn('warehouse_id', $allowedWarehouseIds)))
+            ->groupBy('product_id')
+            ->selectRaw('product_id, SUM(qte) as qty')
+            ->pluck('qty', 'product_id');
+
+        $variantProductIds = $products->where('type', 'is_variant')->pluck('id');
+        $variantsByProduct = $variantProductIds->isEmpty()
+            ? collect()
+            : ProductVariant::whereIn('product_id', $variantProductIds)
+                ->whereNull('deleted_at')
+                ->orderBy('id')
+                ->get()
+                ->groupBy('product_id');
+
         $data = [];
         foreach ($products as $product) {
             $item = [];
@@ -152,6 +210,12 @@ class ProductsController extends BaseController
                 ? $product->categories->pluck('name')->filter()->unique()->values()->implode("\n")
                 : ($item['category'] ?? '');
             $item['brand'] = $product->brand ? $product->brand->name : 'N/D';
+            // Default supplier — shown as a column and used to reorder.
+            $item['provider_id'] = $product->provider_id;
+            $item['provider_name'] = $product->provider ? $product->provider->name : null;
+            // Home warehouse — shown as a column while the ownership switch is on.
+            $item['warehouse_id'] = $product->warehouse_id;
+            $item['warehouse_name'] = $product->warehouse ? $product->warehouse->name : null;
 
             $isActive = (int) ($product->is_active ?? 1) === 1;
             $item['status'] = $isActive ? __('Active') : __('Inactif');
@@ -174,16 +238,7 @@ class ProductsController extends BaseController
                 $item['min_price'] = number_format((float) $product->min_price, helpers::price_decimals(), '.', '');
                 $item['unit'] = optional($product->unit)->ShortName;
 
-                $qtyQuery = product_warehouse::where('product_id', $product->id)
-                    ->whereNull('deleted_at');
-                if ($warehouseId) {
-                    $qtyQuery->where('warehouse_id', $warehouseId);
-                } elseif (! $user_auth->is_all_warehouses) {
-                    // ✅ if no warehouse filter selected, keep qty within allowed warehouses only
-                    $qtyQuery->whereIn('warehouse_id', $allowedWarehouseIds);
-                }
-
-                $qty = $qtyQuery->sum('qte');
+                $qty = $qtyByProduct[$product->id] ?? 0;
 
                 $item['quantity'] = number_format((float) $qty, 2, '.', '').' '.$item['unit'];
 
@@ -197,16 +252,7 @@ class ProductsController extends BaseController
                 $item['min_price'] = number_format((float) $product->min_price, helpers::price_decimals(), '.', '');
                 $item['unit'] = optional($product->unit)->ShortName;
 
-                $qtyQuery = product_warehouse::where('product_id', $product->id)
-                    ->whereNull('deleted_at');
-
-                if ($warehouseId) {
-                    $qtyQuery->where('warehouse_id', $warehouseId);
-                } elseif (! $user_auth->is_all_warehouses) {
-                    $qtyQuery->whereIn('warehouse_id', $allowedWarehouseIds);
-                }
-
-                $qty = $qtyQuery->sum('qte');
+                $qty = $qtyByProduct[$product->id] ?? 0;
 
                 $item['quantity'] = number_format((float) $qty, 2, '.', '').' '.$item['unit'];
 
@@ -214,9 +260,7 @@ class ProductsController extends BaseController
 
                 $item['type'] = 'Variable';
 
-                $variants = ProductVariant::where('product_id', $product->id)
-                    ->whereNull('deleted_at')
-                    ->get();
+                $variants = $variantsByProduct->get($product->id, collect());
 
                 // For variant products, display the parent product name
                 $item['name'] = $product->name;
@@ -238,16 +282,7 @@ class ProductsController extends BaseController
                     : null;
                 $item['unit'] = optional($product->unit)->ShortName;
 
-                $qtyQuery = product_warehouse::where('product_id', $product->id)
-                    ->whereNull('deleted_at');
-
-                if ($warehouseId) {
-                    $qtyQuery->where('warehouse_id', $warehouseId);
-                } elseif (! $user_auth->is_all_warehouses) {
-                    $qtyQuery->whereIn('warehouse_id', $allowedWarehouseIds);
-                }
-
-                $qty = $qtyQuery->sum('qte');
+                $qty = $qtyByProduct[$product->id] ?? 0;
 
                 $item['quantity'] = number_format((float) $qty, 2, '.', '').' '.$item['unit'];
 
@@ -261,27 +296,34 @@ class ProductsController extends BaseController
                 $item['price'] = number_format((float) $product->price, helpers::price_decimals(), '.', '');
             }
 
+            // Software License badge (none | pool | generated).
+            $item['license_mode'] = $product->license_mode ?? 'none';
+
             $data[] = $item;
         }
 
-        // warehouses for user
-        $user_auth = auth()->user();
-        if ($user_auth->is_all_warehouses) {
-            $warehouses = Warehouse::whereNull('deleted_at')->get(['id', 'name']);
-        } else {
-            $warehouses_id = UserWarehouse::where('user_id', $user_auth->id)->pluck('warehouse_id')->toArray();
-            $warehouses = Warehouse::whereNull('deleted_at')->whereIn('id', $warehouses_id)->get(['id', 'name']);
-        }
-
+        // $warehouses (the user's) was resolved at the top of the method.
         $categories = Category::whereNull('deleted_at')->get(['id', 'name']);
         $subcategories = SubCategory::orderBy('name')->get(['id', 'name', 'category_id']);
         $brands = Brand::whereNull('deleted_at')->get(['id', 'name']);
+
+        // Supplier column + filter (Settings -> Features). Skipped entirely when
+        // the feature is off, so the list costs nothing extra.
+        $setting = Setting::whereNull('deleted_at')->first();
+        $product_supplier_enabled = (bool) ($setting->product_supplier_enabled ?? false);
+        $restrict_products_by_warehouse = (bool) ($setting->restrict_products_by_warehouse ?? false);
+        $providers = $product_supplier_enabled
+            ? \App\Models\Provider::whereNull('deleted_at')->orderBy('name')->get(['id', 'name'])
+            : collect();
 
         return response()->json([
             'warehouses' => $warehouses,
             'categories' => $categories,
             'subcategories' => $subcategories,
             'brands' => $brands,
+            'providers' => $providers,
+            'product_supplier_enabled' => $product_supplier_enabled,
+            'restrict_products_by_warehouse' => $restrict_products_by_warehouse,
             'products' => $data,
             'totalRows' => $totalRows,
         ]);
@@ -330,6 +372,364 @@ class ProductsController extends BaseController
     }
 
     /**
+     * Size guide from the product form ('' / 'null' clears it). Skipped until
+     * the size_guides migration has run, and only an active guide is accepted.
+     */
+    private function applySizeGuide(Product $Product, Request $request): void
+    {
+        if (! \App\Models\SizeGuide::tablesReady() || ! $request->has('size_guide_id')) {
+            return;
+        }
+        $id = (int) $request->input('size_guide_id');
+        $Product->size_guide_id = $id > 0 && \App\Models\SizeGuide::whereNull('deleted_at')->whereKey($id)->exists() ? $id : null;
+    }
+
+    /** True when the tenant decodes weighing-scale labels (and the 2026_10_27_000004 migration ran). */
+    private static function scaleBarcodeEnabled(): bool
+    {
+        if (! Schema::hasColumn('products', 'scale_plu')) {
+            return false;
+        }
+
+        return (bool) optional(\App\Models\PosSetting::whereNull('deleted_at')->first())->scale_barcode_enabled;
+    }
+
+    /**
+     * Weighing scale: the item code a counter scale prints for this product
+     * (System Settings > Weighing scale). Stored without leading zeros so a
+     * label's "00042" finds "42". Standard products only — the scale can't
+     * tell variants apart.
+     */
+    private function applyScalePlu(Product $Product, Request $request): void
+    {
+        if (! Schema::hasColumn('products', 'scale_plu')) {
+            return;
+        }
+        // Changed into a combo/service/variant product: the code no longer applies,
+        // even when the form didn't send the field (scale switched off).
+        if ($Product->type !== 'is_single') {
+            $Product->scale_plu = null;
+
+            return;
+        }
+        if (! $request->has('scale_plu')) {
+            return;
+        }
+        $plu = trim((string) $request->input('scale_plu'));
+        if ($plu === '' || $plu === 'null') {
+            $Product->scale_plu = null;
+
+            return;
+        }
+        if (! preg_match('/^\d{1,8}$/', $plu)) {
+            throw ValidationException::withMessages(['scale_plu' => __('The scale PLU must be 1 to 8 digits.')]);
+        }
+        $plu = ltrim($plu, '0') === '' ? '0' : ltrim($plu, '0');
+
+        $takenBy = Product::whereNull('deleted_at')
+            ->where('scale_plu', $plu)
+            ->when($Product->exists, fn ($q) => $q->whereKeyNot($Product->id))
+            ->value('name');
+        if ($takenBy !== null) {
+            throw ValidationException::withMessages(['scale_plu' => __('Scale PLU :plu is already used by :name.', ['plu' => $plu, 'name' => $takenBy])]);
+        }
+        $Product->scale_plu = $plu;
+    }
+
+    /**
+     * Car Dealership theme: the form's "Vehicle details" card arrives as a
+     * `vehicle_spec` JSON object. Saved only while that theme is the store's
+     * theme and its migration has run; an empty card removes the row.
+     */
+    private function applyVehicleSpec(Product $Product, Request $request): void
+    {
+        if (! $request->has('vehicle_spec') || ! self::vehicleSpecsEnabled()) {
+            return;
+        }
+        $raw = $request->input('vehicle_spec');
+        $raw = is_string($raw) ? json_decode($raw, true) : $raw;
+        if (! is_array($raw)) {
+            return;
+        }
+        $clean = \App\Models\VehicleSpec::clean($raw);
+        $hasData = collect($clean)->except(['condition', 'reservable', 'is_sold', 'features'])->filter(fn ($v) => $v !== null)->isNotEmpty()
+            || $clean['features'] || $clean['is_sold'];
+        if (! $hasData) {
+            \App\Models\VehicleSpec::where('product_id', $Product->id)->delete();
+
+            return;
+        }
+        \App\Models\VehicleSpec::updateOrCreate(['product_id' => $Product->id], $clean);
+    }
+
+    /**
+     * Restaurant module: the form's "Dish details" card arrives as a
+     * `dish_details` JSON object ({station_id, prep_minutes, calories,
+     * spice_level, dietary[], meal_periods[], addon_group_ids[]}). Saved only
+     * while the module is on and its menu tables exist.
+     */
+    /**
+     * Software License: the form's "Software License" type arrives as a
+     * `license` JSON object {mode: none|pool|generated, policy: {...},
+     * variant_policies: [{variant_name, ...}]}. The product keeps its real type
+     * (is_single / is_variant); generated-key products never run out (always in
+     * stock, stock not managed). Saved only on plans with `license_keys`.
+     */
+    private function applyLicense(Product $Product, Request $request): void
+    {
+        if (! $request->has('license') || ! \App\Services\LicenseKeys\LicenseFulfilment::ready()) {
+            return;
+        }
+        $raw = $request->input('license');
+        $raw = is_string($raw) ? json_decode($raw, true) : $raw;
+        if (! is_array($raw)) {
+            return;
+        }
+
+        $old = $Product->license_mode ?: 'none';
+        $mode = in_array($raw['mode'] ?? 'none', ['none', 'pool', 'generated'], true) ? $raw['mode'] : 'none';
+        if (! in_array($Product->type, ['is_single', 'is_variant'], true)) {
+            $mode = 'none';
+        }
+        if ($mode !== 'none' && ! app(\App\Services\TenantLimitsService::class)->hasFeature('license_keys')) {
+            $mode = $old;
+        }
+
+        // Uploaded keys still in stock would be stranded by a mode change.
+        if ($old === 'pool' && $mode !== 'pool') {
+            $inStock = \App\Models\LicenseKey::where('product_id', $Product->id)
+                ->whereIn('status', [\App\Models\LicenseKey::STATUS_AVAILABLE, \App\Models\LicenseKey::STATUS_RETURNED])
+                ->count();
+            if ($inStock > 0) {
+                throw ValidationException::withMessages(['license' => [
+                    __(':n uploaded license keys are still in stock — sell or write them off before changing the key source.', ['n' => $inStock]),
+                ]]);
+            }
+        }
+
+        // Leaving "generated": its stock figures were never real (sales ran it
+        // negative with stock unmanaged) — start again from 0, managed.
+        if ($old === 'generated' && $mode !== 'generated') {
+            product_warehouse::where('product_id', $Product->id)->update(['qte' => 0, 'manage_stock' => 1]);
+            $Product->always_in_stock = 0;
+        }
+
+        // Uploaded keys ARE the stock (qte == keys on hand), so the product must
+        // start from 0: stock it holds now would sell keys that do not exist.
+        if ($mode === 'pool' && $old !== 'pool') {
+            $qty = (float) product_warehouse::where('product_id', $Product->id)->whereNull('deleted_at')->sum('qte');
+            if (abs($qty) > 0.0001) {
+                throw ValidationException::withMessages(['license' => [
+                    __('This product has :n in stock. Adjust its stock to 0 first — with uploaded license keys, the keys you add become its stock.', ['n' => round($qty, 3)]),
+                ]]);
+            }
+        }
+
+        $Product->license_mode = $mode;
+        if ($mode === 'generated') {
+            $Product->always_in_stock = 1;
+        } elseif ($mode === 'pool') {
+            // Never oversold: a sale needs a real key.
+            $Product->always_in_stock = 0;
+        }
+        $Product->save();
+
+        if ($mode === 'generated') {
+            product_warehouse::where('product_id', $Product->id)->update(['manage_stock' => 0]);
+        }
+
+        if ($mode !== 'generated') {
+            return;
+        }
+
+        $clean = function ($p): array {
+            $p = is_array($p) ? $p : [];
+            $duration = in_array($p['duration_type'] ?? null, \App\Models\LicensePolicy::DURATIONS, true) ? $p['duration_type'] : 'lifetime';
+            $restriction = in_array($p['restriction'] ?? null, \App\Models\LicensePolicy::RESTRICTIONS, true) ? $p['restriction'] : 'none';
+            $max = isset($p['max_activations']) && $p['max_activations'] !== '' && $p['max_activations'] !== null
+                ? max(1, min(100000, (int) $p['max_activations'])) : null;
+            $format = isset($p['key_format']) ? trim((string) $p['key_format']) : '';
+            if (! \App\Services\LicenseKeys\LicenseKeyGenerator::validFormat($format)) {
+                throw ValidationException::withMessages(['license' => [
+                    __('The key format is too easy to guess: use at least 13 X (random letter or digit) — a 9 counts less — and at most 64 characters.'),
+                ]]);
+            }
+
+            return [
+                'key_format' => $format !== '' ? $format : null,
+                'duration_type' => $duration,
+                'duration_value' => max(1, min(1000, (int) ($p['duration_value'] ?? 1))),
+                'max_activations' => $max,
+                'restriction' => $restriction,
+            ];
+        };
+
+        \App\Models\LicensePolicy::updateOrCreate(
+            ['product_id' => $Product->id, 'product_variant_id' => null],
+            $clean($raw['policy'] ?? [])
+        );
+
+        // Per-edition rules, matched to the saved variants by name.
+        $byName = [];
+        foreach ((array) ($raw['variant_policies'] ?? []) as $vp) {
+            if (is_array($vp) && ! empty($vp['variant_name']) && ! empty($vp['override'])) {
+                $byName[mb_strtolower(trim((string) $vp['variant_name']))] = $vp;
+            }
+        }
+        $variants = $Product->type === 'is_variant'
+            ? ProductVariant::where('product_id', $Product->id)->whereNull('deleted_at')->get(['id', 'name'])
+            : collect();
+        foreach ($variants as $v) {
+            $vp = $byName[mb_strtolower(trim((string) $v->name))] ?? null;
+            if ($vp) {
+                \App\Models\LicensePolicy::updateOrCreate(
+                    ['product_id' => $Product->id, 'product_variant_id' => $v->id],
+                    $clean($vp)
+                );
+            } else {
+                \App\Models\LicensePolicy::where('product_id', $Product->id)->where('product_variant_id', $v->id)->delete();
+            }
+        }
+        \App\Models\LicensePolicy::where('product_id', $Product->id)
+            ->whereNotNull('product_variant_id')
+            ->whereNotIn('product_variant_id', $variants->pluck('id'))
+            ->delete();
+    }
+
+    /** Edit-form payload for the Software License card. */
+    private function licensePayload(Product $Product): array
+    {
+        if (! \App\Services\LicenseKeys\LicenseFulfilment::ready()) {
+            return ['mode' => 'none', 'policy' => null, 'variant_policies' => [], 'keys_in_stock' => 0];
+        }
+        $policies = \App\Models\LicensePolicy::where('product_id', $Product->id)->get();
+        $base = $policies->firstWhere('product_variant_id', null);
+        $names = ProductVariant::whereIn('id', $policies->pluck('product_variant_id')->filter())->pluck('name', 'id');
+        $shape = fn ($p) => [
+            'key_format' => $p->key_format ?? '',
+            'duration_type' => $p->duration_type,
+            'duration_value' => (int) $p->duration_value,
+            'max_activations' => $p->max_activations,
+            'restriction' => $p->restriction,
+        ];
+
+        return [
+            'mode' => $Product->license_mode ?: 'none',
+            'policy' => $base ? $shape($base) : null,
+            'variant_policies' => $policies->whereNotNull('product_variant_id')->map(fn ($p) => ['variant_name' => $names[$p->product_variant_id] ?? '', 'override' => true] + $shape($p))->values()->all(),
+            'keys_in_stock' => \App\Models\LicenseKey::where('product_id', $Product->id)->where('status', \App\Models\LicenseKey::STATUS_AVAILABLE)->count(),
+        ];
+    }
+
+    private function applyDishDetails(Product $Product, Request $request): void
+    {
+        if (! $request->has('dish_details') || ! \App\Support\RestaurantModule::menuReady() || ! self::canEditDishes()) {
+            return;
+        }
+        $raw = $request->input('dish_details');
+        $raw = is_string($raw) ? json_decode($raw, true) : $raw;
+        if (! is_array($raw)) {
+            return;
+        }
+        // Left out = keep the dish's add-on groups; an empty list removes them.
+        $groups = array_key_exists('addon_group_ids', $raw) ? (is_array($raw['addon_group_ids']) ? $raw['addon_group_ids'] : []) : null;
+        app(\App\Services\Restaurant\MenuService::class)->saveDish($Product->id, $raw, $groups);
+    }
+
+    /** The "Dish details" card is for staff allowed to edit the restaurant menu (rst_menu). */
+    private static function canEditDishes(): bool
+    {
+        $user = request()->user('api');
+
+        return $user && $user->can('rst_menu', \App\Models\RestaurantSetting::class);
+    }
+
+    /** Product form payload for the "Dish details" card (null when the restaurant menu is off). */
+    private static function dishFormData(?int $productId): ?array
+    {
+        if (! \App\Support\RestaurantModule::menuReady() || ! self::canEditDishes()) {
+            return null;
+        }
+        $d = $productId ? \App\Models\RestaurantDishDetail::where('product_id', $productId)->first() : null;
+
+        return [
+            'stations' => \App\Models\RestaurantStation::where('is_active', true)->orderBy('sort_order')->get(['id', 'name']),
+            'addon_groups' => \App\Models\RestaurantAddonGroup::where('is_active', true)->orderBy('sort_order')->get(['id', 'name', 'min_select', 'max_select']),
+            'details' => [
+                'station_id' => $d->station_id ?? null,
+                'prep_minutes' => $d->prep_minutes ?? null,
+                'calories' => $d->calories ?? null,
+                'spice_level' => $d->spice_level ?? null,
+                'dietary' => array_values($d->dietary ?? []),
+                'meal_periods' => array_values($d->meal_periods ?? []),
+                'addon_group_ids' => $productId ? \Illuminate\Support\Facades\DB::table('rst_dish_addon_group')->where('product_id', $productId)->orderBy('sort_order')->pluck('group_id')->map(fn ($v) => (int) $v)->all() : [],
+            ],
+        ];
+    }
+
+    /**
+     * The product form shows "Specifications" (products.specs + video_url) when
+     * the column exists and the plan includes premium store themes — so owners
+     * can fill specs in before switching to Electronics Premium.
+     */
+    private static function storeSpecsEnabled(): bool
+    {
+        return \App\Support\StoreSpecs::ready() && \App\Support\StoreThemes::allowedPremium() !== [];
+    }
+
+    /**
+     * "Specifications" card: `store_specs` JSON rows + `product_video_url`.
+     * Left out of the request = unchanged; an empty list clears the specs.
+     */
+    private function applyStoreSpecs(Product $Product, Request $request): void
+    {
+        if (! self::storeSpecsEnabled()) {
+            return;
+        }
+        if ($request->has('store_specs')) {
+            $rows = \App\Support\StoreSpecs::clean($request->input('store_specs'));
+            $Product->specs = $rows ? json_encode($rows, JSON_UNESCAPED_UNICODE) : null;
+        }
+        if ($request->has('product_video_url') && \App\Support\StoreSpecs::videoReady()) {
+            $url = trim((string) $request->input('product_video_url'));
+            if ($url !== '' && $url !== 'null' && ! \App\Support\PremiumElectronicsTheme::safeUrl($url)) {
+                throw ValidationException::withMessages(['product_video_url' => __('The video link must start with http:// or https://.')]);
+            }
+            $Product->video_url = ($url === '' || $url === 'null') ? null : mb_substr($url, 0, 500);
+        }
+        if ($Product->isDirty(['specs', 'video_url'])) {
+            $Product->save();
+            \App\Support\StoreSpecs::forgetLabels();
+        }
+    }
+
+    /** Spec groups + labels already used in the catalogue, for the form's autocomplete. */
+    private static function storeSpecLabelSuggestions(): array
+    {
+        $groups = [];
+        $labels = [];
+        \Illuminate\Support\Facades\DB::table('products')->whereNull('deleted_at')->whereNotNull('specs')
+            ->orderByDesc('id')->limit(300)->pluck('specs')
+            ->each(function ($json) use (&$groups, &$labels) {
+                foreach (\App\Support\StoreSpecs::clean(json_decode((string) $json, true)) as $r) {
+                    if ($r['group'] !== '') {
+                        $groups[$r['group']] = true;
+                    }
+                    $labels[$r['label']] = true;
+                }
+            });
+
+        return ['groups' => array_slice(array_keys($groups), 0, 40), 'labels' => array_slice(array_keys($labels), 0, 80)];
+    }
+
+    /** The product form shows "Vehicle details" when the store runs the Car Dealership theme. */
+    private static function vehicleSpecsEnabled(): bool
+    {
+        return \App\Models\VehicleSpec::tablesReady()
+            && \App\Models\StoreSetting::query()->value('theme') === \App\Support\CarsTheme::KEY;
+    }
+
+    /**
      * Store an uploaded variant image under the tenant-aware products upload dir (same convention as product images).
      * Resizes to 800x800 (keeping aspect ratio). Returns the stored filename, or 'no-image.png' when no/invalid file.
      */
@@ -352,10 +752,7 @@ class ProductsController extends BaseController
             }
 
             $image_resize = Image::make($file->getRealPath());
-            $image_resize->resize(800, 800, function ($constraint) {
-                $constraint->aspectRatio();
-                $constraint->upsize();
-            })->save($path.'/'.$filename);
+            helpers::apply_product_image_resize($image_resize)->save($path.'/'.$filename);
 
             return $filename;
         } catch (\Throwable $e) {
@@ -403,6 +800,19 @@ class ProductsController extends BaseController
                 'cost' => Rule::requiredIf($request->type == 'is_single' || $request->type == 'is_combo'),
                 'price' => Rule::requiredIf($request->type != 'is_variant'),
             ];
+
+            // Combo products must carry at least one component product
+            if ($request->type == 'is_combo') {
+                $productRules['materiels'] = [
+                    'required',
+                    function ($attribute, $value, $fail) {
+                        $decoded = is_string($value) ? json_decode($value, true) : $value;
+                        if (! is_array($decoded) || empty($decoded)) {
+                            $fail('Add at least one product to the combo.');
+                        }
+                    },
+                ];
+            }
 
             // if type is not is_variant, add validation for variants array
             if ($request->type == 'is_variant') {
@@ -539,13 +949,34 @@ class ProductsController extends BaseController
                 ];
             }
 
+            // Additional barcodes share one namespace with product / variant codes.
+            $this->addBarcodeRules($productRules, $request, null);
+
             // validate the request data
             $validatedData = $request->validate($productRules, [
                 'code.unique' => 'Product code already used.',
                 'code.required' => 'This field is required',
             ]);
 
-            \DB::transaction(function () use ($request) {
+            // Shopify-style options (Color / Size). Empty = legacy flat variant list.
+            $optionService = app(ProductOptionService::class);
+            $productOptions = $request['type'] == 'is_variant'
+                ? $optionService->normalizeOptions($request->input('options'))
+                : [];
+            $requestVariantRows = $request['type'] == 'is_variant'
+                ? array_values((array) json_decode((string) $request->variants, true))
+                : [];
+            $variantOptionValues = [];
+            if ($productOptions) {
+                foreach ($requestVariantRows as $variantRow) {
+                    $variantOptionValues[] = $optionService->normalizeVariantValues($variantRow['option_values'] ?? null, $productOptions);
+                }
+                $optionService->validateVariants($productOptions, $variantOptionValues);
+            }
+
+            $createdProductId = null;
+
+            \DB::transaction(function () use ($request, $optionService, $productOptions, $variantOptionValues, &$createdProductId) {
 
                 // -- Create New Product
                 $Product = new Product;
@@ -561,6 +992,18 @@ class ProductsController extends BaseController
                 $Product->category_id = $request['category_id'];
                 $Product->sub_category_id = $request['sub_category_id'] ?? null;
                 $Product->brand_id = $request['brand_id'];
+                $this->applySizeGuide($Product, $request);
+                $this->applyScalePlu($Product, $request);
+                // Default supplier (Settings -> Features). 'null' arrives as a
+                // string from the multipart form when the select is cleared.
+                $Product->provider_id = ($request['provider_id'] ?? null) && $request['provider_id'] !== 'null'
+                    ? (int) $request['provider_id']
+                    : null;
+                // Home warehouse (Settings -> Features -> Restrict products by
+                // warehouse): the branch this product was created for.
+                $Product->warehouse_id = $this->productHomeWarehouseFor(
+                    $request->input('warehouse_id') === 'null' ? null : $request->input('warehouse_id')
+                );
                 $Product->note = $request['note'];
                 $Product->TaxNet = $request['TaxNet'] ? $request['TaxNet'] : 0;
                 $Product->tax_method = $request['tax_method'];
@@ -640,7 +1083,7 @@ class ProductsController extends BaseController
 
                 // Derived from the product type so any client gets per-variant stock rows.
                 $Product->is_variant = ($request['type'] === 'is_variant' || $request['is_variant'] == 'true') ? 1 : 0;
-                $Product->is_imei = $request['is_imei'] == 'true' ? 1 : 0;
+                $Product->is_imei = ($request['is_imei'] == 'true' && in_array($request['type'], ['is_single', 'is_variant'], true)) ? 1 : 0;
                 $Product->not_selling = $request['not_selling'] == 'true' ? 1 : 0;
                 $Product->is_active = filter_var($request->input('is_active', true), FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
                 $Product->is_featured = $request['is_featured'] == 'true' ? 1 : 0;
@@ -683,11 +1126,8 @@ class ProductsController extends BaseController
 
                     $image_resize = Image::make($image->getRealPath());
 
-                    // Resize to one standard size (800x800)
-                    $image_resize->resize(800, 800, function ($constraint) {
-                        $constraint->aspectRatio();
-                        $constraint->upsize();
-                    })->save($path.'/'.$filename);
+                    // Resize per System Settings → Features (Resize Product Images)
+                    helpers::apply_product_image_resize($image_resize)->save($path.'/'.$filename);
 
                 } else {
                     $filename = 'no-image.png';
@@ -695,17 +1135,30 @@ class ProductsController extends BaseController
 
                 $Product->image = $filename;
                 $Product->save();
+                $createdProductId = $Product->id;
+                if ($request->has('barcodes') && $Product->type !== 'is_variant') {
+                    ProductBarcodes::sync($Product->id, null, ProductBarcodes::normalize($request->input('barcodes')));
+                }
+                $this->applyVehicleSpec($Product, $request);
+                $this->applyStoreSpecs($Product, $request);
+                $this->applyDishDetails($Product, $request);
 
                 $this->syncProductMultiCategories($request, $Product);
 
                 app(ProductGalleryService::class)->syncAfterCreate($request, $Product, $filename);
 
                 if ($request['type'] == 'is_combo') {
-                    $materiels = json_decode($request['materiels'], true);
+                    $materiels = json_decode($request['materiels'] ?? '[]', true);
+                    if (! is_array($materiels)) {
+                        $materiels = [];
+                    }
 
                     $syncData = [];
                     foreach ($materiels as $materiel) {
-                        $syncData[$materiel['product_id']] = ['quantity' => $materiel['quantity']];
+                        if (empty($materiel['product_id'])) {
+                            continue;
+                        }
+                        $syncData[$materiel['product_id']] = ['quantity' => max(1, (float) ($materiel['quantity'] ?? 1))];
                     }
 
                     // Sync the combined products
@@ -737,7 +1190,9 @@ class ProductsController extends BaseController
 
                         $row = [
                             'product_id' => $Product->id,
-                            'name' => $variant->text,
+                            'name' => $productOptions
+                                ? $optionService->title($productOptions, $variantOptionValues[$index] ?? [])
+                                : $variant->text,
                             'cost' => $variant->cost,
                             'price' => $variant->price,
                             'code' => $variant->code,
@@ -763,7 +1218,25 @@ class ProductsController extends BaseController
                     if (! empty($Product_variants_data)) {
                         ProductVariant::insert($Product_variants_data);
                     }
+
+                    // Options: create the dimensions and point every variant at
+                    // its combination. Bulk insert preserves order, so the
+                    // id-ordered variants line up with the request rows.
+                    if ($productOptions) {
+                        $optionMap = $optionService->sync($Product, $productOptions);
+                        $insertedVariants = ProductVariant::where('product_id', $Product->id)
+                            ->whereNull('deleted_at')
+                            ->orderBy('id')
+                            ->get()
+                            ->values();
+                        foreach ($insertedVariants as $vIndex => $insertedVariant) {
+                            $optionService->attach($insertedVariant->id, $variantOptionValues[$vIndex] ?? [], $optionMap);
+                        }
+                    }
                 }
+
+                // Different prices per store (variants exist by now).
+                $this->saveStorePrices($request, $Product);
 
                 // 1) gather all warehouse IDs
                 $warehouseIds = Warehouse::whereNull('deleted_at')
@@ -774,15 +1247,31 @@ class ProductsController extends BaseController
                     $isSingle = $request->input('type') === 'is_single';
                     $isVariant = $request->input('type') === 'is_variant' || $request->input('is_variant') === 'true';
 
-                    // fetch variants if needed
+                    // fetch variants if needed — ordered by id so their position
+                    // matches the `variants` payload (bulk-inserted in that order),
+                    // which is how `variant_opening` addresses them.
                     $variants = $isVariant
                         ? ProductVariant::where('product_id', $Product->id)
                             ->whereNull('deleted_at')
+                            ->orderBy('id')
                             ->get()
                         : collect();
 
                     // decode the JSON blob you appended from the frontend
                     $payloadWs = json_decode($request->input('warehouses', '[]'), true);
+                    if (! is_array($payloadWs)) {
+                        $payloadWs = [];
+                    }
+
+                    // Variant opening stock: { warehouse_id: [qty by variant position] }
+                    $payloadVo = json_decode($request->input('variant_opening', '[]'), true);
+                    if (! is_array($payloadVo)) {
+                        $payloadVo = [];
+                    }
+
+                    // Opening quantities actually recorded, for the virtual
+                    // adjustments below: [warehouse_id => [variant_id|0 => qty]]
+                    $openingByWarehouse = [];
 
                     $insertRows = [];
 
@@ -795,16 +1284,28 @@ class ProductsController extends BaseController
                         : 0;
 
                         if ($isVariant) {
-                            foreach ($variants as $variant) {
+                            $voRow = $payloadVo[$wid] ?? [];
+                            foreach ($variants->values() as $index => $variant) {
+                                $variantQty = is_array($voRow) && isset($voRow[$index]) && is_numeric($voRow[$index])
+                                    ? max(0.0, (float) $voRow[$index])
+                                    : 0.0;
+
                                 $insertRows[] = [
                                     'product_id' => $Product->id,
                                     'warehouse_id' => $wid,
                                     'product_variant_id' => $variant->id,
                                     'manage_stock' => $manage_stock,
-                                    'qte' => $qty,
+                                    'qte' => $variantQty,
                                 ];
+
+                                if ($variantQty > 0) {
+                                    $openingByWarehouse[$wid][$variant->id] = $variantQty;
+                                }
                             }
                         } else {
+                            if ($isSingle && $qty > 0) {
+                                $openingByWarehouse[$wid][0] = $qty;
+                            }
                             $insertRows[] = [
                                 'product_id' => $Product->id,
                                 'warehouse_id' => $wid,
@@ -847,15 +1348,8 @@ class ProductsController extends BaseController
                      * This keeps existing stock logic intact while giving the Profit & Loss report
                      * a proper cost basis for products created with opening stock.
                      */
-                    if ($isSingle && $manage_stock && is_array($payloadWs) && ! empty($payloadWs)) {
-                        foreach ($warehouseIds as $wid) {
-                            $whData = $payloadWs[$wid] ?? null;
-                            $openingQty = $whData && isset($whData['qte']) ? (float) $whData['qte'] : 0.0;
-
-                            if ($openingQty <= 0) {
-                                continue;
-                            }
-
+                    if ($manage_stock && ! empty($openingByWarehouse)) {
+                        foreach ($openingByWarehouse as $wid => $lines) {
                             // Create a lightweight adjustment header per warehouse
                             $adjRef = app('App\Http\Controllers\AdjustmentController')->getNumberOrder();
 
@@ -864,26 +1358,40 @@ class ProductsController extends BaseController
                                 'time' => now()->toTimeString(),
                                 'Ref' => $adjRef,
                                 'warehouse_id' => $wid,
-                                'items' => 1,
+                                'items' => count($lines),
                                 'notes' => 'Opening stock (auto)',
                                 'user_id' => Auth::id(),
                             ]);
 
-                            // Single detail row using type "add" so averageCostBulk values it as positive qty
-                            AdjustmentDetail::create([
-                                'adjustment_id' => $adjustment->id,
-                                'product_id' => $Product->id,
-                                'product_variant_id' => null,
-                                'quantity' => $openingQty,
-                                'type' => 'add',
-                            ]);
+                            // One detail row per product/variant using type "add" so
+                            // averageCostBulk values it as positive qty
+                            foreach ($lines as $variantId => $openingQty) {
+                                AdjustmentDetail::create([
+                                    'adjustment_id' => $adjustment->id,
+                                    'product_id' => $Product->id,
+                                    'product_variant_id' => $variantId ?: null,
+                                    'quantity' => $openingQty,
+                                    'type' => 'add',
+                                ]);
+                            }
+
+                            // Accounting: opening stock enters Inventory against equity.
+                            \App\Services\AccountingV2\StockJournal::adjustment($adjustment, created: true, opening: true);
                         }
                     }
                 }
 
+                // Software License: key source + generated-key rules (after variants / stock rows exist).
+                $this->applyLicense($Product, $request);
+
             }, 10);
 
-            return response()->json(['success' => true]);
+            WooAutoSync::productSaved($createdProductId);
+            OpencartAutoSync::productSaved($createdProductId);
+
+            // The id lets the form finish what had to wait for it — pairing
+            // the new product with a Shopify listing picked before saving.
+            return response()->json(['success' => true, 'id' => $createdProductId]);
 
         } catch (ValidationException $e) {
             return response()->json([
@@ -934,6 +1442,19 @@ class ProductsController extends BaseController
                 'cost' => Rule::requiredIf($request->type == 'is_single' || $request->type == 'is_combo'),
                 'price' => Rule::requiredIf($request->type != 'is_variant'),
             ];
+
+            // Combo products must carry at least one component product
+            if ($request->type == 'is_combo') {
+                $productRules['materiels'] = [
+                    'required',
+                    function ($attribute, $value, $fail) {
+                        $decoded = is_string($value) ? json_decode($value, true) : $value;
+                        if (! is_array($decoded) || empty($decoded)) {
+                            $fail('Add at least one product to the combo.');
+                        }
+                    },
+                ];
+            }
 
             // if type is not is_variant, add validation for variants array
             if ($request->type == 'is_variant') {
@@ -1073,17 +1594,40 @@ class ProductsController extends BaseController
                 ];
             }
 
+            // Additional barcodes share one namespace with product / variant codes.
+            $this->addBarcodeRules($productRules, $request, (int) $id);
+
             // validate the request data
             $validatedData = $request->validate($productRules, [
                 'code.unique' => 'Product code already used.',
                 'code.required' => 'This field is required',
             ]);
 
-            \DB::transaction(function () use ($request, $id) {
+            // Shopify-style options (Color / Size). Empty = legacy flat variant list,
+            // and also what a product sends when it is switched back to the list.
+            $optionService = app(ProductOptionService::class);
+            $productOptions = $request['type'] == 'is_variant'
+                ? $optionService->normalizeOptions($request->input('options'))
+                : [];
+            $variantOptionValues = [];
+            if ($productOptions) {
+                foreach (array_values((array) $request['variants']) as $variantRow) {
+                    $variantOptionValues[] = $optionService->normalizeVariantValues(
+                        is_array($variantRow) ? ($variantRow['option_values'] ?? null) : null,
+                        $productOptions
+                    );
+                }
+                $optionService->validateVariants($productOptions, $variantOptionValues);
+            }
+
+            \DB::transaction(function () use ($request, $id, $optionService, $productOptions, $variantOptionValues) {
 
                 $Product = Product::where('id', $id)
                     ->where('deleted_at', '=', null)
                     ->first();
+
+                // A restricted user may only edit products they can see.
+                $this->abortIfProductDenied($Product);
 
                 // -- Update Product
                 $Product->type = $request['type'];
@@ -1099,6 +1643,22 @@ class ProductsController extends BaseController
                     ? $request['sub_category_id']
                     : null;
                 $Product->brand_id = $request['brand_id'] == 'null' ? null : $request['brand_id'];
+                $this->applySizeGuide($Product, $request);
+                $this->applyScalePlu($Product, $request);
+                $Product->provider_id = ($request['provider_id'] ?? null) && $request['provider_id'] !== 'null'
+                    ? (int) $request['provider_id']
+                    : null;
+                // Home warehouse: re-assignable within the caller's warehouses.
+                // Only a user who may see every warehouse can clear it (the
+                // select sends '' / 'null'); a restricted user keeps the value.
+                if ($request->has('warehouse_id')) {
+                    $requestedHome = $request->input('warehouse_id');
+                    if ($requestedHome !== null && $requestedHome !== '' && $requestedHome !== 'null') {
+                        $Product->warehouse_id = $this->productHomeWarehouseFor($requestedHome);
+                    } elseif ($this->warehouseScopeIds() === null) {
+                        $Product->warehouse_id = null;
+                    }
+                }
                 $Product->TaxNet = $request['TaxNet'];
                 $Product->tax_method = $request['tax_method'];
                 $Product->discount = $request['discount'];
@@ -1186,18 +1746,24 @@ class ProductsController extends BaseController
                 }
 
                 if ($request['type'] == 'is_combo') {
-                    $materiels = json_decode($request['materiels'], true);
+                    $materiels = json_decode($request['materiels'] ?? '[]', true);
+                    if (! is_array($materiels)) {
+                        $materiels = [];
+                    }
 
                     $syncData = [];
                     foreach ($materiels as $materiel) {
-                        $syncData[$materiel['product_id']] = ['quantity' => $materiel['quantity']];
+                        if (empty($materiel['product_id'])) {
+                            continue;
+                        }
+                        $syncData[$materiel['product_id']] = ['quantity' => max(1, (float) ($materiel['quantity'] ?? 1))];
                     }
 
                     // Sync the combined products
                     $Product->combinedProducts()->sync($syncData);
                 }
 
-                $Product->is_imei = $request['is_imei'] == 'true' ? 1 : 0;
+                $Product->is_imei = ($request['is_imei'] == 'true' && in_array($request['type'], ['is_single', 'is_variant'], true)) ? 1 : 0;
                 $Product->not_selling = $request['not_selling'] == 'true' ? 1 : 0;
                 $Product->is_active = filter_var($request->input('is_active', $Product->is_active ?? 1), FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
                 $Product->is_featured = $request['is_featured'] == 'true' ? 1 : 0;
@@ -1239,6 +1805,17 @@ class ProductsController extends BaseController
                     // Uploaded variant images (indexed by variant position) — shared by both update branches below.
                     $variantImages = $request->file('variant_images', []);
 
+                    // Options: upsert dimensions/values (empty = flat list, clears them).
+                    $optionMap = $optionService->sync($Product, $productOptions);
+                    $variantNameFor = function ($key, $variant) use ($optionService, $productOptions, $variantOptionValues) {
+                        return $productOptions
+                            ? $optionService->title($productOptions, $variantOptionValues[$key] ?? [])
+                            : $variant['text'];
+                    };
+                    // Refuse to drop a variant that still holds stock: its quantity
+                    // would silently disappear from every warehouse.
+                    $stockedVariants = $optionService->variantsWithStock($oldVariants->pluck('id')->all());
+
                     if ($oldVariants->isNotEmpty()) {
                         $new_variants_id = [];
                         $var = 'id';
@@ -1256,9 +1833,15 @@ class ProductsController extends BaseController
 
                             // Delete Variant
                             if (! in_array($old_variants_id[$key], $new_variants_id)) {
+                                if (isset($stockedVariants[$value->id])) {
+                                    throw ValidationException::withMessages([
+                                        'variants' => ['Variant "'.$value->name.'" still has '.rtrim(rtrim(number_format($stockedVariants[$value->id], 2, '.', ''), '0'), '.').' in stock. Adjust or transfer it before removing the variant.'],
+                                    ]);
+                                }
                                 $ProductVariant = ProductVariant::findOrFail($value->id);
                                 $ProductVariant->deleted_at = Carbon::now();
                                 $ProductVariant->save();
+                                $optionService->detach((int) $value->id);
 
                                 $ProductWarehouse = product_warehouse::where('product_variant_id', $value->id)
                                     ->update(['deleted_at' => Carbon::now()]);
@@ -1285,7 +1868,7 @@ class ProductsController extends BaseController
                                 $ProductVariantDT = new ProductVariant;
                                 // -- Field Required
                                 $ProductVariantDT->product_id = $variant['product_id'];
-                                $ProductVariantDT->name = $variant['text'];
+                                $ProductVariantDT->name = $variantNameFor($key, $variant);
                                 $ProductVariantDT->price = $variant['price'];
                                 $ProductVariantDT->cost = $variant['cost'];
                                 $ProductVariantDT->code = $variant['code'];
@@ -1302,7 +1885,7 @@ class ProductsController extends BaseController
 
                                 $ProductVariantUP['product_id'] = $variant['product_id'];
                                 $ProductVariantUP['code'] = $variant['code'];
-                                $ProductVariantUP['name'] = $variant['text'];
+                                $ProductVariantUP['name'] = $variantNameFor($key, $variant);
                                 $ProductVariantUP['price'] = $variant['price'];
                                 $ProductVariantUP['cost'] = $variant['cost'];
                                 if (Schema::hasColumn('product_variants', 'wholesale')) {
@@ -1322,7 +1905,7 @@ class ProductsController extends BaseController
                                 // -- Field Required
                                 $ProductVariantDT->product_id = $id;
                                 $ProductVariantDT->code = $variant['code'];
-                                $ProductVariantDT->name = $variant['text'];
+                                $ProductVariantDT->name = $variantNameFor($key, $variant);
                                 $ProductVariantDT->price = $variant['price'];
                                 $ProductVariantDT->cost = $variant['cost'];
                                 if (Schema::hasColumn('product_variants', 'wholesale')) {
@@ -1338,7 +1921,7 @@ class ProductsController extends BaseController
 
                                 $ProductVariantUP['product_id'] = $id;
                                 $ProductVariantUP['code'] = $variant['code'];
-                                $ProductVariantUP['name'] = $variant['text'];
+                                $ProductVariantUP['name'] = $variantNameFor($key, $variant);
                                 $ProductVariantUP['price'] = $variant['price'];
                                 $ProductVariantUP['cost'] = $variant['cost'];
                                 $ProductVariantUP['qty'] = 0.00;
@@ -1364,6 +1947,7 @@ class ProductsController extends BaseController
 
                             if (! in_array($new_variants_id[$key], $old_variants_id)) {
                                 $ProductVariantDT->save();
+                                $optionService->attach($ProductVariantDT->id, $variantOptionValues[$key] ?? [], $optionMap);
 
                                 // --Store Product warehouse
                                 if ($warehouses) {
@@ -1382,6 +1966,7 @@ class ProductsController extends BaseController
                                 }
                             } else {
                                 ProductVariant::where('id', $variant['id'])->update($ProductVariantUP);
+                                $optionService->attach((int) $variant['id'], $variantOptionValues[$key] ?? [], $optionMap);
                             }
                         }
 
@@ -1409,7 +1994,7 @@ class ProductsController extends BaseController
                                 : ((isset($variant['image']) && $variant['image'] !== '' && $variant['image'] !== 'null')
                                     ? $variant['image']
                                     : 'no-image.png');
-                            $ProductVarDT->name = $variant['text'];
+                            $ProductVarDT->name = $variantNameFor($vIdx, $variant);
                             $ProductVarDT->cost = $variant['cost'];
                             $ProductVarDT->price = $variant['price'];
                             if (Schema::hasColumn('product_variants', 'wholesale')) {
@@ -1423,6 +2008,7 @@ class ProductsController extends BaseController
                                     : 0;
                             }
                             $ProductVarDT->save();
+                            $optionService->attach($ProductVarDT->id, $variantOptionValues[$vIdx] ?? [], $optionMap);
 
                             // -- Store Product warehouse
                             if ($warehouses) {
@@ -1442,11 +2028,16 @@ class ProductsController extends BaseController
 
                     }
                 } else {
+                    $optionService->clear($Product);
                     if ($oldVariants->isNotEmpty()) {
+                        $stockedVariants = $optionService->variantsWithStock($oldVariants->pluck('id')->all());
                         foreach ($oldVariants as $old_var) {
-                            $var_old = ProductVariant::where('product_id', $old_var['product_id'])
-                                ->where('deleted_at', null)
-                                ->first();
+                            if (isset($stockedVariants[$old_var->id])) {
+                                throw ValidationException::withMessages([
+                                    'type' => ['Variant "'.$old_var->name.'" still has stock. Adjust or transfer it before changing the product type.'],
+                                ]);
+                            }
+                            $var_old = ProductVariant::where('id', $old_var->id)->first();
                             $var_old->deleted_at = Carbon::now();
                             $var_old->save();
 
@@ -1487,12 +2078,9 @@ class ProductsController extends BaseController
                     }
                     $filename = rand(11111111, 99999999).'.'.$ext;
 
-                    // Resize to one standard size (800x800)
+                    // Resize per System Settings → Features (Resize Product Images)
                     $image_resize = Image::make($image->getRealPath());
-                    $image_resize->resize(800, 800, function ($constraint) {
-                        $constraint->aspectRatio();
-                        $constraint->upsize();
-                    })->save($path.'/'.$filename);
+                    helpers::apply_product_image_resize($image_resize)->save($path.'/'.$filename);
 
                     // Delete old image if it exists and is not the placeholder
                     $oldImage = $path.'/'.$currentImage;
@@ -1514,10 +2102,7 @@ class ProductsController extends BaseController
                     $filename = rand(11111111, 99999999).'.'.$ext;
 
                     $image_resize = Image::make($image->getRealPath());
-                    $image_resize->resize(800, 800, function ($constraint) {
-                        $constraint->aspectRatio();
-                        $constraint->upsize();
-                    })->save($path.'/'.$filename);
+                    helpers::apply_product_image_resize($image_resize)->save($path.'/'.$filename);
 
                 } else {
                     // Keep existing image or fallback to default
@@ -1526,11 +2111,27 @@ class ProductsController extends BaseController
 
                 $Product->image = $filename;
                 $Product->save();
+                // Sent only by forms that edit them, so an older client never wipes the list.
+                if ($request->has('barcodes') && $Product->type !== 'is_variant') {
+                    ProductBarcodes::sync($Product->id, null, ProductBarcodes::normalize($request->input('barcodes')));
+                } elseif ($Product->type === 'is_variant') {
+                    // Switched to variants: the parent row is never sold, so its
+                    // own barcodes would scan to nothing — free them.
+                    ProductBarcodes::sync($Product->id, null, []);
+                }
+                // Variants removed above take their barcodes with them.
+                ProductBarcodes::purgeDead();
+                $this->applyVehicleSpec($Product, $request);
+                $this->applyStoreSpecs($Product, $request);
+                $this->applyDishDetails($Product, $request);
 
                 $this->syncProductMultiCategories($request, $Product);
 
                 // Multi-Pack Selling: reconcile per-product selling packs
                 $this->syncProductPacks($request, $Product);
+
+                // Different prices per store (after the variants above are saved).
+                $this->saveStorePrices($request, $Product);
 
                 app(ProductGalleryService::class)->syncAfterUpdate($request, $Product);
 
@@ -1554,7 +2155,13 @@ class ProductsController extends BaseController
                     }
                 }
 
+                // Software License: key source + generated-key rules (after variants / stock rows exist).
+                $this->applyLicense($Product, $request);
+
             }, 10);
+
+            WooAutoSync::productSaved($id);
+            OpencartAutoSync::productSaved($id);
 
             return response()->json(['success' => true]);
 
@@ -1578,6 +2185,7 @@ class ProductsController extends BaseController
         \DB::transaction(function () use ($id) {
 
             $Product = Product::findOrFail($id);
+            $this->abortIfProductDenied($Product);
 
             if (Schema::hasTable('category_product')) {
                 $Product->categories()->detach();
@@ -1606,6 +2214,9 @@ class ProductsController extends BaseController
                 'deleted_at' => Carbon::now(),
             ]);
 
+            // Its extra barcodes are free again, like its code.
+            ProductBarcodes::forget((int) $id);
+
         }, 10);
 
         return response()->json(['success' => true]);
@@ -1623,7 +2234,9 @@ class ProductsController extends BaseController
             foreach ($selectedIds as $product_id) {
 
                 $Product = Product::findOrFail($product_id);
+                $this->abortIfProductDenied($Product);
                 $Product->deleted_at = Carbon::now();
+                ProductBarcodes::forget((int) $Product->id);
 
                 if (Schema::hasTable('category_product')) {
                     $Product->categories()->detach();
@@ -1669,6 +2282,7 @@ class ProductsController extends BaseController
         $Product = Product::with(['category', 'categories', 'subCategory', 'subcategories', 'images'])
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
+        $this->abortIfProductDenied($Product);
         // get warehouses assigned to user
         $user_auth = auth()->user();
         if ($user_auth->is_all_warehouses) {
@@ -1681,6 +2295,7 @@ class ProductsController extends BaseController
         $item['id'] = $Product->id;
         $item['type'] = $Product->type;
         $item['code'] = $Product->code;
+        $item['barcodes'] = ProductBarcodes::for((int) $Product->id);
         $item['gtin'] = $Product->gtin ?? '';
         $item['hs_code'] = $Product->hs_code ?? '';
         $item['fbr_uom'] = $Product->fbr_uom ?? '';
@@ -1693,6 +2308,8 @@ class ProductsController extends BaseController
         $item['sub_category'] = optional($Product->subCategory)->name;
         $item['subcategories'] = $Product->apiSubcategoriesList();
         $item['brand'] = $Product['brand'] ? $Product['brand']->name : 'N/D';
+        $sizeGuide = $Product->activeSizeGuide();
+        $item['size_guide'] = $sizeGuide ? ['id' => $sizeGuide->id, 'name' => $sizeGuide->name] : null;
         $item['price'] = $Product->price;
         $item['wholesale_price'] = $Product->wholesale_price;
         $item['min_price'] = $Product->min_price;
@@ -1700,9 +2317,10 @@ class ProductsController extends BaseController
         $item['stock_alert'] = $Product->stock_alert;
         $item['weight'] = $Product->weight;
         $item['taxe'] = $Product->TaxNet;
-        $item['tax_method'] = $Product->tax_method === 1 ? 'Exclusive' : 'Inclusive';
+        // Both columns are varchar ("1"/"2"), so compare as strings.
+        $item['tax_method'] = (string) $Product->tax_method === '2' ? 'Inclusive' : 'Exclusive';
         $symbol = $helpers->Get_Currency_Code();
-        $item['discount'] = $Product->discount_method === 1 ? $Product->discount.' '.'%' : $Product->discount.' '.$symbol;
+        $item['discount'] = (string) $Product->discount_method === '2' ? helpers::with_currency($symbol, $Product->discount) : $Product->discount.' '.'%';
 
         // ——— Warranty & Guarantee ———
         $item['warranty_period'] = $Product->warranty_period;
@@ -1745,12 +2363,17 @@ class ProductsController extends BaseController
 
         }
 
+        $optionService = app(ProductOptionService::class);
+        $item['options'] = $Product->is_variant ? $optionService->optionsPayload((int) $id) : [];
+        $variantOptionValues = $item['options'] ? $optionService->variantValuesMap((int) $id) : [];
+
         if ($Product->is_variant) {
             $item['is_variant'] = 'yes';
             $productsVariants = ProductVariant::where('product_id', $id)
                 ->where('deleted_at', null)
                 ->get();
             foreach ($productsVariants as $variant) {
+                $ProductVariant['option_values'] = (object) ($variantOptionValues[$variant->id] ?? []);
                 $ProductVariant['code'] = $variant->code;
                 $ProductVariant['gtin'] = $variant->gtin ?? null;
                 $ProductVariant['image'] = $variant->image ?: 'no-image.png';
@@ -1787,6 +2410,9 @@ class ProductsController extends BaseController
             $item['CountQTY_variants'] = [];
         }
 
+        // Virtual combo stock: show what the components can still fill.
+        $virtualCombo = $Product->type == 'is_combo' && ComboStockService::enabled();
+
         foreach ($warehouses as $warehouse) {
             $product_warehouse_data = DB::table('product_warehouse')
                 ->where('deleted_at', '=', null)
@@ -1796,8 +2422,33 @@ class ProductsController extends BaseController
                 ->first();
 
             $war['mag'] = $warehouse->name;
-            $war['qte'] = $product_warehouse_data->sum;
+            $war['qte'] = $virtualCombo
+                ? (app(ComboStockService::class)->availability([(int) $id], $warehouse->id)[(int) $id] ?? '---')
+                : $product_warehouse_data->sum;
             $item['CountQTY'][] = $war;
+        }
+
+        // Different prices per store: the figures set per warehouse (blank = normal price).
+        $item['store_prices'] = [];
+        if (WarehousePrices::enabled()) {
+            $spWarehouses = Warehouse::whereNull('deleted_at')
+                ->whereIn('id', $this->storePriceWarehouseIds())->pluck('name', 'id');
+            $spVariants = ProductVariant::where('product_id', $id)->whereNull('deleted_at')->pluck('name', 'id');
+            $spRows = \App\Models\ProductWarehousePrice::where('product_id', $id)
+                ->whereIn('warehouse_id', $spWarehouses->keys())
+                ->orderBy('warehouse_id')->orderBy('product_variant_id')->get();
+            foreach ($spRows as $sp) {
+                if ($sp->product_variant_id && ! isset($spVariants[$sp->product_variant_id])) {
+                    continue;
+                }
+                $item['store_prices'][] = [
+                    'warehouse' => $spWarehouses[$sp->warehouse_id],
+                    'variant' => $sp->product_variant_id ? $spVariants[$sp->product_variant_id] : null,
+                    'price' => $sp->price,
+                    'wholesale_price' => $sp->wholesale_price,
+                    'min_price' => $sp->min_price,
+                ];
+            }
         }
 
         $allimages = $Product->productGalleryFilenames();
@@ -1833,9 +2484,22 @@ class ProductsController extends BaseController
         // manage_stock semantics stay untouched.
         $global_setting = Setting::whereNull('deleted_at')->first();
         $allow_overselling = (bool) ($global_setting->allow_overselling ?? false);
+        // Virtual combo stock: combos skip the SQL stock filter and are
+        // filtered on their component availability after the query.
+        $virtualCombos = (bool) ($global_setting->virtual_combo_stock ?? false);
+        $stockFiltered = $request->stock == '1' && $request->product_service == '1' && ! $allow_overselling;
 
-        $product_warehouse_data = product_warehouse::with('warehouse', 'product', 'productVariant')
-            ->where(function ($query) use ($request, $id, $allow_overselling) {
+        // product.unitSale / unitPurchase are read for every row below: loading
+        // them here saves two queries per product (a 21,000-product catalogue
+        // took over a minute to open a sale or purchase form).
+        $product_warehouse_data = product_warehouse::with('warehouse', 'product.unitSale', 'product.unitPurchase', 'productVariant')
+            // Products belong to a warehouse (Settings -> Features): every
+            // product has a row in every warehouse, so the picker must also
+            // apply the ownership rule or a zero-stock product from another
+            // branch would still be offered here.
+            ->whereHas('product', fn ($p) => $this->scopeProductsToWarehouses($p))
+            ->withoutVariantParentRows()
+            ->where(function ($query) use ($request, $id, $allow_overselling, $virtualCombos) {
                 return $query->where('warehouse_id', $id)
                     ->where('deleted_at', '=', null)
                     ->where(function ($query) use ($request) {
@@ -1857,15 +2521,20 @@ class ProductsController extends BaseController
                             }
                         });
                     })
+                    // Virtual combo stock: the stock-movement forms (adjustment,
+                    // damage, transfer ask for product_service=0) can't move a
+                    // combo — it has no stock of its own, only its components.
+                    ->when($virtualCombos && $request->product_service == '0', fn ($query) => $query->whereHas('product', fn ($q) => $q->where('type', '!=', 'is_combo')))
 
-                    ->where(function ($query) use ($request, $allow_overselling) {
+                    ->where(function ($query) use ($request, $allow_overselling, $virtualCombos) {
                         if ($request->stock == '1' && $request->product_service == '1') {
                             // Overselling ON → services included, no qte filter.
                             return $allow_overselling
                                 ? $query
                                 : $query->where('qte', '>', 0)->orWhere('manage_stock', false)
                                     // "Always in stock" products stay listed at zero stock.
-                                    ->orWhereHas('product', fn ($p) => $p->where('always_in_stock', 1));
+                                    ->orWhereHas('product', fn ($p) => $p->where('always_in_stock', 1))
+                                    ->when($virtualCombos, fn ($q) => $q->orWhereHas('product', fn ($p) => $p->where('type', 'is_combo')));
 
                         } elseif ($request->stock == '1' && $request->product_service == '0') {
                             // Overselling ON → stock-managed products only, no qte filter.
@@ -1880,94 +2549,151 @@ class ProductsController extends BaseController
                     });
             })->get();
 
+        if ($virtualCombos) {
+            app(ComboStockService::class)->overlayRows($product_warehouse_data);
+            if ($stockFiltered) {
+                $product_warehouse_data = $product_warehouse_data->reject(fn ($pw) => optional($pw->product)->type === 'is_combo'
+                    && $pw->qte <= 0
+                    && ! $pw->combo_unlimited
+                    && ! $pw->product->always_in_stock
+                )->values();
+            }
+        }
+
+        // Additional barcodes, scanned by the forms' resolveScan(), in one query.
+        $barcodeMap = ProductBarcodes::map($product_warehouse_data->pluck('product_id')->all());
+
+        // Different prices per store: this warehouse's own prices, one query.
+        $storePriceMap = WarehousePrices::map($id);
+
+        $num = fn ($v) => $v === null ? null : (float) $v;
+
         foreach ($product_warehouse_data as $product_warehouse) {
+            // Plain reads: on this stack every Eloquent attribute read costs ~10 µs
+            // (casts are re-resolved each time) and this loop made ~50 per product,
+            // so a 21,000-product list took ~20 s to open a sale or purchase form.
+            // Raw values, cast exactly as the models cast them (double → float,
+            // null kept, booleans for always_in_stock).
+            $a = $product_warehouse['product']->getAttributes();
+            $prodRow = (object) [
+                'code' => $a['code'] ?? null,
+                'name' => $a['name'] ?? null,
+                'type' => $a['type'] ?? null,
+                'image' => $a['image'] ?? null,
+                'Type_barcode' => $a['Type_barcode'] ?? null,
+                'scale_plu' => $a['scale_plu'] ?? null,
+                'always_in_stock' => isset($a['always_in_stock']) ? (bool) $a['always_in_stock'] : null,
+                'price' => $num($a['price'] ?? null),
+                'wholesale_price' => $num($a['wholesale_price'] ?? null),
+                'min_price' => $num($a['min_price'] ?? null),
+                'discount' => $num($a['discount'] ?? null),
+                'discount_method' => $a['discount_method'] ?? null,
+                'TaxNet' => $num($a['TaxNet'] ?? null),
+                'tax_method' => $a['tax_method'] ?? null,
+            ];
+            $unitSale = $product_warehouse['product']->unitSale;
+            $unitPurchase = $product_warehouse['product']->unitPurchase;
+            $pwRaw = $product_warehouse->getAttributes();
+            $pwQte = $num($pwRaw['qte'] ?? null);
+            $pwProductId = isset($pwRaw['product_id']) ? (int) $pwRaw['product_id'] : null;
+            $pwVariantId = $pwRaw['product_variant_id'] ?? null;
+            $pwManageStock = isset($pwRaw['manage_stock']) ? (int) $pwRaw['manage_stock'] : null;
+            $variantRaw = $pwVariantId && $product_warehouse['productVariant'] ? $product_warehouse['productVariant']->getAttributes() : [];
 
-            if ($product_warehouse->product_variant_id) {
-                $item['product_variant_id'] = $product_warehouse->product_variant_id;
+            if ($pwVariantId) {
+                $item['product_variant_id'] = $pwVariantId;
 
-                $item['code'] = $product_warehouse['productVariant']->code;
-                $item['Variant'] = '['.$product_warehouse['productVariant']->name.']'.$product_warehouse['product']->name;
-                $item['name'] = '['.$product_warehouse['productVariant']->name.']'.$product_warehouse['product']->name;
-                $item['barcode'] = $product_warehouse['productVariant']->code;
+                $item['code'] = ($variantRaw['code'] ?? null);
+                $item['Variant'] = '['.($variantRaw['name'] ?? null).']'.$prodRow->name;
+                $item['name'] = '['.($variantRaw['name'] ?? null).']'.$prodRow->name;
+                $item['barcode'] = ($variantRaw['code'] ?? null);
 
-                $product_price = $product_warehouse['productVariant']->price;
+                $product_price = $num($variantRaw['price'] ?? null);
 
             } else {
                 $item['product_variant_id'] = null;
                 $item['Variant'] = null;
-                $item['code'] = $product_warehouse['product']->code;
-                $item['name'] = $product_warehouse['product']->name;
-                $item['barcode'] = $product_warehouse['product']->code;
+                $item['code'] = $prodRow->code;
+                $item['name'] = $prodRow->name;
+                $item['barcode'] = $prodRow->code;
 
-                $product_price = $product_warehouse['product']->price;
+                $product_price = $prodRow->price;
             }
+            $storeRow = $storePriceMap[WarehousePrices::key($pwProductId, $pwVariantId)] ?? null;
+            $product_price = WarehousePrices::pick($storeRow, 'price', $product_price);
+            $item['barcodes'] = $barcodeMap[$pwProductId.'|'.($pwVariantId ?? '')] ?? [];
 
-            $item['id'] = $product_warehouse->product_id;
-            $item['product_type'] = $product_warehouse['product']->type;
-            $item['always_in_stock'] = (bool) ($product_warehouse['product']->always_in_stock ?? false);
-            $item['Type_barcode'] = $product_warehouse['product']->Type_barcode;
-            $firstimage = explode(',', $product_warehouse['product']->image);
+            $item['id'] = $pwProductId;
+            $item['product_type'] = $prodRow->type;
+            // Weighing-scale item code (standard products only).
+            $item['scale_plu'] = ! $pwVariantId && $prodRow->type === 'is_single'
+                ? ($prodRow->scale_plu ?? null) : null;
+            $item['always_in_stock'] = (bool) ($prodRow->always_in_stock ?? false)
+                || (bool) ($pwRaw['combo_unlimited'] ?? null);
+            $item['Type_barcode'] = $prodRow->Type_barcode;
+            $firstimage = explode(',', $prodRow->image);
             $item['image'] = $firstimage[0];
 
-            if ($product_warehouse['product']['unitSale']) {
+            if ($unitSale) {
 
-                if ($product_warehouse['product']['unitSale']->operator == '/') {
-                    $item['qte_sale'] = $product_warehouse->qte * $product_warehouse['product']['unitSale']->operator_value;
-                    $price = $product_price / $product_warehouse['product']['unitSale']->operator_value;
+                if ($unitSale->operator == '/') {
+                    $item['qte_sale'] = $pwQte * $unitSale->operator_value;
+                    $price = $product_price / $unitSale->operator_value;
                 } else {
-                    $item['qte_sale'] = $product_warehouse->qte / $product_warehouse['product']['unitSale']->operator_value;
-                    $price = $product_price * $product_warehouse['product']['unitSale']->operator_value;
+                    $item['qte_sale'] = $pwQte / $unitSale->operator_value;
+                    $price = $product_price * $unitSale->operator_value;
                 }
 
             } else {
-                $item['qte_sale'] = $product_warehouse['product']->type != 'is_service' ? $product_warehouse->qte : '---';
+                $item['qte_sale'] = $prodRow->type != 'is_service' ? $pwQte : '---';
                 $price = $product_price;
             }
 
             // Compute wholesale price per sale unit (min_price is returned raw from DB)
-            $wholesale_product_price = isset($product_warehouse['product']->wholesale_price) ? $product_warehouse['product']->wholesale_price : $product_price;
+            $wholesale_product_price = isset($prodRow->wholesale_price) ? $prodRow->wholesale_price : $product_price;
+            $wholesale_product_price = WarehousePrices::pick($storeRow, 'wholesale_price', $wholesale_product_price);
 
-            if ($product_warehouse['product']['unitSale']) {
-                if ($product_warehouse['product']['unitSale']->operator == '/') {
-                    $wholesale_unit_price = $wholesale_product_price / $product_warehouse['product']['unitSale']->operator_value;
+            if ($unitSale) {
+                if ($unitSale->operator == '/') {
+                    $wholesale_unit_price = $wholesale_product_price / $unitSale->operator_value;
                 } else {
-                    $wholesale_unit_price = $wholesale_product_price * $product_warehouse['product']['unitSale']->operator_value;
+                    $wholesale_unit_price = $wholesale_product_price * $unitSale->operator_value;
                 }
             } else {
                 $wholesale_unit_price = $wholesale_product_price;
             }
 
-            if ($product_warehouse['product']['unitPurchase']) {
+            if ($unitPurchase) {
 
-                if ($product_warehouse['product']['unitPurchase']->operator == '/') {
-                    $item['qte_purchase'] = round($product_warehouse->qte * $product_warehouse['product']['unitPurchase']->operator_value, 5);
+                if ($unitPurchase->operator == '/') {
+                    $item['qte_purchase'] = round($pwQte * $unitPurchase->operator_value, 5);
                 } else {
-                    $item['qte_purchase'] = round($product_warehouse->qte / $product_warehouse['product']['unitPurchase']->operator_value, 5);
+                    $item['qte_purchase'] = round($pwQte / $unitPurchase->operator_value, 5);
                 }
 
             } else {
-                $item['qte_purchase'] = $product_warehouse->qte;
+                $item['qte_purchase'] = $pwQte;
             }
 
-            $item['manage_stock'] = $product_warehouse->manage_stock;
-            $item['qte'] = $product_warehouse['product']->type != 'is_service' ? $product_warehouse->qte : '---';
-            $item['unitSale'] = $product_warehouse['product']['unitSale'] ? $product_warehouse['product']['unitSale']->ShortName : '';
-            $item['unitPurchase'] = $product_warehouse['product']['unitPurchase'] ? $product_warehouse['product']['unitPurchase']->ShortName : '';
+            $item['manage_stock'] = $pwManageStock;
+            $item['qte'] = $prodRow->type != 'is_service' ? $pwQte : '---';
+            $item['unitSale'] = $unitSale ? $unitSale->ShortName : '';
+            $item['unitPurchase'] = $unitPurchase ? $unitPurchase->ShortName : '';
 
             // Discount
 
-            if ($product_warehouse['product']->discount !== 0.0) {
-                if ($product_warehouse['product']->discount_method == '1') {
-                    $discount = $price * $product_warehouse['product']->discount / 100;
-                    $item['discount'] = $product_warehouse['product']->discount;
+            if ($prodRow->discount !== 0.0) {
+                if ($prodRow->discount_method == '1') {
+                    $discount = $price * $prodRow->discount / 100;
+                    $item['discount'] = $prodRow->discount;
                     $item['DiscountNet'] = $discount;
                     $price_discounted = $price - $discount;
                     $item['discount_method'] = '1';
                 } else {
-                    $discount = $product_warehouse['product']->discount;
-                    $item['discount'] = $product_warehouse['product']->discount;
-                    $item['DiscountNet'] = $product_warehouse['product']->discount;
-                    $price_discounted = $price - $product_warehouse['product']->discount;
+                    $discount = $prodRow->discount;
+                    $item['discount'] = $prodRow->discount;
+                    $item['DiscountNet'] = $prodRow->discount;
+                    $price_discounted = $price - $prodRow->discount;
                     $item['discount_method'] = '2';
                 }
 
@@ -1975,15 +2701,17 @@ class ProductsController extends BaseController
                 $item['discount'] = 0;
                 $item['DiscountNet'] = 0;
                 $item['discount_method'] = '2';
-                $price_discounted = $product_price;
+                // Per sale unit, like the discounted branches above and the
+                // wholesale price below (was the base-unit price).
+                $price_discounted = $price;
 
             }
 
             // Tax
-            if ($product_warehouse['product']->TaxNet !== 0.0) {
+            if ($prodRow->TaxNet !== 0.0) {
                 // Exclusive
-                if ($product_warehouse['product']->tax_method == '1') {
-                    $tax_price = $price_discounted * $product_warehouse['product']->TaxNet / 100;
+                if ($prodRow->tax_method == '1') {
+                    $tax_price = $price_discounted * $prodRow->TaxNet / 100;
                     $item['Net_price'] = $price_discounted + $tax_price;
                     // Inxclusive
                 } else {
@@ -1995,12 +2723,12 @@ class ProductsController extends BaseController
 
             // Apply discount/tax to wholesale and min prices as well
             // Wholesale
-            if ($product_warehouse['product']->discount !== 0.0) {
-                if ($product_warehouse['product']->discount_method == '1') {
-                    $wholesale_discount = $wholesale_unit_price * $product_warehouse['product']->discount / 100;
+            if ($prodRow->discount !== 0.0) {
+                if ($prodRow->discount_method == '1') {
+                    $wholesale_discount = $wholesale_unit_price * $prodRow->discount / 100;
                     $wholesale_price_discounted = $wholesale_unit_price - $wholesale_discount;
                 } else {
-                    $wholesale_discount = $product_warehouse['product']->discount;
+                    $wholesale_discount = $prodRow->discount;
                     $wholesale_price_discounted = $wholesale_unit_price - $wholesale_discount;
                 }
             } else {
@@ -2008,12 +2736,12 @@ class ProductsController extends BaseController
                 $wholesale_price_discounted = $wholesale_unit_price;
             }
 
-            if ($product_warehouse['product']->TaxNet !== 0.0) {
-                if ($product_warehouse['product']->tax_method == '1') {
-                    $wholesale_tax_price = $wholesale_price_discounted * $product_warehouse['product']->TaxNet / 100;
+            if ($prodRow->TaxNet !== 0.0) {
+                if ($prodRow->tax_method == '1') {
+                    $wholesale_tax_price = $wholesale_price_discounted * $prodRow->TaxNet / 100;
                     $wholesale_net_price = $wholesale_price_discounted + $wholesale_tax_price;
                 } else {
-                    $wholesale_tax_price = $wholesale_price_discounted * $product_warehouse['product']->TaxNet / 100;
+                    $wholesale_tax_price = $wholesale_price_discounted * $prodRow->TaxNet / 100;
                     $wholesale_net_price = $wholesale_price_discounted;
                 }
             } else {
@@ -2024,7 +2752,7 @@ class ProductsController extends BaseController
             $item['Unit_price_wholesale'] = $wholesale_unit_price;
             $item['wholesale_Net_price'] = $wholesale_net_price;
             // return raw min price from DB without discount/tax/unit conversion
-            $item['min_price'] = $product_warehouse['product']->min_price ?? 0;
+            $item['min_price'] = WarehousePrices::pick($storeRow, 'min_price', $prodRow->min_price ?? 0);
 
             $data[] = $item;
         }
@@ -2051,6 +2779,7 @@ class ProductsController extends BaseController
             ->where('deleted_at', '=', null)
             ->where('is_active', 1)
             ->firstOrFail();
+        $this->abortIfProductDenied($Product_data);
 
         $data = [];
         $item['id'] = $Product_data['id'];
@@ -2074,6 +2803,9 @@ class ProductsController extends BaseController
         $item['discount'] = $Product_data['discount'];
 
         $item['is_imei'] = $Product_data['is_imei'];
+        // Combo lines pick serials of their tracked components.
+        $item['serial_components'] = app(SerialNumberService::class)
+            ->comboSerialComponents([(int) $Product_data['id']])[(int) $Product_data['id']] ?? [];
         $item['not_selling'] = $Product_data['not_selling'];
         $item['hide_from_online_store'] = $Product_data['hide_from_online_store'] ?? 0;
         $item['always_in_stock'] = (bool) ($Product_data['always_in_stock'] ?? false);
@@ -2090,8 +2822,10 @@ class ProductsController extends BaseController
             // product is_variant
         } elseif ($Product_data['type'] == 'is_variant') {
 
+            // No such variant (e.g. the parent itself was requested) is a 404,
+            // not a crash on the null lookups below.
             $product_variant_data = ProductVariant::where('product_id', $id)
-                ->where('id', $variant_id)->first();
+                ->where('id', $variant_id)->firstOrFail();
 
             $product_price = $product_variant_data['price'];
             $product_cost = $product_variant_data['cost'];
@@ -2107,6 +2841,16 @@ class ProductsController extends BaseController
             $item['code'] = $Product_data['code'];
             $item['name'] = $Product_data['name'];
         }
+
+        // Different prices per store: the warehouse's own figures replace the
+        // normal ones (NULL fields keep them). base_price stays the product's
+        // own price for forms that edit it (purchase "current price" hint).
+        $item['base_price'] = $product_price;
+        $storePrices = $warehouse_id
+            ? WarehousePrices::find($id, $Product_data['type'] == 'is_variant' ? $variant_id : null, $warehouse_id)
+            : null;
+        $product_price = WarehousePrices::pick($storePrices, 'price', $product_price);
+        $item['store_price_applied'] = $storePrices !== null;
 
         // check if product has Unit sale
         if ($Product_data['unitSale']) {
@@ -2151,6 +2895,7 @@ class ProductsController extends BaseController
                 ? $Product_data->wholesale_price
                 : $product_price;
         }
+        $wholesale_product_price = WarehousePrices::pick($storePrices, 'wholesale_price', $wholesale_product_price);
 
         if ($Product_data['unitSale']) {
             if ($Product_data['unitSale']->operator == '/') {
@@ -2254,6 +2999,7 @@ class ProductsController extends BaseController
         $min_price_raw = ($Product_data['type'] == 'is_variant' && isset($product_variant_data))
             ? ($product_variant_data['min_price'] ?? 0)
             : ($Product_data->min_price ?? 0);
+        $min_price_raw = WarehousePrices::pick($storePrices, 'min_price', $min_price_raw);
 
         if ($Product_data['unitSale']) {
             if ($Product_data['unitSale']->operator == '/') {
@@ -2283,6 +3029,15 @@ class ProductsController extends BaseController
             }
 
             $product_warehouse = $query->first();
+
+            if ($product_warehouse && $Product_data['type'] === 'is_combo' && ComboStockService::enabled()) {
+                $product_warehouse->setRelation('product', $Product_data);
+                app(ComboStockService::class)->overlayRows([$product_warehouse]);
+                // Components that never run out: the line must not be capped at 0.
+                if ($product_warehouse->combo_unlimited) {
+                    $item['always_in_stock'] = true;
+                }
+            }
 
             if ($product_warehouse) {
                 $item['qte'] = $product_warehouse->qte;
@@ -2359,29 +3114,42 @@ class ProductsController extends BaseController
 
         $product_warehouse_data = product_warehouse::with('warehouse', 'product', 'productVariant')
             ->join('products', 'product_warehouse.product_id', '=', 'products.id')
-            ->where('manage_stock', true)
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
+            // Qualified: some tenants' products table also has a manage_stock column.
+            ->where('product_warehouse.manage_stock', true)
             ->whereRaw('qte <= stock_alert')
+            ->tap(fn ($q) => ComboStockService::excludeVirtualCombos($q))
             ->whereIn('product_warehouse.warehouse_id', $allowedWarehouseIds)
             ->when($warehouseFilter, function ($query) use ($warehouseFilter) {
                 return $query->where('product_warehouse.warehouse_id', $warehouseFilter);
-            })->where('product_warehouse.deleted_at', null)->get();
+            })->where('product_warehouse.deleted_at', null)
+            // An empty row of another warehouse's product is not a low-stock alert here.
+            ->tap(fn ($q) => $this->scopeStockRowsToOwnership($q))
+            // products.id / products.warehouse_id would otherwise overwrite the
+            // product_warehouse columns and break the eager-loaded relations
+            ->select('product_warehouse.*')
+            ->get();
 
         $data = [];
 
         if ($product_warehouse_data->isNotEmpty()) {
 
             foreach ($product_warehouse_data as $product_warehouse) {
-                if ($product_warehouse->qte <= $product_warehouse['product']->stock_alert) {
+                $product = $product_warehouse['product'];
+                if ($product === null) {
+                    continue;
+                }
+                if ($product_warehouse->qte <= $product->stock_alert) {
                     if ($product_warehouse->product_variant_id !== null) {
-                        $item['code'] = $product_warehouse['productVariant']->code;
-                        $item['name'] = '['.$product_warehouse['productVariant']->name.']'.$product_warehouse['product']->name;
+                        $item['code'] = optional($product_warehouse['productVariant'])->code;
+                        $item['name'] = '['.optional($product_warehouse['productVariant'])->name.']'.$product->name;
                     } else {
-                        $item['code'] = $product_warehouse['product']->code;
-                        $item['name'] = $product_warehouse['product']->name;
+                        $item['code'] = $product->code;
+                        $item['name'] = $product->name;
                     }
                     $item['quantity'] = $product_warehouse->qte;
-                    $item['warehouse'] = $product_warehouse['warehouse']->name;
-                    $item['stock_alert'] = $product_warehouse['product']->stock_alert;
+                    $item['warehouse'] = optional($product_warehouse['warehouse'])->name;
+                    $item['stock_alert'] = $product->stock_alert;
                     $data[] = $item;
                 }
             }
@@ -2475,6 +3243,11 @@ class ProductsController extends BaseController
         $show_product_gtin = (bool) ($setting->show_product_gtin ?? false);
         $show_serial_tracking = (bool) ($setting->show_serial_tracking ?? false);
         $enable_multi_pack_selling = (bool) ($setting->enable_multi_pack_selling ?? false);
+        // Default-supplier field on the product form (Settings -> Features).
+        $product_supplier_enabled = (bool) ($setting->product_supplier_enabled ?? false);
+        $providers = $product_supplier_enabled
+            ? \App\Models\Provider::whereNull('deleted_at')->orderBy('name')->get(['id', 'name'])
+            : collect();
 
         // FBR Digital Invoicing (Pakistan): show the HS Code / FBR UoM fields
         // on the product form only when the tenant enabled the integration.
@@ -2484,6 +3257,13 @@ class ProductsController extends BaseController
             'categories' => $categories,
             'subcategories' => $subcategories,
             'brands' => $brands,
+            'size_guides' => SizeGuideController::activeOptions(),
+            'vehicle_specs_enabled' => self::vehicleSpecsEnabled(),
+            'store_specs_enabled' => self::storeSpecsEnabled(),
+            'store_spec_labels' => self::storeSpecsEnabled() ? self::storeSpecLabelSuggestions() : [],
+            'restaurant_dish' => self::dishFormData(null),
+            'providers' => $providers,
+            'product_supplier_enabled' => $product_supplier_enabled,
             'units' => $units,
             'warehouses' => $warehouses,
             'warehouse_locations' => $warehouse_locations,
@@ -2491,8 +3271,46 @@ class ProductsController extends BaseController
             'show_serial_tracking' => $show_serial_tracking,
             'enable_multi_pack_selling' => $enable_multi_pack_selling,
             'fbr_enabled' => $fbr_enabled,
+            // Scale PLU field (System Settings > Weighing scale).
+            'scale_barcode_enabled' => self::scaleBarcodeEnabled(),
+            // Home warehouse field (Settings -> Features -> Restrict products by
+            // warehouse). Required for a warehouse-restricted user; a user who
+            // may see every warehouse can leave the product unassigned.
+            'restrict_products_by_warehouse' => (bool) ($setting->restrict_products_by_warehouse ?? false),
+            'home_warehouse_required' => ! $user_auth->is_all_warehouses,
+            'default_warehouse_id' => count($allowedWarehouseIds) === 1 ? (int) $allowedWarehouseIds[0] : null,
+            // Store prices table (Settings -> Features -> Different prices per store).
+            'warehouse_prices_enabled' => WarehousePrices::enabled(),
         ]);
 
+    }
+
+    /**
+     * Warehouses whose store prices the current user may set: the same set
+     * the product form lists (all, or the user's assigned warehouses).
+     */
+    private function storePriceWarehouseIds(): array
+    {
+        $user_auth = auth()->user();
+        if (! $user_auth) {
+            return [];
+        }
+        $ids = Warehouse::whereNull('deleted_at')->pluck('id')->map(fn ($v) => (int) $v)->all();
+        if ($user_auth->is_all_warehouses) {
+            return $ids;
+        }
+        $assigned = UserWarehouse::where('user_id', $user_auth->id)->pluck('warehouse_id')->map(fn ($v) => (int) $v)->all();
+
+        return array_values(array_intersect($ids, $assigned));
+    }
+
+    /** Save the product form's "Store prices" rows (sent only while the switch is on). */
+    private function saveStorePrices(Request $request, Product $product): void
+    {
+        if (! $request->has('warehouse_prices') || ! WarehousePrices::enabled()) {
+            return;
+        }
+        WarehousePrices::syncFromForm($product, $request->input('warehouse_prices'), $this->storePriceWarehouseIds());
     }
 
     // ---------------- Show Elements Barcode ---------------\\
@@ -2522,10 +3340,13 @@ class ProductsController extends BaseController
         $this->authorizeForUser($request->user('api'), 'update', Product::class);
 
         $Product = Product::where('deleted_at', '=', null)->findOrFail($id);
+        $this->abortIfProductDenied($Product);
 
         $item['id'] = $Product->id;
+        $item['warehouse_id'] = $Product->warehouse_id;
         $item['type'] = $Product->type;
         $item['code'] = $Product->code;
+        $item['barcodes'] = ProductBarcodes::for((int) $Product->id);
         $item['gtin'] = $Product->gtin ?? '';
         $item['hs_code'] = $Product->hs_code ?? '';
         $item['fbr_uom'] = $Product->fbr_uom ?? '';
@@ -2576,6 +3397,14 @@ class ProductsController extends BaseController
         } else {
             $item['brand_id'] = '';
         }
+        $item['size_guide_id'] = $Product->size_guide_id ?: null;
+
+        // Same guard as brand: a supplier deleted since the product was saved
+        // must not be pre-selected in a form whose dropdown no longer lists it.
+        $item['provider_id'] = ($Product->provider_id && \App\Models\Provider::where('id', $Product->provider_id)
+            ->whereNull('deleted_at')->exists())
+            ? $Product->provider_id
+            : '';
 
         if ($Product->unit_id) {
             if (Unit::where('id', $Product->unit_id)
@@ -2641,6 +3470,10 @@ class ProductsController extends BaseController
         $firstimage = explode(',', $Product->image);
         $item['image'] = $firstimage[0];
 
+        $optionService = app(ProductOptionService::class);
+        $item['options'] = $Product->type == 'is_variant' ? $optionService->optionsPayload((int) $id) : [];
+        $variantOptionValues = $item['options'] ? $optionService->variantValuesMap((int) $id) : [];
+
         if ($Product->type == 'is_variant') {
             $item['is_variant'] = true;
             $productsVariants = ProductVariant::where('product_id', $id)
@@ -2650,6 +3483,7 @@ class ProductsController extends BaseController
             $var_id = 0;
             foreach ($productsVariants as $variant) {
                 $variant_item['var_id'] = $var_id += 1;
+                $variant_item['option_values'] = (object) ($variantOptionValues[$variant->id] ?? []);
                 $variant_item['id'] = $variant->id;
                 $variant_item['text'] = $variant->name;
                 $variant_item['code'] = $variant->code;
@@ -2685,6 +3519,8 @@ class ProductsController extends BaseController
         $item['is_featured'] = $Product->is_featured ? true : false;
         $item['hide_from_online_store'] = $Product->hide_from_online_store ? true : false;
         $item['always_in_stock'] = $Product->always_in_stock ? true : false;
+        $item['license'] = $this->licensePayload($Product);
+        $item['scale_plu'] = $Product->scale_plu ?? '';
         $item['is_active'] = $Product->is_active ? true : false;
 
         $item['is_preorder'] = (bool) $Product->is_preorder;
@@ -2788,12 +3624,27 @@ class ProductsController extends BaseController
         $show_product_gtin = (bool) ($setting->show_product_gtin ?? false);
         $show_serial_tracking = (bool) ($setting->show_serial_tracking ?? false);
         $enable_multi_pack_selling = (bool) ($setting->enable_multi_pack_selling ?? false);
+        // Default-supplier field on the product form (Settings -> Features).
+        $product_supplier_enabled = (bool) ($setting->product_supplier_enabled ?? false);
+        $providers = $product_supplier_enabled
+            ? \App\Models\Provider::whereNull('deleted_at')->orderBy('name')->get(['id', 'name'])
+            : collect();
 
         return response()->json([
             'product' => $data,
             'categories' => $categories,
             'all_subcategories' => $all_subcategories,
             'brands' => $brands,
+            'size_guides' => SizeGuideController::activeOptions(),
+            'vehicle_specs_enabled' => self::vehicleSpecsEnabled(),
+            'vehicle_spec' => self::vehicleSpecsEnabled() ? optional(\App\Models\VehicleSpec::where('product_id', $Product->id)->first())->toFormArray() : null,
+            'store_specs_enabled' => self::storeSpecsEnabled(),
+            'store_specs' => self::storeSpecsEnabled() ? \App\Support\StoreSpecs::rows($Product) : [],
+            'product_video_url' => self::storeSpecsEnabled() && \App\Support\StoreSpecs::videoReady() ? ($Product->getAttributes()['video_url'] ?? null) : null,
+            'store_spec_labels' => self::storeSpecsEnabled() ? self::storeSpecLabelSuggestions() : [],
+            'restaurant_dish' => self::dishFormData($Product->id),
+            'providers' => $providers,
+            'product_supplier_enabled' => $product_supplier_enabled,
             'units' => $units,
             'units_sub' => $product_units,
             'materiels' => $materiels,
@@ -2804,6 +3655,16 @@ class ProductsController extends BaseController
             'show_serial_tracking' => $show_serial_tracking,
             'enable_multi_pack_selling' => $enable_multi_pack_selling,
             'fbr_enabled' => (bool) optional(\App\Models\FbrSetting::current())->enabled,
+            'scale_barcode_enabled' => self::scaleBarcodeEnabled(),
+            // Home warehouse field — see create().
+            'restrict_products_by_warehouse' => (bool) ($setting->restrict_products_by_warehouse ?? false),
+            'home_warehouse_required' => ! auth()->user()->is_all_warehouses,
+            'default_warehouse_id' => count($allowedWarehouseIds) === 1 ? (int) $allowedWarehouseIds[0] : null,
+            // Store prices table (Settings -> Features -> Different prices per store).
+            'warehouse_prices_enabled' => WarehousePrices::enabled(),
+            'warehouse_prices' => WarehousePrices::enabled()
+                ? WarehousePrices::formRows((int) $Product->id, array_map('intval', $allowedWarehouseIds))
+                : [],
         ]);
 
     }
@@ -2848,97 +3709,135 @@ class ProductsController extends BaseController
         // Preload existing codes (products & variants)
         $existingProductCodes = Product::whereNull('deleted_at')->pluck('code')->all();
         $existingVariantCodes = ProductVariant::whereNull('deleted_at')->pluck('code')->all();
-        $existingCodesSet = array_fill_keys(array_merge($existingProductCodes, $existingVariantCodes), true);
+        // Additional barcodes share the namespace: a new code may not be one.
+        $existingCodesSet = array_fill_keys(array_merge($existingProductCodes, $existingVariantCodes, ProductBarcodes::all()), true);
 
         $seenCodes = []; // duplicates inside the file
-        $toCreate = [];
+        $errors = [];
+        $valid = [];
+        $unitCache = [];
 
-        foreach ($rows as $row) {
-            $name = trim($row['name'] ?? '');
-            $code = trim($row['code'] ?? '');
+        // Pass 1 — check every row and report ALL problems at once (with row
+        // numbers), instead of stopping at the first; nothing is created yet.
+        foreach ($rows as $i => $row) {
+            $rowNum = $i + 2; // heading row = 1
+            $name = trim((string) ($row['name'] ?? ''));
+            $code = trim((string) ($row['code'] ?? ''));
             // Support 'retail_price' as the canonical header; fallback to 'price'
             $price = $row['retail_price'] ?? ($row['price'] ?? null);
             $cost = $row['cost'] ?? null;
-            $categoryName = $row['category'] ?? '';
-            $subCategoryName = $row['sub_category'] ?? ($row['subcategory'] ?? '');
-            $unitName = $row['unit'] ?? '';
-            $brandName = $row['brand'] ?? '';
+            $categoryName = trim((string) ($row['category'] ?? ''));
+            $subCategoryName = trim((string) ($row['sub_category'] ?? ($row['subcategory'] ?? '')));
+            $unitName = trim((string) ($row['unit'] ?? ''));
+            $brandName = trim((string) ($row['brand'] ?? ''));
             $stockAlert = $row['stock_alert'] ?? 0;
             $note = $row['note'] ?? null;
             $wholesale = $row['wholesale_price'] ?? null;
             $minPrice = $row['min_price'] ?? null;
+            $label = $code !== '' ? "Row {$rowNum} ({$code})" : "Row {$rowNum}";
+            $rowErrors = [];
 
-            if (! $name) {
-                return response()->json(['status' => false, 'message' => 'Product name is missing.']);
+            if ($name === '') {
+                $rowErrors[] = "{$label}: product name is missing.";
+            } elseif (mb_strlen($name) > 192) {
+                $rowErrors[] = "{$label}: product name is ".mb_strlen($name).' characters; the maximum is 192.';
             }
-            if (! $code) {
-                return response()->json(['status' => false, 'message' => "Product \"$name\" has no code."]);
-            }
-
-            if (isset($seenCodes[$code])) {
-                return response()->json(['status' => false, 'message' => "Duplicate product code \"$code\" found in file."]);
-            }
-            if (isset($existingCodesSet[$code])) {
-                return response()->json(['status' => false, 'message' => "Code \"$code\" already exists (product or variant)."]);
+            if ($code === '') {
+                $rowErrors[] = "{$label}: product code is missing.";
+            } elseif (mb_strlen($code) > 192) {
+                $rowErrors[] = "{$label}: product code is longer than 192 characters.";
+            } elseif (isset($seenCodes[$code])) {
+                $rowErrors[] = "{$label}: duplicate product code (also on row {$seenCodes[$code]}).";
+            } elseif (isset($existingCodesSet[$code])) {
+                $rowErrors[] = "{$label}: code already exists (product or variant).";
             }
             if (! is_numeric($price)) {
-                return response()->json(['status' => false, 'message' => "Retail price for \"$name\" is invalid."]);
+                $rowErrors[] = "{$label}: retail price \"".(is_scalar($price) ? $price : '').'" is not a number.';
             }
             if (! is_numeric($cost)) {
-                return response()->json(['status' => false, 'message' => "Cost for \"$name\" is invalid."]);
+                $rowErrors[] = "{$label}: cost \"".(is_scalar($cost) ? $cost : '').'" is not a number.';
             }
             if ($wholesale !== null && $wholesale !== '' && ! is_numeric($wholesale)) {
-                return response()->json(['status' => false, 'message' => "Wholesale price for \"$name\" is invalid."]);
+                $rowErrors[] = "{$label}: wholesale price is not a number.";
             }
             if ($minPrice !== null && $minPrice !== '' && ! is_numeric($minPrice)) {
-                return response()->json(['status' => false, 'message' => "Minimum price for \"$name\" is invalid."]);
+                $rowErrors[] = "{$label}: minimum price is not a number.";
             }
-
-            $categoryName = trim($categoryName);
             if ($categoryName === '') {
-                return response()->json(['status' => false, 'message' => "Missing category name for product \"$name\"."]);
+                $rowErrors[] = "{$label}: category is missing.";
             }
 
-            $category = Category::firstOrCreate(['name' => $categoryName]);
+            if (! array_key_exists($unitName, $unitCache)) {
+                $unitCache[$unitName] = $unitName === '' ? null
+                    : Unit::where('ShortName', $unitName)->orWhere('name', $unitName)->first();
+            }
+            $unit = $unitCache[$unitName];
+            if (! $unit) {
+                $rowErrors[] = "{$label}: unit \"{$unitName}\" does not exist.";
+            }
+
+            if ($code !== '' && ! isset($seenCodes[$code])) {
+                $seenCodes[$code] = $rowNum;
+            }
+
+            if ($rowErrors) {
+                array_push($errors, ...$rowErrors);
+
+                continue;
+            }
+
+            $valid[] = compact('name', 'code', 'price', 'cost', 'categoryName', 'subCategoryName', 'unit', 'brandName', 'stockAlert', 'note', 'wholesale', 'minPrice');
+        }
+
+        if ($errors) {
+            return response()->json([
+                'status' => false,
+                'message' => count($errors).' problem(s) found — nothing was imported.',
+                'errors' => $errors,
+            ]);
+        }
+
+        // Pass 2 — the file is valid: resolve categories, sub-categories and
+        // brands (created when new, once per name).
+        $categoryIds = [];
+        $subCategoryIds = [];
+        $brandIds = [];
+        $toCreate = [];
+        foreach ($valid as $v) {
+            $categoryIds[$v['categoryName']] ??= Category::firstOrCreate(['name' => $v['categoryName']])->id;
+            $categoryId = $categoryIds[$v['categoryName']];
 
             $subCategoryId = null;
-            $subCategoryName = trim($subCategoryName);
-            if ($subCategoryName !== '') {
-                $subCategory = SubCategory::firstOrCreate(
-                    ['category_id' => $category->id, 'name' => $subCategoryName],
+            if ($v['subCategoryName'] !== '') {
+                $key = $categoryId.'|'.$v['subCategoryName'];
+                $subCategoryIds[$key] ??= SubCategory::firstOrCreate(
+                    ['category_id' => $categoryId, 'name' => $v['subCategoryName']],
                     ['status' => true]
-                );
-                $subCategoryId = $subCategory->id;
-            }
-
-            $unit = Unit::where('ShortName', $unitName)->orWhere('name', $unitName)->first();
-            if (! $unit) {
-                return response()->json(['status' => false, 'message' => "Unit \"$unitName\" for \"$name\" does not exist."]);
+                )->id;
+                $subCategoryId = $subCategoryIds[$key];
             }
 
             $brandId = null;
-            if (trim($brandName) !== '') {
-                $brand = Brand::firstOrCreate(['name' => trim($brandName)]);
-                $brandId = $brand->id;
+            if ($v['brandName'] !== '') {
+                $brandIds[$v['brandName']] ??= Brand::firstOrCreate(['name' => $v['brandName']])->id;
+                $brandId = $brandIds[$v['brandName']];
             }
 
-            $seenCodes[$code] = true;
-
             $toCreate[] = [
-                'name' => $name,
-                'code' => $code,
-                'price' => (float) $price,
-                'cost' => (float) $cost,
-                'category_id' => $category->id,
+                'name' => $v['name'],
+                'code' => $v['code'],
+                'price' => (float) $v['price'],
+                'cost' => (float) $v['cost'],
+                'category_id' => $categoryId,
                 'sub_category_id' => $subCategoryId,
-                'unit_id' => $unit->id,
-                'unit_sale_id' => $unit->id,
-                'unit_purchase_id' => $unit->id,
+                'unit_id' => $v['unit']->id,
+                'unit_sale_id' => $v['unit']->id,
+                'unit_purchase_id' => $v['unit']->id,
                 'brand_id' => $brandId,
-                'stock_alert' => is_numeric($stockAlert) ? $stockAlert : 0,
-                'note' => $note ?: null,
-                'wholesale_price' => is_numeric($wholesale) ? (float) $wholesale : 0,
-                'min_price' => is_numeric($minPrice) ? (float) $minPrice : 0,
+                'stock_alert' => is_numeric($v['stockAlert']) ? $v['stockAlert'] : 0,
+                'note' => $v['note'] ?: null,
+                'wholesale_price' => is_numeric($v['wholesale']) ? (float) $v['wholesale'] : 0,
+                'min_price' => is_numeric($v['minPrice']) ? (float) $v['minPrice'] : 0,
             ];
         }
 
@@ -2955,6 +3854,8 @@ class ProductsController extends BaseController
 
                 foreach ($toCreate as $data) {
                     $product = Product::create([
+                        // Home warehouse: the importer's own (first) warehouse.
+                        'warehouse_id' => $this->productHomeWarehouseFor(null, false),
                         // base
                         'type' => 'is_single',
                         'is_variant' => 0,
@@ -3046,7 +3947,8 @@ class ProductsController extends BaseController
 
         $existingProductCodes = Product::whereNull('deleted_at')->pluck('code')->all();
         $existingVariantCodes = ProductVariant::whereNull('deleted_at')->pluck('code')->all();
-        $existingCodesSet = array_fill_keys(array_merge($existingProductCodes, $existingVariantCodes), true);
+        // Additional barcodes share the namespace: a new code may not be one.
+        $existingCodesSet = array_fill_keys(array_merge($existingProductCodes, $existingVariantCodes, ProductBarcodes::all()), true);
 
         $seenCodes = [];
         $toCreate = [];
@@ -3143,6 +4045,8 @@ class ProductsController extends BaseController
 
                 foreach ($toCreate as $data) {
                     $product = Product::create([
+                        // Home warehouse: the importer's own (first) warehouse.
+                        'warehouse_id' => $this->productHomeWarehouseFor(null, false),
                         'type' => 'is_service',
                         'is_variant' => 0,
                         'is_imei' => 0,
@@ -3268,7 +4172,8 @@ class ProductsController extends BaseController
         // Global uniqueness set (DB): products.code + product_variants.code
         $existingProductCodes = Product::whereNull('deleted_at')->pluck('code')->all();
         $existingVariantCodes = ProductVariant::whereNull('deleted_at')->pluck('code')->all();
-        $existingCodes = array_fill_keys(array_merge($existingProductCodes, $existingVariantCodes), true);
+        // Additional barcodes share the namespace: a new code may not be one.
+        $existingCodes = array_fill_keys(array_merge($existingProductCodes, $existingVariantCodes, ProductBarcodes::all()), true);
 
         // In-file sets
         $fileParentCodes = []; // product_code's seen in file
@@ -3300,6 +4205,21 @@ class ProductsController extends BaseController
             $vPrice = $firstVal($r, ['variant_price', 'v_price'], null);
             $vWholesale = $firstVal($r, ['variant_wholesale', 'v_wholesale'], null);
             $vMinPrice = $firstVal($r, ['variant_min_price', 'v_min_price'], null);
+            // Optional Shopify-style options: "Color=Red|Size=S" (also accepts ':' and ';').
+            $vOptionsRaw = trim(strip_tags((string) $firstVal($r, ['variant_options', 'options', 'option_values'], '')));
+            $vOptionValues = [];
+            if ($vOptionsRaw !== '') {
+                foreach (preg_split('/[|;]/', $vOptionsRaw) as $pair) {
+                    $parts = preg_split('/[=:]/', $pair, 2);
+                    if (count($parts) !== 2) {
+                        continue;
+                    }
+                    [$optName, $optValue] = array_map('trim', $parts);
+                    if ($optName !== '' && $optValue !== '') {
+                        $vOptionValues[$optName] = $optValue;
+                    }
+                }
+            }
 
             // Required checks (same logic, now on sanitized values)
             if ($parentName === '') {
@@ -3394,6 +4314,7 @@ class ProductsController extends BaseController
                 'variant_wholesale' => is_numeric($vWholesale) ? (float) $vWholesale : 0,
                 'variant_min_price' => is_numeric($vMinPrice) ? (float) $vMinPrice : 0,
                 'variant_qty' => 0,
+                'option_values' => $vOptionValues,
             ];
         }
 
@@ -3434,6 +4355,8 @@ class ProductsController extends BaseController
 
                     // Parent product (variant type)
                     $product = Product::create([
+                        // Home warehouse: the importer's own (first) warehouse.
+                        'warehouse_id' => $this->productHomeWarehouseFor(null, false),
                         'type' => 'is_variant',
                         'is_variant' => 1,
                         'is_imei' => 0,
@@ -3485,6 +4408,18 @@ class ProductsController extends BaseController
                     $idByCode = [];
                     foreach ($created as $cv) {
                         $idByCode[$cv->code] = $cv->id;
+                    }
+
+                    // Shopify-style options from the optional variant_options column.
+                    $namedByVariant = [];
+                    foreach ($bundle['variants'] as $v) {
+                        $vid = $idByCode[$v['variant_code']] ?? null;
+                        if ($vid && ! empty($v['option_values'])) {
+                            $namedByVariant[$vid] = $v['option_values'];
+                        }
+                    }
+                    if ($namedByVariant) {
+                        app(ProductOptionService::class)->importNamedValues($product, $namedByVariant);
                     }
 
                     // product_warehouse (forced qte=0)
@@ -3599,7 +4534,51 @@ class ProductsController extends BaseController
         $notFound = [];
         $errors = [];
 
+        // Columns this import cannot change are reported, not silently dropped.
+        $knownColumns = ['code', 'cost', 'retail_price', 'price', 'name', 'category', 'sub_category', 'subcategory', 'brand'];
+        $ignoredColumns = [];
+        foreach (array_keys($rows[0]) as $header) {
+            $normalized = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '_', (string) $header), '_'));
+            if ($normalized !== '' && ! is_numeric($normalized) && ! in_array($normalized, $knownColumns, true)) {
+                $ignoredColumns[] = (string) $header;
+            }
+        }
+
+        // A whole-catalogue file is tens of thousands of rows: products load in
+        // chunks, category / sub-category / brand names resolve once each, and
+        // rows commit in batches of 500 (each row still its own savepoint, so
+        // one failing row is reported without undoing the others).
+        $productsByCode = [];
+        $allCodes = array_values(array_filter(array_map(function ($row) {
+            foreach ($row as $key => $value) {
+                if (strtolower(trim(preg_replace('/[^a-z0-9]+/i', '_', (string) $key))) === 'code') {
+                    return trim((string) $value);
+                }
+            }
+
+            return '';
+        }, $rows), fn ($c) => $c !== ''));
+        foreach (array_chunk(array_unique($allCodes), 1000) as $chunk) {
+            foreach (Product::whereNull('deleted_at')->whereIn('code', $chunk)->get() as $p) {
+                $productsByCode[$p->code] ??= $p;
+            }
+        }
+        $hasCategoryPivot = Schema::hasTable('category_product');
+        $hasSubCategoryPivot = Schema::hasTable('product_subcategory');
+        $categoryIds = [];
+        $subCategoryIds = [];
+        $brandIds = [];
+        $batchOpen = false;
+
         foreach ($rows as $index => $row) {
+            if ($index % 500 === 0) {
+                if ($batchOpen) {
+                    DB::commit();
+                }
+                DB::beginTransaction();
+                $batchOpen = true;
+            }
+
             // Normalize keys (handle case-insensitive and variations)
             $normalizedRow = [];
             foreach ($row as $key => $value) {
@@ -3608,9 +4587,15 @@ class ProductsController extends BaseController
             }
 
             // Extract values - support multiple possible column names
-            $code = trim($normalizedRow['code'] ?? '');
+            $code = trim((string) ($normalizedRow['code'] ?? ''));
             $cost = $normalizedRow['cost'] ?? null;
             $retailPrice = $normalizedRow['retail_price'] ?? ($normalizedRow['price'] ?? null);
+            // Text fields: blank = unchanged, like the prices.
+            $text = fn ($key) => trim((string) ($normalizedRow[$key] ?? ''));
+            $name = $text('name');
+            $categoryName = $text('category');
+            $subCategoryName = $text('sub_category') !== '' ? $text('sub_category') : $text('subcategory');
+            $brandName = $text('brand');
 
             // Validation
             if (empty($code)) {
@@ -3618,35 +4603,123 @@ class ProductsController extends BaseController
                 continue;
             }
 
-            if ($cost === null || $cost === '' || !is_numeric($cost)) {
-                $errors[] = "Row " . ($index + 2) . " (code: $code): Invalid or missing cost.";
+            // A blank cell leaves that value as it is; only a non-number is an error.
+            $cost = is_string($cost) ? trim($cost) : $cost;
+            $retailPrice = is_string($retailPrice) ? trim($retailPrice) : $retailPrice;
+            $hasCost = $cost !== null && $cost !== '';
+            $hasPrice = $retailPrice !== null && $retailPrice !== '';
+
+            if ($hasCost && ! is_numeric($cost)) {
+                $errors[] = "Row " . ($index + 2) . " (code: $code): Invalid cost.";
                 continue;
             }
 
-            if ($retailPrice === null || $retailPrice === '' || !is_numeric($retailPrice)) {
-                $errors[] = "Row " . ($index + 2) . " (code: $code): Invalid or missing retail_price.";
+            if ($hasPrice && ! is_numeric($retailPrice)) {
+                $errors[] = "Row " . ($index + 2) . " (code: $code): Invalid retail_price.";
                 continue;
             }
 
-            // Find product by code (only non-deleted products)
-            $product = Product::where('code', $code)
-                ->whereNull('deleted_at')
-                ->first();
+            if (mb_strlen($name) > 192) {
+                $errors[] = "Row " . ($index + 2) . " (code: $code): name is longer than 192 characters.";
+                continue;
+            }
+
+            if (! $hasCost && ! $hasPrice && $name === '' && $categoryName === '' && $subCategoryName === '' && $brandName === '') {
+                $errors[] = "Row " . ($index + 2) . " (code: $code): Nothing to update.";
+                continue;
+            }
+
+            // Find product by code (only non-deleted products, preloaded above)
+            $product = $productsByCode[$code] ?? null;
 
             if (!$product) {
                 $notFound[] = $code;
                 continue;
             }
 
-            // Update only cost and price (retail_price maps to price field)
+            // Only the cells that hold a value change (retail_price maps to price).
             try {
-                $product->cost = (float) $cost;
-                $product->price = (float) $retailPrice;
-                $product->save();
+                // Names resolve first, outside the row's savepoint: a category
+                // created here must not vanish with a later failure of this row
+                // while its id stays cached for the rows after it.
+                $brandId = $brandName !== ''
+                    ? ($brandIds[$brandName] ??= Brand::firstOrCreate(['name' => $brandName])->id)
+                    : null;
+                // Category / sub-category by name, created when new, as the
+                // product import does. A sub-category alone is looked up
+                // under the product's current category.
+                $categoryId = $categoryName !== ''
+                    ? ($categoryIds[$categoryName] ??= Category::firstOrCreate(['name' => $categoryName])->id)
+                    : null;
+                $parentCategoryId = $categoryId ?? (int) $product->category_id;
+                $subCategoryId = ($subCategoryName !== '' && $parentCategoryId)
+                    ? ($subCategoryIds[$parentCategoryId.'|'.$subCategoryName] ??= SubCategory::firstOrCreate(
+                        ['category_id' => $parentCategoryId, 'name' => $subCategoryName],
+                        ['status' => true]
+                    )->id)
+                    : null;
+
+                $apply = function () use ($product, $hasCost, $cost, $hasPrice, $retailPrice, $name, $brandId, $categoryId, $subCategoryId, $hasCategoryPivot, $hasSubCategoryPivot) {
+                    if ($hasCost) {
+                        $product->cost = (float) $cost;
+                    }
+                    if ($hasPrice) {
+                        $product->price = (float) $retailPrice;
+                    }
+                    if ($name !== '') {
+                        $product->name = $name;
+                    }
+                    if ($brandId) {
+                        $product->brand_id = $brandId;
+                    }
+
+                    $oldCategoryId = (int) $product->category_id;
+                    $oldSubCategoryId = (int) $product->sub_category_id;
+                    if ($categoryId) {
+                        $product->category_id = $categoryId;
+                        if ((int) $categoryId !== $oldCategoryId && ! $subCategoryId) {
+                            $product->sub_category_id = null; // it belonged to the old category
+                        }
+                    }
+                    if ($subCategoryId) {
+                        $product->sub_category_id = $subCategoryId;
+                    }
+                    $product->save();
+
+                    // Keep the multi-category pivots in step with the primary ids.
+                    if ((int) $product->category_id !== $oldCategoryId && $hasCategoryPivot) {
+                        if ($oldCategoryId) {
+                            $product->categories()->detach($oldCategoryId);
+                        }
+                        $product->categories()->syncWithoutDetaching([(int) $product->category_id]);
+                    }
+                    if ((int) $product->sub_category_id !== $oldSubCategoryId && $hasSubCategoryPivot) {
+                        if ($oldSubCategoryId) {
+                            $product->subcategories()->detach($oldSubCategoryId);
+                        }
+                        if ($product->sub_category_id) {
+                            $product->subcategories()->syncWithoutDetaching([(int) $product->sub_category_id]);
+                        }
+                    }
+                };
+
+                // A category move is several writes and gets its own savepoint;
+                // a price / name / brand change is one save and needs none.
+                ($categoryId || $subCategoryId) ? DB::transaction($apply) : $apply();
                 $updated++;
-            } catch (\Exception $e) {
-                $errors[] = "Row " . ($index + 2) . " (code: $code): Failed to update - " . $e->getMessage();
+            } catch (\Throwable $e) {
+                // Any failure stays this row's (an \Error would otherwise
+                // escape the loop and leave the batch transaction open). A
+                // database error is reported without its SQL.
+                if ($e instanceof \Illuminate\Database\QueryException || $e instanceof \Error) {
+                    report($e); // unexpected: keep the detail in the log
+                }
+                $reason = $e instanceof \Illuminate\Database\QueryException ? 'database error' : $e->getMessage();
+                $errors[] = "Row " . ($index + 2) . " (code: $code): Failed to update - " . $reason;
             }
+        }
+        if ($batchOpen) {
+            DB::commit();
         }
 
         // Build response message
@@ -3660,11 +4733,15 @@ class ProductsController extends BaseController
         if (count($errors) > 0) {
             $messages[] = count($errors) . " error(s) occurred. " . implode(' ', array_slice($errors, 0, 5)) . (count($errors) > 5 ? '...' : '');
         }
+        if (count($ignoredColumns) > 0) {
+            $messages[] = 'Ignored column(s), not changed by Update only: ' . implode(', ', $ignoredColumns) . '.';
+        }
 
         if ($updated === 0 && count($notFound) === 0 && count($errors) === 0) {
             return response()->json([
                 'status' => false,
                 'message' => 'No products were updated. Please check your file format.',
+                'ignored_columns' => $ignoredColumns,
             ]);
         }
 
@@ -3674,6 +4751,294 @@ class ProductsController extends BaseController
             'updated' => $updated,
             'not_found' => count($notFound),
             'errors' => count($errors),
+            'ignored_columns' => $ignoredColumns,
+            // Every rejected row, for the on-screen list and its download.
+            'error_list' => array_merge($errors, array_map(fn ($c) => "Code not found: $c", $notFound)),
+        ]);
+    }
+
+    // ----------------- price_check
+
+    /**
+     * GET price-check?code=… → {found, name, price, unit, currency}: the shelf
+     * price check for a customer-facing tablet. Name and selling price ONLY —
+     * never cost or stock — so it needs no permission: give the tablet a user
+     * whose role has none. Matches a product code, a variant code or an
+     * additional barcode; the price is per sale unit, tax included.
+     */
+    public function price_check(Request $request)
+    {
+        $code = trim((string) $request->query('code', ''));
+        if ($code === '' || mb_strlen($code) > 191) {
+            return response()->json(['found' => false]);
+        }
+
+        $product = Product::whereNull('deleted_at')->where('is_active', 1)->where('code', $code)->first();
+        $variant = null;
+        if (! $product) {
+            $variant = ProductVariant::whereNull('deleted_at')->where('code', $code)->first();
+            if (! $variant && ($owner = ProductBarcodes::owner($code))) {
+                $variant = $owner[1] ? ProductVariant::whereNull('deleted_at')->find($owner[1]) : null;
+                $product = $owner[1] ? null : Product::whereNull('deleted_at')->where('is_active', 1)->find($owner[0]);
+            }
+            if ($variant) {
+                $product = Product::whereNull('deleted_at')->where('is_active', 1)->find($variant->product_id);
+            }
+        }
+        if (! $product || ($product->type === 'is_variant' && ! $variant)) {
+            return response()->json(['found' => false]);
+        }
+
+        // The register's math (Products_by_Warehouse / POS): per sale unit,
+        // then the product's own discount, then exclusive tax on top.
+        $price = (float) ($variant ? $variant->price : $product->price);
+
+        // Different prices per store: the kiosk's store price — the page's
+        // ?warehouse=<id> when this user may see it, else the user's only
+        // assigned warehouse. No store known = the normal price.
+        if (WarehousePrices::enabled()) {
+            $kioskWarehouse = null;
+            if ($request->filled('warehouse_id') && $this->canAccessWarehouse($request->warehouse_id)) {
+                $kioskWarehouse = (int) $request->warehouse_id;
+            } else {
+                $assigned = $this->userWarehouseIds();
+                if (! optional(auth()->user())->is_all_warehouses && count($assigned) === 1) {
+                    $kioskWarehouse = (int) $assigned[0];
+                }
+            }
+            $price = (float) WarehousePrices::pick(
+                WarehousePrices::find($product->id, $variant ? $variant->id : null, $kioskWarehouse), 'price', $price
+            );
+        }
+
+        $unit = $product->unit_sale_id ? Unit::find($product->unit_sale_id) : null;
+        if ($unit && (float) $unit->operator_value > 0) {
+            $price = $unit->operator === '/' ? $price / $unit->operator_value : $price * $unit->operator_value;
+        }
+        if ((float) $product->discount > 0) {
+            $price -= $product->discount_method == '1' ? $price * (float) $product->discount / 100 : (float) $product->discount;
+        }
+        if ($product->tax_method == '1' && (float) $product->TaxNet > 0) {
+            $price *= 1 + (float) $product->TaxNet / 100;
+        }
+
+        $image = explode(',', (string) $product->image)[0] ?: null;
+
+        return response()->json([
+            'found' => true,
+            'name' => $variant ? $product->name.' — '.$variant->name : $product->name,
+            'price' => round($price, 2),
+            'unit' => $unit?->ShortName,
+            'image' => $image !== 'no-image.png' ? $image : null,
+        ]);
+    }
+
+    // ----------------- generate_code
+
+    /**
+     * GET products/generate-code?symbology=… → {code}: the next prefix +
+     * number code, or null when numbering is off or the symbology needs digits
+     * (the form then makes its usual random code).
+     */
+    public function generate_code(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'create', Product::class);
+
+        return response()->json(['code' => \App\Services\ProductCodeGenerator::next($request->input('symbology', 'CODE128'))]);
+    }
+
+    // ----------------- import_barcodes
+
+    /**
+     * Import additional barcodes: rows of Code + Barcode (one barcode per row,
+     * a product may appear on many rows; a variant code targets that variant).
+     * mode=append adds to what each product has, mode=replace makes the file's
+     * list the product's whole list. Every row is checked before anything is
+     * written; any problem rejects the file with all reasons listed.
+     */
+    public function import_barcodes(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'product_import', Product::class);
+        ini_set('max_execution_time', 2000);
+
+        $request->validate([
+            'products' => 'required|file|max:20480',
+            'mode' => 'nullable|in:append,replace',
+        ]);
+        if (! ProductBarcodes::enabled()) {
+            return response()->json(['status' => false, 'errors' => ['Additional barcodes are not set up yet: run the database update first.']], 422);
+        }
+        $extension = strtolower($request->file('products')->getClientOriginalExtension());
+        if (! in_array($extension, ['csv', 'xlsx', 'xls'], true)) {
+            return response()->json(['status' => false, 'errors' => ['The file must be an .xlsx, .xls or .csv file.']], 422);
+        }
+
+        $normalize = fn ($h) => strtolower(trim(preg_replace('/[^a-z0-9]+/i', '_', trim((string) $h)), '_'));
+        $rows = [];
+        if ($extension === 'csv') {
+            $handle = fopen($request->file('products')->getRealPath(), 'r');
+            $headers = null;
+            while (($line = fgetcsv($handle)) !== false) {
+                if ($headers === null) {
+                    $line[0] = preg_replace('/^\xEF\xBB\xBF/', '', (string) $line[0]);
+                    $headers = array_map($normalize, $line);
+
+                    continue;
+                }
+                $rows[] = array_combine($headers, array_pad(array_slice($line, 0, count($headers)), count($headers), null));
+            }
+            fclose($handle);
+        } else {
+            foreach (Excel::toArray(new OpeningStockRowsImport, $request->file('products'))[0] ?? [] as $row) {
+                $rows[] = array_combine(array_map($normalize, array_keys($row)), array_values($row));
+            }
+        }
+
+        $cells = [];
+        foreach ($rows as $i => $row) {
+            $cells[$i] = [
+                trim((string) ($row['code'] ?? $row['product_code'] ?? '')),
+                trim((string) ($row['barcode'] ?? $row['ean'] ?? '')),
+            ];
+        }
+
+        // Everything a whole-catalogue file needs, loaded in chunks up front:
+        // products and variants by the file's codes AND by its barcodes (a
+        // barcode may not be anyone's code), and current barcode owners.
+        // Barcode checks compare case-insensitively, like the database does
+        // (so the *ByLower maps); deleted variants' barcodes are freed first.
+        ProductBarcodes::purgeDead();
+        $lookups = array_values(array_unique(array_filter(array_merge(array_column($cells, 0), array_column($cells, 1)), fn ($v) => $v !== '')));
+        $productsByCode = [];
+        $variantsByCode = [];
+        $productsByLower = [];
+        $variantsByLower = [];
+        $ownerByBarcode = [];
+        foreach (array_chunk($lookups, 1000) as $chunk) {
+            foreach (Product::whereNull('deleted_at')->whereIn('code', $chunk)->get(['id', 'code', 'name', 'type', 'is_variant']) as $p) {
+                $productsByCode[$p->code] = $p;
+                $productsByLower[mb_strtolower($p->code)] = $p;
+            }
+            foreach (ProductVariant::whereNull('deleted_at')->whereIn('code', $chunk)->get(['id', 'product_id', 'code']) as $v) {
+                $variantsByCode[$v->code] = $v;
+                $variantsByLower[mb_strtolower($v->code)] = $v;
+            }
+            foreach (DB::table('product_barcodes')->whereIn('barcode', $chunk)->get(['barcode', 'product_id', 'product_variant_id']) as $b) {
+                $ownerByBarcode[mb_strtolower($b->barcode)] = [(int) $b->product_id, $b->product_variant_id !== null ? (int) $b->product_variant_id : null];
+            }
+        }
+        $variantParents = Product::whereNull('deleted_at')
+            ->whereIn('id', collect($variantsByCode)->pluck('product_id')->unique()->all() ?: [0])
+            ->get(['id', 'code', 'name', 'type', 'is_variant'])->keyBy('id');
+
+        // Pass 1 — parse and resolve codes.
+        $errors = [];
+        $wanted = []; // "pid|vid" → ['product_id', 'variant_id', 'code', 'barcodes' => [barcode => row]]
+        $seen = [];   // barcode → "pid|vid" within the file
+        foreach ($cells as $i => [$code, $barcode]) {
+            $rowNum = $i + 2;
+            if ($code === '' && $barcode === '') {
+                continue;
+            }
+            if ($code === '' || $barcode === '') {
+                $errors[] = "Row {$rowNum}: both code and barcode are required.";
+
+                continue;
+            }
+
+            $product = $productsByCode[$code] ?? null;
+            $variantId = null;
+            if (! $product && isset($variantsByCode[$code])) {
+                $product = $variantParents->get($variantsByCode[$code]->product_id);
+                $variantId = $product ? (int) $variantsByCode[$code]->id : null;
+            }
+            if (! $product) {
+                $errors[] = "Row {$rowNum}: code '{$code}' does not exist.";
+
+                continue;
+            }
+            if ($variantId === null && ($product->type === 'is_variant' || $product->is_variant)) {
+                $errors[] = "Row {$rowNum} ({$code}): this product has variants — use a variant code.";
+
+                continue;
+            }
+
+            $key = $product->id.'|'.($variantId ?? '');
+            $lower = mb_strtolower($barcode);
+            if (isset($seen[$lower]) && $seen[$lower] !== $key) {
+                $errors[] = "Row {$rowNum}: barcode '{$barcode}' is given to two different products in this file.";
+
+                continue;
+            }
+            $seen[$lower] = $key;
+            $wanted[$key] ??= ['product_id' => (int) $product->id, 'variant_id' => $variantId, 'code' => $code, 'barcodes' => []];
+            $wanted[$key]['barcodes'][$lower] ??= [$barcode, $rowNum];
+        }
+
+        // Pass 2 — each barcode must be free (or already this product's): the
+        // same rules as ProductBarcodes::conflicts(), against the preloads.
+        foreach ($wanted as $w) {
+            foreach ($w['barcodes'] as $lower => [$barcode, $rowNum]) {
+                $lower = (string) $lower;
+                $owner = $ownerByBarcode[$lower] ?? null;
+                $variant = $variantsByLower[$lower] ?? null;
+                if (mb_strlen($barcode) > 64) {
+                    $errors[] = "Row {$rowNum}: barcode \"{$barcode}\" is longer than 64 characters.";
+                } elseif (isset($productsByLower[$lower])) {
+                    $errors[] = "Row {$rowNum}: barcode \"{$barcode}\" is already the code of \"{$productsByLower[$lower]->name}\".";
+                } elseif ($variant) {
+                    $own = (int) $variant->product_id === $w['product_id'] && (int) $variant->id === (int) $w['variant_id'];
+                    $errors[] = "Row {$rowNum}: barcode \"{$barcode}\" is ".($own ? "the variant's own code." : 'already a variant code.');
+                } elseif ($owner && ! ($owner[0] === $w['product_id'] && $owner[1] === $w['variant_id'])) {
+                    $errors[] = "Row {$rowNum}: barcode \"{$barcode}\" already belongs to another product.";
+                }
+            }
+        }
+
+        if ($errors) {
+            return response()->json(['status' => false, 'message' => count($errors).' problem(s) found — nothing was imported.', 'errors' => $errors]);
+        }
+        if (! $wanted) {
+            return response()->json(['status' => false, 'errors' => ['No rows found. The file needs a Code and a Barcode column.']], 422);
+        }
+
+        // Written in bulk. Replace first clears the listed products' / variants'
+        // lists; append skips barcodes the product already has.
+        $replace = $request->input('mode') === 'replace';
+        $added = 0;
+        DB::transaction(function () use ($wanted, $replace, $ownerByBarcode, &$added) {
+            if ($replace) {
+                $productIds = array_values(array_map(fn ($w) => $w['product_id'], array_filter($wanted, fn ($w) => $w['variant_id'] === null)));
+                $variantIds = array_values(array_map(fn ($w) => $w['variant_id'], array_filter($wanted, fn ($w) => $w['variant_id'] !== null)));
+                foreach (array_chunk($productIds, 1000) as $chunk) {
+                    DB::table('product_barcodes')->whereIn('product_id', $chunk)->whereNull('product_variant_id')->delete();
+                }
+                foreach (array_chunk($variantIds, 1000) as $chunk) {
+                    DB::table('product_barcodes')->whereIn('product_variant_id', $chunk)->delete();
+                }
+            }
+
+            $now = now();
+            $insert = [];
+            foreach ($wanted as $w) {
+                foreach ($w['barcodes'] as $lower => [$barcode]) {
+                    if (! $replace && isset($ownerByBarcode[(string) $lower])) {
+                        continue; // already this product's (others were rejected above)
+                    }
+                    $insert[] = ['product_id' => $w['product_id'], 'product_variant_id' => $w['variant_id'], 'barcode' => $barcode, 'created_at' => $now, 'updated_at' => $now];
+                }
+            }
+            foreach (array_chunk($insert, 1000) as $chunk) {
+                DB::table('product_barcodes')->insert($chunk);
+            }
+            $added = count($insert);
+        });
+
+        return response()->json([
+            'status' => true,
+            'products' => count($wanted),
+            'added' => $added,
+            'message' => count($wanted).' product(s) updated, '.$added.' barcode(s) added.',
         ]);
     }
 
@@ -3757,34 +5122,43 @@ class ProductsController extends BaseController
             'date' => 'required',
             'warehouse_id' => 'required',
         ]);
+        $this->abortIfWarehouseDenied($request->warehouse_id);
 
         $products = product_warehouse::join('products', 'product_warehouse.product_id', '=', 'products.id')
             ->leftJoin('categories', 'products.category_id', '=', 'categories.id')
+            ->leftJoin('product_variants', 'product_variants.id', '=', 'product_warehouse.product_variant_id')
             ->where('product_warehouse.deleted_at', '=', null)
+            ->where('products.deleted_at', '=', null)
             ->where('product_warehouse.warehouse_id', '=', $request->warehouse_id)
+            // Only what this warehouse actually holds: its own products plus
+            // stock transferred in, never the empty rows of other branches.
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
+            ->tap(fn ($q) => $this->scopeStockRowsToOwnership($q))
             ->when($request->filled('category_id'), function ($query) use ($request) {
                 $query->where('products.category_id', $request->category_id);
             })
             ->select(
                 'product_warehouse.product_id as productID',
                 'products.name',
+                'products.code',
+                'categories.name as category_name',
                 'product_warehouse.product_variant_id as productVariantID',
+                'product_variants.name as variant_name',
+                'product_variants.code as variant_code',
                 'product_warehouse.qte'
             )
+            ->orderBy('products.code')
             ->get();
 
         $stock = [];
-        $incorrect_stock = [];
 
         foreach ($products as $product) {
-
-            if ($product->productVariantID) {
-                $variant = ProductVariant::where('product_id', $product->productID)->where('id', $product->productVariantID)->first();
-                $item['product_name'] = $variant->name.'-'.$product->name;
-            } else {
-                $item['product_name'] = $product->name;
-            }
-
+            // A variant row counts under the variant's own code.
+            $item['code'] = $product->productVariantID ? ($product->variant_code ?: $product->code) : $product->code;
+            $item['product_name'] = $product->productVariantID
+                ? $product->variant_name.'-'.$product->name
+                : $product->name;
+            $item['category'] = $product->category_name;
             $item['quantity'] = $product->qte === 0.0 ? '0' : $product->qte;
 
             $stock[] = $item;
@@ -3793,17 +5167,16 @@ class ProductsController extends BaseController
         // Create an instance of StockExport with the warehouse name
         $stockExport = new StockExport($stock);
 
-        $excelFileName = 'stock_export_'.now()->format('YmdHis').'.xlsx';
-        $excelFolderPath = upload_public_path('count_stock').'/';
-        $excelFilePath = $excelFolderPath.$excelFileName;
+        // A stock count is a full inventory listing, so it is kept on the private
+        // `local` disk (tenant-suffixed by config/tenancy.php) and handed out by
+        // download_count_stock() behind auth, rather than written under public/
+        // where the timestamped name was guessable by anyone.
+        $excelFileName = 'stock_export_'.now()->format('YmdHis').'_'.Str::random(24).'.xlsx';
 
-        // Check if the directory exists, if not, create it
-        if (! File::exists($excelFolderPath)) {
-            File::makeDirectory($excelFolderPath, 0755, true, true);
-        }
-
-        // Use File::put to store the file directly in the desired public directory
-        File::put($excelFilePath, Excel::raw($stockExport, \Maatwebsite\Excel\Excel::XLSX));
+        Storage::disk('local')->put(
+            self::COUNT_STOCK_DIR.'/'.$excelFileName,
+            Excel::raw($stockExport, \Maatwebsite\Excel\Excel::XLSX)
+        );
 
         // Save the file name in the count_stock table
         CountStock::create([
@@ -3816,6 +5189,310 @@ class ProductsController extends BaseController
 
         return response()->json(['success' => true]);
 
+    }
+
+    // -------------- download_count_stock ------------------\\
+
+    /**
+     * Stream a stored stock count back to the user.
+     *
+     * The row is warehouse-gated the same way every other document is, so a
+     * user assigned to one branch cannot pull another branch's inventory.
+     * Counts generated before these files moved off the public path are still
+     * served from their old location so existing rows keep working.
+     */
+    public function download_count_stock(Request $request, $id)
+    {
+        $this->authorizeForUser($request->user('api'), 'count_stock', Product::class);
+
+        $count_stock = CountStock::findOrFail($id);
+        $this->abortIfDocumentWarehouseDenied($count_stock);
+
+        // basename() keeps a tampered row from walking out of the directory.
+        $fileName = basename((string) $count_stock->file_stock);
+        if ($fileName === '') {
+            abort(404);
+        }
+
+        $stored = self::COUNT_STOCK_DIR.'/'.$fileName;
+        if (Storage::disk('local')->exists($stored)) {
+            return Storage::disk('local')->download($stored, $fileName);
+        }
+
+        $legacy = upload_public_path('count_stock').'/'.$fileName;
+        if (is_file($legacy)) {
+            return response()->download($legacy, $fileName);
+        }
+
+        abort(404);
+    }
+
+    // -------------- upload_counted_stock ------------------\\
+
+    /**
+     * Upload a physical count: a file of Code + Counted for one warehouse.
+     * Each difference is worked out against stock AT UPLOAD TIME (rows are
+     * locked while applying), so sales between the count sheet and the upload
+     * never skew it, and posted as ONE adjustment noted "Stock count".
+     *
+     * preview=1 returns the differences without changing anything. Rows with
+     * a blank Counted cell are not counted and are left alone. Any problem row
+     * rejects the whole file, as Opening Stock does.
+     *
+     * Serial / batch tracked, combo and service products are refused: their
+     * stock moves through serials, batches or components, which a bare count
+     * cannot name — they are counted on a manual adjustment.
+     */
+    public function upload_counted_stock(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'count_stock', Product::class);
+        $this->authorizeForUser($request->user('api'), 'create', Adjustment::class);
+        ini_set('max_execution_time', 2000); // whole-catalogue counts, like the other imports
+
+        $request->validate([
+            'warehouse_id' => 'required|integer|exists:warehouses,id',
+            'file' => 'required|file|max:20480',
+            'reference' => 'nullable|string|max:100',
+        ]);
+        $this->abortIfWarehouseDenied($request->warehouse_id);
+        $warehouseId = (int) $request->warehouse_id;
+
+        $extension = strtolower($request->file('file')->getClientOriginalExtension());
+        if (! in_array($extension, ['xlsx', 'xls', 'csv'], true)) {
+            return response()->json(['status' => false, 'errors' => ['The file must be an .xlsx, .xls or .csv file.']], 422);
+        }
+
+        // CSV is read natively: the spreadsheet reader takes ~10 s on a
+        // 21,000-row catalogue count, fgetcsv a fraction of that. Headings are
+        // normalized the way the Excel reader slugs them ("Counted Qty" → counted_qty).
+        if ($extension === 'csv') {
+            $rows = [];
+            $handle = fopen($request->file('file')->getRealPath(), 'r');
+            $headers = null;
+            while (($line = fgetcsv($handle)) !== false) {
+                if ($headers === null) {
+                    $line[0] = preg_replace('/^\xEF\xBB\xBF/', '', (string) $line[0]); // BOM
+                    $headers = array_map(fn ($h) => strtolower(trim(preg_replace('/[^a-z0-9]+/i', '_', trim((string) $h)), '_')), $line);
+
+                    continue;
+                }
+                $rows[] = array_combine($headers, array_pad(array_slice($line, 0, count($headers)), count($headers), null));
+            }
+            fclose($handle);
+        } else {
+            $rows = Excel::toArray(new OpeningStockRowsImport, $request->file('file'))[0] ?? [];
+        }
+
+        $errors = [];
+        $counts = [];
+        foreach ($rows as $i => $row) {
+            $rowNum = $i + 2;
+            $code = trim((string) ($row['code'] ?? $row['product_code'] ?? ''));
+            $counted = $row['counted'] ?? $row['counted_qty'] ?? $row['counted_quantity'] ?? null;
+            $counted = is_string($counted) ? trim($counted) : $counted;
+
+            if ($code === '' && ($counted === null || $counted === '')) {
+                continue; // blank line
+            }
+            if ($counted === null || $counted === '') {
+                continue; // listed but not counted
+            }
+            if ($code === '') {
+                $errors[] = "Row {$rowNum}: code is required.";
+
+                continue;
+            }
+            if (! is_numeric($counted) || (float) $counted < 0) {
+                $errors[] = "Row {$rowNum} ({$code}): counted must be a number of 0 or more.";
+
+                continue;
+            }
+            if (isset($counts[$code])) {
+                $errors[] = "Row {$rowNum}: code '{$code}' appears more than once.";
+
+                continue;
+            }
+            $counts[$code] = ['row' => $rowNum, 'counted' => (float) $counted];
+        }
+
+        if (! $counts && ! $errors) {
+            return response()->json(['status' => false, 'errors' => ['No counted quantities found. The file needs a Code and a Counted column.']], 422);
+        }
+
+        // Resolve codes: a product code, or a variant code for variant stock.
+        $codes = array_keys($counts);
+        $hasBatch = Schema::hasColumn('products', 'is_batch_tracked');
+        $productCols = ['id', 'code', 'name', 'type', 'is_variant', 'is_imei'];
+        if ($hasBatch) {
+            $productCols[] = 'is_batch_tracked';
+        }
+        $targets = [];
+        foreach (array_chunk($codes, 1000) as $chunk) {
+            foreach (Product::whereNull('deleted_at')->whereIn('code', $chunk)->get($productCols) as $p) {
+                $targets[$p->code] = ['product' => $p, 'variant_id' => null, 'name' => $p->name];
+            }
+            $variants = ProductVariant::whereNull('deleted_at')->whereIn('code', $chunk)->get(['id', 'product_id', 'code', 'name']);
+            $parents = Product::whereNull('deleted_at')->whereIn('id', $variants->pluck('product_id'))->get($productCols)->keyBy('id');
+            foreach ($variants as $v) {
+                if (! isset($targets[$v->code]) && $parents->has($v->product_id)) {
+                    $parent = $parents[$v->product_id];
+                    $targets[$v->code] = ['product' => $parent, 'variant_id' => (int) $v->id, 'name' => $parent->name.' ['.$v->name.']'];
+                }
+            }
+        }
+
+        foreach ($counts as $code => $c) {
+            $target = $targets[$code] ?? null;
+            $p = $target['product'] ?? null;
+            if (! $p) {
+                $errors[] = "Row {$c['row']}: code '{$code}' does not exist.";
+            } elseif ($target['variant_id'] === null && ($p->type === 'is_variant' || $p->is_variant)) {
+                $errors[] = "Row {$c['row']} ({$code}): this product has variants — count each variant under its own code.";
+            } elseif ($p->type === 'is_service' || $p->type === 'is_combo') {
+                $errors[] = "Row {$c['row']} ({$code}): ".($p->type === 'is_service' ? 'services have no stock.' : 'combos are counted through their components.');
+            } elseif ($p->is_imei || ($hasBatch && $p->is_batch_tracked)) {
+                $errors[] = "Row {$c['row']} ({$code}): serial / batch tracked — count it on a manual adjustment.";
+            }
+        }
+
+        if ($errors) {
+            return response()->json(['status' => false, 'errors' => $errors], 422);
+        }
+
+        // Current stock → differences. Applying re-reads under lock, so the
+        // difference is the one at the moment of posting, not of the preview.
+        // Stock rows load in chunks (one query per 1,000 products, not one per
+        // row): a whole-catalogue count is tens of thousands of rows.
+        $compute = function (bool $lock) use ($counts, $targets, $warehouseId) {
+            $productIds = array_values(array_unique(array_map(fn ($t) => (int) $t['product']->id, array_intersect_key($targets, $counts))));
+            $rows = [];
+            foreach (array_chunk($productIds, 1000) as $chunk) {
+                $found = product_warehouse::whereNull('deleted_at')
+                    ->where('warehouse_id', $warehouseId)
+                    ->whereIn('product_id', $chunk)
+                    ->orderBy('id')
+                    ->when($lock, fn ($q) => $q->lockForUpdate())
+                    ->get();
+                foreach ($found as $row) {
+                    $rows[$row->product_id.'|'.($row->product_variant_id ?? '')] ??= $row;
+                }
+            }
+
+            $lines = [];
+            foreach ($counts as $code => $c) {
+                $t = $targets[$code];
+                $pw = $rows[$t['product']->id.'|'.($t['variant_id'] ?? '')] ?? null;
+                $current = $pw ? (float) $pw->qte : 0.0;
+                $lines[] = [
+                    'code' => $code,
+                    'name' => $t['name'],
+                    'product_id' => (int) $t['product']->id,
+                    'product_variant_id' => $t['variant_id'],
+                    'current' => $current,
+                    'counted' => $c['counted'],
+                    'difference' => round($c['counted'] - $current, 4),
+                    'pw' => $pw,
+                ];
+            }
+
+            return $lines;
+        };
+
+        $summary = function (array $lines) {
+            $changed = array_values(array_filter($lines, fn ($l) => $l['difference'] != 0));
+
+            return [
+                'counted' => count($lines),
+                'changed' => count($changed),
+                'units_added' => array_sum(array_map(fn ($l) => max($l['difference'], 0), $changed)),
+                'units_removed' => array_sum(array_map(fn ($l) => max(-$l['difference'], 0), $changed)),
+                'lines' => array_map(fn ($l) => array_diff_key($l, ['pw' => 1, 'product_id' => 1, 'product_variant_id' => 1]), $changed),
+            ];
+        };
+
+        if ($request->boolean('preview')) {
+            return response()->json(['status' => true, 'preview' => true] + $summary($compute(false)));
+        }
+
+        $result = DB::transaction(function () use ($compute, $summary, $warehouseId, $request) {
+            $lines = $compute(true);
+            $changed = array_filter($lines, fn ($l) => $l['difference'] != 0);
+            $adjustment = null;
+
+            if ($changed) {
+                $reference = trim((string) $request->input('reference', ''));
+                $adjustment = Adjustment::create([
+                    'date' => now()->toDateString(),
+                    'time' => now()->toTimeString(),
+                    'Ref' => app('App\Http\Controllers\AdjustmentController')->getNumberOrder(),
+                    'warehouse_id' => $warehouseId,
+                    'items' => count($changed),
+                    'notes' => 'Stock count'.($reference !== '' ? ' — '.$reference : ''),
+                    'user_id' => Auth::id(),
+                ]);
+
+                $detailRows = [];
+                foreach ($changed as $l) {
+                    // Saved one by one on purpose: the stock observer pushes
+                    // changed rows to Shopify / WooCommerce.
+                    $pw = $l['pw'] ?: new product_warehouse([
+                        'warehouse_id' => $warehouseId,
+                        'product_id' => $l['product_id'],
+                        'product_variant_id' => $l['product_variant_id'],
+                        'manage_stock' => 1,
+                        'qte' => 0,
+                    ]);
+                    $pw->qte = (float) $pw->qte + $l['difference'];
+                    $pw->save();
+
+                    $detailRows[] = [
+                        'adjustment_id' => $adjustment->id,
+                        'product_id' => $l['product_id'],
+                        'product_variant_id' => $l['product_variant_id'],
+                        'quantity' => abs($l['difference']),
+                        'type' => $l['difference'] > 0 ? 'add' : 'sub',
+                        // insert() skips Eloquent: set what create() would.
+                        'created_at' => $adjustment->created_at,
+                        'updated_at' => $adjustment->created_at,
+                    ];
+                }
+                foreach (array_chunk($detailRows, 1000) as $chunk) {
+                    AdjustmentDetail::insert($chunk);
+                }
+
+                \App\Services\AccountingV2\StockJournal::adjustment($adjustment, created: true);
+            }
+
+            return $summary($lines) + [
+                'adjustment_id' => $adjustment?->id,
+                'Ref' => $adjustment?->Ref,
+            ];
+        });
+
+        return response()->json(['status' => true, 'preview' => false] + $result);
+    }
+
+    // -------------- search_products_basic ------------------\\
+
+    /** Typeahead for product pickers: id, name and code of matching active products. */
+    public function search_products_basic(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'view', Product::class);
+
+        $q = trim((string) $request->input('q', ''));
+        $exclude = (int) $request->input('exclude', 0);
+
+        $products = Product::whereNull('deleted_at')
+            ->where('is_active', 1)
+            ->when($exclude > 0, fn ($qq) => $qq->where('id', '!=', $exclude))
+            ->when($q !== '', fn ($qq) => $qq->where(function ($w) use ($q) {
+                $w->where('name', 'like', "%{$q}%")->orWhere('code', 'like', "%{$q}%");
+            }))
+            ->orderBy('name')
+            ->limit(25)
+            ->get(['id', 'name', 'code']);
+
+        return response()->json(['products' => $products]);
     }
 
     // -------------- get_products_materiels ------------------\\
@@ -3851,6 +5528,34 @@ class ProductsController extends BaseController
     }
 
     // POST /opening-stock/import/single
+    /**
+     * Why a product cannot take opening stock from an import, or null.
+     * AdjustmentController::destroy reverses plain rows only — a combo line
+     * is undone as a kit assembly (components credited back) and variant
+     * parents / services not at all — so those would make "delete the log"
+     * move the wrong stock. Serial / batch stock needs its serials or batches.
+     */
+    protected function openingStockTypeError(Product $p, bool $variantSheet): ?string
+    {
+        if (! $variantSheet && ($p->type === 'is_variant' || $p->is_variant)) {
+            return 'this product has variants — use the variants sheet with a variant_code.';
+        }
+        if ($variantSheet && $p->type !== 'is_variant') {
+            return 'not a product with variants — use the standard sheet.';
+        }
+        if ($p->type === 'is_service') {
+            return 'services have no stock.';
+        }
+        if ($p->type === 'is_combo') {
+            return 'combos are stocked through their components.';
+        }
+        if ($p->is_imei || (Schema::hasColumn('products', 'is_batch_tracked') && $p->is_batch_tracked)) {
+            return 'serial / batch tracked — enter its opening stock with serials or batches.';
+        }
+
+        return null;
+    }
+
     public function opening_stock_import_single(Request $request)
     {
         $this->authorizeForUser($request->user('api'), 'opening_stock_import', Product::class);
@@ -3901,6 +5606,8 @@ class ProductsController extends BaseController
             $clean[] = ['row' => $rowNum, 'code' => $code, 'qty' => (float) $qty];
         }
 
+        $this->abortIfWarehouseDenied($request->warehouse_id);
+
         // Validate existence of products
         $codes = array_values(array_unique(array_column($clean, 'code')));
         $existing = Product::whereNull('deleted_at')->whereIn('code', $codes)->pluck('id', 'code')->toArray();
@@ -3915,18 +5622,33 @@ class ProductsController extends BaseController
             }
         }
 
+        // Only products whose stock is a plain quantity on their own row: the
+        // log's delete reverses exactly those (see openingStockTypeError).
+        $typed = Product::whereNull('deleted_at')->whereIn('code', array_keys($existing))->get()->keyBy('code');
+        foreach ($clean as $c) {
+            if (isset($typed[$c['code']]) && ($why = $this->openingStockTypeError($typed[$c['code']], false))) {
+                $errors[] = "Row {$c['row']} ({$c['code']}): {$why}";
+            }
+        }
+
         if (! empty($errors)) {
             return response()->json(['status' => false, 'message' => 'Validation failed', 'errors' => $errors]);
         }
 
+        // The same rows already posted (and still standing) → ask before doubling.
+        $fingerprint = ImportFingerprint::hash('opening_stock', (int) $request->warehouse_id, array_map(fn ($c) => [$c['code'], $c['qty']], $clean));
+        if (! $request->boolean('confirm_duplicate') && ($previous = ImportFingerprint::previous('opening_stock', $fingerprint))) {
+            return ImportFingerprint::duplicateResponse($previous);
+        }
+
         // Apply stock + record virtual adjustments (similar to product create "opening stock")
-        DB::transaction(function () use ($clean, $existing, $request) {
+        DB::transaction(function () use ($clean, $existing, $request, $fingerprint) {
             $warehouseId = (int) $request->warehouse_id;
 
             // 1) Apply stock to product_warehouse
             foreach ($clean as $c) {
                 $productId = $existing[$c['code']];
-                $pw = product_warehouse::firstOrNew([
+                $pw = product_warehouse::lockForUpdate()->firstOrNew([
                     'warehouse_id' => $warehouseId,
                     'product_id' => $productId,
                     'product_variant_id' => null,
@@ -3941,10 +5663,13 @@ class ProductsController extends BaseController
 
             // 2) Create a lightweight Adjustment with one detail per product
             //    so average‑cost/COGS logic can treat this as opening stock.
+            //    Negative rows are logged too (as 'sub' lines): every quantity
+            //    this upload moved must be on its log, or deleting the log
+            //    cannot undo exactly this upload.
             $detailsByProduct = [];
             foreach ($clean as $c) {
                 $qty = (float) $c['qty'];
-                if ($qty <= 0) {
+                if ($qty == 0) {
                     continue;
                 }
 
@@ -3954,6 +5679,7 @@ class ProductsController extends BaseController
                 }
                 $detailsByProduct[$productId] += $qty;
             }
+            $detailsByProduct = array_filter($detailsByProduct, fn ($qty) => $qty != 0);
 
             if (! empty($detailsByProduct)) {
                 $adjRef = app('App\Http\Controllers\AdjustmentController')->getNumberOrder();
@@ -3973,10 +5699,13 @@ class ProductsController extends BaseController
                         'adjustment_id' => $adjustment->id,
                         'product_id' => $productId,
                         'product_variant_id' => null,
-                        'quantity' => $qty,
-                        'type' => 'add',
+                        'quantity' => abs($qty),
+                        'type' => $qty > 0 ? 'add' : 'sub',
                     ]);
                 }
+
+                ImportFingerprint::record('opening_stock', $fingerprint, $warehouseId, 'adjustment', $adjustment->id, $request->file('products')->getClientOriginalName());
+                \App\Services\AccountingV2\StockJournal::adjustment($adjustment, created: true, opening: true);
             }
         });
 
@@ -4061,12 +5790,27 @@ class ProductsController extends BaseController
             }
         }
 
+        $this->abortIfWarehouseDenied($request->warehouse_id);
+        // Serial / batch tracked variants move through serials or batches.
+        $typed = Product::whereNull('deleted_at')->whereIn('code', array_keys($products))->get()->keyBy('code');
+        foreach ($clean as $c) {
+            if (isset($typed[$c['pcode']]) && ($why = $this->openingStockTypeError($typed[$c['pcode']], true))) {
+                $errors[] = "Row {$c['row']} ({$c['pcode']}): {$why}";
+            }
+        }
+
         if (! empty($errors)) {
             return response()->json(['status' => false, 'message' => 'Validation failed', 'errors' => $errors]);
         }
 
+        // The same rows already posted (and still standing) → ask before doubling.
+        $fingerprint = ImportFingerprint::hash('opening_stock_variants', (int) $request->warehouse_id, array_map(fn ($c) => [$c['pcode'], $c['vcode'], $c['qty']], $clean));
+        if (! $request->boolean('confirm_duplicate') && ($previous = ImportFingerprint::previous('opening_stock_variants', $fingerprint))) {
+            return ImportFingerprint::duplicateResponse($previous);
+        }
+
         // Apply stock + record virtual adjustments (similar to product create "opening stock")
-        DB::transaction(function () use ($clean, $products, $variants, $request) {
+        DB::transaction(function () use ($clean, $products, $variants, $request, $fingerprint) {
             $warehouseId = (int) $request->warehouse_id;
             $detailRows = [];
 
@@ -4075,7 +5819,7 @@ class ProductsController extends BaseController
                 $productId = $products[$c['pcode']];
                 $variantId = $variants->get($c['vcode'])->id;
 
-                $pw = product_warehouse::firstOrNew([
+                $pw = product_warehouse::lockForUpdate()->firstOrNew([
                     'warehouse_id' => $warehouseId,
                     'product_id' => $productId,
                     'product_variant_id' => $variantId,
@@ -4087,12 +5831,15 @@ class ProductsController extends BaseController
                 $pw->qte = (float) $pw->qte + (float) $c['qty'];
                 $pw->save();
 
+                // Negative rows are logged as 'sub' lines so the log can undo
+                // exactly what this upload moved.
                 $qty = (float) $c['qty'];
-                if ($qty > 0) {
+                if ($qty != 0) {
                     $detailRows[] = [
                         'product_id' => $productId,
                         'product_variant_id' => $variantId,
-                        'quantity' => $qty,
+                        'quantity' => abs($qty),
+                        'type' => $qty > 0 ? 'add' : 'sub',
                     ];
                 }
             }
@@ -4117,9 +5864,12 @@ class ProductsController extends BaseController
                         'product_id' => $row['product_id'],
                         'product_variant_id' => $row['product_variant_id'],
                         'quantity' => $row['quantity'],
-                        'type' => 'add',
+                        'type' => $row['type'],
                     ]);
                 }
+
+                ImportFingerprint::record('opening_stock_variants', $fingerprint, $warehouseId, 'adjustment', $adjustment->id, $request->file('products')->getClientOriginalName());
+                \App\Services\AccountingV2\StockJournal::adjustment($adjustment, created: true, opening: true);
             }
         });
 
@@ -4160,8 +5910,9 @@ class ProductsController extends BaseController
                     $q->whereNull('deleted_at');
                 }, 'images'])
                 ->findOrFail($id);
+            $this->abortIfProductDenied($original);
 
-            $newCode = $this->generateUniqueCode();
+            $newCode = $this->generateUniqueCode((string) $original->Type_barcode);
 
             $newImage = 'no-image.png';
             $oldImage = $original->image;
@@ -4181,6 +5932,17 @@ class ProductsController extends BaseController
             $copy = $original->replicate();
             $copy->code = $newCode;
             $copy->image = $newImage;
+            // The copy is a new product, not the original's WooCommerce listing.
+            $copy->woocommerce_id = null;
+            // A scale PLU names one product; the copy gets its own later.
+            if (array_key_exists('scale_plu', $copy->getAttributes())) {
+                $copy->scale_plu = null;
+            }
+            // The copy stays in the original's home warehouse when the caller
+            // may access it; otherwise it goes to the caller's own warehouse.
+            $copy->warehouse_id = $this->canAccessWarehouse($original->warehouse_id)
+                ? $original->warehouse_id
+                : $this->productHomeWarehouseFor(null, false);
             $copy->created_at = now();
             $copy->updated_at = now();
             $copy->save();
@@ -4233,6 +5995,8 @@ class ProductsController extends BaseController
 
                     $variantIdMap[$variant->id] = $newVariant->id;
                 }
+
+                app(ProductOptionService::class)->cloneTo($original, $copy, $variantIdMap);
             }
 
             if ($original->type === 'is_combo') {
@@ -4269,6 +6033,9 @@ class ProductsController extends BaseController
             }
         }, 10);
 
+        WooAutoSync::productSaved($newProductId);
+        OpencartAutoSync::productSaved($newProductId);
+
         return response()->json(['success' => true, 'id' => $newProductId]);
     }
 
@@ -4293,8 +6060,15 @@ class ProductsController extends BaseController
         return $try;
     }
 
-    protected function generateUniqueCode(): string
+    protected function generateUniqueCode(string $symbology = 'CODE128'): string
     {
+        // Prefix + number when System Settings > Prefixes sets a numbering and
+        // the symbology takes free text; EAN / UPC keep the digit code below.
+        $numbered = \App\Services\ProductCodeGenerator::next($symbology ?: 'CODE128');
+        if ($numbered !== null) {
+            return $numbered;
+        }
+
         do {
             $code = (string) rand(10000000, 99999999);
         } while ($this->codeExistsAcrossTables($code));
@@ -4310,7 +6084,53 @@ class ProductsController extends BaseController
         }
         $inVariants = ProductVariant::whereNull('deleted_at')->where('code', $code)->exists();
 
-        return $inVariants;
+        return $inVariants || ProductBarcodes::owner($code) !== null;
+    }
+
+    /**
+     * Product form rules for additional barcodes: the product code may not be
+     * another product's extra barcode, and each submitted barcode must be free
+     * (see ProductBarcodes::conflicts). $productId is null on create.
+     */
+    protected function addBarcodeRules(array &$rules, Request $request, ?int $productId): void
+    {
+        $rules['code'][] = function ($attribute, $value, $fail) use ($productId) {
+            $owner = ProductBarcodes::owner(trim((string) $value));
+            if ($owner && $owner[0] !== $productId) {
+                $fail('This code is already an additional barcode of another product.');
+            }
+        };
+
+        // Variant codes too (create posts them as JSON, edit as an array).
+        if (isset($rules['variants'])) {
+            $rules['variants'] = (array) $rules['variants'];
+            $rules['variants'][] = function ($attribute, $value, $fail) use ($productId) {
+                $variants = is_string($value) ? (array) json_decode($value, true) : (array) $value;
+                foreach ($variants as $variant) {
+                    $code = trim((string) (is_array($variant) ? ($variant['code'] ?? '') : ''));
+                    $owner = $code !== '' ? ProductBarcodes::owner($code) : null;
+                    if ($owner && $owner[0] !== $productId) {
+                        $fail("Variant code \"{$code}\" is already an additional barcode of another product.");
+
+                        return;
+                    }
+                }
+            };
+        }
+
+        if ($request->has('barcodes')) {
+            $rules['barcodes'] = [function ($attribute, $value, $fail) use ($productId, $request) {
+                $barcodes = ProductBarcodes::normalize($value);
+                if (count($barcodes) > 50) {
+                    $fail('A product can have at most 50 additional barcodes.');
+
+                    return;
+                }
+                foreach (ProductBarcodes::conflicts($barcodes, $productId, null, trim((string) $request->code)) as $message) {
+                    $fail($message);
+                }
+            }];
+        }
     }
 
     /**

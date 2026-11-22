@@ -391,7 +391,7 @@ class ProductBatchController extends BaseController
         } else {
             $q->whereNull('product_variant_id');
         }
-        $row = $q->first();
+        $row = $q->lockForUpdate()->first();
         if ($row) {
             $row->qte = (float) $row->qte + $delta;
             $row->save();

@@ -138,15 +138,18 @@ class StoreAuthController extends Controller
         $initialStatus = $requireApproval ? 0 : 1;
 
         $user = DB::transaction(function () use ($data, $initialStatus, $inviteCode) {
-            $client = Client::firstOrCreate(
-                ['email' => $data['email']],
-                [
+            // Only a live customer may be linked — never a deleted one (its
+            // history, license keys and balances must not pass to whoever
+            // registers that email next). Live customers are already refused
+            // by the unique rule above, so this normally creates a new one.
+            $client = Client::where('email', $data['email'])->whereNull('deleted_at')->first()
+                ?: Client::create([
+                    'email' => $data['email'],
                     'name' => $data['name'],
                     'code' => $this->getNumberOrder(),
                     'phone' => $data['phone'],
                     'adresse' => $data['address'],
-                ]
-            );
+                ]);
 
             $ecomClient = EcommerceClient::create([
                 'client_id' => $client->id,

@@ -62,7 +62,7 @@
         </template>
       </a-table>
       <div class="showing">
-        {{ $t('Showing') }} {{ rows.length }} of {{ total }} {{ $t('Translations') }}
+        {{ $t('Showing') }} {{ rows.length }} {{ $t('of') }} {{ total }} {{ $t('Translations') }}
       </div>
     </a-card>
 
@@ -74,10 +74,10 @@
       @ok="addTranslation"
     >
       <a-form layout="vertical">
-        <a-form-item label="Key">
+        <a-form-item :label="$t('Key')">
           <a-input v-model:value="newEntry.key" />
         </a-form-item>
-        <a-form-item label="Value">
+        <a-form-item :label="$t('Value')">
           <a-input v-model:value="newEntry.value" />
         </a-form-item>
       </a-form>
@@ -118,8 +118,8 @@ const search = ref('');
 const language = ref(null);
 
 const columns = computed(() => [
-  { title: 'Key', dataIndex: 'key', key: 'key', width: '40%' },
-  { title: 'Value', key: 'value' },
+  { title: t('Key'), dataIndex: 'key', key: 'key', width: '40%' },
+  { title: t('Value'), key: 'value' },
   { title: t('Action'), key: 'actions', width: 70, align: 'center' },
 ]);
 

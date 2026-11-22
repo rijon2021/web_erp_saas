@@ -1,0 +1,14 @@
+{
+    "The security check failed. Please try again.": "فشل التحقق الأمني. يرجى المحاولة مرة أخرى.",
+    "These credentials do not match our records.": "بيانات الاعتماد هذه لا تطابق سجلاتنا.",
+    "{1} :count attempt left before sign-in is blocked.|[2,*] :count attempts left before sign-in is blocked.": "{1} تبقّت محاولة واحدة قبل حظر تسجيل الدخول.|{2} تبقّت محاولتان قبل حظر تسجيل الدخول.|[3,10] تبقّت :count محاولات قبل حظر تسجيل الدخول.|[11,*] تبقّت :count محاولة قبل حظر تسجيل الدخول.",
+    "{1} Too many failed sign-in attempts. Try again in :count second.|[2,*] Too many failed sign-in attempts. Try again in :count seconds.": "{1} محاولات تسجيل دخول فاشلة كثيرة. حاول مرة أخرى بعد ثانية واحدة.|{2} محاولات تسجيل دخول فاشلة كثيرة. حاول مرة أخرى بعد ثانيتين.|[3,10] محاولات تسجيل دخول فاشلة كثيرة. حاول مرة أخرى بعد :count ثوانٍ.|[11,*] محاولات تسجيل دخول فاشلة كثيرة. حاول مرة أخرى بعد :count ثانية.",
+    "{1} Too many failed sign-in attempts. Try again in :count minute.|[2,*] Too many failed sign-in attempts. Try again in :count minutes.": "{1} محاولات تسجيل دخول فاشلة كثيرة. حاول مرة أخرى بعد دقيقة واحدة.|{2} محاولات تسجيل دخول فاشلة كثيرة. حاول مرة أخرى بعد دقيقتين.|[3,10] محاولات تسجيل دخول فاشلة كثيرة. حاول مرة أخرى بعد :count دقائق.|[11,*] محاولات تسجيل دخول فاشلة كثيرة. حاول مرة أخرى بعد :count دقيقة.",
+    "Security check": "التحقق الأمني",
+    "Security code": "رمز الأمان",
+    "Show a new code": "عرض رمز جديد",
+    "Type the characters shown": "اكتب الأحرف الظاهرة",
+    "Your answer": "إجابتك",
+    "Enter both the site key and the secret key for the selected CAPTCHA provider.": "أدخل مفتاح الموقع والمفتاح السري لمزوّد CAPTCHA المحدد.",
+    "Complete the CAPTCHA test with the new keys before saving. If the widget does not load, the site key is wrong or this domain is not allowed for it; if the check fails, the secret key is wrong.": "أكمل اختبار CAPTCHA بالمفاتيح الجديدة قبل الحفظ. إذا لم يتم تحميل الأداة فإن مفتاح الموقع خاطئ أو أن هذا النطاق غير مسموح به؛ وإذا فشل التحقق فإن المفتاح السري خاطئ."
+}

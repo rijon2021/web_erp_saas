@@ -2,10 +2,10 @@
   <div>
     <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
       <a-col :xs="12" :md="6">
-        <a-card size="small"><a-spin :spinning="loadingTab"><a-statistic :title="'WooCommerce ' + $t('Orders')" :value="wooTotalRows" /></a-spin></a-card>
+        <a-card size="small"><a-spin :spinning="loadingTab"><a-statistic :title="$t('Woo_WooCommerce_Orders')" :value="wooTotalRows" /></a-spin></a-card>
       </a-col>
       <a-col :xs="12" :md="6">
-        <a-card size="small"><a-spin :spinning="loadingTab"><a-statistic :title="'Imported'" :value="importedStats.total_imported ?? '—'" :value-style="{ color: '#52c41a' }" /></a-spin></a-card>
+        <a-card size="small"><a-spin :spinning="loadingTab"><a-statistic :title="$t('Imported')" :value="importedStats.total_imported ?? '—'" :value-style="{ color: '#52c41a' }" /></a-spin></a-card>
       </a-col>
       <a-col :xs="12" :md="6">
         <a-card size="small"><a-spin :spinning="loadingTab"><a-statistic :title="$t('Today') || 'Imported today'" :value="importedStats.imported_today ?? '—'" /></a-spin></a-card>
@@ -21,7 +21,7 @@
 
     <a-alert
       v-if="lastResult && !lastResult.ok" type="error" show-icon style="margin-bottom: 12px"
-      :message="'Orders sync failed: ' + (lastResult.error || 'Unknown error')"
+      :message="$t('Woo_Orders_Sync_Failed', { error: lastResult.error || $t('Woo_Unknown_Error') })"
     />
 
     <a-input-search
@@ -91,7 +91,7 @@ const importedStats = ref({ total_imported: null, imported_today: null });
 
 const columns = computed(() => [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 80 },
-  { title: 'Number', dataIndex: 'number', key: 'number', width: 100 },
+  { title: t('Number'), dataIndex: 'number', key: 'number', width: 100 },
   { title: t('Status'), key: 'status', width: 110 },
   { title: t('date'), dataIndex: 'date_created', key: 'date_created', width: 150 },
   { title: t('Total'), dataIndex: 'total', key: 'total', align: 'right', width: 100 },
@@ -144,10 +144,10 @@ async function syncWooOrder(order) {
   syncingOrderId.value = orderId;
   try {
     const data = await http.post(`woocommerce/sync/orders?order_id=${orderId}`);
-    if (data && data.ok) message.success('Order synced');
-    else message.error(`Order sync failed: ${data?.error || 'Unknown error'}`);
+    if (data && data.ok) message.success(t('Woo_Order_Synced'));
+    else message.error(t('Woo_Order_Sync_Failed', { error: data?.error || t('Woo_Unknown_Error') }));
   } catch (e) {
-    message.error(`Order sync failed: ${e.message || 'Network error'}`);
+    message.error(t('Woo_Order_Sync_Failed', { error: e.message || t('Network_error') }));
   } finally {
     syncingOrderId.value = null;
     load();
@@ -161,11 +161,11 @@ async function syncOrders() {
   try {
     const data = await http.post('woocommerce/sync/orders');
     lastResult.value = data;
-    if (data && data.ok) message.success('Orders sync completed');
-    else message.error(`Orders sync failed: ${data?.error || 'Unknown error'}`);
+    if (data && data.ok) message.success(t('Woo_Orders_Sync_Completed'));
+    else message.error(t('Woo_Orders_Sync_Failed', { error: data?.error || t('Woo_Unknown_Error') }));
   } catch (e) {
-    lastResult.value = { ok: false, error: e.message || 'Network error' };
-    message.error(`Orders sync failed: ${e.message || 'Network error'}`);
+    lastResult.value = { ok: false, error: e.message || t('Network_error') };
+    message.error(t('Woo_Orders_Sync_Failed', { error: e.message || t('Network_error') }));
   } finally {
     syncing.value = false;
     load();

@@ -88,7 +88,7 @@
                 <div class="text-sm font-bold truncate" x-text="p.name"></div>
                 <div class="text-xs ty-muted" x-text="p.code || ''"></div>
               </div>
-              <div class="text-sm font-black" style="color: var(--ty-accent)" x-text="window.__HIDE_PRICES__ ? '' : ('{{ $s->currency_code ?? '$' }}' + p.display_price)"></div>
+              <div class="text-sm font-black" style="color: var(--ty-accent)" x-text="window.__HIDE_PRICES__ ? '' : window.storeWithCurrency('{{ $s->currency_code ?? '$' }}', p.display_price)"></div>
             </a>
           </template>
         </div>
@@ -114,7 +114,8 @@
             <div x-show="open" x-cloak x-transition class="ty-menu">
               <a href="{{ $accountUrl }}"><x-store.icon name="user" />{{ __('messages.Profile') }}</a>
               <a href="{{ $ordersUrl }}"><x-store.icon name="package" />{{ __('messages.Orders') }}</a>
-              @if($s->wallet_enabled ?? false)@endif
+              @if($walletNav ?? false)<a href="{{ route('account.wallet') }}"><x-store.icon name="wallet" />{{ __('messages.MyWallet') }}</a>@endif
+              @if($licenseNav ?? false)<a href="{{ route('account.licenses') }}"><x-store.icon name="key" />{{ __('messages.License_My_Licenses') }}</a>@endif
               <hr>
               <form method="POST" action="{{ $logoutUrl }}">@csrf<button type="submit" class="ty-danger"><x-store.icon name="log-out" />{{ __('messages.Logout') }}</button></form>
             </div>

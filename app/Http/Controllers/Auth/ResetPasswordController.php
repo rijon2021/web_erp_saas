@@ -41,7 +41,8 @@ class ResetPasswordController extends BaseController
         $request->validate([
             'token' => 'required',
             'email' => 'required|email',
-            'password' => 'required|min:8|confirmed',
+            // Same staff password policy as user create/profile/installer.
+            'password' => ['required', 'confirmed', \Illuminate\Validation\Rules\Password::min(8)->mixedCase()->numbers()->symbols()],
         ]);
 
         // Set mail configuration from database before sending email (if password reset success email is sent)
@@ -54,6 +55,10 @@ class ResetPasswordController extends BaseController
                     'password' => Hash::make($password),
                     'remember_token' => Str::random(60),
                 ])->save();
+
+                // Whoever knew the old password loses access everywhere
+                // (API tokens, mobile app, other devices).
+                \App\Support\Security\RevokeUserAccess::all((int) $user->id);
 
                 event(new PasswordReset($user));
             }

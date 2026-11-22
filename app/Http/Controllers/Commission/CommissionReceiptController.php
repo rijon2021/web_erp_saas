@@ -26,7 +26,7 @@ class CommissionReceiptController extends BaseController
         $order = $request->SortField ?? 'paid_at';
         $dir = strtolower((string) $request->input('SortType')) === 'asc' ? 'asc' : 'desc';
 
-        $query = CommissionReceipt::with(['salesAgent:id,name,code', 'paymentMethod:id,title'])
+        $query = CommissionReceipt::with(['salesAgent:id,name,code', 'paymentMethod:id,name', 'account:id,account_name'])
             ->where('deleted_at', null);
 
         if ($request->filled('sales_agent_id')) {
@@ -65,6 +65,7 @@ class CommissionReceiptController extends BaseController
             'amount' => 'required|numeric|min:0',
             'paid_at' => 'required|date',
             'payment_method_id' => 'nullable|integer|exists:payment_methods,id',
+            'account_id' => 'nullable|integer|exists:accounts,id',
             'notes' => 'nullable|string',
         ]);
 
@@ -79,18 +80,29 @@ class CommissionReceiptController extends BaseController
             (float) $request->amount,
             $request->paid_at,
             $request->payment_method_id,
-            $request->notes
+            $request->notes,
+            $request->account_id ? (int) $request->account_id : null
         );
 
-        return $this->sendResponse($receipt->load(['salesAgent', 'paymentMethod']), __('Created successfully'));
+        return $this->sendResponse($receipt->load(['salesAgent', 'paymentMethod', 'account']), __('Created successfully'));
     }
 
     public function show(Request $request, $id)
     {
         $this->authorizeForUser($request->user('api'), 'view', CommissionProgram::class);
-        $receipt = CommissionReceipt::with(['salesAgent', 'paymentMethod', 'saleCommissions.sale', 'saleCommissions.commissionRule'])
+        $receipt = CommissionReceipt::with(['salesAgent', 'paymentMethod', 'account', 'saleCommissions.sale', 'saleCommissions.commissionRule'])
             ->findOrFail($id);
         return $this->sendResponse($receipt, '');
+    }
+
+    /** Cash/bank accounts a payout can be taken from (support endpoint for the create form). */
+    public function accounts(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'create', CommissionProgram::class);
+        $accounts = \App\Models\Account::whereNull('deleted_at')
+            ->orderBy('account_name')
+            ->get(['id', 'account_num', 'account_name', 'balance']);
+        return $this->sendResponse(['accounts' => $accounts], '');
     }
 
     /** Next receipt Ref for forms (support endpoint). */

@@ -1,7 +1,7 @@
 @extends('setup.main')
 @section('content')
 
-    <p class="eyebrow">Step 2 of 4</p>
+    <p class="eyebrow">Step 2 of 5</p>
     <h1>Application settings</h1>
     <p class="lead-text">Name your installation, set its public URL and choose how it runs. You can change all of this later in the .env file.</p>
 

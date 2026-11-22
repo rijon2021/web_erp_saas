@@ -154,7 +154,10 @@ const columns = computed(() => [
   { title: t('FromWarehouse'), dataIndex: 'from_warehouse', key: 'from_warehouse' },
   { title: t('ToWarehouse'), dataIndex: 'to_warehouse', key: 'to_warehouse' },
   { title: t('Items'), dataIndex: 'items', key: 'items', align: 'right' },
-  { title: t('Total'), dataIndex: 'GrandTotal', key: 'GrandTotal', sorter: true, align: 'right', exportValue: r => money(r.GrandTotal) },
+  // Transfer totals are cost-based: hidden for roles with hide_product_cost.
+  ...(auth.canSeeCost
+    ? [{ title: t('Total'), dataIndex: 'GrandTotal', key: 'GrandTotal', sorter: true, align: 'right', exportValue: r => money(r.GrandTotal) }]
+    : []),
   { title: t('Status'), dataIndex: 'statut', key: 'statut', sorter: true, exportValue: r => r.statut },
   { title: t('Approval'), dataIndex: 'approval_status', key: 'approval_status', exportValue: r => r.approval_status || 'approved' },
   { title: t('Action'), key: 'actions', width: 190, align: 'center' },

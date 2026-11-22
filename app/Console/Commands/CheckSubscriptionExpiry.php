@@ -162,7 +162,15 @@ class CheckSubscriptionExpiry extends Command
     protected function checkExpired(): void
     {
         // Expire active subscriptions that have passed their end date
-        $subscriptions = TenantSubscription::where('status', TenantSubscription::STATUS_ACTIVE)
+        // Rows the access middleware already flipped to "expired" lazily (no
+        // cron on the host, tenant hit the app) are included for a week so
+        // their notice still goes out; deliverEmail() dedupes per reference date.
+        $recent = now()->subDays(7);
+
+        $subscriptions = TenantSubscription::where(function ($q) use ($recent) {
+                $q->where('status', TenantSubscription::STATUS_ACTIVE)
+                  ->orWhere(fn ($r) => $r->where('status', TenantSubscription::STATUS_EXPIRED)->where('ends_at', '>=', $recent));
+            })
             ->whereNotNull('ends_at')
             ->whereDate('ends_at', '<', now())
             ->with('tenant', 'plan')
@@ -174,7 +182,9 @@ class CheckSubscriptionExpiry extends Command
                 continue;
             }
 
-            $sub->update(['status' => TenantSubscription::STATUS_EXPIRED]);
+            if ($sub->status !== TenantSubscription::STATUS_EXPIRED) {
+                $sub->update(['status' => TenantSubscription::STATUS_EXPIRED]);
+            }
 
             $this->deliverEmail(
                 $sub, $tenant, SubscriptionReminder::TYPE_EXPIRED, 0, $sub->ends_at,
@@ -186,7 +196,10 @@ class CheckSubscriptionExpiry extends Command
         // Expire trials that have passed their end date. Without this, lapsed
         // trial rows keep their 'trial' status forever and show up as live
         // subscriptions in the admin panel.
-        $trialsEnded = TenantSubscription::where('status', TenantSubscription::STATUS_TRIAL)
+        $trialsEnded = TenantSubscription::where(function ($q) use ($recent) {
+                $q->where('status', TenantSubscription::STATUS_TRIAL)
+                  ->orWhere(fn ($r) => $r->where('status', TenantSubscription::STATUS_EXPIRED)->where('trial_ends_at', '>=', $recent));
+            })
             ->whereNotNull('trial_ends_at')
             ->whereDate('trial_ends_at', '<', now())
             ->with('tenant', 'plan')
@@ -198,7 +211,9 @@ class CheckSubscriptionExpiry extends Command
                 continue;
             }
 
-            $sub->update(['status' => TenantSubscription::STATUS_EXPIRED]);
+            if ($sub->status !== TenantSubscription::STATUS_EXPIRED) {
+                $sub->update(['status' => TenantSubscription::STATUS_EXPIRED]);
+            }
 
             $this->deliverEmail(
                 $sub, $tenant, SubscriptionReminder::TYPE_EXPIRED, 0, $sub->trial_ends_at,

@@ -115,6 +115,36 @@ class Client
         return $this->request('DELETE', $endpoint, $query, null, $timeout);
     }
 
+    /**
+     * One GraphQL Admin API call.
+     *
+     * The REST API cannot filter products by SKU, and finding "the Shopify
+     * product that already carries this SKU" is exactly what linking an
+     * existing listing needs. GraphQL can, so this is the one place the
+     * module speaks it. The same auth, throttle and retry path as REST
+     * apply; only the endpoint and the body shape differ.
+     *
+     * Returns ['ok' => bool, 'data' => array, 'error' => ?string].
+     */
+    public function graphql(string $query, array $variables = [], int $timeout = 30): array
+    {
+        $res = $this->request('POST', 'graphql', [], ['query' => $query, 'variables' => (object) $variables], $timeout);
+
+        if (! $res->successful()) {
+            return ['ok' => false, 'data' => [], 'error' => $this->explain($res)];
+        }
+
+        $json = $res->json() ?: [];
+        $errors = $json['errors'] ?? [];
+        if ($errors) {
+            $messages = array_map(fn ($e) => is_array($e) ? ($e['message'] ?? json_encode($e)) : (string) $e, $errors);
+
+            return ['ok' => false, 'data' => $json['data'] ?? [], 'error' => implode('; ', $messages)];
+        }
+
+        return ['ok' => true, 'data' => $json['data'] ?? [], 'error' => null];
+    }
+
     /** Cheap call that proves the domain and token are both good. */
     public function testConnection(): array
     {
@@ -155,6 +185,12 @@ class Client
      */
     public function explain($res): string
     {
+        // No answer at all — a timeout, a dropped connection. The status is
+        // meaningless here (0, or a stray interim 100), so say what happened.
+        if ($res->errno() !== 0) {
+            return 'The request to Shopify did not complete: '.rtrim($res->error() ?: 'connection error '.$res->errno(), '.').'.';
+        }
+
         $status = $res->status();
         $json = $res->json();
 
@@ -360,6 +396,16 @@ class Client
                 return $res;
             }
 
+            // A POST that was sent but never answered may well have been
+            // carried out — a product created while we stopped waiting for the
+            // pictures to be stored. Sending it again would create a second
+            // one, so only retry when the connection was never made. GraphQL
+            // is a POST too, but this module only reads through it.
+            if ($errno !== 0 && $method === 'POST' && $endpoint !== 'graphql'
+                && ! in_array($errno, [CURLE_COULDNT_RESOLVE_HOST, CURLE_COULDNT_CONNECT, CURLE_SSL_CONNECT_ERROR], true)) {
+                return $res;
+            }
+
             // Exponential backoff with jitter.
             $sleepMs = min(4000, 400 * (2 ** ($attempt - 1))) + random_int(0, 150);
             usleep($sleepMs * 1000);
@@ -381,8 +427,18 @@ class Client
             'Accept: application/json',
             'Content-Type: application/json',
             'X-Shopify-Access-Token: '.$this->token,
-            'User-Agent: Stocky-ERP-Shopify-Integration',
+            'User-Agent: POS-Shopify-Integration',
+            // curl otherwise asks permission before sending a large body, and a
+            // request that then times out reports the interim "100 Continue"
+            // as its status.
+            'Expect:',
         ];
+
+        // A request given a long deadline is one Shopify is slow to answer —
+        // it stores every picture first — and nothing moves on the wire while
+        // it does. The stalled-connection check would cut that off at 15s, so
+        // it only guards ordinary calls; the deadline covers the long ones.
+        $lowSpeedSeconds = $timeoutSeconds > 30 ? $timeoutSeconds : min(15, $timeoutSeconds);
 
         $payload = null;
         if ($body !== null) {
@@ -404,7 +460,7 @@ class Client
             CURLOPT_TIMEOUT_MS => $deadlineMs,
             CURLOPT_CONNECTTIMEOUT_MS => $connectTimeoutSeconds * 1000,
             CURLOPT_LOW_SPEED_LIMIT => 1,
-            CURLOPT_LOW_SPEED_TIME => min(15, $timeoutSeconds),
+            CURLOPT_LOW_SPEED_TIME => $lowSpeedSeconds,
             CURLOPT_NOSIGNAL => 1,
             CURLOPT_FORBID_REUSE => true,
             CURLOPT_FRESH_CONNECT => true,
@@ -442,6 +498,16 @@ class Client
         $errno = (int) curl_errno($ch);
         $error = (string) curl_error($ch);
         $durationMs = (int) round((microtime(true) - $start) * 1000);
+
+        // Under curl_multi a failed transfer reports its result here, not
+        // through curl_errno() — without this a timeout or a dropped
+        // connection looked like a response with no error and no body.
+        while ($info = curl_multi_info_read($mh)) {
+            if ($info['handle'] === $ch && $errno === 0 && (int) $info['result'] !== CURLE_OK) {
+                $errno = (int) $info['result'];
+                $error = $error !== '' ? $error : (string) curl_strerror($errno);
+            }
+        }
 
         curl_multi_remove_handle($mh, $ch);
         curl_close($ch);

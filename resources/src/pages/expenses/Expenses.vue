@@ -3,7 +3,7 @@
     <PageHeader :title="$t('ListExpenses')" :breadcrumb="[$t('Accounting'), $t('ListExpenses')]">
       <template #actions>
         <a-space>
-          <a-button :loading="exporting" @click="pdf">PDF</a-button>
+          <a-button :loading="exporting" @click="pdf">{{ $t('PDF') }}</a-button>
           <a-button v-if="auth.can('expense_add')" type="primary" @click="$router.push('/expenses/create')">
             <template #icon><PlusOutlined /></template>
             {{ $t('Create_Expense') }}

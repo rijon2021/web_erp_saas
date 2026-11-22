@@ -35,7 +35,7 @@
     <DataTable :crud="crud" :columns="columns">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'type'">
-          <span style="text-transform: capitalize">{{ record.type }}</span>
+          <span style="text-transform: capitalize">{{ typeLabel(record.type) }}</span>
         </template>
         <template v-else-if="column.key === 'debit'">{{ number(record.debit) }}</template>
         <template v-else-if="column.key === 'credit'">{{ number(record.credit) }}</template>
@@ -67,6 +67,8 @@ import { useFormat } from '../../../composables/useFormat';
 
 const { t } = useI18n();
 const { number } = useFormat();
+const TYPE_LABEL_KEYS = { asset: 'Asset', liability: 'Liability', equity: 'Equity', income: 'Income', expense: 'Expense' };
+const typeLabel = type => (TYPE_LABEL_KEYS[type] ? t(TYPE_LABEL_KEYS[type]) : type);
 
 const filters = ref({ from: '', to: '', type: '' });
 

@@ -12,8 +12,13 @@ class CommissionProgram extends Model
 
     protected $dates = ['deleted_at'];
 
+    /** Every matching rule pays (rules add up). */
+    const MODE_ALL = 'all';
+    /** Only the first rule that qualifies, by priority, pays. */
+    const MODE_HIGHEST_PRIORITY = 'highest_priority';
+
     protected $fillable = [
-        'name', 'description', 'is_active', 'valid_from', 'valid_to',
+        'name', 'description', 'is_active', 'rule_mode', 'valid_from', 'valid_to',
     ];
 
     protected $casts = [

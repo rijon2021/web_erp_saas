@@ -1,9 +1,9 @@
 <template>
   <div class="page">
-    <PageHeader title="Mailchimp" :breadcrumb="['Integrations', 'Mailchimp']">
+    <PageHeader title="Mailchimp" :breadcrumb="[$t('Integrations'), 'Mailchimp']">
       <template #actions>
         <a-tag v-if="!isLoading" :color="state.ready && state.enabled ? 'success' : 'default'" style="font-size: 13px; padding: 4px 12px">
-          {{ state.ready ? (state.enabled ? $t('Enabled') : $t('Disabled')) : 'Not configured' }}
+          {{ state.ready ? (state.enabled ? $t('Enabled') : $t('Disabled')) : $t('Int_Not_Configured') }}
         </a-tag>
       </template>
     </PageHeader>
@@ -18,46 +18,46 @@
           <template #icon><MailOutlined /></template>
         </a-avatar>
         <div>
-          <div class="hero-title">Mailchimp audience sync</div>
-          <div class="muted">Keep a Mailchimp audience filled with your customers, so you can run email campaigns on your real customer base.</div>
+          <div class="hero-title">{{ $t('Mc_Hero_Title') }}</div>
+          <div class="muted">{{ $t('Mc_Hero_Desc') }}</div>
         </div>
       </div>
 
       <a-tabs v-model:activeKey="tab">
         <!-- ============================ Connection ============================ -->
-        <a-tab-pane key="connection" tab="Connection">
-          <a-card size="small" title="Account & audience" style="max-width: 640px">
+        <a-tab-pane key="connection" :tab="$t('Connection')">
+          <a-card size="small" :title="$t('Mc_Account_Audience')" style="max-width: 640px">
             <a-form layout="vertical">
-              <a-form-item label="API key">
+              <a-form-item :label="$t('API_Key')">
                 <a-input-password
                   v-model:value="form.api_key"
-                  :placeholder="state.has_api_key ? 'Saved — paste a new key to replace it' : 'e.g. a1b2c3…-us14 (Account → Extras → API keys)'"
+                  :placeholder="state.has_api_key ? $t('Int_Saved_Paste_New_Key') : $t('Mc_Api_Key_Placeholder')"
                   autocomplete="off"
                 />
               </a-form-item>
-              <a-form-item label="Audience">
+              <a-form-item :label="$t('Mc_Audience')">
                 <a-input-group compact style="display: flex">
                   <a-select
                     v-model:value="form.list_id" style="flex: 1"
-                    :options="lists.map(l => ({ value: l.id, label: l.name + (l.member_count != null ? ` (${l.member_count} members)` : '') }))"
-                    :placeholder="state.list_name || 'Load audiences to pick one'"
+                    :options="lists.map(l => ({ value: l.id, label: l.name + (l.member_count != null ? ' ' + $t('Mc_N_Members', { n: l.member_count }) : '') }))"
+                    :placeholder="state.list_name || $t('Mc_Load_Audiences_To_Pick')"
                   />
-                  <a-button :disabled="!state.has_api_key && !form.api_key" :loading="loadingLists" @click="loadLists">Load audiences</a-button>
+                  <a-button :disabled="!state.has_api_key && !form.api_key" :loading="loadingLists" @click="loadLists">{{ $t('Mc_Load_Audiences') }}</a-button>
                 </a-input-group>
               </a-form-item>
               <a-form-item>
                 <a-space direction="vertical" size="small">
                   <a-space align="center">
                     <a-switch v-model:checked="form.double_opt_in" />
-                    <span>Double opt-in — new members get a confirmation email before joining <span class="muted">(recommended for GDPR)</span></span>
+                    <span>{{ $t('Mc_Double_Opt_In_Label') }} <span class="muted">{{ $t('Mc_Recommended_GDPR') }}</span></span>
                   </a-space>
                   <a-space align="center">
                     <a-switch v-model:checked="form.auto_sync" />
-                    <span>Auto-sync new customers as they are created</span>
+                    <span>{{ $t('Mc_Auto_Sync_New') }}</span>
                   </a-space>
                   <a-space align="center">
                     <a-switch v-model:checked="form.enabled" />
-                    <span>Enable Mailchimp sync</span>
+                    <span>{{ $t('Int_Enable_Sync', { name: 'Mailchimp' }) }}</span>
                   </a-space>
                 </a-space>
               </a-form-item>
@@ -70,22 +70,20 @@
         </a-tab-pane>
 
         <!-- ============================ Sync ============================ -->
-        <a-tab-pane key="sync" tab="Sync" :disabled="!state.ready">
-          <StatsRow :stats="stats" :items="[['customers_total', 'Total customers'], ['customers_with_email', 'With an email']]" />
-          <a-card size="small" title="Push customers to Mailchimp" style="margin-bottom: 16px">
+        <a-tab-pane key="sync" :tab="$t('Sync')" :disabled="!state.ready">
+          <StatsRow :stats="stats" :items="[['customers_total', $t('Total_Customers')], ['customers_with_email', $t('Mc_With_Email')]]" />
+          <a-card size="small" :title="$t('Int_Push_Customers_To', { name: 'Mailchimp' })" style="margin-bottom: 16px">
             <p class="muted">
-              Upserts every customer that has an email address into the selected audience (name and phone included).
-              Existing members keep their subscription status — nobody who unsubscribed is re-subscribed.
-              Customers without an email are left out.
+              {{ $t('Mc_Push_Desc') }}
             </p>
             <a-alert
               v-if="!form.double_opt_in" type="warning" show-icon style="margin-bottom: 12px; max-width: 720px"
-              message="Double opt-in is off"
-              description="New members will be added as subscribed without a confirmation email. Only do this for customers who already agreed to receive marketing."
+              :message="$t('Mc_Double_Opt_In_Off')"
+              :description="$t('Mc_Double_Opt_In_Off_Desc')"
             />
             <a-space>
               <a-button type="primary" :disabled="sync.running.value" @click="runSync">
-                <template #icon><UploadOutlined /></template>Push customers
+                <template #icon><UploadOutlined /></template>{{ $t('Int_Push_Customers') }}
               </a-button>
               <a-button v-if="sync.running.value" danger @click="sync.cancel()">{{ $t('Cancel') }}</a-button>
             </a-space>
@@ -94,18 +92,18 @@
         </a-tab-pane>
 
         <!-- ============================ Logs ============================ -->
-        <a-tab-pane key="logs" tab="Logs">
+        <a-tab-pane key="logs" :tab="$t('Logs')">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap">
             <a-select
               v-model:value="logLevel" style="min-width: 160px" :options="[
-                { value: '', label: 'All levels' },
-                { value: 'info', label: 'Info' },
-                { value: 'warning', label: 'Warning' },
-                { value: 'error', label: 'Error' },
+                { value: '', label: $t('Int_All_Levels') },
+                { value: 'info', label: $t('Info') },
+                { value: 'warning', label: $t('Warning') },
+                { value: 'error', label: $t('Cr_Log_Error') },
               ]" @change="loadLogs(1)"
             />
-            <a-popconfirm title="Clear all Mailchimp logs?" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="clearLogs">
-              <a-button danger size="small">Clear logs</a-button>
+            <a-popconfirm :title="$t('Int_Clear_All_Logs_Confirm', { name: 'Mailchimp' })" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="clearLogs">
+              <a-button danger size="small">{{ $t('Clear_Logs') }}</a-button>
             </a-popconfirm>
           </div>
           <a-table
@@ -123,18 +121,28 @@
         </a-tab-pane>
 
         <!-- ============================ Guide ============================ -->
-        <a-tab-pane key="guide" tab="Guide">
+        <a-tab-pane key="guide" :tab="$t('Guide')">
           <a-card size="small" style="max-width: 860px">
             <ol class="guide">
-              <li>In Mailchimp, open <strong>Account → Extras → API keys</strong> and create a key (it ends in <code>-usX</code> — that suffix is your datacenter).</li>
-              <li>Paste the key here, save, then click <strong>Load audiences</strong> and pick the audience to fill.</li>
-              <li>Leave <strong>double opt-in</strong> on unless your customers have already consented to marketing emails.</li>
-              <li>Run <strong>Push customers</strong> for the initial fill; turn on <strong>auto-sync</strong> so new customers join automatically.</li>
+              <i18n-t keypath="Mc_Guide_1" tag="li">
+                <template #path><strong>Account → Extras → API keys</strong></template>
+                <template #suffix><code>-usX</code></template>
+              </i18n-t>
+              <i18n-t keypath="Mc_Guide_2" tag="li">
+                <template #load><strong>{{ $t('Mc_Load_Audiences') }}</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Mc_Guide_3" tag="li">
+                <template #doi><strong>{{ $t('Mc_Double_Opt_In_Lower') }}</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Mc_Guide_4" tag="li">
+                <template #push><strong>{{ $t('Int_Push_Customers') }}</strong></template>
+                <template #autoSync><strong>{{ $t('Mc_Auto_Sync_Lower') }}</strong></template>
+              </i18n-t>
             </ol>
             <a-alert
               type="info" show-icon style="margin-top: 8px"
-              message="Consent matters"
-              description="Emailing people who never agreed to marketing can violate GDPR/CAN-SPAM and get your Mailchimp account suspended. Double opt-in shifts the confirmation to Mailchimp — the safe default."
+              :message="$t('Mc_Consent_Matters')"
+              :description="$t('Mc_Consent_Desc')"
             />
           </a-card>
         </a-tab-pane>
@@ -178,9 +186,9 @@ const sync = useBatchSync();
 
 const logColumns = [
   { title: 'ID', dataIndex: 'id', width: 70 },
-  { title: 'Action', dataIndex: 'action', width: 180 },
-  { title: 'Level', key: 'level', width: 100 },
-  { title: 'Message', dataIndex: 'message', ellipsis: true },
+  { title: t('Action'), dataIndex: 'action', width: 180 },
+  { title: t('Level'), key: 'level', width: 100 },
+  { title: t('Message'), dataIndex: 'message', ellipsis: true },
   { title: t('Date'), key: 'created_at', width: 170 },
 ];
 
@@ -236,9 +244,9 @@ async function testConnection() {
   testing.value = true;
   try {
     await http.post('mailchimp/test-connection');
-    message.success('Connected to Mailchimp.');
+    message.success(t('Int_Connected_To_Dot', { name: 'Mailchimp' }));
   } catch (e) {
-    message.error(e?.data?.error || e?.data?.message || 'Connection test failed');
+    message.error(e?.data?.error || e?.data?.message || t('Connection_Test_Failed'));
   } finally {
     testing.value = false;
   }
@@ -251,7 +259,7 @@ async function loadLists() {
   try {
     const res = await http.get('mailchimp/lists');
     lists.value = res.lists || [];
-    if (!lists.value.length) message.warning('No audiences found on this account.');
+    if (!lists.value.length) message.warning(t('Mc_No_Audiences'));
   } catch (e) {
     message.error(e?.data?.error || e?.data?.message || t('InvalidData'));
   } finally {

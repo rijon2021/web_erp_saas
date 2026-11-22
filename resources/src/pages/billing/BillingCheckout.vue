@@ -10,7 +10,7 @@
 
     <a-alert v-else-if="pendingUpgrade" type="info" show-icon :message="tf('Pending_Upgrade', 'Pending Upgrade Request')">
       <template #description>
-        {{ tf('Pending_upgrade_message', 'You have a pending upgrade to') }} <strong>{{ pendingUpgrade.plan_name }}</strong>.
+        {{ tf('Billing_Pending_Upgrade_To', 'You have a pending upgrade to') }} <strong>{{ pendingUpgrade.plan_name }}</strong>.
         {{ tf('Pending_upgrade_checkout_block', 'You cannot submit a new request until the pending one is processed or cancelled.') }}
         <div style="margin-top: 8px"><a-button size="small" @click="$router.push('/subscription/current-plan')">{{ tf('Back_to_plan', 'Back to Current Plan') }}</a-button></div>
       </template>
@@ -18,16 +18,18 @@
 
     <a-row v-else :gutter="16">
       <a-col :xs="24" :lg="14">
-        <a-card size="small" :title="tf('Billing_Cycle', 'Billing Cycle')" style="margin-bottom: 16px">
+        <!-- Only shown when there is a real choice; the order summary below
+             still states which cycle is being bought. -->
+        <a-card v-if="cycles.length > 1" size="small" :title="tf('Billing_Cycle', 'Billing Cycle')" style="margin-bottom: 16px">
           <a-radio-group v-model:value="selectedCycle" style="width: 100%">
             <a-row :gutter="12">
-              <a-col :span="12">
+              <a-col v-if="cycles.includes('monthly')" :span="12">
                 <a-radio-button value="monthly" class="cycle-btn">
                   <div><strong>{{ tf('Monthly', 'Monthly') }}</strong><div class="muted">{{ tf('Billed_monthly', 'Billed every month') }}</div></div>
                   <strong>{{ currencySymbol }}{{ plan.price.toFixed(2) }}</strong>
                 </a-radio-button>
               </a-col>
-              <a-col :span="12">
+              <a-col v-if="cycles.includes('yearly')" :span="12">
                 <a-radio-button value="yearly" class="cycle-btn">
                   <div>
                     <strong>{{ tf('Yearly', 'Yearly') }} <a-tag v-if="plan.savings_percent > 0" color="success">-{{ plan.savings_percent }}%</a-tag></strong>
@@ -40,7 +42,14 @@
           </a-radio-group>
         </a-card>
 
-        <a-card size="small" :title="tf('Payment_Method', 'Payment Method')" style="margin-bottom: 16px">
+        <!-- Free plan: nothing to pay — the switch is requested and approved by the team. -->
+        <a-card v-if="isFree" size="small" :title="$t('Free_Plan_Request_Title')" style="margin-bottom: 16px">
+          <p class="muted" style="margin-bottom: 12px">{{ $t('Free_Plan_Request_Text') }}</p>
+          <a-button type="primary" block size="large" :loading="processing" @click="requestFreePlan">{{ $t('Free_Plan_Request_Button') }}</a-button>
+        </a-card>
+
+        <template v-else>
+        <a-card size="small" :title="tf('PaymentMethod', 'Payment Method')" style="margin-bottom: 16px">
           <a-empty v-if="!gateways.length" :description="tf('No_gateways', 'No payment gateways available. Please contact support.')" />
           <a-radio-group v-else v-model:value="selectedGateway" style="width: 100%">
             <div v-for="gw in gateways" :key="gw.key" class="gateway" :class="{ selected: selectedGateway === gw.key }" @click="selectedGateway = gw.key">
@@ -74,7 +83,7 @@
           <a-upload-dragger :file-list="proofFile ? [proofFile] : []" :max-count="1" accept=".jpg,.jpeg,.png,.webp,.pdf" :before-upload="setProof" @remove="proofFile = null">
             <p><UploadOutlined style="font-size: 28px; opacity: 0.5" /></p>
             <p><strong>{{ tf('Click_or_drag', 'Click or drag file here') }}</strong></p>
-            <p class="muted">{{ tf('File_formats', 'JPG, PNG, WebP or PDF (max 5MB)') }}</p>
+            <p class="muted">{{ tf('Billing_Proof_File_Formats', 'JPG, PNG, WebP or PDF (max 5MB)') }}</p>
           </a-upload-dragger>
         </a-card>
 
@@ -85,18 +94,26 @@
         <p class="muted" style="text-align: center; margin-top: 12px">
           {{ isOffline ? tf('Proof_review_note', 'Your proof will be reviewed by our team. Your plan activates after approval.') : tf('Payment_secure', 'Your payment is secured and encrypted. You will be redirected to complete payment.') }}
         </p>
+        </template>
       </a-col>
 
       <a-col :xs="24" :lg="10">
         <a-card size="small" :title="tf('Order_Summary', 'Order Summary')">
           <div class="sum"><span class="muted">{{ tf('Plan', 'Plan') }}</span><strong>{{ plan.name }}</strong></div>
           <div class="sum"><span class="muted">{{ tf('Billing_Cycle', 'Billing Cycle') }}</span><strong>{{ selectedCycle === 'yearly' ? tf('Yearly', 'Yearly') : tf('Monthly', 'Monthly') }}</strong></div>
+          <template v-if="cycleAddonLines.length">
+            <div class="sum"><span class="muted">{{ plan.name }}</span><strong>{{ currencySymbol }}{{ planAmount.toFixed(2) }}</strong></div>
+            <div v-for="l in cycleAddonLines" :key="l.id" class="sum">
+              <span class="muted">{{ tf('Addons_Line_Prefix', 'Add-on') }}: {{ l.name }}</span><strong>{{ currencySymbol }}{{ Number(l.amount).toFixed(2) }}</strong>
+            </div>
+          </template>
           <a-divider style="margin: 8px 0" />
           <div class="sum"><span class="muted">{{ tf('Subtotal', 'Subtotal') }}</span><strong>{{ currencySymbol }}{{ displayAmount }} {{ currencyCode }}</strong></div>
           <div class="sum"><span class="muted">{{ $t('Tax') }}</span><strong>{{ currencySymbol }}0.00</strong></div>
           <a-divider style="margin: 8px 0" />
           <div class="sum total"><span>{{ $t('Total') }}</span><span>{{ currencySymbol }}{{ displayAmount }} {{ currencyCode }}</span></div>
-          <a-alert v-if="isUpgrade !== null" type="info" show-icon style="margin-top: 12px" :message="isUpgrade ? tf('Upgrade_note', 'Your current plan will be replaced immediately after payment.') : tf('Downgrade_note', 'Your new plan will start immediately after payment.')" />
+          <a-alert v-if="isRenewal" type="info" show-icon style="margin-top: 12px" :message="$t('Renew_Early_Hint')" />
+          <a-alert v-else-if="isUpgrade !== null" type="info" show-icon style="margin-top: 12px" :message="isUpgrade ? tf('Upgrade_note', 'Your current plan will be replaced immediately after payment.') : tf('Downgrade_note', 'Your new plan will start immediately after payment.')" />
           <div class="section-label" style="margin-top: 16px">{{ tf('Included', 'Included') }}</div>
           <div v-for="(limit, key) in plan.limits" :key="'l' + key" class="row-item"><CheckOutlined style="color: #52c41a" /> {{ limit.display }} {{ limit.label }}</div>
           <div v-for="(feat, key) in plan.features" :key="'f' + key" class="row-item"><CheckOutlined style="color: #52c41a" /> {{ feat.label }}</div>
@@ -132,15 +149,41 @@ const processing = ref(false);
 const plan = ref({ name: '', price: 0, yearly_price: 0, savings_percent: 0, limits: {}, features: {} });
 const gateways = ref([]);
 const selectedCycle = ref(route.query.cycle === 'yearly' ? 'yearly' : 'monthly');
+// Cycles the super admin currently sells. Defaults to both so the page still
+// renders if an older backend omits the key.
+const cycles = ref(['monthly', 'yearly']);
 const selectedGateway = ref('');
 const proofFile = ref(null);
 const isUpgrade = ref(null);
+const isRenewal = ref(false);
 const pendingUpgrade = ref(null);
 const currencyCode = ref('USD');
 const bankDetails = ref({});
 
-const displayAmount = computed(() => ((selectedCycle.value === 'yearly' ? plan.value.yearly_price : plan.value.price) || 0).toFixed(2));
+// Add-ons renewed together with this plan (renewal only), per cycle.
+const addonLines = ref({});
+const cycleAddonLines = computed(() => addonLines.value[selectedCycle.value] || []);
+const planAmount = computed(() => (selectedCycle.value === 'yearly' ? plan.value.yearly_price : plan.value.price) || 0);
+const displayAmount = computed(() => (planAmount.value + cycleAddonLines.value.reduce((s, l) => s + (Number(l.amount) || 0), 0)).toFixed(2));
 const isOffline = computed(() => selectedGateway.value === 'offline');
+const isFree = computed(() => !!plan.value.is_free);
+
+async function requestFreePlan() {
+  processing.value = true;
+  try {
+    const data = await http.post('billing/request-free-plan', { plan_id: plan.value.id, billing_cycle: selectedCycle.value });
+    if (data?.success) {
+      message.success(data.message);
+      router.push('/subscription/current-plan');
+    } else {
+      message.error(data?.message || tf('Billing_Request_Failed', 'Request failed.'));
+    }
+  } catch (e) {
+    message.error(e?.data?.message || tf('Billing_Request_Failed', 'Request failed.'));
+  } finally {
+    processing.value = false;
+  }
+}
 const hasBankDetails = computed(() => !!(bankDetails.value.bank_name || bankDetails.value.account_number));
 
 function setProof(file) {
@@ -166,18 +209,18 @@ async function submitPayment() {
       fd.append('payment_proof', proofFile.value);
       const data = await http.postForm('billing/offline-payment', fd);
       if (data?.success) {
-        message.success(data.message || 'Payment proof submitted successfully.');
+        message.success(data.message || tf('Billing_Proof_Submitted', 'Payment proof submitted successfully.'));
         router.push('/subscription/current-plan');
       } else {
-        message.error(data?.message || 'Request failed.');
+        message.error(data?.message || tf('Billing_Request_Failed', 'Request failed.'));
       }
       return;
     }
     const data = await http.post('billing/checkout', { plan_id: plan.value.id, gateway: selectedGateway.value, billing_cycle: selectedCycle.value });
     if (data?.success && data.payment_url) window.location.href = data.payment_url;
-    else message.error(data?.message || 'Payment initialization failed.');
+    else message.error(data?.message || tf('Billing_Payment_Init_Failed', 'Payment initialization failed.'));
   } catch (e) {
-    message.error(e?.data?.message || 'Payment failed. Please try again.');
+    message.error(e?.data?.message || tf('Billing_Payment_Failed_Retry', 'Payment failed. Please try again.'));
   } finally {
     processing.value = false;
   }
@@ -189,13 +232,19 @@ onMounted(async () => {
     plan.value = data.plan;
     gateways.value = data.gateways || [];
     isUpgrade.value = data.is_upgrade ?? null;
+    isRenewal.value = !!data.is_renewal;
     pendingUpgrade.value = data.pending_upgrade || null;
     currencyCode.value = data.currency_code || 'USD';
     currencySymbol.value = data.currency_symbol || '$';
     bankDetails.value = data.bank_details || {};
+    addonLines.value = data.addon_lines && typeof data.addon_lines === 'object' && !Array.isArray(data.addon_lines) ? data.addon_lines : {};
+    if (Array.isArray(data.billing_cycles) && data.billing_cycles.length) cycles.value = data.billing_cycles;
+    // A ?cycle= that is no longer sold must not reach the POST, which would
+    // fail validation after the customer had already picked a gateway.
+    if (!cycles.value.includes(selectedCycle.value)) selectedCycle.value = cycles.value[0];
     if (gateways.value.length) selectedGateway.value = gateways.value[0].key;
   } catch (e) {
-    message.error(e?.data?.message || 'Failed to load checkout data.');
+    message.error(e?.data?.message || tf('Billing_Failed_Load_Checkout', 'Failed to load checkout data.'));
   } finally {
     loading.value = false;
   }

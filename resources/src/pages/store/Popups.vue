@@ -24,7 +24,7 @@
             <a-tag color="cyan">{{ typeLabel(record.type) }}</a-tag>
           </template>
           <template v-else-if="column.key === 'trigger'">
-            {{ record.trigger }}<span v-if="record.trigger === 'delay'"> ({{ record.delay_seconds }}s)</span>
+            {{ ({ delay: $t('After_delay'), immediate: $t('Immediately'), exit: $t('Exit_intent') })[record.trigger] || record.trigger }}<span v-if="record.trigger === 'delay'"> ({{ record.delay_seconds }}s)</span>
           </template>
           <template v-else-if="column.key === 'status'">
             <a-switch :checked="!!record.enabled" @change="toggle(record)" />

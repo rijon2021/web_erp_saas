@@ -8,6 +8,7 @@
     export-endpoint="report/serials/sold"
     :export-params="filterParams"
     export-rows-key="report"
+    product-data
   >
     <template #filters>
       <a-select

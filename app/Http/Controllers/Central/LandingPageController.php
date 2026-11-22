@@ -27,17 +27,19 @@ class LandingPageController extends Controller
     }
 
     /**
-     * When the landing page is disabled in the super settings, the central
-     * root redirects to the configured custom URL (validated against loops on
-     * save), or to the super login when none is set. Logged-in super admins
-     * keep template preview access (?__landing_preview) so the CMS previews
-     * still work while the public page is off.
+     * Applies the super-admin "Landing page mode" to the central root:
+     *   redirect — off to the owner's own website (301/302, URL validated
+     *              against loops on save; an empty URL falls back to builtin)
+     *   disabled — the workspace sign-in or the signup page
+     * Logged-in super admins keep template preview access (?__landing_preview)
+     * so the CMS previews still work while the public page is off.
      */
     protected function landingDisabledRedirect(Request $request): ?RedirectResponse
     {
         $setting = GeneralSetting::instance();
+        $mode = $setting->landingMode();
 
-        if ($setting->landing_page_enabled ?? true) {
+        if ($mode === GeneralSetting::LANDING_MODE_BUILTIN) {
             return null;
         }
 
@@ -45,11 +47,17 @@ class LandingPageController extends Controller
             return null;
         }
 
-        $url = trim((string) ($setting->landing_redirect_url ?? ''));
+        if ($mode === GeneralSetting::LANDING_MODE_REDIRECT) {
+            $url = trim((string) ($setting->landing_redirect_url ?? ''));
 
-        return $url !== ''
-            ? redirect()->away($url)
-            : redirect()->route('central.login');
+            return $url !== ''
+                ? redirect()->away($url, $setting->landingRedirectStatus())
+                : null;
+        }
+
+        return $setting->landingDisabledTarget() === 'signup'
+            ? redirect()->route('central.register', $request->query())
+            : redirect()->route('central.workspace.login');
     }
 
     protected function resolveLandingViewName(Request $request): string
@@ -113,16 +121,42 @@ class LandingPageController extends Controller
 
         $plans = Plan::public()->orderBy('price')->get();
 
+        // Multi-currency pricing: plans priced in the visitor's currency
+        // (?currency= / cookie / country); the designs read $plan->price and
+        // $currencySymbol as before, so they need no per-design pricing code.
+        $displayCurrency = \App\Services\Billing\PlanPricing::visitorCurrency(request());
+        \App\Support\DisplayCurrency::set($displayCurrency !== \App\Support\SellingCurrencies::main() ? $displayCurrency : null);
+        $plans = \App\Services\Billing\PlanPricing::displayPlans($plans, $displayCurrency);
+        view()->share('currencySwitcher', \App\Support\CurrencySwitcher::data($displayCurrency));
+
         $features = [
             'is_active' => $featuresSection->is_active ?? false,
             'section'   => $featuresSection,
             'items'     => $featureItems,
         ];
 
+        // Which cycles the pricing section may show. The platform setting is
+        // the hard gate (a cycle that is not sold must never be advertised);
+        // the per-section CMS checkboxes can hide one further. Those checkboxes
+        // existed but were read by nothing before this.
+        $showMonthly = GeneralSetting::billingCycleEnabled('monthly')
+            && ($pricingSection->show_monthly_pricing ?? true);
+        $showYearly = GeneralSetting::billingCycleEnabled('yearly')
+            && ($pricingSection->show_yearly_pricing ?? true);
+
+        // Never end up advertising nothing — if the CMS hid the only cycle on
+        // sale, the platform setting wins.
+        if (! $showMonthly && ! $showYearly) {
+            $showMonthly = GeneralSetting::billingCycleEnabled('monthly');
+            $showYearly = ! $showMonthly;
+        }
+
         $pricing = [
-            'is_active' => $pricingSection->is_active ?? true,
-            'settings'  => $pricingSection,
-            'plans'     => $plans,
+            'is_active'    => $pricingSection->is_active ?? true,
+            'settings'     => $pricingSection,
+            'plans'        => $plans,
+            'show_monthly' => $showMonthly,
+            'show_yearly'  => $showYearly,
         ];
 
         $howItWorks = [

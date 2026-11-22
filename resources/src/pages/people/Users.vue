@@ -19,7 +19,7 @@
         <template v-else-if="column.key === 'statut'">
           <!-- Activate/deactivate toggle, like the legacy switch. The logged-in
                user cannot deactivate their own account. -->
-          <a-tooltip :title="isSelf(record) ? 'You cannot deactivate your own account' : ''">
+          <a-tooltip :title="isSelf(record) ? $t('Cannot_Deactivate_Own_Account') : ''">
             <a-switch
               :checked="!!Number(record.statut)"
               :loading="switching === record.id"
@@ -63,6 +63,7 @@ import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useAuthStore } from '../../stores/auth';
 import http from '../../lib/http';
+import { uploadUrl } from '../../lib/uploadUrl';
 
 const { t } = useI18n();
 const auth = useAuthStore();

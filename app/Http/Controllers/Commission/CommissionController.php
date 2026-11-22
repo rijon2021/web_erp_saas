@@ -23,11 +23,29 @@ class CommissionController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'create', CommissionProgram::class);
         $sale = Sale::findOrFail($saleId);
-        $created = $this->commissionService->calculateForSale($sale);
+        $created = $this->commissionService->calculateForSale($sale, true);
         return $this->sendResponse([
             'created_count' => count($created),
             'commissions' => $created,
         ], __('Commissions calculated'));
+    }
+
+    /**
+     * Recalculate the sales behind the ticked report rows from scratch:
+     * current sale figures, and cancelled commissions worked out again.
+     */
+    public function recalculate(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'update', CommissionProgram::class);
+        $request->validate([
+            'sale_ids' => 'required|array|max:500',
+            'sale_ids.*' => 'integer',
+        ]);
+        $changed = 0;
+        foreach (Sale::whereIn('id', array_unique($request->sale_ids))->get() as $sale) {
+            $changed += count($this->commissionService->calculateForSale($sale, true));
+        }
+        return $this->sendResponse(['updated_count' => $changed], __('Updated successfully'));
     }
 
     /** Approve one or more commissions (status pending -> approved). */

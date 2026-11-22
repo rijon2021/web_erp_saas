@@ -12,6 +12,11 @@ class ErrorLogController extends Controller
     {
         $this->authorizeForUser($request->user('api'), 'view', ErrorLog::class);
 
+        // Pull this tenant's new failures from the shared log files first
+        // (incremental, cheap when nothing changed) — most errors are only
+        // ever written there.
+        app(\App\Services\ErrorLogIngestor::class)->run();
+
         $perPage = (int) $request->input('per_page', $request->input('limit', 10));
         $page = max(1, (int) $request->input('page', 1));
 

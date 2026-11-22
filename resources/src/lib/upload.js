@@ -6,6 +6,8 @@
  * Same /api/ base + CSRF headers as lib/http.
  */
 
+import { t as tf } from '../i18n';
+
 const BASE = '/api/';
 
 function readCookie(name) {
@@ -34,7 +36,7 @@ export function uploadForm(url, formData, onProgress) {
             try { data = JSON.parse(xhr.responseText); } catch (e) { data = xhr.responseText; }
             resolve({ status: xhr.status, data });
         };
-        xhr.onerror = () => reject(new Error('Network error. Please try again.'));
+        xhr.onerror = () => reject(new Error(tf('Network_Error_Try_Again', 'Network error. Please try again.')));
         xhr.send(formData);
     });
 }

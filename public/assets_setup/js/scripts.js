@@ -59,16 +59,13 @@ $(function() {
 
 $(function() {
     'use strict';
-    $('#lastStep').on("click", function(e) {
-        $('.loader').removeClass('d-none').addClass('d-block');
-        $('#content').removeClass('d-block').addClass('d-none');
-    });
-});
-
-
-$(function() {
-    'use strict';
-    $('#lastStep').on("click", function(e) {
+    // Show the install loader only once the browser has accepted the form:
+    // hiding #content first made invalid fields (super admin e-mail/password)
+    // impossible to report, and the page sat on the loader forever.
+    $('#lastStep').closest('form').on("submit", function(e) {
+        if (this.checkValidity && !this.checkValidity()) {
+            return;
+        }
         $('.loader').removeClass('d-none').addClass('d-block');
         $('#content').removeClass('d-block').addClass('d-none');
     });

@@ -200,4 +200,15 @@ return [
 
     'perfect_to_start'           => 'Perfect to get started',
     'for_growing_teams'          => 'For growing teams',
+
+    // ── Workspace sign-in page ──────────────────────────
+    'workspace_login_title'      => 'Sign in to your workspace',
+    'workspace_login_subtitle'   => 'Enter your workspace address and we\'ll take you to its sign-in page.',
+    'workspace_login_hero'       => 'Every business has its own workspace. Find yours to continue.',
+    'workspace_address'          => 'Workspace address',
+    'workspace_placeholder'      => 'your-company or your-company.:domain',
+    'workspace_continue'         => 'Continue',
+    'workspace_not_found'        => 'We couldn\'t find a workspace with that address. Check the spelling and try again.',
+    'currency'                   => 'Currency',
+    'currency_apply'             => 'Show prices',
 ];

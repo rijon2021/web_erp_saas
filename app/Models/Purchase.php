@@ -2,14 +2,19 @@
 
 namespace App\Models;
 
+use App\Traits\HasShareToken;
 use Illuminate\Database\Eloquent\Model;
 
 class Purchase extends Model
 {
+    use HasShareToken;
+
+    const SHARE_TYPE = 'purchase';
+
     protected $dates = ['deleted_at'];
 
     protected $fillable = [
-        'date', 'Ref', 'provider_id', 'warehouse_id', 'GrandTotal', 'time',
+        'date', 'Ref', 'order_reference', 'provider_id', 'warehouse_id', 'GrandTotal', 'time',
         'discount', 'shipping', 'statut', 'notes', 'TaxNet', 'tax_rate', 'paid_amount',
         'payment_statut', 'created_at', 'updated_at', 'deleted_at',
         // Multi-Currency snapshot; NULL = base currency, rate 1

@@ -25,4 +25,18 @@ class StorePage extends Model
         'seo_title_translations' => 'array',
         'seo_description_translations' => 'array',
     ];
+
+    protected static function booted(): void
+    {
+        // Page content is rendered raw on the public storefront ({!! !!}), so
+        // it is cleaned on every write path (API, seeders, imports).
+        static::saving(function (StorePage $page) {
+            if ($page->isDirty('content')) {
+                $page->content = \App\Support\HtmlSanitizer::clean($page->content);
+            }
+            if ($page->isDirty('content_translations')) {
+                $page->content_translations = \App\Support\HtmlSanitizer::cleanMap($page->content_translations);
+            }
+        });
+    }
 }

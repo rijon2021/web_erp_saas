@@ -14,7 +14,7 @@ class Client
         $baseUrl = rtrim($baseUrl, '/');
 
         // Optional override for tunneling / local proxy
-        $override = env('WOO_API_BASE_URL');
+        $override = config('woocommerce.api_base_url');
         if (is_string($override) && $override !== '') {
             $this->baseUrl = rtrim($override, '/');
             $host = parse_url($baseUrl, PHP_URL_HOST);
@@ -277,9 +277,9 @@ class Client
 
     private function execWithRetries(string $method, string $url, ?array $data, int $timeoutSeconds, int $connectTimeoutSeconds)
     {
-        $maxRetries = (int) env('WOO_HTTP_RETRIES', 2);
+        $maxRetries = (int) config('woocommerce.http_retries');
         $maxRetries = max(0, min(10, $maxRetries));
-        $baseSleepMs = (int) env('WOO_HTTP_RETRY_BASE_MS', 300);
+        $baseSleepMs = (int) config('woocommerce.http_retry_base_ms');
         $baseSleepMs = max(0, min(10000, $baseSleepMs));
 
         $attempt = 0;

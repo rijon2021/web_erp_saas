@@ -16,21 +16,33 @@
             $colors = ['purple', 'blue', 'green', 'amber', 'rose'];
             $color = $colors[crc32($tenant->id) % count($colors)];
             $initial = strtoupper(mb_substr($displayName, 0, 1));
+            // Only a provisioned workspace has a database, users and a live login.
+            $isProvisioned = in_array($tenant->status, ['active', 'suspended', 'cancelled'], true);
         @endphp
         <div class="tenant-avatar tenant-avatar-{{ $color }} tenant-avatar-xl">{{ $initial }}</div>
         <div>
             <h1 class="mb-2xs">{{ $displayName }}</h1>
             <div class="d-flex align-items-center gap-2">
                 <span class="badge badge-{{ $tenant->status }}">{{ ucfirst($tenant->status) }}</span>
+                @if($tenant->isSuspendedForNonPayment())
+                    <span class="text-muted fs-sm3" title="{{ __('central.SuspendedNonPaymentHint') }}"><i class="bi bi-credit-card me-1"></i>{{ __('central.SuspendedNonPayment') }}</span>
+                @endif
                 <span class="text-muted fs-sm3">{{ __('super.tenants.registered') }} {{ $tenant->created_at->format('M d, Y') }}</span>
             </div>
         </div>
     </div>
     <div class="btn-group-custom">
+        @if(Auth::guard('central')->user()?->hasPermission('payments'))
+        <a href="{{ route('super.payment-links.create', ['tenant_id' => $tenant->id]) }}" class="btn btn-secondary btn-sm">
+            <i class="bi bi-link-45deg"></i> {{ __('super.payment_links.create') }}
+        </a>
+        @endif
         <a href="{{ route('super.tenants.edit', $tenant) }}" class="btn btn-primary btn-sm">
             <i class="bi bi-pencil"></i> {{ __('super.common.edit') }}
         </a>
-        @if($tenant->status !== 'suspended')
+        @if(! $isProvisioned)
+            {{-- Suspend / cancel only apply to a live workspace; setup actions live in the banner below. --}}
+        @elseif($tenant->status !== 'suspended')
             <form method="POST" action="{{ route('super.tenants.suspend', $tenant) }}" class="d-inline">
                 @csrf
                 <button type="button" class="btn btn-warning btn-sm" data-swal-action='{"title":@json(__('super.tenants.suspend')),"text":@json(__('super.tenants.confirm_suspend')),"icon":"warning","confirmText":@json(__('super.tenants.suspend')),"color":"#f59e0b"}'>
@@ -45,7 +57,7 @@
                 </button>
             </form>
         @endif
-        @if($tenant->status !== 'cancelled')
+        @if($isProvisioned && $tenant->status !== 'cancelled')
             <form method="POST" action="{{ route('super.tenants.cancel', $tenant) }}" class="d-inline">
                 @csrf
                 <button type="button" class="btn btn-sm btn-cancel-tenant" data-swal-action='{"title":@json(__('super.common.cancel')),"text":@json(__('super.tenants.confirm_cancel')),"icon":"warning","confirmText":@json(__('super.common.yes')),"cancelText":@json(__('super.common.no')),"color":"#f43f5e"}'>
@@ -62,6 +74,10 @@
         </form>
     </div>
 </div>
+
+@if($setup)
+    @include('central.super.tenants.partials.setup-banner')
+@endif
 
 <div class="row g-4">
     {{-- Tenant details --}}
@@ -203,7 +219,7 @@
                 <div>
                     <p class="form-label mb-2 text-section-label">{{ __('super.tenants.feature_access') }}</p>
                     <div class="d-flex flex-wrap gap-2">
-                        @foreach(\App\Models\Central\Plan::AVAILABLE_FEATURES as $fKey => $fMeta)
+                        @foreach(\App\Models\Central\Plan::availableFeatures() as $fKey => $fMeta)
                         @php $enabled = $plan->hasFeature($fKey); @endphp
                         <div class="d-flex align-items-center gap-2 px-3 py-2 rounded-2 {{ $enabled ? 'feature-badge-enabled' : 'feature-badge-disabled' }}">
                             <i class="bi {{ $enabled ? 'bi-check-circle-fill' : 'bi-x-circle' }}"></i>
@@ -226,9 +242,17 @@
             </div>
             <div class="card-body-custom">
                 @if($tenant->domains->isNotEmpty())
+                    @php
+                        $customHosts = $tenant->customDomains->pluck('domain')->all();
+                        $toggleOn = \App\Support\TenantDomainStatus::supported();
+                        $offTarget = $toggleOn ? \App\Support\TenantDomainStatus::customDomainTarget((string) $tenant->id) : null;
+                    @endphp
                     <div class="d-flex flex-column gap-2">
                         @foreach($tenant->domains as $d)
                         @php
+                            $isCustomRow = in_array($d->domain, $customHosts, true);
+                            $isOn = \App\Support\TenantDomainStatus::isActive($d);
+                            $canOff = $toggleOn && $isOn && ! $isCustomRow && \App\Support\TenantDomainStatus::canDeactivate((string) $tenant->id, (int) $d->id);
                             $fullDomain = str_contains($d->domain, '.') ? $d->domain : $d->domain . '.' . (preg_replace('/^www\./i', '', parse_url(config('app.url', 'http://localhost'), PHP_URL_HOST) ?? 'localhost'));
                         @endphp
                         <div class="d-flex align-items-center justify-content-between p-3 rounded-3 domain-card">
@@ -239,10 +263,36 @@
                                     @if(!str_contains($d->domain, '.'))
                                         <span class="text-muted d-block fs-xs2">{{ __('central.SubdomainLabel') }}: {{ $d->domain }}</span>
                                     @endif
+                                    @if(! $isOn && $offTarget)
+                                        <span class="text-muted d-block fs-xs2"><i class="bi bi-arrow-return-right"></i> {{ __('super.tenants.domain_off_hint', ['domain' => $offTarget]) }}</span>
+                                    @endif
                                 </div>
                             </div>
                             <div class="d-flex align-items-center gap-2">
-                                <span class="badge badge-active badge-sm">{{ __('super.common.active') }}</span>
+                                @if($isOn)
+                                    <span class="badge badge-active badge-sm">{{ __('super.common.active') }}</span>
+                                @else
+                                    <span class="badge badge-suspended badge-sm">{{ __('super.tenants.domain_off') }}</span>
+                                @endif
+                                @if($toggleOn && ! $isCustomRow)
+                                    @if($isOn && ! $canOff)
+                                        <span class="text-muted fs-sm3" title="{{ __('super.tenants.domain_off_needs_custom') }}"><i class="bi bi-toggle-on"></i></span>
+                                    @else
+                                    <form method="POST" action="{{ route('super.tenants.domains.toggle', [$tenant, $d->id]) }}" class="d-inline">
+                                        @csrf
+                                        @if($isOn)
+                                            @php $offConfirm = json_encode(['title' => __('super.tenants.domain_switch_off') . '?', 'text' => __('super.tenants.domain_switch_off_confirm', ['domain' => $fullDomain]), 'icon' => 'question', 'confirmText' => __('super.tenants.domain_switch_off'), 'color' => '#f59e0b']); @endphp
+                                            <button type="button" class="btn p-0 border-0 bg-transparent text-success fs-sm3" title="{{ __('super.tenants.domain_switch_off') }}" data-swal-action='{!! e($offConfirm) !!}'>
+                                                <i class="bi bi-toggle-on"></i>
+                                            </button>
+                                        @else
+                                            <button type="submit" class="btn p-0 border-0 bg-transparent text-muted fs-sm3" title="{{ __('super.tenants.domain_switch_on') }}">
+                                                <i class="bi bi-toggle-off"></i>
+                                            </button>
+                                        @endif
+                                    </form>
+                                    @endif
+                                @endif
                                 @if($tenant->domains->count() > 1)
                                 <form method="POST" action="{{ route('super.tenants.domains.destroy', [$tenant, $d->id]) }}" class="d-inline">
                                     @csrf
@@ -293,6 +343,10 @@
     </div>
 </div>
 
+@if($subscriptionPanel)
+    @include('central.super.tenants.partials.subscription-panel')
+@endif
+
 {{-- Custom Domains --}}
 @php
     $customDomainVerifier = app(\App\Services\CustomDomainVerifier::class);
@@ -301,7 +355,12 @@
 <div class="content-card mt-4" id="custom-domains-card">
     <div class="card-header-custom d-flex align-items-center justify-content-between">
         <h2><i class="bi bi-globe2 me-2 text-muted"></i>{{ __('super.custom_domains.title') }}</h2>
-        <span class="badge badge-trial badge-sm">{{ $tenant->customDomains->count() }}</span>
+        <div class="d-flex align-items-center gap-2">
+            <button type="button" class="btn btn-sm btn-outline" data-bs-toggle="offcanvas" data-bs-target="#cdGuideDrawer" aria-controls="cdGuideDrawer">
+                <i class="bi bi-book me-1"></i>{{ __('super.custom_domains.guide.button') }}
+            </button>
+            <span class="badge badge-trial badge-sm">{{ $tenant->customDomains->count() }}</span>
+        </div>
     </div>
     <div class="card-body-custom">
         <p class="text-muted fs-sm mb-3">{{ __('super.custom_domains.subtitle') }}</p>
@@ -343,7 +402,16 @@
                                     data-url="{{ route('super.tenants.custom-domains.verify', [$tenant, $cd->id]) }}">
                                 <i class="bi bi-arrow-repeat me-1"></i>{{ __('super.custom_domains.verify') }}
                             </button>
-                        @elseif(!$cd->is_primary)
+                        @endif
+                        @if($cd->is_verified)
+                            <form method="POST" action="{{ route('super.tenants.custom-domains.check-ssl', [$tenant, $cd->id]) }}" class="d-inline">
+                                @csrf
+                                <button type="submit" class="btn btn-sm btn-outline" title="{{ __('super.custom_domains.check_ssl_hint') }}">
+                                    <i class="bi bi-shield-lock me-1"></i>{{ __('super.custom_domains.check_ssl') }}
+                                </button>
+                            </form>
+                        @endif
+                        @if($cd->is_verified && !$cd->is_primary)
                             <form method="POST" action="{{ route('super.tenants.custom-domains.primary', [$tenant, $cd->id]) }}" class="d-inline">
                                 @csrf
                                 <button type="submit" class="btn btn-sm btn-outline">
@@ -418,119 +486,7 @@
     </div>
 </div>
 
-{{-- Approve & Provision (visible only for PENDING tenants) --}}
-@if($tenant->isPending())
-@php
-    $approvePlan = $tenant->subscription?->plan;
-    $approveIsFreeOrTrial = $approvePlan && ($approvePlan->isFree() || $approvePlan->hasTrial());
-    $approveHasPaidPayment = $tenant->payments()->where('status', 'paid')->exists();
-    $approveCanApprove = $approveIsFreeOrTrial || $approveHasPaidPayment;
-    $approveIsShared = \App\Models\Central\GeneralSetting::instance()->isSharedHosting();
-@endphp
-<div class="content-card mt-4">
-    <div class="card-header-custom">
-        <h2><i class="bi bi-check-circle me-2 text-muted"></i>{{ __('central.ApproveAndProvision') }}</h2>
-    </div>
-    <div class="card-body-custom">
-        @if(! $approveCanApprove)
-            <div class="p-3 rounded-3 approve-payment-required">
-                <div class="d-flex align-items-center gap-2">
-                    <i class="bi bi-exclamation-triangle-fill approve-payment-required-icon"></i>
-                    <div>
-                        <p class="mb-0 fw-600 approve-payment-required-title">{{ __('central.PaymentRequiredBeforeApproval') }}</p>
-                        <p class="mb-0 text-muted approve-payment-required-desc">{{ __('central.PaymentRequiredDesc') }}</p>
-                    </div>
-                </div>
-            </div>
-        @else
-            <form method="POST" action="{{ route('super.tenants.approve', $tenant) }}" id="approveForm">
-                @csrf
-
-                @if($approveIsFreeOrTrial)
-                <div class="mb-3 p-3 rounded-3 approve-notice-green">
-                    <p class="mb-0 d-flex align-items-center gap-2 approve-notice-green-text">
-                        <i class="bi bi-check-circle-fill"></i>
-                        {{ $approvePlan->isFree() ? __('central.FreePlanNoPayment') : __('central.TrialPlanDaysFree', ['days' => $approvePlan->getTrialDays()]) }}
-                    </p>
-                </div>
-                @else
-                <div class="mb-3 p-3 rounded-3 approve-notice-green">
-                    <p class="mb-0 d-flex align-items-center gap-2 approve-notice-green-text">
-                        <i class="bi bi-check-circle-fill"></i>
-                        {{ __('central.PaymentConfirmedReadyToApprove') }}
-                    </p>
-                </div>
-                @endif
-
-                @php
-                    $defaultDbHost = $approveIsShared
-                        ? 'localhost'
-                        : config('database.connections.central.host', '127.0.0.1');
-                    $defaultDbUser = $approveIsShared
-                        ? ''
-                        : config('database.connections.central.username', 'root');
-                    $defaultDbPassword = $approveIsShared
-                        ? ''
-                        : config('database.connections.central.password', '');
-                    $defaultDbPort = $approveIsShared
-                        ? 3306
-                        : (int) config('database.connections.central.port', 3306);
-                    $defaultDbName = $approveIsShared
-                        ? 'tenant_' . ($tenant->domains->first()->domain ?? '')
-                        : config('tenancy.database.prefix', 'tenant') . $tenant->id . config('tenancy.database.suffix', '');
-                @endphp
-
-                <div class="mb-3 p-3 rounded-3 approve-notice-amber">
-                    <div class="d-flex gap-2">
-                        <i class="bi bi-info-circle-fill flex-shrink-0 approve-notice-amber-icon"></i>
-                        <p class="mb-0 approve-notice-amber-text">
-                            @if($approveIsShared)
-                                {!! __('central.SharedHostingDbHint') !!}
-                            @else
-                                {!! __('central.VpsDbHint') !!}
-                            @endif
-                        </p>
-                    </div>
-                </div>
-
-                <div class="row g-3 mb-3">
-                    <div class="col-md-4">
-                        <label class="form-label form-label-sm">{{ __('central.DbHost') }} <span class="text-danger">*</span></label>
-                        <input type="text" name="db_host" class="form-control form-control-sm approve-db-field" value="{{ old('db_host', $defaultDbHost) }}" required placeholder="localhost">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label form-label-sm">{{ __('central.DbName') }} <span class="text-danger">*</span></label>
-                        <input type="text" name="db_name" id="approveDbName" class="form-control form-control-sm approve-db-field" value="{{ old('db_name', $defaultDbName) }}" required placeholder="tenant_name">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label form-label-sm">{{ __('central.DbPort') }} <span class="text-danger">*</span></label>
-                        <input type="number" name="db_port" class="form-control form-control-sm approve-db-field" value="{{ old('db_port', $defaultDbPort) }}" required min="1" max="65535">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label form-label-sm">{{ __('central.DbUsername') }} <span class="text-danger">*</span></label>
-                        <input type="text" name="db_username" class="form-control form-control-sm approve-db-field" value="{{ old('db_username', $defaultDbUser) }}" required placeholder="db_user">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label form-label-sm">{{ __('central.DbPassword') }}</label>
-                        <input type="password" name="db_password" class="form-control form-control-sm approve-db-field" value="{{ old('db_password', $defaultDbPassword) }}" placeholder="********">
-                    </div>
-                    <div class="col-md-4 d-flex align-items-end">
-                        <button type="button" class="btn btn-sm btn-test-connection" id="btnTestApproveDb">
-                            <i class="bi bi-plug me-1"></i>{{ __('central.TestConnection') }}
-                        </button>
-                    </div>
-                </div>
-                <div id="approve-db-test-result" class="mb-3"></div>
-
-                <button type="button" class="btn btn-success approve-locked" id="btnApprove"
-                    data-swal-action='{"title":@json(__('central.ApproveAndProvisionTitle')),"text":@json(__('central.ApproveAndProvisionText')),"icon":"question","confirmText":@json(__('central.YesApprove')),"color":"#10b981"}'>
-                    <i class="bi bi-check-circle me-1"></i> {{ __('central.ApproveAndProvision') }}
-                </button>
-            </form>
-        @endif
-    </div>
-</div>
-@endif
+@include('central.super.tenants.partials.custom-domain-guide')
 
 {{-- Admin Actions (provisioned tenants + failed tenants so a broken
      provision can be retried via Re-provision / Reset / Re-seed). --}}
@@ -540,38 +496,71 @@
         <h2><i class="bi bi-gear-wide-connected me-2 text-muted"></i>{{ __('central.AdminActions') }}</h2>
     </div>
     <div class="card-body-custom">
+        <p class="admin-actions-hint"><i class="bi bi-info-circle"></i>{{ __('central.AdminActionsHint') }}</p>
+        {{-- Each button sits in an .action-tip wrapper; the .action-tip-bubble
+             sibling is revealed on hover / keyboard focus (CSS only, see
+             central-shared.css) and explains what the action does and whether
+             it keeps or destroys tenant data. --}}
         <div class="d-flex flex-wrap gap-2">
             {{-- Re-run Migrations --}}
-            <form method="POST" action="{{ route('super.tenants.rerun-migrations', $tenant) }}" class="d-inline" id="form-rerun-migrations">
-                @csrf
-                <button type="button" class="btn btn-sm btn-migration" data-swal-action='{"title":@json(__('central.RerunMigrationsTitle')),"text":@json(__('central.RerunMigrationsText')),"icon":"info","confirmText":@json(__('central.YesRunMigrations')),"color":"#d97706"}'>
-                    <i class="bi bi-arrow-repeat me-1"></i>{{ __('central.RerunMigrations') }}
-                </button>
-            </form>
+            <div class="action-tip action-tip-migration">
+                <form method="POST" action="{{ route('super.tenants.rerun-migrations', $tenant) }}" class="d-inline" id="form-rerun-migrations">
+                    @csrf
+                    <button type="button" class="btn btn-sm btn-migration" aria-describedby="tip-rerun-migrations" data-swal-action='{"title":@json(__('central.RerunMigrationsTitle')),"text":@json(__('central.RerunMigrationsText')),"icon":"info","confirmText":@json(__('central.YesRunMigrations')),"color":"#d97706"}'>
+                        <i class="bi bi-arrow-repeat me-1"></i>{{ __('central.RerunMigrations') }}<i class="bi bi-info-circle action-tip-icon"></i>
+                    </button>
+                </form>
+                <div class="action-tip-bubble" role="tooltip" id="tip-rerun-migrations">
+                    <div class="action-tip-head"><i class="bi bi-arrow-repeat"></i>{{ __('central.RerunMigrations') }}</div>
+                    <p>{{ __('central.RerunMigrationsHint') }}</p>
+                    <span class="action-tip-tag is-safe"><i class="bi bi-shield-check"></i>{{ __('central.ActionKeepsData') }}</span>
+                </div>
+            </div>
 
             {{-- Re-seed --}}
-            <form method="POST" action="{{ route('super.tenants.reseed', $tenant) }}" class="d-inline" id="form-reseed">
-                @csrf
-                <button type="button" class="btn btn-sm btn-reseed" data-swal-action='{"title":@json(__('central.ReseedTitle')),"text":@json(__('central.ReseedText')),"icon":"info","confirmText":@json(__('central.YesReseed')),"color":"#6366f1"}'>
-                    <i class="bi bi-database-down me-1"></i>{{ __('central.Reseed') }}
-                </button>
-            </form>
+            <div class="action-tip action-tip-reseed">
+                <form method="POST" action="{{ route('super.tenants.reseed', $tenant) }}" class="d-inline" id="form-reseed">
+                    @csrf
+                    <button type="button" class="btn btn-sm btn-reseed" aria-describedby="tip-reseed" data-swal-action='{"title":@json(__('central.ReseedTitle')),"text":@json(__('central.ReseedText')),"icon":"info","confirmText":@json(__('central.YesReseed')),"color":"#6366f1"}'>
+                        <i class="bi bi-database-down me-1"></i>{{ __('central.Reseed') }}<i class="bi bi-info-circle action-tip-icon"></i>
+                    </button>
+                </form>
+                <div class="action-tip-bubble" role="tooltip" id="tip-reseed">
+                    <div class="action-tip-head"><i class="bi bi-database-down"></i>{{ __('central.Reseed') }}</div>
+                    <p>{{ __('central.ReseedHint') }}</p>
+                    <span class="action-tip-tag is-safe"><i class="bi bi-shield-check"></i>{{ __('central.ActionKeepsData') }}</span>
+                </div>
+            </div>
 
             {{-- Re-provision (Full Re-install) --}}
-            <form method="POST" action="{{ route('super.tenants.reprovision', $tenant) }}" class="d-inline" id="form-reprovision">
-                @csrf
-                <button type="button" class="btn btn-sm btn-reprovision" data-swal-action='{"title":@json(__('central.ReprovisionTitle')),"html":@json(__('central.ReprovisionHtml')),"icon":"warning","confirmText":@json(__('central.YesReprovision')),"color":"#ea580c"}'>
-                    <i class="bi bi-arrow-clockwise me-1"></i>{{ __('central.Reprovision') }}
-                </button>
-            </form>
+            <div class="action-tip action-tip-reprovision">
+                <form method="POST" action="{{ route('super.tenants.reprovision', $tenant) }}" class="d-inline" id="form-reprovision">
+                    @csrf
+                    <button type="button" class="btn btn-sm btn-reprovision" aria-describedby="tip-reprovision" data-swal-action='{"title":@json(__('central.ReprovisionTitle')),"html":@json(__('central.ReprovisionHtml')),"icon":"warning","confirmText":@json(__('central.YesReprovision')),"color":"#ea580c"}'>
+                        <i class="bi bi-arrow-clockwise me-1"></i>{{ __('central.Reprovision') }}<i class="bi bi-info-circle action-tip-icon"></i>
+                    </button>
+                </form>
+                <div class="action-tip-bubble" role="tooltip" id="tip-reprovision">
+                    <div class="action-tip-head"><i class="bi bi-arrow-clockwise"></i>{{ __('central.Reprovision') }}</div>
+                    <p>{{ __('central.ReprovisionHint') }}</p>
+                    <span class="action-tip-tag is-danger"><i class="bi bi-exclamation-octagon"></i>{{ __('central.ActionDeletesData') }}</span>
+                </div>
+            </div>
 
             {{-- Reset Database (Drop & Migrate) --}}
-            <form method="POST" action="{{ route('super.tenants.reset-database', $tenant) }}" class="d-inline" id="form-reset-db">
-                @csrf
-                <button type="button" class="btn btn-sm btn-reset-db" data-swal-action='{"title":@json(__('central.ResetDatabaseTitle')),"html":@json(__('central.ResetDatabaseHtml')),"icon":"error","confirmText":@json(__('central.YesResetDatabase')),"color":"#dc2626"}'>
-                    <i class="bi bi-exclamation-triangle me-1"></i>{{ __('central.ResetDatabase') }}
-                </button>
-            </form>
+            <div class="action-tip action-tip-reset">
+                <form method="POST" action="{{ route('super.tenants.reset-database', $tenant) }}" class="d-inline" id="form-reset-db">
+                    @csrf
+                    <button type="button" class="btn btn-sm btn-reset-db" aria-describedby="tip-reset-db" data-swal-action='{"title":@json(__('central.ResetDatabaseTitle')),"html":@json(__('central.ResetDatabaseHtml')),"icon":"error","confirmText":@json(__('central.YesResetDatabase')),"color":"#dc2626"}'>
+                        <i class="bi bi-exclamation-triangle me-1"></i>{{ __('central.ResetDatabase') }}<i class="bi bi-info-circle action-tip-icon"></i>
+                    </button>
+                </form>
+                <div class="action-tip-bubble" role="tooltip" id="tip-reset-db">
+                    <div class="action-tip-head"><i class="bi bi-exclamation-triangle"></i>{{ __('central.ResetDatabase') }}</div>
+                    <p>{{ __('central.ResetDatabaseHint') }}</p>
+                    <span class="action-tip-tag is-danger"><i class="bi bi-exclamation-octagon"></i>{{ __('central.ActionDeletesData') }}</span>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -582,6 +571,8 @@
 @php
     $dbCreds = $tenant->getEffectiveDatabaseCredentials();
     $isCustomCreds = $tenant->hasDatabaseCredentials();
+    // Own MySQL account created at auto-provisioning (not typed in by an admin).
+    $isDedicatedUser = $tenant->usesDedicatedDatabaseUser();
 @endphp
 <div class="content-card mt-4">
     <div class="card-header-custom d-flex align-items-center justify-content-between">
@@ -600,7 +591,11 @@
 
         {{-- Credential source indicator --}}
         <div class="mb-3">
-            @if($isCustomCreds)
+            @if($isDedicatedUser)
+            <span class="badge badge-config-auto">
+                <i class="bi bi-shield-check me-1"></i>{{ __('super.tenants.db_dedicated_badge') }}
+            </span>
+            @elseif($isCustomCreds)
             <span class="badge badge-config-admin">
                 <i class="bi bi-person-gear me-1"></i>{{ __('central.AdminConfiguredShared') }}
             </span>
@@ -610,6 +605,21 @@
             </span>
             @endif
         </div>
+
+        {{-- Auto-provisioned on the shared central account: offer its own user. --}}
+        @unless($isCustomCreds)
+        <div class="mb-3 p-3 rounded-3 notice-warning">
+            <p class="mb-2 fs-xs3 text-warning-dark">
+                <i class="bi bi-info-circle-fill me-1"></i>{{ __('super.tenants.db_dedicated_hint') }}
+            </p>
+            <form method="POST" action="{{ route('super.tenants.dedicated-db-user', $tenant) }}" class="d-inline">
+                @csrf
+                <button type="submit" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-person-lock me-1"></i>{{ __('super.tenants.db_dedicated_button') }}
+                </button>
+            </form>
+        </div>
+        @endunless
         {{-- Read-only view --}}
         <ul class="info-list" id="db-readonly-view">
             <li>
@@ -708,13 +718,140 @@
 </div>
 @endif
 
-{{-- Users --}}
+{{-- Billing currency (multi-currency pricing) — shown while the feature is on,
+     or when this workspace already pays in a currency other than the main one. --}}
+@php
+    $tenantBillingCurrency = \App\Services\Billing\PlanPricing::tenantCurrency($tenant);
+    $offeredCurrencies = \App\Support\SellingCurrencies::active();
+@endphp
+@if(\App\Support\SellingCurrencies::enabled() || $tenantBillingCurrency !== \App\Support\SellingCurrencies::main())
+<div class="content-card mt-4">
+    <div class="card-header-custom">
+        <h2><i class="bi bi-currency-exchange me-2 text-muted"></i>{{ __('super.currencies.tenant_card_title') }}</h2>
+    </div>
+    <div class="card-body-custom">
+        <form method="POST" action="{{ route('super.tenants.billing-currency', $tenant) }}" class="row g-2 align-items-end">
+            @csrf
+            <div class="col-sm-5 col-md-4">
+                <label class="form-label form-label-sm" for="billingCurrency">{{ __('super.currencies.tenant_currency') }}</label>
+                <select id="billingCurrency" name="billing_currency" class="form-select form-select-sm">
+                    @foreach(array_unique(array_merge($offeredCurrencies, [$tenantBillingCurrency])) as $code)
+                        <option value="{{ $code }}" @selected($code === $tenantBillingCurrency)>{{ $code }} — {{ \App\Support\SellingCurrencies::symbol($code) }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="col-sm-3 col-md-2">
+                <button type="submit" class="btn btn-sm btn-primary w-100">{{ __('super.common.save') }}</button>
+            </div>
+            <p class="form-hint mb-0 mt-1">{{ __('super.currencies.tenant_hint') }}</p>
+        </form>
+    </div>
+</div>
+@endif
+
+{{-- Add-ons: modules / premium themes on top of the plan --}}
+@if(\App\Models\Central\Addon::tablesReady() && auth('central')->user()?->hasPermission('addons'))
+@php
+    $tenantAddons = \App\Models\Central\TenantAddon::where('tenant_id', $tenant->id)->latest('id')->limit(30)->get();
+    $addonCatalog = \App\Models\Central\Addon::catalog();
+@endphp
+<div class="content-card mt-4">
+    <div class="card-header-custom d-flex align-items-center justify-content-between">
+        <h2><i class="bi bi-puzzle me-2 text-muted"></i>{{ __('super.addons.tenant_card_title') }}</h2>
+        <a href="{{ route('super.addons.index') }}" class="btn btn-sm btn-outline-secondary">{{ __('super.addons.manage_catalog') }}</a>
+    </div>
+    <div class="card-body-custom">
+        @if($tenantAddons->isEmpty())
+            <p class="text-muted">{{ __('super.addons.tenant_none') }}</p>
+        @else
+            <div class="table-responsive mb-3">
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr>
+                            <th>{{ __('super.addons.col_addon') }}</th>
+                            <th>{{ __('super.addons.col_cycle') }}</th>
+                            <th>{{ __('super.addons.col_amount') }}</th>
+                            <th>{{ __('super.addons.col_status') }}</th>
+                            <th>{{ __('super.addons.col_ends') }}</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach($tenantAddons as $ta)
+                            <tr>
+                                <td>{{ $ta->displayName() }}
+                                    @if($ta->source === 'admin')<span class="badge bg-secondary-subtle text-secondary-emphasis ms-1">{{ __('super.addons.source_admin') }}</span>@endif
+                                </td>
+                                <td>{{ __('super.addons.cycle_' . $ta->billing_cycle) }}</td>
+                                <td dir="ltr">{{ $ta->currency }} {{ number_format((float) $ta->amount, 2) }}</td>
+                                <td>@include('central.super.addons._status', ['row' => $ta])</td>
+                                <td>{{ $ta->ends_at ? $ta->ends_at->format('M d, Y') : ($ta->status === 'active' ? __('super.addons.no_end') : '—') }}</td>
+                                <td class="text-end">
+                                    @if(in_array($ta->status, ['active', 'pending'], true))
+                                        <form method="POST" action="{{ route('super.addons.revoke', $ta) }}" class="d-inline"
+                                              onsubmit="return confirm(@js(__('super.addons.revoke_confirm')))">
+                                            @csrf
+                                            <button type="submit" class="btn btn-sm btn-outline-danger">{{ __('super.addons.revoke') }}</button>
+                                        </form>
+                                    @endif
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+        @endif
+
+        <form method="POST" action="{{ route('super.addons.grant', $tenant) }}" class="row g-2 align-items-end">
+            @csrf
+            <div class="col-md-4">
+                <label class="form-label form-label-sm">{{ __('super.addons.grant_addon') }}</label>
+                <select name="addon_key" class="form-select form-select-sm" required>
+                    @foreach($addonCatalog as $key => $meta)
+                        <option value="{{ $key }}">{{ $meta['label'] }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label form-label-sm">{{ __('super.addons.grant_until') }}</label>
+                <input type="date" name="until" class="form-control form-control-sm" min="{{ now()->toDateString() }}">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label form-label-sm">{{ __('super.addons.grant_note') }}</label>
+                <input type="text" name="note" class="form-control form-control-sm" maxlength="500">
+            </div>
+            <div class="col-md-1">
+                <label class="form-label form-label-sm" title="{{ __('super.addons.grant_quantity_hint') }}">{{ __('super.addons.grant_quantity') }}</label>
+                <input type="number" name="quantity" class="form-control form-control-sm" min="1" max="100" value="1" title="{{ __('super.addons.grant_quantity_hint') }}">
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-sm btn-primary w-100"><i class="bi bi-gift me-1"></i>{{ __('super.addons.grant') }}</button>
+            </div>
+            <p class="form-hint mb-0 mt-1">{{ __('super.addons.grant_hint') }}</p>
+        </form>
+    </div>
+</div>
+@endif
+
+{{-- Users (a workspace has users only once it is provisioned) --}}
+@if($isProvisioned)
 <div class="content-card mt-4">
     <div class="card-header-custom">
         <h2><i class="bi bi-people me-2 text-muted"></i>{{ __('central.Users') }}</h2>
-        <a href="{{ route('super.tenants.users', $tenant) }}" class="btn btn-ghost btn-xs">
-            {{ __('central.ViewAll', ['count' => $tenantUserCount]) }} <i class="bi bi-arrow-right ms-1"></i>
-        </a>
+        <div class="d-flex align-items-center gap-2">
+            @if(count($tenantUsers) > 0)
+                @php $forceLogoutAllText = __('central.ForceLogoutAllText', ['tenant' => $displayName]); @endphp
+                <form method="POST" action="{{ route('super.tenants.force-logout', $tenant) }}" class="d-inline">
+                    @csrf
+                    <button type="button" class="btn btn-outline btn-xs btn-outline-danger-inline" data-swal-action='{"title":@json(__('central.ForceLogoutAllTitle')),"text":@json($forceLogoutAllText),"icon":"warning","confirmText":@json(__('central.YesForceLogout')),"color":"#ef4444"}'>
+                        <i class="bi bi-box-arrow-right"></i> {{ __('central.ForceLogoutAll') }}
+                    </button>
+                </form>
+            @endif
+            <a href="{{ route('super.tenants.users', $tenant) }}" class="btn btn-ghost btn-xs">
+                {{ __('central.ViewAll', ['count' => $tenantUserCount]) }} <i class="bi bi-arrow-right ms-1"></i>
+            </a>
+        </div>
     </div>
     <div class="card-body-custom p-0">
         @if(count($tenantUsers) > 0)
@@ -773,6 +910,13 @@
                                     </button>
                                 </form>
                             @endif
+                            @php $forceLogoutText = __('central.ForceLogoutUserText', ['name' => $tUser->firstname . ' ' . $tUser->lastname]); @endphp
+                            <form method="POST" action="{{ route('super.tenants.users.force-logout', [$tenant, $tUser->id]) }}" class="d-inline">
+                                @csrf
+                                <button type="button" class="btn btn-outline btn-sm" data-swal-action='{"title":@json(__('central.ForceLogoutUserTitle')),"text":@json($forceLogoutText),"icon":"warning","confirmText":@json(__('central.YesForceLogout')),"color":"#ef4444"}'>
+                                    <i class="bi bi-box-arrow-right"></i> {{ __('central.ForceLogout') }}
+                                </button>
+                            </form>
                             <button type="button"
                                     class="btn btn-outline btn-sm"
                                     data-change-password-url="{{ route('super.tenants.users.password', [$tenant, $tUser->id]) }}"
@@ -815,6 +959,7 @@
         @endif
     </div>
 </div>
+@endif
 
 <div class="mt-4">
     <a href="{{ route('super.tenants.index') }}" class="back-link">
@@ -826,6 +971,7 @@
 <script>
 window.TenantShowData = {
     csrfToken: '{{ csrf_token() }}',
+    status: @json($tenant->status),
     statusUrl: '{{ route("super.tenants.provisioning-status", $tenant) }}',
     testConnectionUrl: '{{ route("super.tenants.test-connection", $tenant) }}',
     testConnectionPreUrl: '{{ route("super.tenants.test-connection-pre") }}',
@@ -855,6 +1001,11 @@ window.TenantShowData = {
         customDomainVerifying:     @json(__('super.custom_domains.verifying')),
         customDomainVerifiedTitle: @json(__('super.custom_domains.status_verified')),
         customDomainFailedTitle:   @json(__('super.custom_domains.errors.unknown')),
+        rejectTitle:               @json(__('central.RejectTenant')),
+        rejectText:                @json(__('central.SetupRejectText')),
+        rejectReasonPlaceholder:   @json(__('central.RejectionReasonPlaceholder')),
+        rejectReasonRequired:      @json(__('central.SetupRejectReasonRequired')),
+        elapsed:                   @json(__('central.SetupElapsed')),
     },
 };
 window.TenantUserPasswordData = {

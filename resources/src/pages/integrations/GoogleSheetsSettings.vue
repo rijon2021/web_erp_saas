@@ -1,9 +1,9 @@
 <template>
   <div class="page">
-    <PageHeader title="Google Sheets" :breadcrumb="['Integrations', 'Google Sheets']">
+    <PageHeader title="Google Sheets" :breadcrumb="[$t('Integrations'), 'Google Sheets']">
       <template #actions>
         <a-tag v-if="!isLoading" :color="state.connected ? 'success' : 'default'" style="font-size: 13px; padding: 4px 12px">
-          {{ state.connected ? $t('Connected') : 'Not connected' }}
+          {{ state.connected ? $t('Connected') : $t('Not_connected') }}
         </a-tag>
       </template>
     </PageHeader>
@@ -18,36 +18,36 @@
           <template #icon><TableOutlined /></template>
         </a-avatar>
         <div>
-          <div class="hero-title">Google Sheets exports</div>
-          <div class="muted">Export your sales, products and customers into a live Google spreadsheet — one tab each, refreshed on demand.</div>
+          <div class="hero-title">{{ $t('Gs_Hero_Title') }}</div>
+          <div class="muted">{{ $t('Gs_Hero_Desc') }}</div>
         </div>
       </div>
 
       <a-tabs v-model:activeKey="tab">
         <!-- ============================ Connection ============================ -->
-        <a-tab-pane key="connection" tab="Connection">
+        <a-tab-pane key="connection" :tab="$t('Connection')">
           <a-row :gutter="[16, 16]">
             <a-col :xs="24" :lg="12">
-              <a-card size="small" title="Google OAuth credentials" style="height: 100%">
+              <a-card size="small" :title="$t('Gs_OAuth_Credentials')" style="height: 100%">
                 <a-form layout="vertical">
-                  <a-form-item label="Client ID">
+                  <a-form-item :label="$t('Client_ID')">
                     <a-input v-model:value="form.client_id" placeholder="…apps.googleusercontent.com" />
                   </a-form-item>
-                  <a-form-item label="Client Secret">
+                  <a-form-item :label="$t('Client_Secret')">
                     <a-input-password
                       v-model:value="form.client_secret"
-                      :placeholder="state.has_client_secret ? 'Saved — paste a new value to replace it' : 'From your Google Cloud OAuth client'"
+                      :placeholder="state.has_client_secret ? $t('Int_Saved_Paste_New_Value') : $t('Gs_Secret_Placeholder')"
                       autocomplete="off"
                     />
                   </a-form-item>
                   <a-space direction="vertical" size="small" style="margin-bottom: 16px">
                     <a-space align="center">
                       <a-switch v-model:checked="form.auto_export" />
-                      <span>Auto-export nightly <span class="muted">(all tabs refreshed around 02:30 server time)</span></span>
+                      <span>{{ $t('Gs_Auto_Export_Nightly') }} <span class="muted">{{ $t('Gs_Auto_Export_Hint') }}</span></span>
                     </a-space>
                     <a-space align="center">
                       <a-switch v-model:checked="form.enabled" />
-                      <span>Enable Google Sheets exports</span>
+                      <span>{{ $t('Gs_Enable_Exports') }}</span>
                     </a-space>
                   </a-space>
                   <div>
@@ -58,37 +58,37 @@
             </a-col>
 
             <a-col :xs="24" :lg="12">
-              <a-card size="small" title="Account & spreadsheet" style="margin-bottom: 16px">
+              <a-card size="small" :title="$t('Gs_Account_Spreadsheet')" style="margin-bottom: 16px">
                 <a-space wrap style="margin-bottom: 16px">
                   <a-button type="primary" :disabled="!state.client_id || !state.has_client_secret" @click="connect">
                     <template #icon><LinkOutlined /></template>
-                    {{ state.connected ? 'Reconnect Google account' : 'Connect Google account' }}
+                    {{ state.connected ? $t('Gs_Reconnect') : $t('Gs_Connect') }}
                   </a-button>
                   <a-button :disabled="!state.connected" :loading="testing" @click="testConnection">{{ $t('Test_Connection') }}</a-button>
                   <a-popconfirm
                     v-if="state.connected"
-                    title="Disconnect the Google account? Exports stop until you reconnect."
+                    :title="$t('Gs_Disconnect_Confirm')"
                     :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="disconnect"
                   >
-                    <a-button danger>Disconnect</a-button>
+                    <a-button danger>{{ $t('Disconnect') }}</a-button>
                   </a-popconfirm>
                 </a-space>
 
                 <a-form layout="vertical">
-                  <a-form-item label="Target spreadsheet (ID or full URL)">
+                  <a-form-item :label="$t('Gs_Target_Spreadsheet')">
                     <a-input-group compact style="display: flex">
-                      <a-input v-model:value="form.spreadsheet" placeholder="Paste a spreadsheet URL, or create one →" style="flex: 1" />
-                      <a-button :disabled="!state.connected" :loading="creating" @click="createSpreadsheet">Create new</a-button>
+                      <a-input v-model:value="form.spreadsheet" :placeholder="$t('Gs_Spreadsheet_Placeholder')" style="flex: 1" />
+                      <a-button :disabled="!state.connected" :loading="creating" @click="createSpreadsheet">{{ $t('Gs_Create_New') }}</a-button>
                     </a-input-group>
                     <div v-if="state.spreadsheet_url" style="margin-top: 6px">
-                      <a :href="state.spreadsheet_url" target="_blank" rel="noopener">Open the spreadsheet ↗</a>
-                      <span class="muted" style="margin-left: 8px" v-if="state.last_sync_at">Last export {{ date(state.last_sync_at) }}</span>
+                      <a :href="state.spreadsheet_url" target="_blank" rel="noopener">{{ $t('Gs_Open_Spreadsheet') }}</a>
+                      <span class="muted" style="margin-left: 8px" v-if="state.last_sync_at">{{ $t('Gs_Last_Export', { date: date(state.last_sync_at) }) }}</span>
                     </div>
                   </a-form-item>
                 </a-form>
               </a-card>
 
-              <a-card size="small" title="Redirect URI for the Google OAuth client">
+              <a-card size="small" :title="$t('Gs_Redirect_Uri_Title')">
                 <a-input-group compact style="display: flex">
                   <a-input :value="state.callback_url" readonly style="flex: 1" />
                   <a-button @click="copy(state.callback_url)"><CopyOutlined /></a-button>
@@ -99,18 +99,17 @@
         </a-tab-pane>
 
         <!-- ============================ Export ============================ -->
-        <a-tab-pane key="export" tab="Export" :disabled="!state.connected || !state.spreadsheet_id">
-          <StatsRow :stats="stats" :items="[['sales_total', 'Sales'], ['products_total', 'Products'], ['customers_total', 'Customers']]" />
+        <a-tab-pane key="export" :tab="$t('Export')" :disabled="!state.connected || !state.spreadsheet_id">
+          <StatsRow :stats="stats" :items="[['sales_total', $t('Sales')], ['products_total', $t('Products')], ['customers_total', $t('Customers')]]" />
           <p class="muted" style="max-width: 760px">
-            Each export rewrites its tab from scratch (header + all rows), so the sheet is always a complete, current snapshot.
-            Large datasets are sent in batches — leave the page open until the counter stops.
+            {{ $t('Gs_Export_Desc') }}
           </p>
           <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
             <a-col v-for="job in exportJobs" :key="job.key" :xs="24" :md="8">
               <a-card size="small" :title="job.title" style="height: 100%">
                 <p class="muted" style="min-height: 40px">{{ job.desc }}</p>
                 <a-button type="primary" :disabled="sync.running.value" @click="runSync(job.url, {}, 'push')">
-                  <template #icon><UploadOutlined /></template>Export {{ job.title.toLowerCase() }}
+                  <template #icon><UploadOutlined /></template>{{ job.button }}
                 </a-button>
               </a-card>
             </a-col>
@@ -120,18 +119,18 @@
         </a-tab-pane>
 
         <!-- ============================ Logs ============================ -->
-        <a-tab-pane key="logs" tab="Logs">
+        <a-tab-pane key="logs" :tab="$t('Logs')">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap">
             <a-select
               v-model:value="logLevel" style="min-width: 160px" :options="[
-                { value: '', label: 'All levels' },
-                { value: 'info', label: 'Info' },
-                { value: 'warning', label: 'Warning' },
-                { value: 'error', label: 'Error' },
+                { value: '', label: $t('Int_All_Levels') },
+                { value: 'info', label: $t('Info') },
+                { value: 'warning', label: $t('Warning') },
+                { value: 'error', label: $t('Cr_Log_Error') },
               ]" @change="loadLogs(1)"
             />
-            <a-popconfirm title="Clear all Google Sheets logs?" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="clearLogs">
-              <a-button danger size="small">Clear logs</a-button>
+            <a-popconfirm :title="$t('Int_Clear_All_Logs_Confirm', { name: 'Google Sheets' })" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="clearLogs">
+              <a-button danger size="small">{{ $t('Clear_Logs') }}</a-button>
             </a-popconfirm>
           </div>
           <a-table
@@ -149,19 +148,29 @@
         </a-tab-pane>
 
         <!-- ============================ Guide ============================ -->
-        <a-tab-pane key="guide" tab="Guide">
+        <a-tab-pane key="guide" :tab="$t('Guide')">
           <a-card size="small" style="max-width: 860px">
             <ol class="guide">
-              <li>Create a project on <a href="https://console.cloud.google.com" target="_blank" rel="noopener">console.cloud.google.com</a> and enable the <strong>Google Sheets API</strong> (APIs &amp; Services → Library).</li>
-              <li>Configure the <strong>OAuth consent screen</strong> (External). While it stays in "Testing", add your Google account as a test user — note that testing-mode refresh tokens expire after 7 days, so <strong>publish</strong> the app for a permanent connection.</li>
-              <li>Create an <strong>OAuth client ID</strong> of type Web application and register the redirect URI shown on the Connection tab.</li>
-              <li>Paste the Client ID and Secret here, save, and click <strong>Connect Google account</strong>.</li>
-              <li>Create a spreadsheet with the button (or paste the URL of one your Google account can edit), then run the exports.</li>
+              <i18n-t keypath="Gs_Guide_1" tag="li">
+                <template #console><a href="https://console.cloud.google.com" target="_blank" rel="noopener">console.cloud.google.com</a></template>
+                <template #api><strong>Google Sheets API</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Gs_Guide_2" tag="li">
+                <template #consent><strong>{{ $t('Gs_OAuth_Consent_Screen') }}</strong></template>
+                <template #publish><strong>{{ $t('Gs_Publish') }}</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Gs_Guide_3" tag="li">
+                <template #clientId><strong>{{ $t('Gs_OAuth_Client_ID') }}</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Gs_Guide_4" tag="li">
+                <template #connect><strong>{{ $t('Gs_Connect') }}</strong></template>
+              </i18n-t>
+              <li>{{ $t('Gs_Guide_5') }}</li>
             </ol>
             <a-alert
               type="info" show-icon style="margin-top: 8px"
-              message="Snapshots, not live sync"
-              description="Exports rewrite the Sales / Products / Customers tabs on demand. For live row-by-row updates on every sale, connect Zapier — it can append rows the moment events fire."
+              :message="$t('Gs_Snapshots_Title')"
+              :description="$t('Gs_Snapshots_Desc')"
             />
           </a-card>
         </a-tab-pane>
@@ -209,16 +218,16 @@ const logLevel = ref('');
 const sync = useBatchSync();
 
 const exportJobs = [
-  { key: 'sales', title: 'Sales', url: 'google-sheets/export/sales', desc: 'Every sale with customer, totals, payment status and warehouse.' },
-  { key: 'products', title: 'Products', url: 'google-sheets/export/products', desc: 'The full catalog with prices, costs and current stock quantities.' },
-  { key: 'customers', title: 'Customers', url: 'google-sheets/export/customers', desc: 'All customers with their contact details.' },
+  { key: 'sales', title: t('Sales'), button: t('Gs_Export_Sales'), url: 'google-sheets/export/sales', desc: t('Gs_Job_Sales_Desc') },
+  { key: 'products', title: t('Products'), button: t('Gs_Export_Products'), url: 'google-sheets/export/products', desc: t('Gs_Job_Products_Desc') },
+  { key: 'customers', title: t('Customers'), button: t('Gs_Export_Customers'), url: 'google-sheets/export/customers', desc: t('Gs_Job_Customers_Desc') },
 ];
 
 const logColumns = [
   { title: 'ID', dataIndex: 'id', width: 70 },
-  { title: 'Action', dataIndex: 'action', width: 180 },
-  { title: 'Level', key: 'level', width: 100 },
-  { title: 'Message', dataIndex: 'message', ellipsis: true },
+  { title: t('Action'), dataIndex: 'action', width: 180 },
+  { title: t('Level'), key: 'level', width: 100 },
+  { title: t('Message'), dataIndex: 'message', ellipsis: true },
   { title: t('Date'), key: 'created_at', width: 170 },
 ];
 
@@ -277,10 +286,10 @@ async function testConnection() {
   try {
     const res = await http.post('google-sheets/test-connection');
     message.success(res?.spreadsheet_title
-      ? 'Connected — spreadsheet: ' + res.spreadsheet_title
-      : 'Connected to Google.');
+      ? t('Gs_Connected_Spreadsheet', { title: res.spreadsheet_title })
+      : t('Int_Connected_To_Dot', { name: 'Google' }));
   } catch (e) {
-    message.error(e?.data?.error || e?.data?.message || 'Connection test failed');
+    message.error(e?.data?.error || e?.data?.message || t('Connection_Test_Failed'));
   } finally {
     testing.value = false;
   }
@@ -289,7 +298,7 @@ async function testConnection() {
 async function disconnect() {
   try {
     await http.post('google-sheets/disconnect');
-    message.success('Disconnected');
+    message.success(t('Disconnected'));
     await load();
   } catch (e) {
     message.error(e?.data?.message || t('InvalidData'));
@@ -300,7 +309,7 @@ async function createSpreadsheet() {
   creating.value = true;
   try {
     const res = await http.post('google-sheets/create-spreadsheet');
-    message.success('Spreadsheet created.');
+    message.success(t('Gs_Spreadsheet_Created'));
     form.value.spreadsheet = res.spreadsheet_id;
     await load();
   } catch (e) {
@@ -343,7 +352,7 @@ async function copy(text) {
 onMounted(() => {
   load();
   loadLogs(1);
-  if (route.query.connected === '1') message.success('Google account connected.');
+  if (route.query.connected === '1') message.success(t('Gs_Account_Connected'));
   if (route.query.gs_error) message.error(String(route.query.gs_error));
 });
 

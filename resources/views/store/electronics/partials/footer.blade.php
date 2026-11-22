@@ -80,6 +80,7 @@
         <ul>
           <li></li>
           <li></li>
+          @if($s->cookie_consent_enabled ?? true)<li><a href="#" onclick="window.openCookieSettings && window.openCookieSettings(); return false;">{{ __('messages.CookieSettings') }}</a></li>@endif
         </ul>
       </div>
 

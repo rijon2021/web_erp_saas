@@ -92,11 +92,12 @@
   };
 
   function money(n){
-    try {
-      return new Intl.NumberFormat(undefined, { style: 'currency', currency: CURRENCY }).format(Number(n || 0));
-    } catch(e){
-      return (CURRENCY || '$') + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    }
+    // Symbol (meta currency) placed per System Settings → Currency Position; Intl's
+    // currency style decided the placement itself, so it is no longer used here.
+    var symMeta = document.querySelector('meta[name="currency"]');
+    var sym = (symMeta && symMeta.content) || CURRENCY || '$';
+    var num = window.storeFmtNumber ? storeFmtNumber(n) : Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return window.storeWithCurrency ? storeWithCurrency(sym, num) : storeCurrencyPrefix(sym) + num;
   }
 
   function esc(s){ return String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }

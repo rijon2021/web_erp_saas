@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <PageHeader title="Lab Test Catalogue" :breadcrumb="['Hospital', 'Laboratory', 'Tests']">
+    <PageHeader :title="$t('Hm_Lab_Test_Catalogue')" :breadcrumb="[$t('Hm_Hospital'), $t('Hm_Laboratory'), $t('Hm_Tests')]">
       <template #actions>
         <a-button @click="$router.push('/hospital/lab-orders')">
           <template #icon><ExperimentOutlined /></template>
-          Lab orders
+          {{ $t('Hm_Lab_Orders') }}
         </a-button>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
@@ -16,16 +16,16 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search test name, code or category…"
+          v-model:value="crud.search.value" :placeholder="$t('Hm_Search_Test_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.category" class="tb-item" allow-clear show-search
-          placeholder="All categories" :options="categoryOptions" @change="crud.reload"
+          :placeholder="$t('Hm_All_Categories')" :options="categoryOptions" @change="crud.reload"
         />
         <a-select
-          v-model:value="filters.active" class="tb-item-sm" allow-clear placeholder="All"
-          :options="[{ value: '1', label: 'Active' }, { value: '0', label: 'Inactive' }]"
+          v-model:value="filters.active" class="tb-item-sm" allow-clear :placeholder="$t('Hm_All')"
+          :options="[{ value: '1', label: $t('Hm_Active') }, { value: '0', label: $t('Hm_Inactive') }]"
           @change="crud.reload"
         />
       </div>
@@ -44,7 +44,7 @@
         </template>
         <template v-else-if="column.key === 'is_active'">
           <a-tag :color="record.is_active ? 'success' : 'default'">
-            {{ record.is_active ? 'Active' : 'Inactive' }}
+            {{ record.is_active ? $t('Hm_Active') : $t('Hm_Inactive') }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'actions'">
@@ -65,63 +65,63 @@
     </DataTable>
 
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit test' : 'New test'" :width="620"
+      :open="formOpen" :title="editing ? $t('Hm_Edit_Test') : $t('Hm_New_Test')" :width="620"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <a-alert
           type="info" show-icon banner
-          message="Price and reference range are copied onto each order, so changing them here never rewrites past results."
+          :message="$t('Hm_Test_Snapshot_Hint')"
           style="margin-bottom: 16px"
         />
         <a-row :gutter="16">
           <a-col :xs="24" :md="14">
-            <a-form-item label="Test name *" name="name">
-              <a-input v-model:value="form.name" placeholder="e.g. Complete blood count" allow-clear />
+            <a-form-item :label="$t('Hm_Test_Name') + ' *'" name="name">
+              <a-input v-model:value="form.name" :placeholder="$t('Hm_Test_Name_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="10">
-            <a-form-item label="Code">
-              <a-input v-model:value="form.code" placeholder="e.g. CBC" allow-clear />
+            <a-form-item :label="$t('Code')">
+              <a-input v-model:value="form.code" :placeholder="$t('Hm_Example_Value', { value: 'CBC' })" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Category">
+            <a-form-item :label="$t('Hm_Category')">
               <a-auto-complete
                 v-model:value="form.category" :options="categoryOptions"
-                placeholder="e.g. Haematology" allow-clear
+                :placeholder="$t('Hm_Category_Placeholder')" allow-clear
               />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Sample type">
-              <a-input v-model:value="form.sample_type" placeholder="e.g. Blood" allow-clear />
+            <a-form-item :label="$t('Hm_Sample_Type')">
+              <a-input v-model:value="form.sample_type" :placeholder="$t('Hm_Sample_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Unit">
-              <a-input v-model:value="form.unit" placeholder="e.g. g/dL" allow-clear />
+            <a-form-item :label="$t('Hm_Unit')">
+              <a-input v-model:value="form.unit" :placeholder="$t('Hm_Example_Value', { value: 'g/dL' })" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Normal range">
-              <a-input v-model:value="form.normal_range" placeholder="e.g. 13.5–17.5" allow-clear />
+            <a-form-item :label="$t('Hm_Normal_Range')">
+              <a-input v-model:value="form.normal_range" :placeholder="$t('Hm_Example_Value', { value: '13.5–17.5' })" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Price">
+            <a-form-item :label="$t('Price')">
               <a-input-number v-model:value="form.price" :min="0" :step="1" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Turnaround (hours)">
+            <a-form-item :label="$t('Hm_Turnaround_Hours')">
               <a-input-number v-model:value="form.turnaround_hours" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :span="24">
             <a-form-item style="margin-bottom: 0">
-              <a-checkbox v-model:checked="form.is_active">Available to order</a-checkbox>
+              <a-checkbox v-model:checked="form.is_active">{{ $t('Hm_Available_To_Order') }}</a-checkbox>
             </a-form-item>
           </a-col>
         </a-row>
@@ -159,14 +159,14 @@ const categoryOptions = computed(() =>
   (crud.payload.value?.categories || []).map(c => ({ value: c, label: c })));
 
 const columns = computed(() => [
-  { title: 'Test', key: 'name', dataIndex: 'name', sorter: true },
-  { title: 'Category', dataIndex: 'category', key: 'category', sorter: true, width: 160 },
-  { title: 'Sample', dataIndex: 'sample_type', key: 'sample_type', width: 130 },
-  { title: 'Unit', dataIndex: 'unit', key: 'unit', width: 100 },
-  { title: 'Normal range', dataIndex: 'normal_range', key: 'normal_range', width: 150 },
-  { title: 'Turnaround', key: 'turnaround_hours', dataIndex: 'turnaround_hours', width: 120 },
-  { title: 'Price', key: 'price', dataIndex: 'price', sorter: true, width: 120 },
-  { title: 'Status', key: 'is_active', dataIndex: 'is_active', sorter: true, width: 110 },
+  { title: t('Hm_Test'), key: 'name', dataIndex: 'name', sorter: true },
+  { title: t('Hm_Category'), dataIndex: 'category', key: 'category', sorter: true, width: 160 },
+  { title: t('Hm_Sample'), dataIndex: 'sample_type', key: 'sample_type', width: 130 },
+  { title: t('Hm_Unit'), dataIndex: 'unit', key: 'unit', width: 100 },
+  { title: t('Hm_Normal_Range'), dataIndex: 'normal_range', key: 'normal_range', width: 150 },
+  { title: t('Hm_Turnaround'), key: 'turnaround_hours', dataIndex: 'turnaround_hours', width: 120 },
+  { title: t('Price'), key: 'price', dataIndex: 'price', sorter: true, width: 120 },
+  { title: t('Status'), key: 'is_active', dataIndex: 'is_active', sorter: true, width: 110 },
   { title: '', key: 'actions', width: 90 },
 ]);
 

@@ -49,7 +49,7 @@
                                     name="mail_host"
                                     class="form-control @error('mail_host') is-invalid @enderror"
                                     value="{{ old('mail_host', $setting->mail_host) }}"
-                                    placeholder="e.g. smtp.gmail.com"
+                                    placeholder="{{ __('super.mail_settings.ph_host') }}"
                                 >
                                 @error('mail_host')
                                     <div class="invalid-feedback">{{ $message }}</div>
@@ -96,7 +96,7 @@
                             name="mail_username"
                             class="form-control @error('mail_username') is-invalid @enderror"
                             value="{{ old('mail_username', $setting->mail_username) }}"
-                            placeholder="your-email@gmail.com"
+                            placeholder="{{ __('super.mail_settings.ph_username') }}"
                             autocomplete="off"
                         >
                         @error('mail_username')
@@ -147,7 +147,7 @@
                                     name="mail_from_address"
                                     class="form-control @error('mail_from_address') is-invalid @enderror"
                                     value="{{ old('mail_from_address', $setting->mail_from_address) }}"
-                                    placeholder="noreply@yourdomain.com"
+                                    placeholder="{{ __('super.mail_settings.ph_from_addr') }}"
                                 >
                                 @error('mail_from_address')
                                     <div class="invalid-feedback">{{ $message }}</div>
@@ -162,7 +162,7 @@
                                     name="mail_from_name"
                                     class="form-control @error('mail_from_name') is-invalid @enderror"
                                     value="{{ old('mail_from_name', $setting->mail_from_name) }}"
-                                    placeholder="Stocky"
+                                    placeholder="{{ __('super.mail_settings.ph_from_name') }}"
                                 >
                                 @error('mail_from_name')
                                     <div class="invalid-feedback">{{ $message }}</div>
@@ -210,19 +210,19 @@
                     <div class="d-flex flex-column gap-3 fs-sm2">
                         <div class="smtp-ref">
                             <p class="fw-700 mb-1">Gmail</p>
-                            <p class="text-muted mb-0">Host: <code>smtp.gmail.com</code><br>Port: <code>587</code> (TLS) / <code>465</code> (SSL)<br>{{ __('central.GmailAppPasswordHint') }}</p>
+                            <p class="text-muted mb-0">{{ __('super.common.host') }} <code>smtp.gmail.com</code><br>{{ __('super.common.port') }} <code>587</code> (TLS) / <code>465</code> (SSL)<br>{{ __('central.GmailAppPasswordHint') }}</p>
                         </div>
                         <div class="smtp-ref">
                             <p class="fw-700 mb-1">Outlook / Office 365</p>
-                            <p class="text-muted mb-0">Host: <code>smtp.office365.com</code><br>Port: <code>587</code> (TLS)</p>
+                            <p class="text-muted mb-0">{{ __('super.common.host') }} <code>smtp.office365.com</code><br>{{ __('super.common.port') }} <code>587</code> (TLS)</p>
                         </div>
                         <div class="smtp-ref">
                             <p class="fw-700 mb-1">Mailgun</p>
-                            <p class="text-muted mb-0">Host: <code>smtp.mailgun.org</code><br>Port: <code>587</code> (TLS)</p>
+                            <p class="text-muted mb-0">{{ __('super.common.host') }} <code>smtp.mailgun.org</code><br>{{ __('super.common.port') }} <code>587</code> (TLS)</p>
                         </div>
                         <div class="smtp-ref">
                             <p class="fw-700 mb-1">SendGrid</p>
-                            <p class="text-muted mb-0">Host: <code>smtp.sendgrid.net</code><br>Port: <code>587</code> (TLS)<br>{{ __('central.SendGridUsernameHint') }}</p>
+                            <p class="text-muted mb-0">{{ __('super.common.host') }} <code>smtp.sendgrid.net</code><br>{{ __('super.common.port') }} <code>587</code> (TLS)<br>{{ __('central.SendGridUsernameHint') }}</p>
                         </div>
                     </div>
                 </div>
@@ -244,7 +244,7 @@
                             name="test_email"
                             class="form-control @error('test_email') is-invalid @enderror"
                             value="{{ old('test_email') }}"
-                            placeholder="recipient@example.com"
+                            placeholder="{{ __('super.mail_settings.ph_test_to') }}"
                         >
                         @error('test_email')
                             <div class="invalid-feedback">{{ $message }}</div>

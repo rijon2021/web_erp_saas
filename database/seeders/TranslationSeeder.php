@@ -13,46 +13,64 @@ class TranslationSeeder extends Seeder
         DB::disableQueryLog();
 
         $path = database_path('seeders/translations');
+
+        // Sort case-insensitively so files of the same locale (e.g. "Ind"/"ind")
+        // are adjacent and share one dedupe set.
         $files = File::files($path);
+        usort($files, fn ($a, $b) => strcasecmp($a->getFilename(), $b->getFilename()));
 
         $now = now();
-        $allTranslations = [];
-
-        foreach ($files as $file) {
-            $locale = pathinfo($file, PATHINFO_FILENAME);
-            $translations = require $file;
-
-            foreach ($translations as $key => $value) {
-                $allTranslations[] = [
-                    'locale' => $locale,
-                    'key' => $key,
-                    'value' => $value,
-                    'is_default' => $locale === 'en' ? 1 : 0,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ];
-            }
-        }
-
-        // Deduplicate by locale+key (PHP arrays are case-sensitive but
-        // MySQL unique index is case-insensitive, causing collisions).
-        $seen = [];
-        $unique = [];
-        foreach ($allTranslations as $row) {
-            $dup = strtolower($row['locale'] . '|' . $row['key']);
-            if (! isset($seen[$dup])) {
-                $seen[$dup] = true;
-                $unique[] = $row;
-            }
-        }
 
         // Truncate + bulk insert is much faster than upsert on remote databases.
         DB::statement('SET FOREIGN_KEY_CHECKS=0');
         DB::table('translations')->truncate();
 
-        DB::transaction(function () use ($unique) {
-            foreach (array_chunk($unique, 2000) as $chunk) {
-                DB::table('translations')->insert($chunk);
+        // Stream one locale file at a time and flush every 2000 rows, so memory
+        // stays flat instead of holding every locale (~150k rows) at once.
+        DB::transaction(function () use ($files, $now) {
+            $buffer = [];
+            $seen = [];
+            $currentLocale = null;
+
+            foreach ($files as $file) {
+                $locale = pathinfo($file, PATHINFO_FILENAME);
+
+                // Deduplicate by locale+key (PHP arrays are case-sensitive but
+                // MySQL unique index is case-insensitive, causing collisions).
+                if (strtolower($locale) !== $currentLocale) {
+                    $currentLocale = strtolower($locale);
+                    $seen = [];
+                }
+
+                $translations = require $file;
+
+                foreach ($translations as $key => $value) {
+                    $dup = strtolower($key);
+                    if (isset($seen[$dup])) {
+                        continue;
+                    }
+                    $seen[$dup] = true;
+
+                    $buffer[] = [
+                        'locale' => $locale,
+                        'key' => $key,
+                        'value' => $value,
+                        'is_default' => $locale === 'en' ? 1 : 0,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
+
+                    if (count($buffer) >= 2000) {
+                        DB::table('translations')->insert($buffer);
+                        $buffer = [];
+                    }
+                }
+
+                unset($translations);
+            }
+
+            if ($buffer) {
+                DB::table('translations')->insert($buffer);
             }
         });
 

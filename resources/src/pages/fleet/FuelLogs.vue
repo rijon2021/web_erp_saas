@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHeader title="Fuel Logs" :breadcrumb="['Fleet Management', 'Fuel Logs']">
+    <PageHeader :title="$t('Fl_Fuel_Logs')" :breadcrumb="[$t('Fl_Fleet_Management'), $t('Fl_Fuel_Logs')]">
       <template #actions>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
@@ -12,23 +12,23 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search station or vehicle…"
+          v-model:value="crud.search.value" :placeholder="$t('Fl_Search_Station_Or_Vehicle')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.vehicle_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All vehicles"
+          option-filter-prop="label" :placeholder="$t('Fl_All_Vehicles')"
           :options="vehicleOptions" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.employee_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All drivers"
+          option-filter-prop="label" :placeholder="$t('Fl_All_Drivers')"
           :options="employeeOptions" @change="crud.reload"
         />
         <a-range-picker v-model:value="filters.range" class="tb-range" value-format="YYYY-MM-DD" @change="crud.reload" />
         <a-space class="tb-totals" :size="6">
           <a-tag color="purple">{{ money(totals.cost || 0) }}</a-tag>
-          <a-tag>{{ number(totals.quantity || 0, 2) }} units</a-tag>
+          <a-tag>{{ number(totals.quantity || 0, 2) }} {{ $t('Fl_Units') }}</a-tag>
         </a-space>
       </div>
     </a-card>
@@ -49,7 +49,7 @@
         </template>
         <template v-else-if="column.key === 'full_tank'">
           <a-tag :color="record.full_tank ? 'success' : 'default'">
-            {{ record.full_tank ? 'Full' : 'Partial' }}
+            {{ record.full_tank ? $t('Fl_Full') : $t('Fl_Partial') }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'actions'">
@@ -70,61 +70,61 @@
     </DataTable>
 
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit fuel entry' : 'Record fuel'" :width="620"
+      :open="formOpen" :title="editing ? $t('Fl_Edit_Fuel_Entry') : $t('Fl_Record_Fuel')" :width="620"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Vehicle *" name="vehicle_id">
+            <a-form-item :label="$t('Fl_Vehicle') + ' *'" name="vehicle_id">
               <a-select
                 v-model:value="form.vehicle_id" show-search option-filter-prop="label"
-                :options="vehicleOptions" placeholder="Select a vehicle" @change="onVehicleChange"
+                :options="vehicleOptions" :placeholder="$t('Fl_Select_A_Vehicle')" @change="onVehicleChange"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Driver">
+            <a-form-item :label="$t('Fl_Driver')">
               <a-select
                 v-model:value="form.employee_id" allow-clear show-search option-filter-prop="label"
-                :options="employeeOptions" placeholder="Not recorded"
+                :options="employeeOptions" :placeholder="$t('Fl_Not_Recorded')"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Date *" name="log_date">
+            <a-form-item :label="$t('Date') + ' *'" name="log_date">
               <a-date-picker v-model:value="form.log_date" style="width: 100%" value-format="YYYY-MM-DD" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Odometer *" name="odometer">
+            <a-form-item :label="$t('Fl_Odometer') + ' *'" name="odometer">
               <a-input-number v-model:value="form.odometer" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="4">
-            <a-form-item label="Quantity *" name="quantity">
+            <a-form-item :label="$t('Quantity') + ' *'" name="quantity">
               <a-input-number v-model:value="form.quantity" :min="0" :step="0.01" style="width: 100%" @change="recalcTotal" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="4">
-            <a-form-item label="Unit price">
+            <a-form-item :label="$t('Fl_Unit_Price')">
               <a-input-number v-model:value="form.unit_price" :min="0" :step="0.01" style="width: 100%" @change="recalcTotal" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="4">
-            <a-form-item label="Total" extra="Auto">
+            <a-form-item :label="$t('Total')" :extra="$t('Fl_Auto')">
               <a-input-number v-model:value="form.total_cost" :min="0" :step="0.01" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Station">
+            <a-form-item :label="$t('Fl_Station')">
               <a-input v-model:value="form.station" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Tank" extra="Consumption maths only works between full tanks">
-              <a-switch v-model:checked="form.full_tank" checked-children="Full" un-checked-children="Partial" />
+            <a-form-item :label="$t('Fl_Tank')" :extra="$t('Fl_Full_Tank_Hint')">
+              <a-switch v-model:checked="form.full_tank" :checked-children="$t('Fl_Full')" :un-checked-children="$t('Fl_Partial')" />
             </a-form-item>
           </a-col>
           <a-col :span="24">
@@ -178,15 +178,15 @@ const crud = useCrudTable('fleet/fuel-logs', {
 const totals = computed(() => crud.payload.value?.totals || {});
 
 const columns = computed(() => [
-  { title: 'Date', key: 'log_date', dataIndex: 'log_date', sorter: true, width: 110 },
-  { title: 'Vehicle', key: 'vehicle', dataIndex: 'vehicle_name', width: 200 },
-  { title: 'Odometer', key: 'odometer', dataIndex: 'odometer', sorter: true, width: 110 },
-  { title: 'Quantity', key: 'quantity', dataIndex: 'quantity', sorter: true, width: 110 },
-  { title: 'Unit price', key: 'unit_price', dataIndex: 'unit_price', sorter: true, width: 120 },
-  { title: 'Total', key: 'total_cost', dataIndex: 'total_cost', sorter: true, width: 120 },
-  { title: 'Driver', key: 'driver', dataIndex: 'driver_name', width: 150 },
-  { title: 'Station', dataIndex: 'station', key: 'station' },
-  { title: 'Tank', key: 'full_tank', width: 100 },
+  { title: t('Date'), key: 'log_date', dataIndex: 'log_date', sorter: true, width: 110 },
+  { title: t('Fl_Vehicle'), key: 'vehicle', dataIndex: 'vehicle_name', width: 200 },
+  { title: t('Fl_Odometer'), key: 'odometer', dataIndex: 'odometer', sorter: true, width: 110 },
+  { title: t('Quantity'), key: 'quantity', dataIndex: 'quantity', sorter: true, width: 110 },
+  { title: t('Fl_Unit_Price'), key: 'unit_price', dataIndex: 'unit_price', sorter: true, width: 120 },
+  { title: t('Total'), key: 'total_cost', dataIndex: 'total_cost', sorter: true, width: 120 },
+  { title: t('Fl_Driver'), key: 'driver', dataIndex: 'driver_name', width: 150 },
+  { title: t('Fl_Station'), dataIndex: 'station', key: 'station' },
+  { title: t('Fl_Tank'), key: 'full_tank', width: 100 },
   { title: '', key: 'actions', width: 90 },
 ]);
 

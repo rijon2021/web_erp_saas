@@ -8,17 +8,21 @@
 
     <a-skeleton v-if="loading" active :paragraph="{ rows: 10 }" />
     <template v-else>
+      <!-- Message carried over from a server redirect (e.g. "renew to continue"). Plain text. -->
+      <a-alert v-if="$route.query.notice" :type="$route.query.notice_type === 'success' ? 'success' : 'warning'" show-icon closable style="margin-bottom: 16px" :message="String($route.query.notice)" />
       <a-alert v-if="pendingUpgrade" type="info" show-icon style="margin-bottom: 16px" :message="tf('Pending_Upgrade', 'Pending Upgrade Request')">
         <template #description>
-          {{ tf('Pending_upgrade_message', 'You have a pending upgrade to') }} <strong>{{ pendingUpgrade.plan_name }}</strong>.
+          {{ tf('Billing_Pending_Upgrade_To', 'You have a pending upgrade to') }} <strong>{{ pendingUpgrade.plan_name }}</strong>.
           {{ tf('Pending_upgrade_wait', 'Please wait for admin approval before submitting another request.') }}
         </template>
       </a-alert>
 
-      <div style="text-align: center; margin-bottom: 20px">
+      <!-- Hidden entirely when the platform sells a single cycle: a one-option
+           toggle is noise, and `cycle` is already pinned to that option. -->
+      <div v-if="cycles.length > 1" style="text-align: center; margin-bottom: 20px">
         <a-radio-group v-model:value="cycle" button-style="solid">
-          <a-radio-button value="monthly">{{ tf('Monthly', 'Monthly') }}</a-radio-button>
-          <a-radio-button value="yearly">{{ tf('Yearly', 'Yearly') }} <a-tag color="success" style="margin-left: 6px">{{ $t('Save') }}</a-tag></a-radio-button>
+          <a-radio-button v-if="cycles.includes('monthly')" value="monthly">{{ tf('Monthly', 'Monthly') }}</a-radio-button>
+          <a-radio-button v-if="cycles.includes('yearly')" value="yearly">{{ tf('Yearly', 'Yearly') }} <a-tag color="success" style="margin-left: 6px">{{ $t('Save') }}</a-tag></a-radio-button>
         </a-radio-group>
       </div>
 
@@ -40,8 +44,13 @@
             <div v-for="(feat, key) in p.features" :key="'f' + key" class="row-item"><CheckOutlined style="color: #52c41a" /> {{ feat.label }}</div>
             <div v-for="(feat, key) in missingFeatures(p)" :key="'m' + key" class="row-item muted"><CloseOutlined /> {{ feat.label }}</div>
             <div style="margin-top: 20px">
-              <a-button v-if="p.is_current" block disabled>{{ tf('Current_Plan', 'Current Plan') }}</a-button>
+              <a-button v-if="p.is_current && isFreePlan(p)" block disabled>{{ tf('Current_Plan', 'Current Plan') }}</a-button>
               <a-button v-else-if="pendingUpgrade" block disabled>{{ tf('Upgrade_Pending', 'Upgrade Pending') }}</a-button>
+              <template v-else-if="p.is_current">
+                <!-- Current paid plan: renew early / switch cycle — the days left are kept. -->
+                <a-button block @click="$router.push({ path: `/subscription/checkout/${p.id}`, query: { cycle } })">{{ $t('Renew_Early') }}</a-button>
+                <div class="muted" style="text-align: center; font-size: 12px; margin-top: 6px">{{ $t('Renew_Early_Hint') }}</div>
+              </template>
               <a-button v-else type="primary" block @click="$router.push({ path: `/subscription/checkout/${p.id}`, query: { cycle } })">
                 <template v-if="hasActive && currentPlanPrice !== null && p.price > currentPlanPrice">{{ tf('Upgrade', 'Upgrade') }}</template>
                 <template v-else-if="hasActive">{{ tf('Switch', 'Switch') }}</template>
@@ -69,10 +78,17 @@ const { currencySymbol } = useBillingFormat();
 const loading = ref(true);
 const plans = ref([]);
 const cycle = ref('monthly');
+// Cycles the super admin currently sells. Defaults to both so the page still
+// renders if an older backend omits the key.
+const cycles = ref(['monthly', 'yearly']);
 const currentPlanPrice = ref(null);
 const hasActive = ref(false);
 const pendingUpgrade = ref(null);
 const allFeatures = ref({});
+
+function isFreePlan(p) {
+  return Number(p.price || 0) <= 0 && Number(p.yearly_price || 0) <= 0;
+}
 
 function missingFeatures(p) {
   const active = p.features || {};
@@ -89,9 +105,12 @@ onMounted(async () => {
     hasActive.value = !!data.has_active;
     pendingUpgrade.value = data.pending_upgrade || null;
     currencySymbol.value = data.currency_symbol || '$';
+    if (Array.isArray(data.billing_cycles) && data.billing_cycles.length) cycles.value = data.billing_cycles;
+    // Never leave the page on a cycle the backend would reject.
+    if (!cycles.value.includes(cycle.value)) cycle.value = cycles.value[0];
     if (plans.value.length) allFeatures.value = plans.value[0].all_features || {};
   } catch (e) {
-    message.error(e?.data?.message || 'Failed to load plans.');
+    message.error(e?.data?.message || tf('Billing_Failed_Load_Plans', 'Failed to load plans.'));
   } finally {
     loading.value = false;
   }

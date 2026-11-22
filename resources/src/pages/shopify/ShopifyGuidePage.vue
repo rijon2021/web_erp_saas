@@ -1,22 +1,22 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Shopify guide"
-      subtitle="Connecting a shop, what runs by itself, and where each setting lives"
-      :breadcrumb="['Shopify', 'Guide']"
+      :title="$t('Page_Shopify_Guide')"
+      :subtitle="$t('Shp_Guide_Subtitle')"
+      :breadcrumb="['Shopify', $t('Guide')]"
     >
       <template #actions>
         <a-select
           v-model:value="storeId" :options="storeOptions" style="min-width: 260px"
-          placeholder="Show a store's own state" allow-clear
+          :placeholder="$t('Shp_Show_Store_State')" allow-clear
           :loading="loading" @change="loadStore"
         />
         <a-button v-if="storeId" @click="$router.push(`/shopify/stores/${storeId}`)">
-          Open store
+          {{ $t('Shp_Open_Store') }}
         </a-button>
         <a-button type="primary" @click="$router.push('/shopify/stores')">
           <template #icon><ShopOutlined /></template>
-          Stores
+          {{ $t('Stores') }}
         </a-button>
       </template>
     </PageHeader>
@@ -26,8 +26,8 @@
         <a-alert
           v-if="!loading && !stores.length"
           type="info" show-icon style="margin-bottom: 16px"
-          message="No shop is connected yet"
-          description="Everything below still applies — connect one from Shopify → Stores, then come back here and pick it above to see its own state alongside each step."
+          :message="$t('Shp_No_Shop_Connected_Yet')"
+          :description="$t('Shp_Guide_No_Shop_Desc')"
         />
         <ShopifyGuide :store="store" :cron="cron" :webhook-url="webhookUrl" />
       </a-spin>
@@ -54,7 +54,9 @@ const loading = ref(false);
 const stores = ref([]);
 const store = ref(null);
 const storeId = ref(route.query.store_id ? Number(route.query.store_id) : undefined);
-const cron = ref({ managed: false, base_path: '', sync: '', queue: '' });
+// The platform always runs the scheduler (ShopifyStoreController::cronLines
+// returns managed: true), so a failed request must not fall back to cron steps.
+const cron = ref({ managed: true, base_path: '', sync: '', queue: '' });
 const webhookUrl = ref('');
 
 const storeOptions = computed(() => stores.value.map(s => ({ value: s.id, label: s.label })));

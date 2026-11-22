@@ -5,10 +5,20 @@ import http from '../lib/http';
 const DARK_KEY = 'next_dark_mode';
 const THEME_KEY = 'next_theme_mode';
 const COLOR_KEY = 'next_primary_color';
-const RTL_KEY = 'next_rtl';
+// v2: the old 'next_rtl' key could hold a stale '0' written by saving System
+// Settings in Arabic, which pinned every Ant component LTR. Renaming the key
+// resets that once; the old value is dropped below.
+const RTL_KEY = 'next_rtl_override';
+try { window.localStorage.removeItem('next_rtl'); } catch (e) { /* ignore */ }
 const SIDEBAR_KEY = 'next_sidebar_compact';
 const LAYOUT_KEY = 'next_sidebar_layout';
-const DEFAULT_COLOR = '#6d28d9';
+// Built-in brand colour, unless the super admin chose a tenant default
+// (Settings > General > Tenant Settings), which master.blade.php exposes.
+const BUILTIN_COLOR = '#6d28d9';
+const DEFAULT_COLOR = (typeof window !== 'undefined'
+    && /^#[0-9a-f]{6}$/i.test(String(window.__defaultPrimaryColor || '')))
+    ? String(window.__defaultPrimaryColor).toLowerCase()
+    : BUILTIN_COLOR;
 const SIDEBAR_LAYOUTS = ['default', 'large', 'flat', 'dark'];
 
 function stored(key, fallback) {
@@ -109,12 +119,20 @@ export const useUiStore = defineStore('ui', {
             this.primaryColor = color || DEFAULT_COLOR;
             save(COLOR_KEY, this.primaryColor);
         },
+        // Forget the personal choice (rather than saving the default), so the
+        // user follows the admin default even if it changes later.
         resetPrimaryColor() {
-            this.setPrimaryColor(DEFAULT_COLOR);
+            this.primaryColor = DEFAULT_COLOR;
+            try { window.localStorage.removeItem(COLOR_KEY); } catch (e) { /* ignore */ }
         },
         setRtl(on) {
             this.rtl = on ? '1' : '0';
             save(RTL_KEY, this.rtl);
+        },
+        // Back to the language's natural direction (ar → rtl, others → ltr).
+        clearRtlOverride() {
+            this.rtl = null;
+            try { window.localStorage.removeItem(RTL_KEY); } catch (e) { /* ignore */ }
         },
         setSidebarCollapsed(on) {
             this.sidebarCollapsed = !!on;
@@ -128,6 +146,9 @@ export const useUiStore = defineStore('ui', {
             save(LAYOUT_KEY, this.sidebarLayout);
         },
         async setLocale(locale) {
+            // Picking a language picks its direction: Arabic is always RTL
+            // again, whatever a manual toggle said for the previous language.
+            this.clearRtlOverride();
             this.locale = locale;
             await loadLocale(locale);
             // Best-effort backend sync, exactly what the legacy language store

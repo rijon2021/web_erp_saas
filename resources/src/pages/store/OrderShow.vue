@@ -6,7 +6,7 @@
           <a-tooltip v-if="order.is_flagged" :title="order.flag_reason">
             <a-tag color="error"><FlagOutlined /> {{ $t('Flagged') }}</a-tag>
           </a-tooltip>
-          <a-tag :color="statusColor(order.status)" style="text-transform: uppercase">{{ order.status }}</a-tag>
+          <a-tag :color="statusColor(order.status)" style="text-transform: uppercase">{{ statusLabel(order.status) }}</a-tag>
           <a-tag v-if="order.has_preorder_items" color="warning">{{ $t('HasPreorderItems') }}</a-tag>
           <a-button v-if="order.status === 'confirmed'" :loading="actionBusy" @click="changeStatus('shipped')">
             {{ $t('Mark_Shipped') }}
@@ -17,6 +17,15 @@
         </a-space>
       </template>
     </PageHeader>
+
+    <!-- Paid online, but auto-confirm could not run: say why, so the admin
+         can fix it (e.g. restock) and confirm by hand. -->
+    <a-alert
+      v-if="!loading && order.auto_confirm_error"
+      type="warning" show-icon style="margin-bottom: 16px"
+      :message="$t('Auto_Confirm_Failed')"
+      :description="order.auto_confirm_error"
+    />
 
     <div v-if="loading" style="display: flex; justify-content: center; padding: 96px 0">
       <a-spin size="large" />
@@ -44,7 +53,12 @@
 
       <a-col :xs="24" :lg="10">
         <a-card size="small" :title="$t('Customer')" style="margin-bottom: 16px">
-          <div class="muted">{{ order.customer_name }}</div>
+          <div class="muted">
+            {{ order.customer_name }}
+            <a-tooltip v-if="order.is_guest" :title="$t('Guest_Order_Help')">
+              <a-tag style="margin-inline-start: 4px">{{ $t('Guest_Order') }}</a-tag>
+            </a-tooltip>
+          </div>
           <div class="muted">{{ order.customer_email }}</div>
           <div class="muted">{{ order.customer_phone }}</div>
         </a-card>
@@ -70,8 +84,31 @@
           </div>
           <div class="line">
             <span class="muted">{{ $t('Status') }}</span>
-            <a-tag :color="order.payment_status === 'paid' ? 'success' : 'warning'">{{ order.payment_status || 'pending' }}</a-tag>
+            <a-tag :color="onlineOrderPaymentColor(order.payment_status)">{{ statusLabel(order.payment_status || 'pending') }}</a-tag>
           </div>
+        </a-card>
+
+        <a-card v-if="order.sale || saleMissing" size="small" :title="$t('Ord_LinkedSale')" style="margin-bottom: 16px">
+          <template v-if="order.sale">
+            <div class="line">
+              <span class="muted">{{ $t('Reference') }}</span>
+              <router-link v-if="auth.can('Sales_view')" :to="`/sales/${order.sale.id}`">{{ order.sale.ref }}</router-link>
+              <span v-else>{{ order.sale.ref }}</span>
+            </div>
+            <div class="line">
+              <span class="muted">{{ $t('PaymentStatus') }}</span>
+              <a-tag :color="payStatusColor(order.sale.payment_status)">{{ $t(statusKey(PAYMENT_STATUSES, order.sale.payment_status) || 'Unpaid') }}</a-tag>
+            </div>
+            <div class="line">
+              <span class="muted">{{ $t('Paid') }}</span>
+              <span>{{ currency(order.sale.paid) }}</span>
+            </div>
+            <div class="line">
+              <span class="muted">{{ $t('Due') }}</span>
+              <span>{{ currency(order.sale.due) }}</span>
+            </div>
+          </template>
+          <div v-else class="muted">{{ $t('Ord_LinkedSale_Missing') }}</div>
         </a-card>
 
         <a-card
@@ -117,7 +154,7 @@
           </div>
         </a-card>
 
-        <a-card size="small" title="Summary">
+        <a-card size="small" :title="$t('Summary')">
           <div class="line"><span>{{ $t('Subtotal') }}</span><strong>{{ currency(order.subtotal) }}</strong></div>
           <div v-if="Number(order.shipping || 0) > 0" class="line">
             <span>{{ $t('Shipping') }}</span><strong>{{ currency(order.shipping || 0) }}</strong>
@@ -153,6 +190,7 @@
  * blob GET store/orders/{id}/invoice.
  */
 import { ref, computed, onMounted } from 'vue';
+import { useFormat } from '../../composables/useFormat';
 import { useRoute } from 'vue-router';
 import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
@@ -160,10 +198,14 @@ import { FlagOutlined, FilePdfOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import { useAuthStore } from '../../stores/auth';
 import http from '../../lib/http';
+import { onlineOrderPaymentColor } from '../../lib/statusTags';
+import { payStatusColor } from '../../lib/statusColors';
+import { PAYMENT_STATUSES, statusKey } from '../sales/saleVocab';
 
 const { t } = useI18n();
 const route = useRoute();
 const auth = useAuthStore();
+const { moneyBase } = useFormat();
 
 const id = route.params.id;
 const loading = ref(true);
@@ -179,6 +221,9 @@ const rejectTarget = ref(null);
 
 const proofs = computed(() => order.value.payment_proofs || []);
 const isPickup = computed(() => order.value.delivery_method === 'pickup');
+// Confirming creates the sale, so a later status with none means it was deleted
+// or the order predates the link.
+const saleMissing = computed(() => !order.value.sale && ['confirmed', 'shipped', 'delivered'].includes(order.value.status));
 
 const itemColumns = computed(() => [
   { title: t('ProductName'), key: 'name' },
@@ -187,13 +232,14 @@ const itemColumns = computed(() => [
   { title: t('Total'), key: 'total', align: 'right' },
 ]);
 
+// Base-currency amount with the configured price format and Currency Position.
 function currency(n) {
-  const c = auth.currency;
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: c }).format(n || 0);
-  } catch (e) {
-    return `${c} ${Number(n || 0).toFixed(2)}`;
-  }
+  return moneyBase(n || 0);
+}
+// Status values stay raw for the API; only the tag text is translated.
+const STATUS_LABEL_KEYS = { pending: 'pending', confirmed: 'confirmed', cancelled: 'cancelled', shipped: 'Shipped', delivered: 'Delivered', paid: 'paid', partial: 'PartiallyPaid', refunded: 'Refunded', failed: 'Failed' };
+function statusLabel(s) {
+  return STATUS_LABEL_KEYS[s] ? t(STATUS_LABEL_KEYS[s]) : s;
 }
 function statusColor(s) {
   return { pending: 'warning', confirmed: 'success', shipped: 'cyan', delivered: 'blue', cancelled: 'error' }[s] || 'default';
@@ -203,6 +249,7 @@ function paymentMethodLabel(m) {
     credit_card: t('CreditCard'), paypal: 'PayPal', paystack: 'Paystack', flutterwave: 'Flutterwave',
     razorpay: 'Razorpay', mobile_money: t('MobileMoney'), cod: t('CashOnDelivery'),
     gcash: t('GCash'), bank_transfer: t('BankTransfer'), cash_on_pickup: t('CashOnPickup'),
+    wallet: t('CW_Customer_Wallet'),
   }[m] || m || 'N/A';
 }
 function paymentMethodColor(m) {

@@ -1,18 +1,18 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Hospital Dashboard"
-      subtitle="Census, activity and revenue at a glance."
-      :breadcrumb="['Hospital', 'Dashboard']"
+      :title="$t('Page_Hospital_Dashboard')"
+      :subtitle="$t('Hm_Dashboard_Subtitle')"
+      :breadcrumb="[$t('Hm_Hospital'), $t('Dashboard')]"
     >
       <template #actions>
         <a-button @click="$router.push('/hospital/appointments')">
           <template #icon><CalendarOutlined /></template>
-          Appointments
+          {{ $t('Hm_Appointments') }}
         </a-button>
         <a-button type="primary" @click="$router.push('/hospital/patients/create')">
           <template #icon><UserAddOutlined /></template>
-          Register patient
+          {{ $t('Hm_Register_Patient') }}
         </a-button>
       </template>
     </PageHeader>
@@ -24,54 +24,54 @@
           <span class="kpi-ic kpi-ic--brand"><TeamOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ n(data.patients_total) }}</span>
-            <span class="kpi-label">Patients</span>
+            <span class="kpi-label">{{ $t('Hm_Patients') }}</span>
           </span>
-          <span v-if="data.patients_new_today" class="kpi-note">+{{ data.patients_new_today }} today</span>
+          <span v-if="data.patients_new_today" class="kpi-note">+{{ data.patients_new_today }} {{ $t('Hm_Today_Lc') }}</span>
         </button>
 
         <button type="button" class="kpi" @click="$router.push('/hospital/appointments?today=1')">
           <span class="kpi-ic kpi-ic--info"><CalendarOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ n(data.appointments_today) }}</span>
-            <span class="kpi-label">Appointments today</span>
+            <span class="kpi-label">{{ $t('Hm_Appointments_Today') }}</span>
           </span>
-          <span v-if="data.appointments_pending" class="kpi-note">{{ data.appointments_pending }} pending</span>
+          <span v-if="data.appointments_pending" class="kpi-note">{{ data.appointments_pending }} {{ $t('Hm_Pending_Lc') }}</span>
         </button>
 
         <button type="button" class="kpi" @click="$router.push('/hospital/admissions?status=admitted')">
           <span class="kpi-ic kpi-ic--warn"><MedicineBoxOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ n(data.admissions_current) }}</span>
-            <span class="kpi-label">Inpatients</span>
+            <span class="kpi-label">{{ $t('Hm_Inpatients') }}</span>
           </span>
-          <span class="kpi-note">{{ data.admissions_today || 0 }} in / {{ data.discharges_today || 0 }} out</span>
+          <span class="kpi-note">{{ data.admissions_today || 0 }} {{ $t('Hm_In_Lc') }} / {{ data.discharges_today || 0 }} {{ $t('Hm_Out_Lc') }}</span>
         </button>
 
         <button type="button" class="kpi" @click="$router.push('/hospital/wards')">
           <span class="kpi-ic kpi-ic--bed"><HomeOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.occupancy_rate || 0 }}%</span>
-            <span class="kpi-label">Bed occupancy</span>
+            <span class="kpi-label">{{ $t('Hm_Bed_Occupancy') }}</span>
           </span>
-          <span class="kpi-note">{{ data.beds_available || 0 }} free</span>
+          <span class="kpi-note">{{ data.beds_available || 0 }} {{ $t('Hm_Free_Lc') }}</span>
         </button>
 
         <button type="button" class="kpi" @click="$router.push('/hospital/lab-orders?pending=1')">
           <span class="kpi-ic kpi-ic--lab"><ExperimentOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ n(data.lab_pending) }}</span>
-            <span class="kpi-label">Lab pending</span>
+            <span class="kpi-label">{{ $t('Hm_Lab_Pending') }}</span>
           </span>
-          <span v-if="data.lab_critical" class="kpi-note kpi-note--danger">{{ data.lab_critical }} critical</span>
+          <span v-if="data.lab_critical" class="kpi-note kpi-note--danger">{{ data.lab_critical }} {{ $t('Hm_Critical_Lc') }}</span>
         </button>
 
         <button type="button" class="kpi" @click="$router.push('/hospital/invoices?outstanding=1')">
           <span class="kpi-ic kpi-ic--money"><DollarOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ money(data.revenue_today || 0) }}</span>
-            <span class="kpi-label">Collected today</span>
+            <span class="kpi-label">{{ $t('Hm_Collected_Today') }}</span>
           </span>
-          <span v-if="data.outstanding" class="kpi-note kpi-note--danger">{{ money(data.outstanding) }} due</span>
+          <span v-if="data.outstanding" class="kpi-note kpi-note--danger">{{ money(data.outstanding) }} {{ $t('Hm_Due_Lc') }}</span>
         </button>
       </div>
 
@@ -80,24 +80,24 @@
           <ReportChart
             :data="data.trend || []"
             :fields="[
-              { key: 'visits', label: 'Consultations' },
-              { key: 'admissions', label: 'Admissions' },
+              { key: 'visits', label: $t('Hm_Consultations') },
+              { key: 'admissions', label: $t('Hm_Admissions') },
             ]"
-            title="Activity — last 14 days"
+            :title="$t('Hm_Activity_14_Days')"
             type="area"
             :height="280"
           />
 
           <ReportChart
             :data="data.trend || []"
-            :fields="[{ key: 'revenue', label: 'Collected' }]"
-            title="Collections — last 14 days"
+            :fields="[{ key: 'revenue', label: $t('Hm_Collected') }]"
+            :title="$t('Hm_Collections_14_Days')"
             type="bar"
             :height="240"
             :format="money"
           />
 
-          <a-card size="small" title="Ward occupancy" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Hm_Ward_Occupancy')" style="margin-bottom: 16px">
             <div v-if="(data.ward_occupancy || []).length" class="wards">
               <div v-for="w in data.ward_occupancy" :key="w.id" class="ward">
                 <div class="ward-head">
@@ -110,16 +110,16 @@
                 />
               </div>
             </div>
-            <a-empty v-else :image="simpleEmptyImage" description="No beds configured yet">
-              <a-button size="small" @click="$router.push('/hospital/wards')">Set up wards</a-button>
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Hm_No_Beds_Configured')">
+              <a-button size="small" @click="$router.push('/hospital/wards')">{{ $t('Hm_Set_Up_Wards') }}</a-button>
             </a-empty>
           </a-card>
         </a-col>
 
         <a-col :xs="24" :xl="8">
-          <a-card size="small" title="Next up today" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Hm_Next_Up_Today')" style="margin-bottom: 16px">
             <template #extra>
-              <a-button type="link" size="small" @click="$router.push('/hospital/appointments?today=1')">All</a-button>
+              <a-button type="link" size="small" @click="$router.push('/hospital/appointments?today=1')">{{ $t('Hm_All') }}</a-button>
             </template>
             <div v-if="(data.upcoming || []).length" class="queue">
               <button
@@ -136,11 +136,11 @@
                 </a-tag>
               </button>
             </div>
-            <a-empty v-else :image="simpleEmptyImage" description="Nothing else booked today" style="padding: 16px 0" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Hm_Nothing_Else_Booked_Today')" style="padding: 16px 0" />
           </a-card>
 
-          <a-card size="small" title="Busiest departments" style="margin-bottom: 16px">
-            <template #extra><span class="card-hint">last 30 days</span></template>
+          <a-card size="small" :title="$t('Hm_Busiest_Departments')" style="margin-bottom: 16px">
+            <template #extra><span class="card-hint">{{ $t('Hm_Last_30_Days') }}</span></template>
             <div v-if="(data.by_department || []).length" class="depts">
               <div v-for="d in data.by_department" :key="d.name" class="dept">
                 <span class="dept-name">{{ d.name }}</span>
@@ -151,20 +151,20 @@
                 <span class="dept-count">{{ d.visits }}</span>
               </div>
             </div>
-            <a-empty v-else :image="simpleEmptyImage" description="No consultations yet" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Hm_No_Consultations_Yet')" />
           </a-card>
 
-          <a-card size="small" title="This month">
+          <a-card size="small" :title="$t('Hm_This_Month')">
             <a-descriptions :column="1" size="small">
-              <a-descriptions-item label="Consultations today">{{ n(data.visits_today) }}</a-descriptions-item>
-              <a-descriptions-item label="Collected">{{ money(data.revenue_month || 0) }}</a-descriptions-item>
-              <a-descriptions-item label="Outstanding">
+              <a-descriptions-item :label="$t('Hm_Consultations_Today')">{{ n(data.visits_today) }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Collected')">{{ money(data.revenue_month || 0) }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Outstanding')">
                 <span :class="{ danger: data.outstanding > 0 }">{{ money(data.outstanding || 0) }}</span>
               </a-descriptions-item>
-              <a-descriptions-item label="Active doctors">{{ n(data.doctors_active) }}</a-descriptions-item>
-              <a-descriptions-item label="Departments">{{ n(data.departments) }}</a-descriptions-item>
-              <a-descriptions-item label="Beds">
-                {{ n(data.beds_occupied) }} / {{ n(data.beds_total) }} occupied
+              <a-descriptions-item :label="$t('Hm_Active_Doctors')">{{ n(data.doctors_active) }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Departments')">{{ n(data.departments) }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Beds')">
+                {{ n(data.beds_occupied) }} / {{ n(data.beds_total) }} {{ $t('Hm_Occupied_Lc') }}
               </a-descriptions-item>
             </a-descriptions>
           </a-card>

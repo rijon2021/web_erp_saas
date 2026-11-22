@@ -31,7 +31,7 @@
               <a-form-item :label="tf('Access_Token', 'Access Token')">
                 <a-input-password
                   v-model:value="form.access_token" autocomplete="new-password"
-                  :placeholder="status.has_access_token ? '••••••••  (leave blank to keep)' : 'Permanent access token'"
+                  :placeholder="status.has_access_token ? tf('Wa_Leave_Blank_To_Keep') : tf('Wa_Permanent_Access_Token')"
                 />
               </a-form-item>
               <a-row :gutter="12">
@@ -39,13 +39,13 @@
                   <a-form-item :label="tf('App_Secret', 'App Secret')">
                     <a-input-password
                       v-model:value="form.app_secret" autocomplete="new-password"
-                      :placeholder="status.has_app_secret ? '••••••••  (leave blank to keep)' : 'For webhook signature (optional)'"
+                      :placeholder="status.has_app_secret ? tf('Wa_Leave_Blank_To_Keep') : tf('Wa_App_Secret_Placeholder')"
                     />
                   </a-form-item>
                 </a-col>
                 <a-col :xs="24" :md="12">
                   <a-form-item :label="tf('Webhook_Verify_Token', 'Webhook Verify Token')">
-                    <a-input v-model:value="form.webhook_verify_token" placeholder="Any secret string you set in Meta" />
+                    <a-input v-model:value="form.webhook_verify_token" :placeholder="tf('Wa_Verify_Token_Placeholder')" />
                   </a-form-item>
                 </a-col>
                 <a-col :xs="24" :md="12">
@@ -65,7 +65,7 @@
             <p class="muted">{{ tf('Automated_Messages_Help', 'Automatically send a WhatsApp message when these events happen. Each event uses the matching template (by key).') }}</p>
             <div v-for="key in automationKeys" :key="key" style="margin-bottom: 8px">
               <a-switch :checked="!!form.automations[key]" @update:checked="v => (form.automations[key] = v)" />
-              <span style="margin-left: 8px">{{ automationLabels[key] || key }}</span>
+              <span style="margin-left: 8px">{{ automationLabel(key) }}</span>
             </div>
             <a-empty v-if="!automationKeys.length" :description="tf('No_Automations_Available', 'No automation events available.')" />
           </a-card>
@@ -75,7 +75,7 @@
           <a-card size="small" style="margin-bottom: 16px; text-align: center">
             <h4 style="margin-bottom: 8px">{{ tf('Connection_Status', 'Connection Status') }}</h4>
             <a-tag :color="status.is_connected ? 'success' : 'default'" style="font-size: 13px; padding: 4px 12px">
-              {{ status.is_connected ? tf('Connected', 'Connected') : tf('Not_Connected', 'Not Connected') }}
+              {{ status.is_connected ? tf('Connected', 'Connected') : tf('Not_connected', 'Not Connected') }}
             </a-tag>
             <p v-if="status.connected_at" class="muted" style="margin: 8px 0 0">{{ tf('Since', 'Since') }} {{ status.connected_at }}</p>
           </a-card>
@@ -87,7 +87,7 @@
             <a-progress v-if="quota.max" :percent="quotaPercent" :status="quotaStatus" :show-info="false" style="margin-top: 8px" />
           </a-card>
 
-          <a-card size="small" :title="tf('Webhook_URL', 'Webhook URL')">
+          <a-card size="small" :title="tf('Webhook_Url', 'Webhook URL')">
             <p class="muted" style="margin-bottom: 6px">{{ tf('Webhook_URL_Hint', 'Paste this into your Meta app webhook configuration:') }}</p>
             <a-textarea :value="webhookUrl" readonly :rows="2" />
           </a-card>
@@ -121,9 +121,10 @@ const globallyEnabled = ref(false);
 const webhookUrl = ref('');
 const automationKeys = ref([]);
 const automationLabels = {
-  invoice_created: 'Invoice created (new sale)',
-  payment_received: 'Payment received',
+  invoice_created: 'Wa_Auto_Invoice_Created',
+  payment_received: 'Wa_Auto_Payment_Received',
 };
+const automationLabel = key => (automationLabels[key] ? tf(automationLabels[key]) : key);
 const status = ref({ is_connected: false, connected_at: null, has_access_token: false, has_app_secret: false });
 const quota = ref({ used: 0, max: null, remaining: null });
 const form = ref({
@@ -168,7 +169,7 @@ async function save() {
     message.success(tf('WhatsApp_Settings_Saved', 'WhatsApp settings saved.'));
     await load();
   } catch (e) {
-    message.error(e?.data?.message || tf('Failed_To_Save', 'Failed to save.'));
+    message.error(e?.data?.message || tf('Failed_to_save', 'Failed to save.'));
   } finally {
     saving.value = false;
   }

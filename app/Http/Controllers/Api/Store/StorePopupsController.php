@@ -12,7 +12,7 @@ class StorePopupsController extends Controller
 {
     public function index(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_popups', StoreSetting::class);
 
         $popups = StorePopup::orderBy('sort_order')->orderByDesc('id')->get()
             ->map(fn (StorePopup $p) => $this->present($p));
@@ -25,7 +25,7 @@ class StorePopupsController extends Controller
 
     public function store(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_popups', StoreSetting::class);
 
         $data = $this->validateData($request);
         $data['image'] = $this->handleImage($request, null);
@@ -37,7 +37,7 @@ class StorePopupsController extends Controller
 
     public function update(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_popups', StoreSetting::class);
 
         $popup = StorePopup::findOrFail($id);
         $data = $this->validateData($request);
@@ -54,7 +54,7 @@ class StorePopupsController extends Controller
 
     public function destroy(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_popups', StoreSetting::class);
 
         StorePopup::findOrFail($id)->delete();
 
@@ -131,7 +131,7 @@ class StorePopupsController extends Controller
         }
 
         $file = $request->file('image');
-        $filename = 'popup_'.time().'_'.mt_rand(1000, 9999).'.'.$file->getClientOriginalExtension();
+        $filename = 'popup_'.time().'_'.mt_rand(1000, 9999).'.'.\App\Support\SafeUpload::imageExtension($file, 'image');
         $file->move($dir, $filename);
 
         return upload_path('popups').'/'.$filename;

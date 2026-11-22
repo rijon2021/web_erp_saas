@@ -78,6 +78,12 @@
         >
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'quantity'">{{ number(record.quantity, 2) }} {{ record.unit }}</template>
+            <template v-else-if="column.key === 'name'">
+              <div>{{ record.name }}</div>
+              <div v-if="(record.serial_numbers || []).length" style="font-size: 12px; opacity: 0.6">
+                {{ $t('SN') }}: {{ record.serial_numbers.join(', ') }}
+              </div>
+            </template>
           </template>
         </a-table>
         <p v-if="detail.damage.note" style="margin-top: 16px">{{ detail.damage.note }}</p>

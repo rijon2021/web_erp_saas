@@ -21,10 +21,15 @@ class PortalAppointmentsController extends Controller
         $perPage = (int) $request->input('limit', 10);
         $page = max(1, (int) $request->input('page', 1));
         $search = $request->input('search');
+        $status = $request->input('status');
+        $dateFrom = $request->input('date_from');
+        $dateTo = $request->input('date_to');
 
-        $q = ServiceJob::query()
+        $base = ServiceJob::query()
             ->whereNull('deleted_at')
-            ->where('client_id', $portalClient->client_id)
+            ->where('client_id', $portalClient->client_id);
+
+        $q = (clone $base)
             ->when($search, function ($query) use ($search) {
                 $query->where(function ($qr) use ($search) {
                     $qr->where('Ref', 'LIKE', "%{$search}%")
@@ -33,8 +38,18 @@ class PortalAppointmentsController extends Controller
                         ->orWhere('status', 'LIKE', "%{$search}%");
                 });
             })
-            ->orderByDesc('scheduled_date')
-            ->orderByDesc('id');
+            ->when($status, fn ($query) => $query->where('status', $status))
+            ->when($dateFrom, fn ($query) => $query->whereDate('scheduled_date', '>=', $dateFrom))
+            ->when($dateTo, fn ($query) => $query->whereDate('scheduled_date', '<=', $dateTo));
+
+        $q = $this->applyPortalSort($q, $request, [
+            'scheduled_date' => 'scheduled_date',
+            'Ref' => 'Ref',
+            'service_item' => 'service_item',
+            'status' => 'status',
+        ], 'scheduled_date');
+
+        $statuses = (clone $base)->whereNotNull('status')->distinct()->orderBy('status')->pluck('status')->values();
 
         $totalRows = (clone $q)->count();
         $rows = $perPage > 0
@@ -48,7 +63,7 @@ class PortalAppointmentsController extends Controller
                 'service_item' => $job->service_item,
                 'job_type' => $job->job_type,
                 'status' => $job->status,
-                'scheduled_date' => optional($job->scheduled_date)->format('Y-m-d H:i'),
+                'scheduled_date' => self::stamp($job->scheduled_date),
                 'reported_issue' => $job->reported_issue,
                 'total_amount' => (float) ($job->total_amount ?? 0),
                 'paid_amount' => (float) ($job->paid_amount ?? 0),
@@ -59,7 +74,19 @@ class PortalAppointmentsController extends Controller
         return response()->json([
             'totalRows' => $totalRows,
             'appointments' => $data,
+            'statuses' => $statuses,
         ]);
+    }
+
+    /**
+     * Whitelisted sort for the portal list endpoints: ?sort=<column>&dir=asc|desc.
+     */
+    private function applyPortalSort($query, Request $request, array $allowed, string $default)
+    {
+        $sort = (string) $request->input('sort', '');
+        $dir = strtolower((string) $request->input('dir', 'desc')) === 'asc' ? 'asc' : 'desc';
+        $column = array_key_exists($sort, $allowed) ? $allowed[$sort] : $allowed[$default];
+        return $query->orderBy($column, $dir)->orderByDesc('id');
     }
 
     /**
@@ -82,9 +109,9 @@ class PortalAppointmentsController extends Controller
             'service_item' => $job->service_item,
             'job_type' => $job->job_type,
             'status' => $job->status,
-            'scheduled_date' => optional($job->scheduled_date)->format('Y-m-d H:i'),
-            'started_at' => optional($job->started_at)->format('Y-m-d H:i'),
-            'completed_at' => optional($job->completed_at)->format('Y-m-d H:i'),
+            'scheduled_date' => self::stamp($job->scheduled_date),
+            'started_at' => self::stamp($job->started_at),
+            'completed_at' => self::stamp($job->completed_at),
             'created_at' => optional($job->created_at)->format('Y-m-d H:i'),
             'reported_issue' => $job->reported_issue,
             'diagnosis' => $job->diagnosis,
@@ -157,14 +184,30 @@ class PortalAppointmentsController extends Controller
             'Ref' => $job->Ref,
             'service_item' => $job->service_item,
             'status' => $job->status,
-            'scheduled_date' => optional($job->scheduled_date)->format('Y-m-d H:i'),
+            'scheduled_date' => self::stamp($job->scheduled_date),
         ], 201);
+    }
+
+    /**
+     * ServiceJob still declares its datetimes in $dates, which Laravel 10+ ignores,
+     * so they arrive as plain strings (optional()->format() quietly gave null).
+     */
+    public static function stamp($value): ?string
+    {
+        if (! $value) {
+            return null;
+        }
+        try {
+            return Carbon::parse($value)->format('Y-m-d H:i');
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     private function assertPortalActive($portalClient): void
     {
         if ((int) $portalClient->status !== 1) {
-            abort(403, 'Portal access is disabled');
+            abort(403, __('portal.portal_disabled'));
         }
     }
 }

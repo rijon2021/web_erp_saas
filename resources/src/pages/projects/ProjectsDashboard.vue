@@ -1,18 +1,18 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Projects Dashboard"
-      subtitle="Delivery, milestones and effort across every project."
-      :breadcrumb="['Projects Management', 'Dashboard']"
+      :title="$t('Page_Projects_Dashboard')"
+      :subtitle="$t('Pm_Dashboard_Subtitle')"
+      :breadcrumb="[$t('Pm_Projects_Management'), $t('Dashboard')]"
     >
       <template #actions>
         <a-button @click="$router.push('/tasks/board')">
           <template #icon><AppstoreOutlined /></template>
-          Task board
+          {{ $t('Pm_Task_Board') }}
         </a-button>
         <a-button type="primary" @click="$router.push('/projects/create')">
           <template #icon><PlusOutlined /></template>
-          New project
+          {{ $t('Pm_New_Project') }}
         </a-button>
       </template>
     </PageHeader>
@@ -23,16 +23,16 @@
           <span class="kpi-ic kpi-ic--brand"><ProjectOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ n(data.projects_open) }}</span>
-            <span class="kpi-label">Open projects</span>
+            <span class="kpi-label">{{ $t('Pm_Open_Projects') }}</span>
           </span>
-          <span class="kpi-note">{{ n(data.projects_total) }} total</span>
+          <span class="kpi-note">{{ n(data.projects_total) }} {{ $t('Pm_Total') }}</span>
         </button>
 
         <button type="button" class="kpi" @click="$router.push('/projects')">
           <span class="kpi-ic kpi-ic--warn"><ClockCircleOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ n(data.projects_overdue) }}</span>
-            <span class="kpi-label">Projects past due</span>
+            <span class="kpi-label">{{ $t('Pm_Projects_Past_Due') }}</span>
           </span>
         </button>
 
@@ -43,7 +43,7 @@
               {{ data.tasks_completion !== null && data.tasks_completion !== undefined
                 ? data.tasks_completion + '%' : '—' }}
             </span>
-            <span class="kpi-label">Tasks complete</span>
+            <span class="kpi-label">{{ $t('Pm_Tasks_Complete') }}</span>
           </span>
           <span class="kpi-note">{{ n(data.tasks_done) }} / {{ n(data.tasks_total) }}</span>
         </button>
@@ -52,7 +52,7 @@
           <span class="kpi-ic kpi-ic--danger"><ExclamationCircleOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ n(data.tasks_overdue) }}</span>
-            <span class="kpi-label">Tasks past due</span>
+            <span class="kpi-label">{{ $t('Pm_Tasks_Past_Due') }}</span>
           </span>
         </button>
 
@@ -60,10 +60,10 @@
           <span class="kpi-ic kpi-ic--flag"><FlagOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ n(data.milestones_open) }}</span>
-            <span class="kpi-label">Open milestones</span>
+            <span class="kpi-label">{{ $t('Pm_Open_Milestones') }}</span>
           </span>
           <span v-if="data.milestones_overdue" class="kpi-note kpi-note--danger">
-            {{ data.milestones_overdue }} late
+            {{ data.milestones_overdue }} {{ $t('Pm_Late') }}
           </span>
         </button>
 
@@ -71,7 +71,7 @@
           <span class="kpi-ic kpi-ic--time"><FieldTimeOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ number(data.hours_month || 0, 1) }}h</span>
-            <span class="kpi-label">Logged this month</span>
+            <span class="kpi-label">{{ $t('Pm_Logged_This_Month') }}</span>
           </span>
           <span v-if="data.billable_month" class="kpi-note">{{ money(data.billable_month) }}</span>
         </button>
@@ -81,20 +81,20 @@
         <a-col :xs="24" :xl="16">
           <ReportChart
             :data="data.hours_trend || []"
-            :fields="[{ key: 'hours', label: 'Hours logged' }]"
-            title="Effort — last 14 days"
+            :fields="[{ key: 'hours', label: $t('Pm_Hours_Logged') }]"
+            :title="$t('Pm_Effort_Last_14_Days')"
             type="bar"
             :height="260"
           />
 
-          <a-card size="small" title="Active projects" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Pm_Active_Projects')" style="margin-bottom: 16px">
             <template #extra>
-              <a-button type="link" size="small" @click="$router.push('/projects')">All</a-button>
+              <a-button type="link" size="small" @click="$router.push('/projects')">{{ $t('All') }}</a-button>
             </template>
             <div v-if="(data.active_projects || []).length" class="plist">
               <button
                 v-for="p in data.active_projects" :key="p.id" type="button" class="prow"
-                @click="$router.push(`/projects/${p.id}`)"
+                @click="$router.push(`/projects/${p.id}/edit`)"
               >
                 <span class="prow-head">
                   <span class="prow-title">{{ p.title }}</span>
@@ -103,7 +103,7 @@
                   </a-tag>
                 </span>
                 <span class="prow-meta">
-                  {{ p.client_name || 'No client' }} · {{ p.tasks_done }}/{{ p.tasks }} tasks
+                  {{ p.client_name || $t('Pm_No_Client') }} · {{ p.tasks_done }}/{{ p.tasks }} {{ $t('Pm_Tasks_Lc') }}
                   · {{ number(p.hours, 1) }}h
                 </span>
                 <a-progress
@@ -112,14 +112,14 @@
                 />
               </button>
             </div>
-            <a-empty v-else :image="simpleEmptyImage" description="No open projects" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Pm_No_Open_Projects')" />
           </a-card>
         </a-col>
 
         <a-col :xs="24" :xl="8">
-          <a-card size="small" title="Upcoming milestones" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Pm_Upcoming_Milestones')" style="margin-bottom: 16px">
             <template #extra>
-              <a-button type="link" size="small" @click="$router.push('/projects/milestones')">All</a-button>
+              <a-button type="link" size="small" @click="$router.push('/projects/milestones')">{{ $t('All') }}</a-button>
             </template>
             <div v-if="(data.upcoming_milestones || []).length" class="mlist">
               <button
@@ -135,10 +135,10 @@
                 </a-tag>
               </button>
             </div>
-            <a-empty v-else :image="simpleEmptyImage" description="Nothing scheduled" style="padding: 16px 0" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Pm_Nothing_Scheduled')" style="padding: 16px 0" />
           </a-card>
 
-          <a-card size="small" title="Workload this month" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Pm_Workload_This_Month')" style="margin-bottom: 16px">
             <div v-if="(data.workload || []).length" class="wlist">
               <div v-for="w in data.workload" :key="w.id" class="wrow">
                 <span class="wrow-name">{{ w.name }}</span>
@@ -149,10 +149,10 @@
                 <span class="wrow-hours">{{ number(w.hours, 1) }}h</span>
               </div>
             </div>
-            <a-empty v-else :image="simpleEmptyImage" description="No time logged yet" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Pm_No_Time_Logged_Yet')" />
           </a-card>
 
-          <a-card size="small" title="Task breakdown">
+          <a-card size="small" :title="$t('Pm_Task_Breakdown')">
             <div v-if="(data.tasks_by_status || []).length" class="breakdown">
               <div v-for="row in data.tasks_by_status" :key="row.status" class="brow">
                 <a-tag :color="optionOf(TASK_STATUSES, row.status).color">
@@ -161,7 +161,7 @@
                 <span class="bcount">{{ row.count }}</span>
               </div>
             </div>
-            <a-empty v-else :image="simpleEmptyImage" description="No tasks yet" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Pm_No_Tasks_Yet')" />
           </a-card>
         </a-col>
       </a-row>

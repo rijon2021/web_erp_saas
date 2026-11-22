@@ -136,7 +136,7 @@ const TEMPLATE_TYPES = [
   { type: 'payment_received', titleKey: 'PaiementsReceived', color: '#52c41a', icon: DollarOutlined, vars: ['contact_name', 'business_name', 'payment_number', 'paid_amount'] },
   { type: 'purchase', titleKey: 'Purchase', color: '#722ed1', icon: ShoppingCartOutlined, vars: ['contact_name', 'business_name', 'invoice_number', 'invoice_url', 'total_amount', 'paid_amount', 'due_amount'] },
   { type: 'payment_sent', titleKey: 'PaiementsSent', color: '#fa8c16', icon: SendOutlined, vars: ['contact_name', 'business_name', 'payment_number', 'paid_amount'] },
-  { type: 'subscription_reminder', title: 'Subscription Reminder', color: '#eb2f96', icon: ReloadOutlined, vars: ['client_name', 'business_name', 'next_billing_date'] },
+  { type: 'subscription_reminder', titleKey: 'Subscription_Reminder', color: '#eb2f96', icon: ReloadOutlined, vars: ['client_name', 'business_name', 'next_billing_date'] },
   { type: 'asset_validation_due', titleKey: 'Asset_Validation_Due', color: '#f5222d', icon: SafetyCertificateOutlined, vars: ['asset_name', 'asset_tag', 'next_validation', 'business_name'] },
 ];
 

@@ -211,14 +211,21 @@ class SupportController extends Controller
             File::makeDirectory($absoluteDir, 0755, true);
         }
 
-        foreach ($request->file('attachments') as $file) {
+        // Stored extension comes from each file's CONTENT, checked for the whole
+        // batch before anything is written (the folder is served from public/).
+        $extensions = [];
+        foreach ($request->file('attachments') as $i => $file) {
+            $extensions[$i] = \App\Support\SafeUpload::contentExtension($file, ['jpg', 'png', 'pdf'], 'attachments');
+        }
+
+        foreach ($request->file('attachments') as $i => $file) {
             // Capture metadata before move() — afterwards the temp file is gone
             // and getSize() would stat a missing path and throw.
-            $originalName = $file->getClientOriginalName();
+            $originalName = \App\Support\SafeUpload::displayName($file);
             $mimeType     = $file->getClientMimeType();
             $size         = $file->getSize();
 
-            $filename = time() . '_' . Str::random(10) . '_' . preg_replace('/[^A-Za-z0-9._-]/', '', $originalName);
+            $filename = \App\Support\SafeUpload::name($extensions[$i], time() . '_');
             $file->move($absoluteDir, $filename);
 
             SupportTicketAttachment::create([

@@ -116,6 +116,7 @@ import {
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import http from '../../lib/http';
+import { meetingLabel } from './meetingLabels';
 
 const { t } = useI18n();
 
@@ -151,7 +152,7 @@ const physicalPct = computed(() =>
   typeTotal.value ? Math.round(((Number(byType.value.physical) || 0) / typeTotal.value) * 100) : 0);
 const onlinePct = computed(() => (typeTotal.value ? 100 - physicalPct.value : 0));
 
-function formatLabel(v) { return v ? String(v).replace(/_/g, ' ') : '-'; }
+function formatLabel(v) { return meetingLabel(v); }
 function shortTime(x) { return x ? String(x).substring(0, 5) : ''; }
 function dayOf(d) { return d ? String(d).substring(8, 10) : '--'; }
 function monOf(d) {

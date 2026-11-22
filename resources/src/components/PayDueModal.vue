@@ -31,7 +31,13 @@
           :options="paymentMethods.map(m => ({ value: m.id, label: m.name }))"
         />
       </a-form-item>
-      <a-form-item :label="$t('Account')">
+      <!-- Customer Wallet tender: paid from the customer's store credit, no account. -->
+      <a-alert
+        v-if="wallet.isWalletMethod(payment.payment_method_id)"
+        :type="walletShort ? 'error' : 'info'" show-icon style="margin-bottom: 16px"
+        :message="walletMessage"
+      />
+      <a-form-item v-else :label="$t('Account')">
         <a-select
           v-model:value="payment.account_id" allow-clear :placeholder="$t('Choose_Account')"
           :options="accounts.map(a => ({ value: a.id, label: a.account_name ?? a.name }))"
@@ -75,12 +81,14 @@
  * clients_pay_due (opening balance is allocated first, hence the info alert),
  * then the receipt. Parents call open() and refresh their data on @paid.
  */
-import { ref, computed } from 'vue';
+import { ref, computed, nextTick } from 'vue';
 import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import { PrinterOutlined } from '@ant-design/icons-vue';
 import { useFormat } from '../composables/useFormat';
+import { useCustomerWalletTender, customerWalletError } from '../composables/useCustomerWallet';
 import http from '../lib/http';
+import { receiptPageHeadTag } from '../lib/receiptFont';
 
 const props = defineProps({
   /** { id, name } — the customer being paid. */
@@ -131,8 +139,22 @@ const payRules = computed(() => ({
   payment_method_id: [{ required: true, message: t('Field_is_required') }],
 }));
 
+// Customer Wallet: GET customer_wallets/{id}/summary (always answers;
+// { enabled:false } when the feature is off) tells which method is the wallet.
+const wallet = useCustomerWalletTender();
+const walletShort = computed(() =>
+  wallet.frozen.value
+  || (!wallet.info.value?.allow_negative && (Number(payment.value.amount) || 0) > wallet.balance.value));
+const walletMessage = computed(() => {
+  if (wallet.frozen.value) return t('CW_Err_wallet_frozen');
+  return `${t('CW_Pay_From_Wallet_Help')} — ${t('SW_Wallet_Balance')}: ${money(wallet.balance.value)}`;
+});
+
 function open() {
   payment.value = { amount: 0, payment_method_id: undefined, account_id: undefined, notes: '' };
+  wallet.reset();
+  // Parents set :client and call open() in the same tick — read the prop after it lands.
+  nextTick(() => { if (props.client?.id) wallet.load(props.client.id); });
   payOpen.value = true;
 }
 defineExpose({ open });
@@ -158,7 +180,7 @@ async function submitPayment() {
       amount: payment.value.amount,
       notes: payment.value.notes,
       payment_method_id: payment.value.payment_method_id,
-      account_id: payment.value.account_id || null,
+      account_id: wallet.isWalletMethod(payment.value.payment_method_id) ? null : (payment.value.account_id || null),
     });
     message.success(t('Successfully_Created'));
     payOpen.value = false;
@@ -166,7 +188,7 @@ async function submitPayment() {
     receiptOpen.value = true;
     emit('paid');
   } catch (e) {
-    message.error(e?.data?.message || t('InvalidData'));
+    message.error(customerWalletError(e));
   } finally {
     paying.value = false;
   }
@@ -181,7 +203,7 @@ function printReceipt() {
     return;
   }
   win.document.write(
-    `<html><head><link rel="stylesheet" href="/css/pos_print.css" /></head><body>${node.innerHTML}</body></html>`
+    `<html><head><link rel="stylesheet" href="/css/pos_print.css" />${receiptPageHeadTag()}</head><body>${node.innerHTML}</body></html>`
   );
   win.document.close();
   setTimeout(() => win.print(), 600);

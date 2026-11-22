@@ -15,7 +15,7 @@
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'actions'">
           <a-button type="primary" size="small" @click="openRegister(record)">
-            Register Account
+            {{ $t('Register_Account') }}
           </a-button>
         </template>
       </template>
@@ -24,7 +24,7 @@
     <!-- Register store account -->
     <a-modal
       v-model:open="modalOpen"
-      :title="'Register Account'"
+      :title="$t('Register_Account')"
       :confirm-loading="submitting"
       :ok-text="$t('submit')"
       :cancel-text="$t('Delete_cancelButtonText')"
@@ -105,7 +105,7 @@ async function submit() {
       email: form.value.email,
       password: form.value.password,
     });
-    message.success('Account Registred Successfully');
+    message.success(t('Account_Registered_Successfully'));
     modalOpen.value = false;
     crud.fetchRows();
   } catch (e) {

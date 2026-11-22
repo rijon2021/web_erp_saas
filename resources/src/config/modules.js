@@ -9,34 +9,48 @@
 // get_user_auth payload (auth.user.module_flags). A null map or a missing key
 // means the module is ENABLED — so existing installs see no change.
 
+import { i18n } from '../i18n';
+
+// label/description are getters so they follow the active locale; brand-name
+// labels stay literal.
+const tr = (k) => i18n.global.t(k);
+
 export const TOGGLEABLE_MODULES = [
-    { key: 'Store', label: 'Store / E-commerce', description: 'Online storefront: orders, collections, banners, pages and Real Estate listings.', pathPrefixes: ['store', 'realestate'] },
-    { key: 'hrm', label: 'HRM', description: 'Employees, attendance, payroll, contracts and the knowledge base.', pathPrefixes: ['hrm', 'contracts'] },
-    { key: 'recruit', label: 'Recruits & Jobs', description: 'Job postings, candidates, applications and interviews.', pathPrefixes: ['recruit'] },
-    { key: 'meeting', label: 'Meetings', description: 'Meeting planning, attendance and reports.', pathPrefixes: ['meeting', 'meetings'] },
-    { key: 'marketing', label: 'Marketing', description: 'Campaigns and marketing tools.', pathPrefixes: [] },
-    { key: 'accounting', label: 'Accounting', description: 'Chart of accounts, journal entries, financial reports, expenses and deposits.', pathPrefixes: ['accounting-v2'] },
-    { key: 'EWallet', label: 'E-Wallet', description: 'Customer wallet balances and wallet items.', pathPrefixes: ['ewallet'] },
-    { key: 'commissions', label: 'Commissions', description: 'Agent commission programs, rules and receipts.', pathPrefixes: ['commissions'] },
-    { key: 'promotions', label: 'Promotions', description: 'Discount promotions applied at the POS checkout.', pathPrefixes: ['promotions'] },
-    { key: 'woocommerce_settings', label: 'WooCommerce', description: 'WooCommerce store synchronization.', pathPrefixes: [] },
-    { key: 'shopify', label: 'Shopify', description: 'Shopify store synchronization and logs.', pathPrefixes: ['shopify'] },
-    { key: 'salla', label: 'Salla', description: 'Salla store synchronization: products, stock and orders.', pathPrefixes: [] },
-    { key: 'jumia', label: 'Jumia', description: 'Jumia marketplace: price & stock push, order import.', pathPrefixes: [] },
-    { key: 'prestashop', label: 'PrestaShop', description: 'PrestaShop store synchronization: products, stock and orders.', pathPrefixes: [] },
-    { key: 'zapier', label: 'Zapier', description: 'Zapier automation: instant triggers and actions.', pathPrefixes: [] },
-    { key: 'documents', label: 'Document Archive', description: 'Central document storage and archiving.', pathPrefixes: ['documents'] },
-    { key: 'subscription_product', label: 'Subscription Products', description: 'Recurring product subscriptions.', pathPrefixes: ['subscriptions'] },
+    { key: 'Store', get label() { return tr('Mod_Store_Ecommerce'); }, get description() { return tr('Mod_Store_Desc'); }, pathPrefixes: ['store', 'realestate'] },
+    { key: 'hrm', get label() { return tr('HRM'); }, get description() { return tr('Mod_Hrm_Desc'); }, pathPrefixes: ['hrm', 'contracts'] },
+    { key: 'recruit', get label() { return tr('Mod_Recruits_Jobs'); }, get description() { return tr('Mod_Recruit_Desc'); }, pathPrefixes: ['recruit'] },
+    { key: 'meeting', get label() { return tr('Meetings'); }, get description() { return tr('Mod_Meeting_Desc'); }, pathPrefixes: ['meeting', 'meetings'] },
+    { key: 'marketing', get label() { return tr('Marketing'); }, get description() { return tr('Mod_Marketing_Desc'); }, pathPrefixes: [] },
+    { key: 'accounting', get label() { return tr('Accounting'); }, get description() { return tr('Mod_Accounting_Desc'); }, pathPrefixes: ['accounting-v2'] },
+    { key: 'EWallet', get label() { return tr('E_Wallet'); }, get description() { return tr('Mod_EWallet_Desc'); }, pathPrefixes: ['ewallet'] },
+    { key: 'commissions', get label() { return tr('Commissions'); }, get description() { return tr('Mod_Commissions_Desc'); }, pathPrefixes: ['commissions'] },
+    { key: 'promotions', get label() { return tr('Promotions'); }, get description() { return tr('Mod_Promotions_Desc'); }, pathPrefixes: ['promotions'] },
+    { key: 'woocommerce_settings', label: 'WooCommerce', get description() { return tr('Mod_Woocommerce_Desc'); }, pathPrefixes: [] },
+    { key: 'shopify', label: 'Shopify', get description() { return tr('Mod_Shopify_Desc'); }, pathPrefixes: ['shopify'] },
+    { key: 'salla', label: 'Salla', get description() { return tr('Mod_Salla_Desc'); }, pathPrefixes: [] },
+    { key: 'jumia', label: 'Jumia', get description() { return tr('Mod_Jumia_Desc'); }, pathPrefixes: [] },
+    { key: 'printful', label: 'Printful', get description() { return tr('Mod_Printful_Desc'); }, pathPrefixes: [] },
+    { key: 'couriers', get label() { return tr('Mod_Courier_Integration'); }, get description() { return tr('Mod_Couriers_Desc'); }, pathPrefixes: ['couriers'] },
+    { key: 'prestashop', label: 'PrestaShop', get description() { return tr('Mod_Prestashop_Desc'); }, pathPrefixes: [] },
+    { key: 'opencart', label: 'OpenCart', get description() { return tr('Mod_Opencart_Desc'); }, pathPrefixes: [] },
+    { key: 'zapier', label: 'Zapier', get description() { return tr('Mod_Zapier_Desc'); }, pathPrefixes: [] },
+    { key: 'documents', get label() { return tr('Document_Archive'); }, get description() { return tr('Mod_Documents_Desc'); }, pathPrefixes: ['documents'] },
+    { key: 'subscription_product', get label() { return tr('Mod_Subscription_Products'); }, get description() { return tr('Mod_Subscription_Desc'); }, pathPrefixes: ['subscriptions'] },
     // Key matches the sidebar group key ('mrp' in config/menu.js), otherwise the
     // toggle would block the routes but leave the group visible in the sidebar.
-    { key: 'mrp', label: 'Manufacturing (MRP)', description: 'Bills of materials, production orders, work centers, quality and planning.', pathPrefixes: ['mrp'] },
-    { key: 'assets', label: 'Asset Management', description: 'Company assets, assignments, maintenance, transfers and depreciation.', pathPrefixes: ['assets'] },
-    { key: 'projects', label: 'Projects & Tasks', description: 'Projects, tasks, milestones, timesheets and project reports.', pathPrefixes: ['projects', 'tasks'] },
-    { key: 'bookings', label: 'Booking Management', description: 'Bookings, calendar and trays.', pathPrefixes: ['bookings'] },
-    { key: 'service', label: 'Service & Maintenance', description: 'Service jobs, technicians and checklists.', pathPrefixes: ['service'] },
-    { key: 'fleet', label: 'Fleet Management', description: 'Vehicles, maintenance, fuel logs, assignments and fleet reports.', pathPrefixes: ['fleet'] },
-    { key: 'hospital', label: 'Hospital Management', description: 'Patients, doctors, appointments, visits, admissions, wards, lab and billing.', pathPrefixes: ['hospital'] },
-    { key: 'school', label: 'School Management', description: 'Students, teachers, academics, exams, timetable and fees.', pathPrefixes: [] },
+    { key: 'mrp', get label() { return tr('Mrp_Manufacturing'); }, get description() { return tr('Mod_Mrp_Desc'); }, pathPrefixes: ['mrp'] },
+    { key: 'assets', get label() { return tr('Asset_Management'); }, get description() { return tr('Mod_Assets_Desc'); }, pathPrefixes: ['assets'] },
+    { key: 'projects', get label() { return tr('Mod_Projects_Tasks'); }, get description() { return tr('Mod_Projects_Desc'); }, pathPrefixes: ['projects', 'tasks'] },
+    { key: 'bookings', get label() { return tr('Booking Management'); }, get description() { return tr('Mod_Bookings_Desc'); }, pathPrefixes: ['bookings'] },
+    { key: 'service', get label() { return tr('Service_Maintenance'); }, get description() { return tr('Mod_Service_Desc'); }, pathPrefixes: ['service'] },
+    { key: 'fleet', get label() { return tr('Fl_Fleet_Management'); }, get description() { return tr('Mod_Fleet_Desc'); }, pathPrefixes: ['fleet'] },
+    { key: 'hospital', get label() { return tr('Hm_Hospital_Management'); }, get description() { return tr('Mod_Hospital_Desc'); }, pathPrefixes: ['hospital'] },
+    { key: 'school', get label() { return tr('Sc_School_Management'); }, get description() { return tr('Mod_School_Desc'); }, pathPrefixes: [] },
+    // Keys also gate the backend side: store / portal lead capture (crm) and
+    // the client-portal rentals (rental) read settings.module_flags.
+    { key: 'rental', get label() { return tr('Rental_Management'); }, get description() { return tr('Mod_Rental_Desc'); }, pathPrefixes: ['rental'] },
+    { key: 'restaurant', get label() { return tr('Restaurant_Management'); }, get description() { return tr('Mod_Restaurant_Desc'); }, pathPrefixes: ['restaurant'] },
+    { key: 'crm', get label() { return tr('Crm_Management'); }, get description() { return tr('Mod_Crm_Desc'); }, pathPrefixes: ['crm'] },
 ];
 
 const MODULE_KEYS = new Set(TOGGLEABLE_MODULES.map(m => m.key));

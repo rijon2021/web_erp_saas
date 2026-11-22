@@ -64,16 +64,24 @@
             <tbody>
                 <tr>
                     <td>
-                        <strong>{{ $plan->name ?? 'Subscription' }} Plan</strong>
+                        <strong>{{ $payment->checkoutProductName() }}</strong>
                         @if($subscription && $subscription->starts_at && $subscription->ends_at)
                             <br><span class="bil-period-muted">
                                 {{ $subscription->starts_at->format('M d, Y') }} — {{ $subscription->ends_at->format('M d, Y') }}
                             </span>
                         @endif
                     </td>
-                    <td>{{ ucfirst($payment->billing_cycle) }}</td>
-                    <td class="bil-text-right">{{ \App\Models\Central\GeneralSetting::currencySymbol() }}{{ number_format($payment->amount, 2) }} {{ $payment->currency }}</td>
+                    <td>{{ $payment->payment_link_id ? 'One-time' : ucfirst($payment->billing_cycle) }}</td>
+                    {{-- With add-ons on the payment, this row is the plan alone. --}}
+                    <td class="bil-text-right">{{ \App\Models\Central\GeneralSetting::currencySymbol() }}{{ number_format($payment->metadata['plan_amount'] ?? $payment->amount, 2) }} {{ $payment->currency }}</td>
                 </tr>
+                @foreach((array) ($payment->metadata['addons'] ?? []) as $addonLine)
+                <tr>
+                    <td><strong>Add-on: {{ $addonLine['name'] ?? ($addonLine['key'] ?? '') }}</strong></td>
+                    <td>{{ ucfirst($payment->billing_cycle) }}</td>
+                    <td class="bil-text-right">{{ \App\Models\Central\GeneralSetting::currencySymbol() }}{{ number_format((float) ($addonLine['amount'] ?? 0), 2) }} {{ $payment->currency }}</td>
+                </tr>
+                @endforeach
             </tbody>
         </table>
     </div>

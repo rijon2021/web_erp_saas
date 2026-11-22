@@ -12,13 +12,13 @@
           <a-avatar :size="44">{{ (subscription.client || '?').charAt(0) }}</a-avatar>
           <div>
             <div style="font-weight: 600">{{ subscription.client }}</div>
-            <a-tag :color="statusColor(subscription.status)">{{ subscription.status }}</a-tag>
+            <a-tag :color="statusColor(subscription.status)">{{ statusLabel(subscription.status) }}</a-tag>
           </div>
         </div>
         <a-descriptions :column="{ xs: 1, md: 3 }" size="small" bordered>
           <a-descriptions-item :label="$t('ProductName')">{{ subscription.product }}</a-descriptions-item>
           <a-descriptions-item :label="$t('warehouse')">{{ subscription.warehouse }}</a-descriptions-item>
-          <a-descriptions-item :label="$t('Billing_Cycle')">{{ subscription.billing_cycle }}</a-descriptions-item>
+          <a-descriptions-item :label="$t('Billing_Cycle')">{{ statusLabel(subscription.billing_cycle) }}</a-descriptions-item>
           <a-descriptions-item :label="$t('Price_Per_Cycle')">
             <span style="color: #52c41a">{{ subscription.price_per_cycle }}</span>
           </a-descriptions-item>
@@ -28,7 +28,7 @@
         </a-descriptions>
       </a-card>
 
-      <a-card size="small" :title="'Invoices'">
+      <a-card size="small" :title="$t('Invoices')">
         <a-table
           :columns="invoiceColumns" :data-source="invoices"
           size="small" :row-key="(_r, i) => i"
@@ -39,7 +39,7 @@
               <a @click="goTo(`/app/sales/detail/${record.sale_id}`)">{{ record.ref }}</a>
             </template>
             <template v-else-if="column.key === 'status'">
-              <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
+              <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
             </template>
           </template>
         </a-table>
@@ -73,6 +73,16 @@ function statusColor(status) {
   return { active: 'success', unpaid: 'error', partial: 'warning', paid: 'success' }[status] || 'default';
 }
 
+/** Translated label for a stored status / billing-cycle value; raw value otherwise. */
+const STATUS_KEYS = {
+  active: 'Active', canceled: 'Canceled', completed: 'Completed',
+  paid: 'paid', unpaid: 'unpaid', partial: 'partial',
+  monthly: 'Monthly', weekly: 'Sbs_Weekly', yearly: 'Yearly',
+};
+function statusLabel(status) {
+  return STATUS_KEYS[status] ? t(STATUS_KEYS[status]) : status;
+}
+
 const invoiceColumns = computed(() => [
   { title: t('Reference'), key: 'ref' },
   { title: t('date'), dataIndex: 'date', key: 'date' },
@@ -86,7 +96,7 @@ onMounted(async () => {
     subscription.value = data.subscription || {};
     invoices.value = data.invoices || [];
   } catch (e) {
-    message.error('Unable to load subscription details');
+    message.error(t('Sbs_Unable_Load_Details'));
   } finally {
     loading.value = false;
   }

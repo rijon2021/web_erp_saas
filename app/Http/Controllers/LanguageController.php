@@ -37,11 +37,12 @@ class LanguageController extends Controller
 
         if ($request->hasFile('flag')) {
 
+            // Saved as-is under a random name with a content-derived extension:
+            // flags are tiny, and SVG cannot go through Image::make (which was
+            // also never imported here, so every upload crashed).
             $image = $request->file('flag');
-            $filename = rand(11111111, 99999999).$image->getClientOriginalName();
-
-            $image_resize = Image::make($image->getRealPath());
-            $image_resize->save(public_path('/flags/'.$filename));
+            $filename = 'custom_'.bin2hex(random_bytes(6)).'.'.$this->flagExtension($image);
+            $image->move(public_path('flags'), $filename);
 
         } else {
             $filename = 'no-image.png';
@@ -68,6 +69,12 @@ class LanguageController extends Controller
 
         // Handle flag upload
         if ($request->hasFile('flag')) {
+            // Check the new file BEFORE deleting the old one: a refused upload
+            // must not leave the language pointing at a deleted flag (public/flags
+            // is shared by every tenant).
+            $image = $request->file('flag');
+            $extension = $this->flagExtension($image);
+
             // Delete old flag if not default
             if ($language->flag && $language->flag !== 'no-image.png') {
                 $oldPath = public_path('/flags/'.$language->flag);
@@ -76,8 +83,6 @@ class LanguageController extends Controller
                 }
             }
 
-            $image = $request->file('flag');
-            $extension = strtolower($image->getClientOriginalExtension());
             $filename = rand(11111111, 99999999).'.'.$extension;
             $destination = public_path('/flags/'.$filename);
 
@@ -164,6 +169,7 @@ class LanguageController extends Controller
 
             // Update settings
             Setting::query()->update(['default_language' => $language->locale]);
+            Setting::forgetCurrent();
         }
 
         return response()->json([
@@ -311,5 +317,24 @@ class LanguageController extends Controller
         return response()->json([
             'message' => 'Translation deleted successfully.',
         ]);
+    }
+
+    /**
+     * Flag extension from the file's CONTENT (png/jpg/svg only). The client
+     * name never decides it: public/flags is served as-is, so "x.html" or
+     * "x.php" must never land there.
+     */
+    private function flagExtension(\Illuminate\Http\UploadedFile $file): string
+    {
+        $ext = strtolower((string) $file->guessExtension());
+        $ext = ['jpeg' => 'jpg', 'jpe' => 'jpg'][$ext] ?? $ext;
+
+        if (! in_array($ext, ['png', 'jpg', 'svg'], true)) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'flag' => 'The flag must be a PNG, JPG or SVG image.',
+            ]);
+        }
+
+        return $ext;
     }
 }

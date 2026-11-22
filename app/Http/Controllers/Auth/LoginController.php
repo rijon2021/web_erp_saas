@@ -5,8 +5,11 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\UserLoginSession;
 use App\Support\LoginSessionKey;
+use App\Support\Security\LoginGuard;
+use App\Support\Security\SingleSession;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\ValidationException;
 
 class LoginController extends Controller
 {
@@ -51,13 +54,46 @@ class LoginController extends Controller
 
     public function __construct()
     {
-        $this->middleware('guest')->except('logout');
+        // captcha: also loaded by the forgot-password form and by the Login
+        // Page settings preview, which an authenticated admin opens.
+        $this->middleware('guest')->except(['logout', 'preview', 'captcha']);
+        $this->middleware('auth')->only('preview');
     }
 
-    public function showLoginForm()
+    public function showLoginForm(Request $request)
     {
+        return view('auth.login', $this->captchaViewData($request));
+    }
 
-        return view('auth.login');
+    /**
+     * Settings > Login Page live preview (iframe). The real login view with
+     * its form disabled; the settings page pushes unsaved changes into it.
+     */
+    public function preview(Request $request)
+    {
+        return view('auth.login', ['preview' => true] + $this->captchaViewData($request));
+    }
+
+    /** Built-in CAPTCHA image (System Settings > Security). */
+    public function captcha(Request $request)
+    {
+        $png = LoginGuard::tenant()->captcha()->image($request);
+
+        return response($png, 200, [
+            'Content-Type' => 'image/png',
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma' => 'no-cache',
+        ]);
+    }
+
+    private function captchaViewData(Request $request): array
+    {
+        $guard = LoginGuard::tenant();
+
+        return [
+            'captcha' => $guard->captchaRequired($request) ? $guard->captcha()->widget() : null,
+            'rememberAllowed' => $guard->rememberAllowed(),
+        ];
     }
 
     /**
@@ -70,11 +106,35 @@ class LoginController extends Controller
             'password' => ['required', 'string'],
         ]);
 
-        $remember = (bool) $request->input('remember', false);
+        // System Settings > Security: lockout first (so a blocked client can't
+        // burn CAPTCHAs), then the CAPTCHA, then the password.
+        $guard = LoginGuard::tenant();
+        $email = (string) $request->input('email');
+
+        $remember = (bool) $request->input('remember', false) && $guard->rememberAllowed();
+
+        try {
+            $guard->ensureNotLocked($request, $email);
+            if ($guard->captchaRequired($request)) {
+                $guard->verifyCaptcha($request, $email);
+            }
+        } catch (ValidationException $e) {
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json(['message' => collect($e->errors())->flatten()->first()], 422);
+            }
+
+            return back()->withErrors($e->errors())->withInput($request->only('email', 'remember'));
+        }
 
         if (Auth::attempt($this->credentials($request), $remember)) {
+            if ($guard->options()['single_session']) {
+                $this->invalidateOtherRememberCookies($remember);
+            }
+
             // Regenerate the web session ID to prevent fixation
             $request->session()->regenerate();
+
+            $guard->recordSuccess($request, $email, (int) Auth::guard('web')->id());
 
             // Record the session for Settings > Login Devices. It must be keyed
             // the way the api guard can recompute it (see LoginSessionKey): the
@@ -98,6 +158,10 @@ class LoginController extends Controller
                             'revoked_at' => null,
                         ]
                     );
+
+                    if ($guard->options()['single_session']) {
+                        $this->signOutOtherDevices((int) $user->id, $sessionKey);
+                    }
                 }
             } catch (\Throwable $e) {
                 // Never break login if tracking fails
@@ -107,15 +171,45 @@ class LoginController extends Controller
         }
 
         // Failed login
+        $message = $guard->recordFailure($request, $email);
+
         if ($request->expectsJson() || $request->ajax()) {
             return response()->json([
-                'message' => 'These credentials do not match our records.',
+                'message' => $message,
             ], 422);
         }
 
         return back()->withErrors([
-            'email' => 'These credentials do not match our records.',
+            'email' => $message,
         ])->withInput($request->only('email', 'remember'));
+    }
+
+    /**
+     * "One session per user": a signed-out device whose browser was closed
+     * would otherwise come back through its "remember me" cookie. A new
+     * remember token voids every such cookie; this device gets a fresh one.
+     */
+    private function invalidateOtherRememberCookies(bool $remember): void
+    {
+        try {
+            $user = Auth::guard('web')->user();
+            SingleSession::rotateRememberToken($user);
+
+            if ($remember) {
+                Auth::guard('web')->login($user, true);
+            }
+        } catch (\Throwable $e) {
+            // Never break login over this.
+        }
+    }
+
+    /**
+     * System Settings > Security "one session per user": revoke every other
+     * device; this one is known by its SPA cookie key (LoginSessionKey).
+     */
+    private function signOutOtherDevices(int $userId, string $currentKey): void
+    {
+        SingleSession::revokeOthers($userId, [$currentKey]);
     }
 
     /**

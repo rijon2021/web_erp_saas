@@ -21,6 +21,8 @@ class OnlineOrderItem extends Model
         'discount_method',
         'tax_method',
         'is_preorder',
+        'options',       // restaurant add-ons chosen in the store (snapshot)
+        'options_label',
     ];
 
     protected $casts = [
@@ -33,6 +35,7 @@ class OnlineOrderItem extends Model
         'TaxNet' => 'double',
         'discount' => 'double',
         'is_preorder' => 'boolean',
+        'options' => 'array',
     ];
 
     public function order(): BelongsTo

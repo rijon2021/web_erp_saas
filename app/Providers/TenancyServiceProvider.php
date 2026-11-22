@@ -54,26 +54,38 @@ class TenancyServiceProvider extends ServiceProvider
             Events\DatabaseDeleted::class => [],
             Events\InitializingTenancy::class => [
                 // Fires while the OUTGOING context is still current, which is
-                // where anything the Shopify stock watcher buffered belongs.
+                // where anything the Shopify stock watcher or the WooCommerce
+                // automatic sync buffered belongs.
                 \App\Listeners\ResetShopifyStockWatcher::class,
+                \App\Listeners\ResetWooCommerceAutoSync::class,
+                \App\Listeners\ResetOpencartAutoSync::class,
             ],
             Events\TenancyInitialized::class => [
                 Listeners\BootstrapTenancy::class,
                 \App\Listeners\ApplyTenantTimezone::class,
+                // Error Logs report: tag log records with the tenant id.
+                \App\Listeners\TagLogsWithTenant::class,
             ],
             Events\EndingTenancy::class => [
                 \App\Listeners\ResetShopifyStockWatcher::class,
+                \App\Listeners\ResetWooCommerceAutoSync::class,
+                \App\Listeners\ResetOpencartAutoSync::class,
             ],
             Events\TenancyEnded::class => [
                 Listeners\RevertToCentralContext::class,
                 \App\Listeners\RevertTenantTimezone::class,
+                \App\Listeners\TagLogsWithTenant::class,
             ],
             Events\BootstrappingTenancy::class => [],
             Events\TenancyBootstrapped::class => [
                 \App\Listeners\ConfigureTenantDatabaseConnection::class,
+                // Client portal strings come from the tenant DB (PortalTranslationLoader).
+                \App\Listeners\ResetTranslatorOnTenancySwitch::class,
             ],
             Events\RevertingToCentralContext::class => [],
-            Events\RevertedToCentralContext::class => [],
+            Events\RevertedToCentralContext::class => [
+                \App\Listeners\ResetTranslatorOnTenancySwitch::class,
+            ],
             Events\SyncedResourceSaved::class => [Listeners\UpdateSyncedResource::class],
             Events\SyncedResourceChangedInForeignDatabase::class => [],
         ];

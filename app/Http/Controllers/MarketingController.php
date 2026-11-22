@@ -56,7 +56,7 @@ class MarketingController extends Controller
         if (! is_dir($destination)) {
             mkdir($destination, 0755, true);
         }
-        $filename = Str::random(20).'.'.$file->getClientOriginalExtension();
+        $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::documentExtension($file, 'attachment'));
         $file->move($destination, $filename);
 
         return 'images/marketing/'.$filename;
@@ -65,6 +65,57 @@ class MarketingController extends Controller
     private function currentUserId(Request $request)
     {
         return $request->user('api') ? $request->user('api')->id : null;
+    }
+
+    /** A WhatsApp campaign/template that names a Meta-approved template. */
+    private function usesWaTemplate(Request $request): bool
+    {
+        return $request->type === 'whatsapp' && trim((string) $request->wa_template_name) !== '';
+    }
+
+    /**
+     * Rules for a body field (message_content / content): optional when a Meta
+     * template carries the message, required otherwise.
+     */
+    private function bodyRule(Request $request): string
+    {
+        return $this->usesWaTemplate($request) ? 'nullable|string' : 'required|string';
+    }
+
+    private function waTemplateRules(): array
+    {
+        return [
+            // Meta template names: lowercase letters, digits and underscores.
+            'wa_template_name'     => ['nullable', 'string', 'max:191', 'regex:/^[a-z0-9_]+$/'],
+            'wa_template_language' => ['nullable', 'string', 'max:20', 'regex:/^[A-Za-z]{2,3}(_[A-Za-z]{2,4})?$/'],
+        ];
+    }
+
+    /**
+     * The three wa_template_* columns from the request; all null unless this is
+     * a WhatsApp record that names a template. Params arrive as an array (JSON
+     * body) or a JSON string (multipart campaign form).
+     */
+    private function waTemplateData(Request $request): array
+    {
+        if (! $this->usesWaTemplate($request)) {
+            return ['wa_template_name' => null, 'wa_template_language' => null, 'wa_template_params' => null];
+        }
+
+        $params = $request->input('wa_template_params');
+        if (is_string($params)) {
+            $params = json_decode($params, true);
+        }
+        $params = array_values(array_map(
+            fn ($p) => mb_substr(trim((string) $p), 0, 1024),
+            array_slice(is_array($params) ? $params : [], 0, 20)
+        ));
+
+        return [
+            'wa_template_name'     => trim((string) $request->wa_template_name),
+            'wa_template_language' => trim((string) $request->wa_template_language) ?: 'en_US',
+            'wa_template_params'   => $params,
+        ];
     }
 
     // ======================== DASHBOARD ========================
@@ -115,6 +166,71 @@ class MarketingController extends Controller
             'by_type'         => $byType,
             'monthly'         => $months,
             'recent'          => $recent,
+        ]);
+    }
+
+    // ======================== GUIDE ========================
+
+    /** Any of these opens the guide; each one also unlocks its own links there. */
+    private const GUIDE_PERMISSIONS = [
+        'marketing_dashboard', 'marketing_campaigns', 'marketing_segments',
+        'marketing_templates', 'marketing_reports', 'marketing_settings',
+    ];
+
+    /**
+     * Marketing › Guide — the live set-up checklist (channels, audience,
+     * delivery health) for the guide page. Read-only.
+     */
+    public function guide(Request $request)
+    {
+        $user = $request->user('api');
+        $perms = Permission::whereIn('name', self::GUIDE_PERMISSIONS)->get()->keyBy('name');
+        $can = collect(self::GUIDE_PERMISSIONS)->mapWithKeys(fn ($p) => [
+            $p => (bool) ($user && isset($perms[$p]) && $user->hasRole($perms[$p]->roles)),
+        ]);
+        if (! $can->contains(true)) {
+            abort(403, 'This action is unauthorized.');
+        }
+
+        $settings = MarketingSetting::current();
+        $clients = fn () => DB::table('clients')->whereNull('deleted_at');
+        $since = Carbon::now()->subDays(30);
+        $recipients = fn (string $status) => MarketingCampaignRecipient::where('status', $status)
+            ->where('updated_at', '>=', $since)->count();
+
+        return response()->json([
+            'can' => $can,
+            'channels' => [
+                'email' => [
+                    'enabled' => (bool) $settings->email_enabled,
+                    // Same test the dispatcher uses: no tenant mail server = nothing is sent.
+                    'ready' => DB::table('servers')->whereNull('deleted_at')->exists()
+                        && DB::table('settings')->whereNull('deleted_at')->exists(),
+                ],
+                'sms' => [
+                    'enabled' => (bool) $settings->sms_enabled,
+                    'ready' => ! empty($settings->sms_api_url),
+                ],
+                'whatsapp' => [
+                    'enabled' => (bool) $settings->whatsapp_enabled,
+                    'ready' => ! empty($settings->whatsapp_api_url),
+                ],
+            ],
+            'scheduling' => (bool) $settings->scheduling_enabled,
+            'crm_leads' => \App\Services\Crm\CrmCaptureService::enabled(),
+            'counts' => [
+                'customers' => (int) $clients()->count(),
+                'with_email' => (int) $clients()->whereNotNull('email')->where('email', '!=', '')->count(),
+                'with_phone' => (int) $clients()->whereNotNull('phone')->where('phone', '!=', '')->count(),
+                'segments' => (int) MarketingSegment::count(),
+                'templates' => (int) MarketingTemplate::count(),
+                'campaigns' => (int) MarketingCampaign::count(),
+                'sent' => (int) MarketingCampaign::where('status', 'sent')->count(),
+                'stuck' => (int) MarketingCampaign::where('status', 'sending')
+                    ->where('updated_at', '<', Carbon::now()->subMinutes(MarketingCampaign::STALE_SENDING_MINUTES))->count(),
+                'failed_30d' => $recipients('failed'),
+                'skipped_30d' => $recipients('skipped'),
+            ],
         ]);
     }
 
@@ -180,15 +296,15 @@ class MarketingController extends Controller
         ]);
     }
 
-    public function campaigns_store(Request $request)
+    public function campaigns_store(Request $request, MarketingDispatcher $dispatcher)
     {
         $this->authorizeForUser($request->user('api'), 'create', MarketingCampaign::class);
 
         $request->validate([
             'title'           => 'required|string|max:255',
             'type'            => 'required|in:sms,email,whatsapp',
-            'message_content' => 'required|string',
-        ]);
+            'message_content' => $this->bodyRule($request),
+        ] + $this->waTemplateRules());
 
         $sendImmediately = $request->boolean('send_immediately', true);
         $scheduledAt = $request->filled('scheduled_at') ? $request->scheduled_at : null;
@@ -208,7 +324,7 @@ class MarketingController extends Controller
             'description'      => $request->description,
             'type'            => $request->type,
             'subject'         => $request->subject,
-            'message_content' => $request->message_content,
+            'message_content' => (string) $request->message_content,
             'attachment'      => $attachment,
             'template_id'     => $request->template_id ?: null,
             'segment_id'      => $request->segment_id ?: null,
@@ -217,12 +333,14 @@ class MarketingController extends Controller
             'send_immediately' => $sendImmediately,
             'scheduled_at'    => $scheduledAt,
             'created_by'      => $this->currentUserId($request),
-        ]);
+        ] + $this->waTemplateData($request));
 
         $this->logActivity($request, 'campaign', $campaign->id, 'created', 'Campaign "'.$campaign->title.'" created');
 
-        // Send now if requested.
+        // Send now if requested. The recipient list is built here, not in the
+        // job, so the audience shows at once even while the queue lags.
         if ($sendImmediately) {
+            $dispatcher->buildRecipients($campaign);
             $campaign->update(['status' => 'sending']);
             SendMarketingCampaign::dispatch($campaign->id);
             $this->logActivity($request, 'campaign', $campaign->id, 'queued', 'Campaign queued for immediate sending');
@@ -231,7 +349,7 @@ class MarketingController extends Controller
         return response()->json(['success' => true, 'id' => $campaign->id]);
     }
 
-    public function campaigns_update(Request $request, $id)
+    public function campaigns_update(Request $request, $id, MarketingDispatcher $dispatcher)
     {
         $this->authorizeForUser($request->user('api'), 'update', MarketingCampaign::class);
 
@@ -244,8 +362,8 @@ class MarketingController extends Controller
         $request->validate([
             'title'           => 'required|string|max:255',
             'type'            => 'required|in:sms,email,whatsapp',
-            'message_content' => 'required|string',
-        ]);
+            'message_content' => $this->bodyRule($request),
+        ] + $this->waTemplateRules());
 
         $sendImmediately = $request->boolean('send_immediately', $campaign->send_immediately);
         $scheduledAt = $request->filled('scheduled_at') ? $request->scheduled_at : null;
@@ -261,14 +379,14 @@ class MarketingController extends Controller
             'description'      => $request->description,
             'type'            => $request->type,
             'subject'         => $request->subject,
-            'message_content' => $request->message_content,
+            'message_content' => (string) $request->message_content,
             'template_id'     => $request->template_id ?: null,
             'segment_id'      => $request->segment_id ?: null,
             'all_customers'   => $request->boolean('all_customers'),
             'send_immediately' => $sendImmediately,
             'scheduled_at'    => $scheduledAt,
             'status'          => $status,
-        ];
+        ] + $this->waTemplateData($request);
 
         if ($request->hasFile('attachment')) {
             $data['attachment'] = $this->storeUpload($request->file('attachment'));
@@ -280,6 +398,7 @@ class MarketingController extends Controller
 
         // Mirror create behaviour: if the user chose to send immediately, queue it now.
         if ($sendImmediately) {
+            $dispatcher->buildRecipients($campaign);
             $campaign->update(['status' => 'sending']);
             \App\Jobs\SendMarketingCampaign::dispatch($campaign->id);
             $this->logActivity($request, 'campaign', $campaign->id, 'queued', 'Campaign queued for immediate sending');
@@ -305,17 +424,21 @@ class MarketingController extends Controller
     /**
      * Manually trigger (or re-trigger) sending of a campaign.
      */
-    public function campaigns_send(Request $request, $id)
+    public function campaigns_send(Request $request, $id, MarketingDispatcher $dispatcher)
     {
         $this->authorizeForUser($request->user('api'), 'update', MarketingCampaign::class);
 
         $campaign = MarketingCampaign::findOrFail($id);
 
-        if ($campaign->status === 'sending') {
+        // A stuck send (no batch for a while — no queue worker, killed job) may
+        // be retried; it resumes from its pending recipients.
+        if ($campaign->status === 'sending' && ! $campaign->is_stuck) {
             return response()->json(['success' => false, 'message' => 'Campaign is already sending.'], 422);
         }
 
-        $campaign->update(['status' => 'sending']);
+        $dispatcher->prepareRecipients($campaign);
+        $campaign->status = 'sending';
+        $campaign->touch();
         SendMarketingCampaign::dispatch($campaign->id);
 
         $this->logActivity($request, 'campaign', $campaign->id, 'queued', 'Campaign queued for sending');
@@ -383,7 +506,11 @@ class MarketingController extends Controller
     {
         $this->authorizeForUser($request->user('api'), 'view', MarketingSegment::class);
 
-        $segments = MarketingSegment::orderBy('name')->get(['id', 'name', 'all_customers', 'customers_count']);
+        $cols = ['id', 'name', 'all_customers', 'customers_count'];
+        if (\Illuminate\Support\Facades\Schema::hasColumn('marketing_segments', 'audience')) {
+            $cols[] = 'audience'; // CRM lead segments
+        }
+        $segments = MarketingSegment::orderBy('name')->get($cols);
 
         return response()->json(['segments' => $segments]);
     }
@@ -394,17 +521,18 @@ class MarketingController extends Controller
 
         $request->validate(['name' => 'required|string|max:255']);
 
+        $audience = $this->segmentAudience($request);
         $filters = $request->filters ?: [];
-        $count = (new SegmentResolver)->count($request->boolean('all_customers'), is_array($filters) ? $filters : []);
+        $count = (new SegmentResolver)->countFor($audience, $request->boolean('all_customers'), is_array($filters) ? $filters : []);
 
-        $segment = MarketingSegment::create([
+        $segment = MarketingSegment::create($this->withAudience($audience, [
             'name'            => $request->name,
             'description'     => $request->description,
             'all_customers'   => $request->boolean('all_customers'),
             'filters'         => is_array($filters) ? $filters : [],
             'customers_count' => $count,
             'created_by'      => $this->currentUserId($request),
-        ]);
+        ]));
 
         $this->logActivity($request, 'segment', $segment->id, 'created', 'Segment "'.$segment->name.'" created');
 
@@ -418,16 +546,17 @@ class MarketingController extends Controller
         $request->validate(['name' => 'required|string|max:255']);
 
         $segment = MarketingSegment::findOrFail($id);
+        $audience = $this->segmentAudience($request);
         $filters = $request->filters ?: [];
-        $count = (new SegmentResolver)->count($request->boolean('all_customers'), is_array($filters) ? $filters : []);
+        $count = (new SegmentResolver)->countFor($audience, $request->boolean('all_customers'), is_array($filters) ? $filters : []);
 
-        $segment->update([
+        $segment->update($this->withAudience($audience, [
             'name'            => $request->name,
             'description'     => $request->description,
             'all_customers'   => $request->boolean('all_customers'),
             'filters'         => is_array($filters) ? $filters : [],
             'customers_count' => $count,
-        ]);
+        ]));
 
         $this->logActivity($request, 'segment', $segment->id, 'updated', 'Segment "'.$segment->name.'" updated');
 
@@ -453,12 +582,66 @@ class MarketingController extends Controller
 
         $filters = $request->filters ?: [];
         $resolver = new SegmentResolver;
-        $clients = $resolver->resolve($request->boolean('all_customers'), is_array($filters) ? $filters : []);
+        $clients = $resolver->resolveFor($this->segmentAudience($request), $request->boolean('all_customers'), is_array($filters) ? $filters : []);
 
         return response()->json([
             'count'   => $clients->count(),
             'sample'  => $clients->take(10)->values(),
+            'with_email' => $clients->filter(fn ($c) => ! empty($c->email))->count(),
+            'with_phone' => $clients->filter(fn ($c) => ! empty($c->phone))->count(),
         ]);
+    }
+
+    /**
+     * Lookups for the "CRM leads" audience (null when the CRM isn't available
+     * to this user: lead segments need "view all leads").
+     */
+    public function segments_lead_meta(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'view', MarketingSegment::class);
+        if (! $this->canLeadAudience($request)) {
+            return response()->json(['available' => false]);
+        }
+
+        return response()->json([
+            'available' => true,
+            'sources'  => \App\Models\CrmLeadSource::orderBy('sort_order')->orderBy('name')->get(['id', 'name', 'color']),
+            'statuses' => \App\Models\CrmLeadStatus::where('kind', '!=', 'converted')->orderBy('sort_order')->get(['id', 'name', 'color', 'kind']),
+            'tags'     => \App\Models\CrmTag::orderBy('name')->get(['id', 'name', 'color']),
+            'owners'   => \App\Models\User::whereNull('deleted_at')->where('statut', 1)->orderBy('firstname')->get()
+                ->map(fn ($u) => ['id' => $u->id, 'name' => \App\Services\Crm\CrmLeadService::userName($u)])->values(),
+        ]);
+    }
+
+    private function segmentAudience(Request $request): string
+    {
+        if ($request->input('audience') !== 'crm_leads') {
+            return 'customers';
+        }
+        if (! $this->canLeadAudience($request)) {
+            abort(response()->json(['message' => 'Lead segments need the CRM permission to see all leads.'], 403));
+        }
+
+        return 'crm_leads';
+    }
+
+    private function canLeadAudience(Request $request): bool
+    {
+        return \Illuminate\Support\Facades\Schema::hasColumn('marketing_segments', 'audience')
+            && \Illuminate\Support\Facades\Schema::hasTable('crm_leads')
+            // CRM switched off in Settings → Modules: no lead audience either.
+            && \App\Services\Crm\CrmCaptureService::enabled()
+            && $request->user('api')->can('viewAll', \App\Models\CrmLead::class);
+    }
+
+    /** The audience column only exists once the CRM migrations ran. */
+    private function withAudience(string $audience, array $data): array
+    {
+        if (\Illuminate\Support\Facades\Schema::hasColumn('marketing_segments', 'audience')) {
+            $data['audience'] = $audience;
+        }
+
+        return $data;
     }
 
     // ======================== TEMPLATES ========================
@@ -499,7 +682,10 @@ class MarketingController extends Controller
         if ($request->filled('type')) {
             $query->where('type', $request->type);
         }
-        $templates = $query->orderBy('name')->get(['id', 'name', 'type', 'subject', 'content']);
+        $templates = $query->orderBy('name')->get([
+            'id', 'name', 'type', 'subject', 'content',
+            'wa_template_name', 'wa_template_language', 'wa_template_params',
+        ]);
 
         return response()->json(['templates' => $templates]);
     }
@@ -511,17 +697,17 @@ class MarketingController extends Controller
         $request->validate([
             'name'    => 'required|string|max:255',
             'type'    => 'required|in:sms,email,whatsapp',
-            'content' => 'required|string',
-        ]);
+            'content' => $this->bodyRule($request),
+        ] + $this->waTemplateRules());
 
         $template = MarketingTemplate::create([
             'name'       => $request->name,
             'type'       => $request->type,
             'category'   => $request->category,
             'subject'    => $request->subject,
-            'content'    => $request->content,
+            'content'    => (string) $request->content,
             'created_by' => $this->currentUserId($request),
-        ]);
+        ] + $this->waTemplateData($request));
 
         $this->logActivity($request, 'template', $template->id, 'created', 'Template "'.$template->name.'" created');
 
@@ -535,8 +721,8 @@ class MarketingController extends Controller
         $request->validate([
             'name'    => 'required|string|max:255',
             'type'    => 'required|in:sms,email,whatsapp',
-            'content' => 'required|string',
-        ]);
+            'content' => $this->bodyRule($request),
+        ] + $this->waTemplateRules());
 
         $template = MarketingTemplate::findOrFail($id);
         $template->update([
@@ -544,8 +730,8 @@ class MarketingController extends Controller
             'type'     => $request->type,
             'category' => $request->category,
             'subject'  => $request->subject,
-            'content'  => $request->content,
-        ]);
+            'content'  => (string) $request->content,
+        ] + $this->waTemplateData($request));
 
         $this->logActivity($request, 'template', $template->id, 'updated', 'Template "'.$template->name.'" updated');
 

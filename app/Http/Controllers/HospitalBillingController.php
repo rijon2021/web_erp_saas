@@ -9,8 +9,12 @@ use App\Models\HospitalPayment;
 use App\Models\LabOrder;
 use App\Models\PatientVisit;
 use App\Models\Prescription;
+use App\Models\Setting;
+use App\utils\helpers;
+use ArPHP\I18N\Arabic;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use PDF;
 
 /**
  * Hospital billing: invoices, their lines, and payments against them.
@@ -109,6 +113,41 @@ class HospitalBillingController extends Controller
         ])->values();
 
         return response()->json(['invoice' => $data]);
+    }
+
+    /** The printable bill — ?preview=1 streams it for the browser's print dialog, otherwise it downloads. */
+    public function invoicePdf(Request $request, $id)
+    {
+        $this->authorizeForUser($request->user('api'), 'view', HospitalInvoice::class);
+
+        $invoice = HospitalInvoice::with('patient', 'items', 'payments')->whereNull('deleted_at')->findOrFail($id);
+        $symbol = (new helpers)->Get_Currency();
+        $decimals = helpers::price_decimals();
+
+        $html = view('pdf.hospital_invoice_pdf', [
+            'invoice' => $invoice,
+            'setting' => Setting::whereNull('deleted_at')->first(),
+            'money' => fn ($v) => helpers::with_currency($symbol, helpers::format_price((float) $v, $decimals, 'comma_dot')),
+        ])->render();
+
+        // dompdf can't shape Arabic itself; ArPHP does it when installed.
+        if (class_exists(Arabic::class)) {
+            try {
+                $arabic = new Arabic;
+                $p = $arabic->arIdentify($html);
+                for ($i = count($p) - 1; $i >= 0; $i -= 2) {
+                    $utf8ar = $arabic->utf8Glyphs(substr($html, $p[$i - 1], $p[$i] - $p[$i - 1]));
+                    $html = substr_replace($html, $utf8ar, $p[$i - 1], $p[$i] - $p[$i - 1]);
+                }
+            } catch (\Throwable $e) {
+                // Shaping is cosmetic; print without it.
+            }
+        }
+
+        $pdf = PDF::loadHTML($html);
+        $filename = 'Hospital_Invoice_' . $invoice->reference . '.pdf';
+
+        return $request->boolean('preview') ? $pdf->stream($filename) : $pdf->download($filename);
     }
 
     public function store(Request $request)

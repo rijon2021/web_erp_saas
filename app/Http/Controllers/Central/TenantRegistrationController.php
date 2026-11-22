@@ -21,11 +21,27 @@ use Stancl\Tenancy\Database\Models\Domain;
 
 class TenantRegistrationController extends Controller
 {
-    public function showRegistrationForm()
+    public function showRegistrationForm(Request $request)
     {
         $plans = Plan::public()->orderBy('price')->get();
+        $billingCycles = GeneralSetting::enabledBillingCycles();
 
-        return view('central.register', compact('plans'));
+        // Multi-currency pricing: the plan list and symbol in the visitor's
+        // currency (?currency=, cookie, country); the form posts it back.
+        $signupCurrency = \App\Services\Billing\PlanPricing::visitorCurrency($request);
+        \App\Support\DisplayCurrency::set($signupCurrency !== \App\Support\SellingCurrencies::main() ? $signupCurrency : null);
+        $plans = \App\Services\Billing\PlanPricing::displayPlans($plans, $signupCurrency);
+        $currencySwitcher = \App\Support\CurrencySwitcher::data($signupCurrency);
+
+        return view('central.register', compact('plans', 'billingCycles', 'signupCurrency', 'currencySwitcher'));
+    }
+
+    /** The currency a signup is billed in: the posted one when it is on offer, else the main one. */
+    protected function signupCurrency(Request $request): string
+    {
+        $asked = strtoupper((string) $request->input('currency', ''));
+
+        return \App\Support\SellingCurrencies::isOffered($asked) ? $asked : \App\Support\SellingCurrencies::main();
     }
 
     public function register(Request $request)
@@ -74,7 +90,8 @@ class TenantRegistrationController extends Controller
                     }
                 },
             ],
-            'billing_cycle'  => ['nullable', 'in:monthly,yearly'],
+            // Only the cycles the super admin currently sells.
+            'billing_cycle'  => ['nullable', GeneralSetting::billingCycleRule()],
         ], [
             'plan_id.required' => __('landing.plan_required'),
         ]);
@@ -87,7 +104,10 @@ class TenantRegistrationController extends Controller
             return back()->withErrors(['plan_id' => 'No plans available. Please contact support.']);
         }
 
-        $billingCycle = $validated['billing_cycle'] ?? 'monthly';
+        // An omitted cycle must land on one that is actually offered, so a
+        // yearly-only platform never writes a monthly subscription by default.
+        $billingCycle = GeneralSetting::defaultBillingCycle($validated['billing_cycle'] ?? null);
+        $validated['currency'] = $this->signupCurrency($request);
 
         if ($plan->isFree() || $plan->hasTrial()) {
             return $this->handleFreeOrTrialSignup($validated, $plan, $billingCycle);
@@ -111,6 +131,10 @@ class TenantRegistrationController extends Controller
                 'admin_password_hash'      => Hash::make($data['admin_password']),
                 'admin_password_encrypted' => Crypt::encryptString($data['admin_password']),
                 'owner_phone'              => $data['owner_phone'] ?? null,
+                // Billed in (and its shop starts in) the currency chosen at signup.
+                // Only a real multi-currency choice is stored; others follow the platform currency.
+                'billing_currency'         => ($data['currency'] ?? null) && strtoupper($data['currency']) !== strtoupper((string) GeneralSetting::currencyCode())
+                    ? strtoupper($data['currency']) : null,
                 'status'                   => $isShared ? Tenant::STATUS_PENDING : Tenant::STATUS_PROVISIONING,
             ]);
 
@@ -124,8 +148,8 @@ class TenantRegistrationController extends Controller
                 'tenant_id'     => $tenant->id,
                 'plan_id'       => $plan->id,
                 'billing_cycle' => $billingCycle,
-                'amount'        => $plan->getPriceForCycle($billingCycle),
-                'currency'      => GeneralSetting::currencyCode(),
+                'amount'        => $this->safePrice($plan, $billingCycle, $data['currency'] ?? null),
+                'currency'      => $data['currency'] ?? GeneralSetting::currencyCode(),
                 'status'        => $isShared ? 'pending' : ($isTrial ? TenantSubscription::STATUS_TRIAL : TenantSubscription::STATUS_ACTIVE),
                 'starts_at'     => $now,
                 'trial_ends_at' => $isTrial ? $now->copy()->addDays($trialDays) : null,
@@ -188,8 +212,31 @@ class TenantRegistrationController extends Controller
 
     // ── Paid: only create a pending registration — NO tenant ─────────
 
+    /** Plan price in a currency; the main price if that currency can't be priced right now. */
+    protected function safePrice(Plan $plan, string $cycle, ?string $currency): float
+    {
+        try {
+            return \App\Services\Billing\PlanPricing::price($plan, $cycle, $currency);
+        } catch (\Throwable $e) {
+            Log::warning("Registration: no {$currency} price for plan {$plan->id}: {$e->getMessage()}");
+
+            return (float) $plan->getPriceForCycle($cycle);
+        }
+    }
+
     protected function handlePaidSignup(array $data, Plan $plan, string $billingCycle)
     {
+        $currency = strtoupper((string) ($data['currency'] ?? GeneralSetting::currencyCode()));
+        try {
+            $amount = \App\Services\Billing\PlanPricing::price($plan, $billingCycle, $currency);
+        } catch (\Throwable $e) {
+            // No exchange rate for an automatic price right now — bill in the
+            // main currency rather than fail the signup.
+            Log::warning("Registration: no {$currency} price for plan {$plan->id}, using the main currency: {$e->getMessage()}");
+            $currency = GeneralSetting::currencyCode();
+            $amount = (float) $plan->getPriceForCycle($billingCycle);
+        }
+
         $registration = PendingRegistration::create([
             'subdomain'           => $data['subdomain'],
             'company_name'        => $data['company_name'],
@@ -197,16 +244,17 @@ class TenantRegistrationController extends Controller
             'admin_password_hash' => Hash::make($data['admin_password']),
             'plan_id'             => $plan->id,
             'billing_cycle'       => $billingCycle,
-            'amount'              => $plan->getPriceForCycle($billingCycle),
-            // Plan prices are in the platform's configured currency — storing a
-            // hardcoded 'USD' here made CurrencyConversionService treat e.g. NGN
-            // prices as USD and multiply them by the USD→NGN rate (~1500x),
-            // which blew past the gateways' per-transaction limits.
-            'currency'            => GeneralSetting::currencyCode(),
+            // Priced in the currency the visitor chose (multi-currency pricing;
+            // the main currency otherwise). Never a hardcoded 'USD': that made
+            // CurrencyConversionService treat e.g. NGN prices as USD and
+            // multiply them by the USD→NGN rate (~1500x).
+            'amount'              => $amount,
+            'currency'            => $currency,
             'status'              => PendingRegistration::STATUS_PENDING,
             'metadata'            => [
                 'admin_password_encrypted' => Crypt::encryptString($data['admin_password']),
                 'owner_phone'              => $data['owner_phone'] ?? null,
+                'billing_currency'         => $currency,
             ],
         ]);
 

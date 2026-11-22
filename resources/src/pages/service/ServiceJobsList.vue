@@ -33,6 +33,10 @@
           </a-button>
         </a-col>
       </a-row>
+      <!-- Client Portal → Appointments lands here with ?source=portal. -->
+      <a-tag v-if="filters.source === 'portal'" color="orange" closable style="margin-top: 12px" @close="clearSource">
+        {{ $t('Portal_Bookings_Only') }}
+      </a-tag>
     </a-card>
 
     <DataTable :crud="crud" :columns="columns">
@@ -102,7 +106,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
-const filters = ref({ status: '', payment_status: '', from: '', to: '' });
+const filters = ref({ status: '', payment_status: '', from: '', to: '', source: '' });
 
 const crud = useCrudTable('service_jobs', {
   rowsKey: 'jobs',
@@ -114,33 +118,34 @@ const crud = useCrudTable('service_jobs', {
     if (filters.value.payment_status) p.payment_status = filters.value.payment_status;
     if (filters.value.from) p.from = filters.value.from;
     if (filters.value.to) p.to = filters.value.to;
+    if (filters.value.source) p.source = filters.value.source;
     return p;
   },
 });
 
 const hasActiveFilters = computed(() =>
-  !!(filters.value.status || filters.value.payment_status || filters.value.from || filters.value.to));
+  !!(filters.value.status || filters.value.payment_status || filters.value.from || filters.value.to || filters.value.source));
 
-const statusFilterOptions = [
-  { value: '', label: 'All' },
-  { value: 'pending', label: 'Pending' },
-  { value: 'intake', label: 'Intake' },
-  { value: 'diagnostic', label: 'Diagnostic' },
-  { value: 'quoted', label: 'Quoted' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'ready', label: 'Ready for Pickup' },
-  { value: 'delivered', label: 'Delivered' },
-  { value: 'declined', label: 'Declined' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'cancelled', label: 'Cancelled' },
-];
-const paymentFilterOptions = [
-  { value: '', label: 'All' },
-  { value: 'unpaid', label: 'Unpaid' },
-  { value: 'partial', label: 'Partial' },
-  { value: 'paid', label: 'Paid' },
-];
+const statusFilterOptions = computed(() => [
+  { value: '', label: t('All') },
+  { value: 'pending', label: t('Pending') },
+  { value: 'intake', label: t('Intake') },
+  { value: 'diagnostic', label: t('Diagnostic') },
+  { value: 'quoted', label: t('Quoted') },
+  { value: 'approved', label: t('Approved') },
+  { value: 'in_progress', label: t('In_Progress') },
+  { value: 'ready', label: t('Ready_For_Pickup') },
+  { value: 'delivered', label: t('Delivered') },
+  { value: 'declined', label: t('Declined') },
+  { value: 'completed', label: t('Completed') },
+  { value: 'cancelled', label: t('Cancelled') },
+]);
+const paymentFilterOptions = computed(() => [
+  { value: '', label: t('All') },
+  { value: 'unpaid', label: t('Unpaid') },
+  { value: 'partial', label: t('Partial') },
+  { value: 'paid', label: t('Paid') },
+]);
 
 const columns = computed(() => [
   { title: t('Reference'), dataIndex: 'Ref', key: 'Ref', sorter: true },
@@ -169,14 +174,14 @@ function statusLabel(s) {
   if (!s) return '-';
   const map = {
     pending: t('Pending'),
-    intake: 'Intake',
-    diagnostic: 'Diagnostic',
-    quoted: 'Quoted',
-    approved: 'Approved',
+    intake: t('Intake'),
+    diagnostic: t('Diagnostic'),
+    quoted: t('Quoted'),
+    approved: t('Approved'),
     in_progress: t('In_Progress'),
-    ready: 'Ready for Pickup',
-    delivered: 'Delivered',
-    declined: 'Declined',
+    ready: t('Ready_For_Pickup'),
+    delivered: t('Delivered'),
+    declined: t('Declined'),
     completed: t('complete'),
     cancelled: t('Cancelled'),
   };
@@ -200,10 +205,16 @@ function applyQueryFilters() {
   filters.value.payment_status = q.payment_status || '';
   filters.value.from = q.from || '';
   filters.value.to = q.to || '';
+  filters.value.source = q.source === 'portal' ? 'portal' : '';
   applyFilters();
 }
+function clearSource() {
+  const { source, ...rest } = route.query;
+  if (source) router.replace({ path: route.path, query: rest });
+  else { filters.value.source = ''; applyFilters(); }
+}
 function clearFilters() {
-  filters.value = { status: '', payment_status: '', from: '', to: '' };
+  filters.value = { status: '', payment_status: '', from: '', to: '', source: '' };
   if (Object.keys(route.query).length > 0) {
     router.replace({ path: route.path });
   } else {

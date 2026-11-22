@@ -40,6 +40,11 @@
           @change="crud.reload()"
         />
         <a-date-picker v-model:value="day" value-format="YYYY-MM-DD" allow-clear @change="crud.reload()" />
+        <a-select
+          v-model:value="source" style="width: 170px" allow-clear :placeholder="$t('Bkm_Source')"
+          :options="[{ value: 'website', label: $t('Bkm_From_Website') }, { value: 'staff', label: $t('Bkm_Entered_By_Staff') }]"
+          @change="crud.reload()"
+        />
       </div>
 
       <a-table
@@ -57,9 +62,16 @@
           <template v-else-if="column.key === 'price'">{{ money(record.price) }}</template>
           <template v-else-if="column.key === 'status'">
             <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
+            <a-tag v-if="record.source === 'website'" color="blue">{{ $t('Bkm_Web') }}</a-tag>
           </template>
+          <template v-else-if="column.key === 'staff_name'">{{ record.staff_name || '—' }}</template>
           <template v-else-if="column.key === 'actions'">
             <a-space>
+              <a-tooltip v-if="crud.payload.value?.workflow_ready" :title="$t('Bkm_View_Actions')">
+                <a-button type="text" size="small" @click="openView(record)">
+                  <template #icon><EyeOutlined /></template>
+                </a-button>
+              </a-tooltip>
               <a-tooltip :title="$t('Edit')">
                 <a-button type="text" size="small" @click="$router.push(`/bookings/${record.id}/edit`)">
                   <template #icon><EditOutlined style="color: #52c41a" /></template>
@@ -75,6 +87,8 @@
         </template>
       </a-table>
     </a-card>
+
+    <BookingQuickView v-model:open="viewOpen" :booking-id="viewId" @changed="crud.reload()" />
   </div>
 </template>
 
@@ -86,20 +100,31 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
+import BookingQuickView from './BookingQuickView.vue';
+import { statusLabel as bkStatusLabel, statusTag, statusOptions as bkStatusOptions } from './bookingStatus';
 
 const { t } = useI18n();
 const { money, date } = useFormat();
 
 const status = ref(undefined);
 const day = ref(null);
+const source = ref(undefined);
+const viewOpen = ref(false);
+const viewId = ref(null);
+
+function openView(record) {
+  viewId.value = record.id;
+  viewOpen.value = true;
+}
 
 const filterParams = () => ({
   ...(status.value ? { status: status.value } : {}),
   ...(day.value ? { date: day.value } : {}),
+  ...(source.value ? { source: source.value } : {}),
 });
 
 // Payload: { bookings, totalRows, stats: {total, pending, confirmed, completed} }
@@ -119,12 +144,7 @@ const tiles = computed(() => [
   { label: t('Completed'), value: stats.value.completed || 0, style: { color: '#52c41a' } },
 ]);
 
-const statusOptions = computed(() => [
-  { value: 'pending', label: t('Pending') },
-  { value: 'confirmed', label: t('Confirmed') },
-  { value: 'completed', label: t('Completed') },
-  { value: 'cancelled', label: t('Cancelled') },
-]);
+const statusOptions = computed(() => bkStatusOptions());
 
 const columns = computed(() => [
   { title: t('Reference'), dataIndex: 'Ref', key: 'Ref', sorter: true },
@@ -134,24 +154,17 @@ const columns = computed(() => [
   { title: t('date'), key: 'booking_date', dataIndex: 'booking_date', sorter: true, exportValue: r => date(r.booking_date) },
   { title: t('Time_In'), dataIndex: 'booking_time', key: 'booking_time' },
   { title: t('Time_Out'), dataIndex: 'booking_end_time', key: 'booking_end_time' },
+  { title: t('Bkm_Staff', 'Staff'), dataIndex: 'staff_name', key: 'staff_name', exportValue: r => r.staff_name || '' },
   { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => statusLabel(r.status) },
-  { title: t('Action'), key: 'actions', width: 110, align: 'center' },
+  { title: t('Action'), key: 'actions', width: 140, align: 'center' },
 ]);
 
 function statusLabel(s) {
-  const map = {
-    pending: t('Pending'), confirmed: t('Confirmed'),
-    completed: t('Completed'), cancelled: t('Cancelled'),
-  };
-  return map[s] || s;
+  return bkStatusLabel(s);
 }
 
 function statusColor(s) {
-  if (s === 'confirmed') return 'processing';
-  if (s === 'completed') return 'success';
-  if (s === 'pending') return 'warning';
-  if (s === 'cancelled') return 'error';
-  return 'default';
+  return statusTag(s);
 }
 
 onMounted(crud.fetchRows);

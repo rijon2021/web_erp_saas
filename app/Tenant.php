@@ -72,6 +72,34 @@ class Tenant extends BaseTenant implements TenantWithDatabase
         return $this->hasMany(TenantSubscription::class, 'tenant_id', 'id');
     }
 
+    /**
+     * The subscription the tenant is actually on — not necessarily the newest
+     * row, which can be a plan change still waiting for payment. Prefers the
+     * row granting access now (grace included), then the newest settled row.
+     */
+    public function currentSubscription(): ?TenantSubscription
+    {
+        return $this->subscriptions()->grantingAccess()->latest('id')->first()
+            ?? $this->subscriptions()
+                ->whereNotIn('status', [TenantSubscription::STATUS_PENDING, TenantSubscription::STATUS_FAILED])
+                ->latest('id')
+                ->first()
+            ?? $this->subscriptions()->latest('id')->first();
+    }
+
+    /**
+     * In-memory twin of currentSubscription() for an eager-loaded
+     * `subscriptions` relation (list pages — no query per row).
+     */
+    public function currentSubscriptionLoaded(): ?TenantSubscription
+    {
+        $rows = $this->subscriptions->sortByDesc('id');
+
+        return $rows->first(fn (TenantSubscription $s) => $s->grantsAccess() || $s->inGracePeriod())
+            ?? $rows->first(fn (TenantSubscription $s) => ! in_array($s->status, [TenantSubscription::STATUS_PENDING, TenantSubscription::STATUS_FAILED], true))
+            ?? $rows->first();
+    }
+
     public function payments()
     {
         return $this->hasMany(TenantBillingPayment::class, 'tenant_id', 'id');
@@ -92,6 +120,54 @@ class Tenant extends BaseTenant implements TenantWithDatabase
                 TenantSubscription::STATUS_TRIAL,
             ])
             ->latest('id');
+    }
+
+    /**
+     * Active tenants whose current plan includes $feature, resolved from the
+     * central DB alone — for scheduler sweeps, so a tenant with nothing to do
+     * never has its database connected. "Current plan" is resolved as
+     * TenantLimitsService does: the latest subscription that grants access.
+     */
+    public static function activeWithFeature(string $feature): \Illuminate\Support\LazyCollection
+    {
+        $ids = static::activePlans()
+            ->filter(fn (\App\Models\Central\Plan $plan) => $plan->hasFeature($feature))
+            ->keys()
+            ->all();
+
+        return static::whereIn('id', $ids)->cursor();
+    }
+
+    /**
+     * Current plan of every active tenant, keyed by tenant id — one central
+     * query, no tenant database touched. Tenants with no subscription granting
+     * access are left out.
+     *
+     * @return \Illuminate\Support\Collection<string, \App\Models\Central\Plan>
+     */
+    public static function activePlans(): \Illuminate\Support\Collection
+    {
+        return TenantSubscription::query()
+            ->whereIn('tenant_id', static::where('status', self::STATUS_ACTIVE)->pluck('id'))
+            ->grantingAccess()
+            ->with('plan')
+            ->latest()
+            ->get()
+            // A base collection: on an Eloquent one, only()/except() match
+            // model ids (plan ids here), not the tenant-id keys.
+            ->toBase()
+            ->unique('tenant_id')
+            ->filter(fn (TenantSubscription $s) => $s->plan !== null)
+            ->mapWithKeys(fn (TenantSubscription $s) => [$s->tenant_id => $s->plan])
+            // Each tenant's effective plan: its plan plus its active add-ons.
+            ->pipe(function (\Illuminate\Support\Collection $plans) {
+                $grants = \App\Models\Central\TenantAddon::activeGrantsByTenant(array_map('strval', $plans->keys()->all()));
+
+                return $plans->map(fn ($plan, $tenantId) => $plan->withAddonFeatures(
+                    $grants[$tenantId]['keys'] ?? [],
+                    $grants[$tenantId]['limits'] ?? []
+                ));
+            });
     }
 
     public function isPending(): bool
@@ -124,9 +200,70 @@ class Tenant extends BaseTenant implements TenantWithDatabase
         return $this->status === self::STATUS_REJECTED;
     }
 
+    /**
+     * Why a suspended tenant is suspended (virtual `data` attribute):
+     * non_payment = auto-suspended by tenant:cleanup-inactive — the owner can
+     * still sign in and pay, and paying lifts it; admin = by a super admin.
+     */
+    public const SUSPENDED_NON_PAYMENT = 'non_payment';
+    public const SUSPENDED_BY_ADMIN    = 'admin';
+
+    public function isSuspendedForNonPayment(): bool
+    {
+        if ($this->status !== self::STATUS_SUSPENDED) {
+            return false;
+        }
+
+        if ($this->suspension_reason !== null) {
+            return $this->suspension_reason === self::SUSPENDED_NON_PAYMENT;
+        }
+
+        // Suspended before the reason was recorded (2026-10-10): the old
+        // cleanup command only suspended lapsed tenants, so a suspension with
+        // no reason and no subscription granting access is a non-payment one.
+        try {
+            return $this->subscriptions()->exists()
+                && ! $this->subscriptions()->grantingAccess()->exists();
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Has this workspace never been live? went_live_at (virtual data
+     * attribute) is stamped by ProvisionTenantWorkspace on the first success;
+     * last_activity_at covers workspaces that went live before that stamp
+     * existed and have been used since.
+     */
+    public function neverWentLive(): bool
+    {
+        return empty($this->went_live_at) && $this->last_activity_at === null;
+    }
+
+    /**
+     * Restore a workspace that was auto-suspended for non-payment, once a
+     * subscription is activated or renewed. Admin suspensions are left alone.
+     */
+    public static function liftNonPaymentSuspension($tenantId): void
+    {
+        $tenant = $tenantId ? static::find($tenantId) : null;
+        if (! $tenant || ! $tenant->isSuspendedForNonPayment()) {
+            return;
+        }
+
+        $tenant->status = $tenant->status_before_suspension ?: self::STATUS_ACTIVE;
+        $tenant->status_before_suspension = null;
+        $tenant->suspension_reason = null;
+        $tenant->save();
+    }
+
     public function getTenantUrl(): string
     {
-        $domain = $this->domains()->first();
+        // Prefer an address that is switched on: links to a switched-off
+        // subdomain would only bounce through a redirect.
+        $domain = \App\Support\TenantDomainStatus::supported()
+            ? ($this->domains()->where('is_active', true)->first() ?? $this->domains()->first())
+            : $this->domains()->first();
 
         if (! $domain) {
             return '';
@@ -140,8 +277,16 @@ class Tenant extends BaseTenant implements TenantWithDatabase
             $hostname = "{$hostname}.{$baseDomain}";
         }
 
-        $protocol = request()->secure() ? 'https' : 'http';
-        $port = request()->getPort();
+        // From the scheduler / queue there is no real request — take the scheme
+        // and port from APP_URL so emailed links are not downgraded to http.
+        if (app()->runningInConsole()) {
+            $appUrl = parse_url(config('app.url', 'http://localhost')) ?: [];
+            $protocol = $appUrl['scheme'] ?? 'http';
+            $port = $appUrl['port'] ?? null;
+        } else {
+            $protocol = request()->secure() ? 'https' : 'http';
+            $port = request()->getPort();
+        }
         $portSuffix = ($port && ! in_array($port, [80, 443])) ? ":{$port}" : '';
 
         return "{$protocol}://{$hostname}{$portSuffix}";
@@ -189,6 +334,16 @@ class Tenant extends BaseTenant implements TenantWithDatabase
     public function hasDatabaseCredentials(): bool
     {
         return ! empty($this->tenancy_db_host) && ! empty($this->tenancy_db_name) && ! empty($this->tenancy_db_username);
+    }
+
+    /**
+     * Whether the stored credentials are the tenant's own MySQL account created
+     * at auto-provisioning (App\Services\TenantDatabaseUser), rather than ones an
+     * admin typed in. Such a tenant is still "auto-provisioned".
+     */
+    public function usesDedicatedDatabaseUser(): bool
+    {
+        return (bool) ($this->tenancy_dedicated_db_user ?? false) && $this->hasDatabaseCredentials();
     }
 
     /**

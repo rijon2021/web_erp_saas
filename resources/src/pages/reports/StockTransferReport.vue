@@ -8,6 +8,7 @@
     export-endpoint="report/stock_transfer"
     :export-params="filterParams"
     :export-select="p => p?.data?.rows || []"
+    product-data
   >
     <template #actions>
       <!-- Multi-Currency: view amounts converted (display-only) -->
@@ -35,7 +36,7 @@
       <template v-if="column.key === 'date_time'">{{ dateTime(record.date_time) }}</template>
       <template v-else-if="column.key === 'value'">{{ money(record.value) }}</template>
       <template v-else-if="column.key === 'statut'">
-        <a-tag :color="docStatusColor(record.statut)">{{ record.statut }}</a-tag>
+        <a-tag :color="docStatusColor(record.statut)">{{ statusLabel(record.statut) }}</a-tag>
       </template>
     </template>
   </ReportPage>
@@ -80,14 +81,18 @@ const warehouseOptions = computed(() =>
 const timeseries = computed(() => crud.payload.value?.data?.timeseries || []);
 const chartFields = computed(() => [{ key: 'qty', label: t('Qty') }]);
 
+// Display label for the raw transfer status (falls back to the value itself).
+const STATUS_KEYS = { completed: 'complete', sent: 'Sent', pending: 'Pending' };
+const statusLabel = s => (STATUS_KEYS[s] ? t(STATUS_KEYS[s]) : s);
+
 const columns = computed(() => [
   { title: t('ID'), dataIndex: 'transfer_id', key: 'transfer_id', sorter: true },
   { title: t('date'), key: 'date_time', dataIndex: 'date_time', sorter: true, exportValue: r => dateTime(r.date_time) },
   { title: t('From'), dataIndex: 'from', key: 'from' },
   { title: t('to'), dataIndex: 'to', key: 'to' },
   { title: t('Qty'), dataIndex: 'qty', key: 'qty', sorter: true, align: 'right', sum: true },
-  { title: t('Value'), key: 'value', dataIndex: 'value', sorter: true, align: 'right', sum: 'money', exportValue: r => money(r.value) },
-  { title: t('Status'), key: 'statut', dataIndex: 'statut', exportValue: r => r.statut },
+  { title: t('Value'), key: 'value', dataIndex: 'value', sorter: true, align: 'right', sum: 'money', cost: true, exportValue: r => money(r.value) },
+  { title: t('Status'), key: 'statut', dataIndex: 'statut', exportValue: r => statusLabel(r.statut) },
 ]);
 
 onMounted(crud.fetchRows);

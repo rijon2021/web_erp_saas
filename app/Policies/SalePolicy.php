@@ -85,6 +85,82 @@ class SalePolicy
         return $user->hasRole($permission->roles);
     }
 
+    // Sales > Offline Sales: review, retry and discard sales replayed from
+    // tills' offline queues.
+    public function pos_offline_sales(User $user)
+    {
+        $permission = Permission::where('name', 'pos_offline_sales')->first();
+
+        // New permission: tenants that have not run the updater yet get a clean 403, not a 500.
+        if (! $permission) {
+            return false;
+        }
+
+        return $user->hasRole($permission->roles);
+    }
+
+    // POS: remove cart items without a manager PIN, approve others' removals
+    // with a PIN, and see Reports > POS Voided Items.
+    public function pos_void_items(User $user)
+    {
+        $permission = Permission::where('name', 'pos_void_items')->first();
+
+        if (! $permission) {
+            return false;
+        }
+
+        return $user->hasRole($permission->roles);
+    }
+
+    /** Settings > API: issue and revoke REST API keys. */
+    public function api_keys(User $user)
+    {
+        $permission = Permission::where('name', 'api_keys')->first();
+
+        if (! $permission) {
+            return false;
+        }
+
+        return $user->hasRole($permission->roles);
+    }
+
+    /** Settings > Custom Domain: add, verify and remove the tenant's own domains. */
+    public function custom_domains(User $user)
+    {
+        $permission = Permission::where('name', 'custom_domains')->first();
+
+        if (! $permission) {
+            return false;
+        }
+
+        return $user->hasRole($permission->roles);
+    }
+
+    // POS Devices: add / edit card terminals, test them, refund and void
+    // device payments.
+    public function pos_terminals_manage(User $user)
+    {
+        $permission = Permission::where('name', 'pos_terminals_manage')->first();
+
+        if (! $permission) {
+            return false;
+        }
+
+        return $user->hasRole($permission->roles);
+    }
+
+    // POS Devices > Transactions: every payment, refund and void sent to a device.
+    public function pos_terminals_transactions(User $user)
+    {
+        $permission = Permission::where('name', 'pos_terminals_transactions')->first();
+
+        if (! $permission) {
+            return false;
+        }
+
+        return $user->hasRole($permission->roles);
+    }
+
     public function products_sold_summary(User $user)
     {
         $permission = Permission::where('name', 'products_sold_summary')->first();
@@ -144,6 +220,20 @@ class SalePolicy
         return $user->hasRole($permission->roles);
     }
 
+    public function due_collection_report(User $user)
+    {
+        $permission = Permission::where('name', 'due_collection_report')->first();
+
+        return $user->hasRole($permission->roles);
+    }
+
+    public function pos_sales_report(User $user)
+    {
+        $permission = Permission::where('name', 'pos_sales_report')->first();
+
+        return $permission ? $user->hasRole($permission->roles) : false;
+    }
+
     public function tax_summary_report(User $user)
     {
         $permission = Permission::where('name', 'tax_summary_report')->first();
@@ -191,6 +281,36 @@ class SalePolicy
         $permission = Permission::where('name', 'fbr_settings')->first();
 
         return $user->hasRole($permission->roles);
+    }
+
+    public function agt_settings(User $user)
+    {
+        $permission = Permission::where('name', 'agt_settings')->first();
+
+        return $permission && $user->hasRole($permission->roles);
+    }
+
+    public function dgi_settings(User $user)
+    {
+        $permission = Permission::where('name', 'dgi_settings')->first();
+
+        return $permission && $user->hasRole($permission->roles);
+    }
+
+    /** Client Portal → Dashboard, Accounts (grant / invite / disable), Deletion Log. */
+    public function portal_accounts(User $user)
+    {
+        $permission = Permission::where('name', 'portal_accounts')->first();
+
+        return $permission && $user->hasRole($permission->roles);
+    }
+
+    /** Client Portal → Portal Settings, Portal Languages / Translations. */
+    public function portal_settings(User $user)
+    {
+        $permission = Permission::where('name', 'portal_settings')->first();
+
+        return $permission && $user->hasRole($permission->roles);
     }
 
     public function customer_loyalty_points_report(User $user)

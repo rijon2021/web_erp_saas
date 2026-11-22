@@ -100,12 +100,13 @@ class GoogleCalendarService
     protected function bookingToRfc3339(Booking $booking): array
     {
         $tz = $this->getTimezone();
-        $date = $booking->booking_date;
+        // booking_date is a plain string: Laravel 12 ignores the model's $dates.
+        $date = Carbon::parse($booking->booking_date)->format('Y-m-d');
         $startTime = $booking->booking_time;
         $endTime = $booking->booking_end_time ?? $startTime;
 
-        $start = Carbon::parse($date->format('Y-m-d').' '.$startTime, $tz);
-        $end = Carbon::parse($date->format('Y-m-d').' '.$endTime, $tz);
+        $start = Carbon::parse($date.' '.$startTime, $tz);
+        $end = Carbon::parse($date.' '.$endTime, $tz);
 
         return [
             'start' => $start->format('Y-m-d\TH:i:sP'),

@@ -1,0 +1,304 @@
+/*!
+ * super-rtl.css — right-to-left overrides for the super-admin dashboard.
+ *
+ * Loaded by resources/views/central/super/layout.blade.php only when the active
+ * locale is RTL (ar, he, fa, ur), after every other stylesheet so it wins.
+ *
+ * The app bundles the LTR build of Bootstrap 5.3.2 only, so the handful of
+ * physical-direction utilities the super views actually use are flipped here
+ * too. Flexbox, grid and `gap` are already direction-aware and need nothing.
+ *
+ * Scoped to [dir="rtl"] throughout — this file is inert in LTR.
+ */
+
+/* ==========================================================================
+   1. Bootstrap utilities used by the super views
+   ========================================================================== */
+
+[dir="rtl"] .me-1 { margin-right: 0 !important; margin-left: 0.25rem !important; }
+[dir="rtl"] .me-2 { margin-right: 0 !important; margin-left: 0.5rem !important; }
+[dir="rtl"] .me-3 { margin-right: 0 !important; margin-left: 1rem !important; }
+[dir="rtl"] .ms-1 { margin-left: 0 !important; margin-right: 0.25rem !important; }
+[dir="rtl"] .ms-2 { margin-left: 0 !important; margin-right: 0.5rem !important; }
+[dir="rtl"] .ms-3 { margin-left: 0 !important; margin-right: 1rem !important; }
+[dir="rtl"] .ms-auto { margin-left: 0 !important; margin-right: auto !important; }
+[dir="rtl"] .me-auto { margin-right: 0 !important; margin-left: auto !important; }
+
+[dir="rtl"] .pe-5 { padding-right: 0 !important; padding-left: 3rem !important; }
+[dir="rtl"] .ps-5 { padding-left: 0 !important; padding-right: 3rem !important; }
+
+[dir="rtl"] .text-end   { text-align: left !important; }
+[dir="rtl"] .text-start { text-align: right !important; }
+
+[dir="rtl"] .float-end   { float: left !important; }
+[dir="rtl"] .float-start { float: right !important; }
+
+[dir="rtl"] .border-start { border-left: 0 !important; border-right: var(--bs-border-width) solid var(--bs-border-color) !important; }
+[dir="rtl"] .border-end   { border-right: 0 !important; border-left: var(--bs-border-width) solid var(--bs-border-color) !important; }
+
+/* Bootstrap aligns these with right:0 in the LTR build */
+[dir="rtl"] .dropdown-menu-end { right: auto !important; left: 0 !important; }
+
+[dir="rtl"] .offset-lg-8 { margin-left: 0; margin-right: 66.66666667%; }
+[dir="rtl"] .offset-lg-4 { margin-left: 0; margin-right: 33.33333333%; }
+
+/* Bootstrap's input-group / .form-select arrow */
+[dir="rtl"] .form-select,
+[dir="rtl"] select.form-control {
+    background-position: left 0.75rem center;
+    padding-right: 0.75rem;
+    padding-left: 2.25rem;
+}
+
+/* ==========================================================================
+   2. Shell: sidebar, main content, topbar  (super-layout.css)
+   ========================================================================== */
+
+[dir="rtl"] .sidebar {
+    left: auto;
+    right: 0;
+    border-right: none;
+    border-left: 1px solid var(--color-border);
+}
+
+[dir="rtl"] .main-content { margin-left: 0; margin-right: var(--sidebar-width); }
+
+[dir="rtl"] .sidebar-nav .nav-link.active::before { left: auto; right: -0.75rem; }
+[dir="rtl"] .sidebar-nav .nav-link .nav-badge { margin-left: 0; margin-right: auto; }
+
+@media (min-width: 992px) {
+    [dir="rtl"] .sidebar.collapsed .sidebar-nav .nav-link.active::before { left: auto; right: 0; }
+    [dir="rtl"] .sidebar.collapsed + .main-content { margin-left: 0; margin-right: var(--sidebar-collapsed-width); }
+    /* Collapsed-rail flyout labels open toward the content area.
+       CSS transforms are physical and do NOT flip with dir, so the entry
+       offset has to be mirrored by hand. */
+    [dir="rtl"] .sidebar.collapsed .sidebar-nav .nav-link::after {
+        left: auto;
+        right: calc(100% + 12px);
+        transform: translateY(-50%) translateX(4px);
+    }
+    [dir="rtl"] .sidebar.collapsed .sidebar-nav .nav-link:hover::after { transform: translateY(-50%) translateX(0); }
+}
+
+/* Mobile off-canvas slides in from the right */
+@media (max-width: 991px) {
+    [dir="rtl"] .sidebar { transform: translate3d(100%, 0, 0); }
+    [dir="rtl"] .sidebar.open { transform: translate3d(0, 0, 0); box-shadow: -4px 0 24px rgba(0, 0, 0, 0.12); }
+    [dir="rtl"] .main-content { margin-right: 0 !important; margin-left: 0 !important; }
+}
+
+[dir="rtl"] .topbar-icon-btn .badge-dot { right: auto; left: 8px; }
+[dir="rtl"] .notification-item { text-align: right; }
+[dir="rtl"] .lang-chevron { margin-left: 0; margin-right: -0.15rem; }
+
+[dir="rtl"] .dashboard-footer > :only-child { margin-left: auto; margin-right: auto; }
+
+[dir="rtl"] .search-box i { left: auto; right: 0.85rem; }
+[dir="rtl"] .search-box input,
+[dir="rtl"] .search-box .form-control { padding-left: 0.85rem; padding-right: 2.5rem; }
+
+[dir="rtl"] th,
+[dir="rtl"] td { text-align: right; }
+[dir="rtl"] .action-cell { text-align: left; }
+
+[dir="rtl"] .form-check-input { margin-right: 0; margin-left: 0.5rem; }
+
+[dir="rtl"] .main-content.blurred::after { left: 0; right: 0; }
+
+@media (max-width: 575px) {
+    [dir="rtl"] .content-card .d-flex.flex-wrap.gap-2 .px-3 {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+}
+
+/* ==========================================================================
+   3. Theme customizer  (super-customizer.css)
+   ========================================================================== */
+
+[dir="rtl"] .super-customizer-fab { right: auto; left: 24px; }
+
+/* The drawer is hidden with translateX(105%); transforms ignore `dir`, so the
+   left-anchored RTL drawer has to slide out the other way. */
+[dir="rtl"] .super-customizer-drawer {
+    right: auto;
+    left: 0;
+    transform: translateX(-105%);
+    box-shadow: 10px 0 30px rgba(15, 23, 42, 0.18);
+}
+[dir="rtl"] .super-customizer-drawer.is-open { transform: translateX(0); }
+
+@media (max-width: 480px) {
+    [dir="rtl"] .super-customizer-fab { right: auto; left: 16px; }
+}
+
+/* ==========================================================================
+   4. Shared components  (central-shared.css)
+   ========================================================================== */
+
+[dir="rtl"] .table-pending th.text-end,
+[dir="rtl"] .table-pending td.text-end { text-align: left; }
+
+[dir="rtl"] .modal-overlay,
+[dir="rtl"] .reject-modal-overlay { left: 0; right: 0; }
+
+[dir="rtl"] .pi-cell-border-left { border-left: none; border-right: 1px solid #f1f5f9; }
+
+/* Prefixed inputs: symbol moves to the right, padding follows */
+[dir="rtl"] .currency-input-symbol,
+[dir="rtl"] .price-input-symbol-alt { left: auto; right: 12px; }
+[dir="rtl"] .currency-input-wrap .currency-input.form-control,
+[dir="rtl"] .price-input-wrap-alt .price-input-alt.form-control { padding-left: 0.75rem; padding-right: 28px; }
+[dir="rtl"] .price-input-wrap .price-input.form-control { padding-left: 0.75rem; padding-right: 0.25rem; }
+
+[dir="rtl"] .input-icon-wrapper .input-icon { left: auto; right: 12px; }
+[dir="rtl"] .input-icon-wrapper input { padding-left: 0.75rem; padding-right: 2.2rem; }
+
+[dir="rtl"] .var-chip { text-align: right; }
+[dir="rtl"] .avatar-upload-btn { right: auto; left: 0; }
+
+[dir="rtl"] .input-no-right-border,
+[dir="rtl"] .input-domain-field { border-right: 1px solid var(--color-border); border-left: none; }
+
+/* Left accent bars become right accent bars */
+[dir="rtl"] .alert-card-warning { border-left: none; border-right: 3px solid #f59e0b; }
+[dir="rtl"] .alert-card-danger  { border-left: none; border-right: 3px solid #ef4444; }
+[dir="rtl"] .alert-card-primary { border-left: none; border-right: 3px solid #6366f1; }
+
+[dir="rtl"] .ms-4px { margin-left: 0; margin-right: 4px; }
+[dir="rtl"] .gateway-tab-check { margin-left: 0; margin-right: 4px; }
+
+[dir="rtl"] .hiw-timeline { padding-left: 0; padding-right: 0.5rem; }
+[dir="rtl"] .hiw-step:not(:last-child)::after { left: auto; right: 11px; }
+[dir="rtl"] .hiw-faq-toggle { text-align: right; }
+[dir="rtl"] .hiw-faq-answer ul { padding-left: 0; padding-right: 1.25rem; }
+
+[dir="rtl"] .limit-input { padding-right: 0.75rem !important; padding-left: 2.5rem !important; }
+[dir="rtl"] .limit-unlimited-btn { right: auto; left: 4px; }
+
+[dir="rtl"] .upload-preview-actions { right: auto; left: 0.75rem; }
+
+[dir="rtl"] .btn-toggle-secret,
+[dir="rtl"] .btn-pw-toggle { right: auto; left: 10px; }
+[dir="rtl"] .secret-field { padding-right: 0.75rem !important; padding-left: 40px !important; }
+
+/* ==========================================================================
+   5. Dashboard  (dashboard.css)
+   ========================================================================== */
+
+[dir="rtl"] .dash-alert--warning { border-left: none; border-right: 3px solid #f59e0b; }
+[dir="rtl"] .dash-alert--danger  { border-left: none; border-right: 3px solid #ef4444; }
+[dir="rtl"] .dash-alert--indigo  { border-left: none; border-right: 3px solid #6366f1; }
+[dir="rtl"] .dash-alert-count { margin-right: 0; margin-left: 0.35rem; }
+
+@media (max-width: 575px) {
+    [dir="rtl"] .dash-action { text-align: right; }
+}
+
+/* ==========================================================================
+   6. Settings  (settings-general.css)
+   ========================================================================== */
+
+[dir="rtl"] .settings-nav-item { text-align: right; }
+[dir="rtl"] .backup-table thead th { text-align: right; }
+[dir="rtl"] .backup-table .text-end { text-align: left; }
+[dir="rtl"] .backup-security-note { border-left-width: 0; border-right-width: 3px; }
+
+/* ==========================================================================
+   7. Logs & health  (logs-health.css)
+   ========================================================================== */
+
+[dir="rtl"] .logs-table .action-cell-start { text-align: right; }
+[dir="rtl"] .severity-dot { margin-right: 0; margin-left: 6px; }
+[dir="rtl"] .log-detail-heading i { margin-right: 0; margin-left: 5px; }
+
+[dir="rtl"] .logs-table tbody tr.log-row-critical td:first-child { border-left: none; border-right: 3px solid #ef4444; }
+[dir="rtl"] .logs-table tbody tr.log-row-warning  td:first-child { border-left: none; border-right: 3px solid #f59e0b; }
+[dir="rtl"] .logs-table tbody tr.log-row-info     td:first-child { border-left: none; border-right: 3px solid #3b82f6; }
+
+[dir="rtl"] .log-detail-message    { border-left: none; border-right: 4px solid; }
+[dir="rtl"] .log-detail-cause      { border-left: none; border-right: 3px solid #3b82f6; }
+[dir="rtl"] .log-detail-resolution { border-left: none; border-right: 3px solid #10b981; }
+
+/* ==========================================================================
+   8. Directional icons
+   --------------------------------------------------------------------------
+   Chevrons and arrows encode reading direction, so they mirror. Icons that
+   mean something absolute (external link, download, sort) must not.
+   ========================================================================== */
+
+[dir="rtl"] .breadcrumb-custom .separator .bi,
+[dir="rtl"] .bi-chevron-right,
+[dir="rtl"] .bi-chevron-left,
+[dir="rtl"] .bi-arrow-right,
+[dir="rtl"] .bi-arrow-left,
+[dir="rtl"] .bi-arrow-right-short,
+[dir="rtl"] .bi-arrow-left-short,
+[dir="rtl"] .bi-arrow-bar-right,
+[dir="rtl"] .bi-arrow-bar-left,
+[dir="rtl"] .bi-box-arrow-right,
+[dir="rtl"] .bi-box-arrow-left,
+[dir="rtl"] .bi-reply {
+    display: inline-block;
+    transform: scaleX(-1);
+}
+
+/* Pagination arrows come from Bootstrap's own markup */
+[dir="rtl"] .pagination .page-link[rel="prev"] i,
+[dir="rtl"] .pagination .page-link[rel="next"] i,
+[dir="rtl"] .pagination .page-link svg {
+    transform: scaleX(-1);
+}
+
+/* ==========================================================================
+   9. Typography / numerals
+   ========================================================================== */
+
+/* Keep code, hostnames, IDs and money amounts reading left-to-right inside
+   otherwise right-to-left copy. */
+[dir="rtl"] code,
+[dir="rtl"] pre,
+[dir="rtl"] kbd,
+[dir="rtl"] samp,
+[dir="rtl"] .text-mono,
+[dir="rtl"] input[type="email"],
+[dir="rtl"] input[type="url"],
+[dir="rtl"] input[type="number"],
+[dir="rtl"] input[type="tel"] {
+    direction: ltr;
+    text-align: left;
+}
+
+[dir="rtl"] .text-mono { unicode-bidi: embed; }
+
+/* ==========================================================================
+   10. SweetAlert toasts
+   --------------------------------------------------------------------------
+   SweetAlert2 positions `top-end` physically (top-right) regardless of `dir`,
+   so an RTL page would slide the toast in from the wrong side.
+   ========================================================================== */
+
+[dir="rtl"] .swal2-container.swal2-top-end,
+[dir="rtl"] .swal2-container.swal2-bottom-end {
+    justify-content: flex-start;
+}
+
+[dir="rtl"] .swal2-container.swal2-top-start,
+[dir="rtl"] .swal2-container.swal2-bottom-start {
+    justify-content: flex-end;
+}
+
+[dir="rtl"] .swal2-popup.swal2-toast { text-align: right; }
+[dir="rtl"] .swal2-popup.swal2-toast .swal2-title { text-align: right; margin: 0 0.6em 0 0; }
+[dir="rtl"] .swal2-popup.swal2-toast .swal2-icon { margin: 0 0 0 0.5em; }
+
+
+/* ==========================================================================
+   7. Sidebar layouts from the customizer  (super-layout.css, bottom section)
+   The rail/flyout rules use logical properties and mirror on their own; only
+   the physical transforms and shadows need flipping here.
+   ========================================================================== */
+@media (min-width: 992px) {
+    [dir="rtl"] body.sb-large .sidebar.collapsed .sidebar-nav { transform: translateX(6px); }
+    [dir="rtl"] body.sb-large .sidebar.collapsed.flyout-open .sidebar-nav { transform: none; }
+}

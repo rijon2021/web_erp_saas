@@ -56,10 +56,10 @@
                         </a>
                     </td>
                     <td class="fw-600 fs-sm3">{{ $inv->tenant->company_name ?? $inv->tenant_id }}</td>
-                    <td class="fs-sm3">{{ $inv->plan->name ?? '—' }}</td>
-                    <td class="fw-600 fs-sm3">{{ $currencySymbol }}{{ number_format($inv->amount, 2) }}</td>
-                    <td class="fs-sm3">{{ $inv->tax > 0 ? $currencySymbol . number_format($inv->tax, 2) : '—' }}</td>
-                    <td class="fw-700 fs-sm3">{{ $currencySymbol }}{{ number_format($inv->total, 2) }}</td>
+                    <td class="fs-sm3">{{ $inv->plan->name ?? ($inv->metadata['checkout_name'] ?? '—') }}</td>
+                    <td class="fw-600 fs-sm3">{{ $inv->formatMoney($inv->amount, false) }}</td>
+                    <td class="fs-sm3">{{ $inv->tax > 0 ? $inv->formatMoney($inv->tax, false) : '—' }}</td>
+                    <td class="fw-700 fs-sm3">{{ $inv->formatMoney($inv->total, false) }}</td>
                     <td class="fs-sm2">{{ $inv->gateway_label }}</td>
                     <td>
                         @php

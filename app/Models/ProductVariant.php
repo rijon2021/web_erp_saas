@@ -27,4 +27,13 @@ class ProductVariant extends Model
     {
         return $this->belongsTo(Product::class, 'product_id');
     }
+
+    /**
+     * Option values this variant is the combination of (Color=Red, Size=S).
+     * Empty for legacy flat-list variants.
+     */
+    public function optionValues()
+    {
+        return $this->belongsToMany(ProductOptionValue::class, 'product_variant_option_values', 'product_variant_id', 'product_option_value_id');
+    }
 }

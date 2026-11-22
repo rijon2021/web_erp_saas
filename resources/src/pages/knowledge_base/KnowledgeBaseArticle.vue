@@ -32,7 +32,7 @@
           <a-divider class="kb-article-divider" />
         </header>
         <!-- Quill HTML, rendered like the legacy view page. -->
-        <div class="kb-content" v-html="article.content"></div>
+        <div class="kb-content" v-html="safeContent"></div>
       </article>
     </a-card>
 
@@ -62,6 +62,7 @@ import { t as tf } from '../../i18n';
 import { useFormat } from '../../composables/useFormat';
 import { useAuthStore } from '../../stores/auth';
 import http from '../../lib/http';
+import DOMPurify from 'dompurify';
 
 const { t } = useI18n();
 const { date } = useFormat();
@@ -76,6 +77,7 @@ const canEdit = computed(() => isTeam.value && auth.can('knowledge_base_view'));
 
 const loading = ref(true);
 const article = ref(null);
+const safeContent = computed(() => DOMPurify.sanitize(article.value?.content || '', { ADD_ATTR: ['target'] }));
 
 onMounted(async () => {
   try {

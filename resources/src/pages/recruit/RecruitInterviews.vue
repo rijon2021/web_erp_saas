@@ -125,6 +125,7 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import { recruitLabel } from './recruitLabels';
 import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import http from '../../lib/http';
@@ -166,7 +167,7 @@ const columns = computed(() => [
   { title: t('Action'), key: 'actions', width: 100 },
 ]);
 
-function formatLabel(v) { return v ? v.replace(/_/g, ' ') : '-'; }
+function formatLabel(v) { return recruitLabel(v); }
 function statusColor(s) {
   return {
     scheduled: 'processing', completed: 'success', cancelled: 'error',

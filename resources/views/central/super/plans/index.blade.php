@@ -29,6 +29,7 @@
         $features = $p->features ?? [];
         $formattedLimits = $p->getFormattedLimits();
         $activeFeatures = $p->getActiveFeatures();
+        $allFeatures = \App\Models\Central\Plan::availableFeatures();
         $configuredCount = $p->getConfiguredLimitsCount();
     @endphp
     <div class="col-sm-6 col-xl-4">
@@ -47,7 +48,7 @@
                     </div>
                     <div class="d-flex gap-1">
                         @if($p->is_private)
-                            <span class="badge badge-private"><i class="bi bi-lock-fill me-1"></i>Private</span>
+                            <span class="badge badge-private"><i class="bi bi-lock-fill me-1"></i>{{ __('super.plans.private') }}</span>
                         @endif
                         <span class="badge badge-{{ $p->is_active ? 'yes' : 'no' }}">{{ $p->is_active ? __('super.common.active') : __('super.common.inactive') }}</span>
                     </div>
@@ -94,7 +95,7 @@
                 </div>
 
                 {{-- Features summary --}}
-                @if(count(\App\Models\Central\Plan::AVAILABLE_FEATURES) > 0)
+                @if(count($allFeatures) > 0)
                 <div class="plan-features-section">
                     <p class="plan-section-title">
                         <i class="bi bi-puzzle"></i> {{ __('super.plans.features') }}
@@ -103,7 +104,7 @@
                         @endif
                     </p>
                     <div class="d-flex flex-wrap gap-1">
-                        @foreach(\App\Models\Central\Plan::AVAILABLE_FEATURES as $fKey => $fMeta)
+                        @foreach($allFeatures as $fKey => $fMeta)
                         <span class="plan-feature-tag {{ in_array($fKey, $features) ? 'enabled' : 'disabled' }}">
                             <i class="bi {{ $fMeta['icon'] }}"></i>
                             {{ $fMeta['label'] }}
@@ -116,7 +117,7 @@
                 {{-- Footer --}}
                 <div class="plan-card-footer">
                     <span class="text-muted fs-xs3">
-                        <i class="bi bi-people me-1"></i>{{ $p->tenant_subscriptions_count }} {{ Str::plural(__('super.common.subscriber'), $p->tenant_subscriptions_count) }}
+                        <i class="bi bi-people me-1"></i>{{ $p->tenant_subscriptions_count }} {{ $p->tenant_subscriptions_count == 1 ? __('super.common.subscriber') : __('super.common.subscribers') }}
                     </span>
                     <a href="{{ route('super.plans.edit', $p) }}" class="btn btn-outline btn-sm">
                         <i class="bi bi-pencil"></i> {{ __('super.common.edit') }}

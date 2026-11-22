@@ -253,10 +253,12 @@ class MrpBomController extends BaseController
                 'qty' => round((float) $line->qty, 4),
                 'qty_with_scrap' => $line->qtyWithScrap(),
                 'unit_id' => $line->unit_id,
+                'product_unit_id' => $p ? $p->unit_id : null,
+                'base_qty_with_scrap' => $line->baseQtyWithScrap(),
                 'scrap_pct' => round((float) $line->scrap_pct, 4),
                 'is_optional' => (bool) $line->is_optional,
                 'unit_cost' => $p ? round((float) $p->cost, 4) : 0,
-                'line_cost' => $p ? round((float) $p->cost * $line->qtyWithScrap(), 4) : 0,
+                'line_cost' => $p ? round((float) $p->cost * $line->baseQtyWithScrap(), 4) : 0,
                 'notes' => $line->notes,
                 'sort_order' => (int) $line->sort_order,
             ];
@@ -592,13 +594,35 @@ class MrpBomController extends BaseController
                 'product_id' => $line['product_id'],
                 'product_variant_id' => $line['product_variant_id'] ?? null,
                 'qty' => (float) ($line['qty'] ?? 0),
-                'unit_id' => $line['unit_id'] ?? null,
+                'unit_id' => $this->resolveLineUnit((int) $line['product_id'], $line['unit_id'] ?? null),
                 'scrap_pct' => (float) ($line['scrap_pct'] ?? 0),
                 'is_optional' => ! empty($line['is_optional']),
                 'notes' => $line['notes'] ?? null,
                 'sort_order' => $i,
             ]);
         }
+    }
+
+    /**
+     * Only a unit that belongs to the component (its base unit or one of that
+     * unit's sub-units) may be stored; anything else falls back to base.
+     */
+    private function resolveLineUnit(int $productId, $unitId): ?int
+    {
+        if (! $unitId) {
+            return null;
+        }
+        $product = Product::find($productId);
+        if (! $product || ! $product->unit_id) {
+            return null;
+        }
+
+        $ok = Unit::whereNull('deleted_at')
+            ->where('id', $unitId)
+            ->where(fn ($q) => $q->where('id', $product->unit_id)->orWhere('base_unit', $product->unit_id))
+            ->exists();
+
+        return $ok ? (int) $unitId : null;
     }
 
     private function syncOperations(MrpBom $bom, array $operations): void
@@ -651,7 +675,8 @@ class MrpBomController extends BaseController
 
         return response()->json([
             'warehouses' => $warehouses,
-            'units' => Unit::whereNull('deleted_at')->orderBy('name')->get(['id', 'name', 'ShortName']),
+            'units' => Unit::whereNull('deleted_at')->orderBy('name')
+                ->get(['id', 'name', 'ShortName', 'base_unit', 'operator', 'operator_value']),
             'work_centers' => MrpWorkCenter::whereNull('deleted_at')->where('is_active', 1)
                 ->orderBy('name')->get(['id', 'code', 'name', 'hourly_cost', 'overhead_rate', 'efficiency_pct'])
                 ->map(fn ($c) => [
@@ -697,7 +722,7 @@ class MrpBomController extends BaseController
             })
             ->orderBy('name')
             ->limit(50)
-            ->get(['id', 'name', 'code', 'cost', 'price', 'unit_id', 'stock_alert']);
+            ->get(['id', 'name', 'code', 'cost', 'price', 'unit_id', 'stock_alert', 'is_batch_tracked', 'shelf_life_days']);
 
         return response()->json([
             'products' => $products->map(fn ($p) => [
@@ -709,6 +734,8 @@ class MrpBomController extends BaseController
                 'price' => round((float) $p->price, 4),
                 'unit_id' => $p->unit_id,
                 'stock_alert' => round((float) $p->stock_alert, 4),
+                'is_batch_tracked' => (bool) ($p->is_batch_tracked ?? false),
+                'shelf_life_days' => (int) ($p->shelf_life_days ?? 0),
             ]),
         ]);
     }

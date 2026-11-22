@@ -120,4 +120,7 @@ return [
     'PaymentFailed' => 'Payment Failed',
     'PaymentFailedDescription' => 'We couldn\'t confirm your payment. You can try again or choose a different payment method.',
     'ValidUntil' => 'Valid Until',
+    'RenewEarly' => 'Renew early',
+    'RenewEarlyHint' => 'The days left are kept — the new period starts when the current one ends.',
+    'CarryOverNotice' => 'Days left on your current plan are not lost: they are converted into extra days on the new plan.',
 ];

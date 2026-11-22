@@ -86,7 +86,7 @@
               <template #icon><ThunderboltOutlined /></template>
             </a-avatar>
             <div class="tile__text">
-              <div class="tile__label">Driver</div>
+              <div class="tile__label">{{ $t('Health_Queue_Driver') }}</div>
               <div class="tile__value">{{ metrics.queue?.driver || '—' }}</div>
             </div>
           </a-card>
@@ -161,12 +161,12 @@ const health = computed(() => {
   const critical = !!m.database?.error || !!m.queue?.error;
   const warning = failedCount.value > 0 || !m.last_backup?.date;
   if (critical) {
-    return { level: 'critical', color: '#ff4d4f', icon: CloseCircleFilled, label: 'Critical', summary: 'A service reported an error — action required.' };
+    return { level: 'critical', color: '#ff4d4f', icon: CloseCircleFilled, label: t('Critical'), summary: t('Health_Summary_Critical') };
   }
   if (warning) {
-    return { level: 'warning', color: '#faad14', icon: WarningFilled, label: 'Needs attention', summary: 'Some checks need attention (failed jobs or no recent backup).' };
+    return { level: 'warning', color: '#faad14', icon: WarningFilled, label: t('Fl_Needs_Attention'), summary: t('Health_Summary_Warning') };
   }
-  return { level: 'healthy', color: '#52c41a', icon: CheckCircleFilled, label: 'Healthy', summary: 'All systems operational.' };
+  return { level: 'healthy', color: '#52c41a', icon: CheckCircleFilled, label: t('Healthy'), summary: t('Health_Summary_Healthy') };
 });
 
 const envTiles = computed(() => {

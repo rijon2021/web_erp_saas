@@ -1,7 +1,7 @@
 <template>
   <a-modal
     :open="open"
-    :title="isEdit ? 'Edit folder' : 'New folder'"
+    :title="isEdit ? $t('Edit_Folder') : $t('New_Folder')"
     :confirm-loading="saving"
     :ok-text="$t('submit')"
     :cancel-text="$t('Cancel')"
@@ -9,22 +9,22 @@
     @cancel="$emit('close')"
   >
     <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
-      <a-form-item label="Folder name" name="name">
-        <a-input v-model:value="form.name" placeholder="e.g. Supplier contracts" allow-clear />
+      <a-form-item :label="$t('Folder_Name')" name="name">
+        <a-input v-model:value="form.name" :placeholder="$t('Folder_Name_Placeholder')" allow-clear />
       </a-form-item>
 
-      <a-form-item label="Parent folder">
+      <a-form-item :label="$t('Parent_Folder')">
         <a-tree-select
           v-model:value="form.parent_id"
           :tree-data="parentOptions"
-          placeholder="No parent — top level"
+          :placeholder="$t('No_Parent_Top_Level')"
           allow-clear
           tree-default-expand-all
           :field-names="{ label: 'title', value: 'value', children: 'children' }"
         />
       </a-form-item>
 
-      <a-form-item label="Colour">
+      <a-form-item :label="$t('Colour')">
         <div class="swatches">
           <button
             v-for="c in COLORS" :key="c" type="button" class="swatch"

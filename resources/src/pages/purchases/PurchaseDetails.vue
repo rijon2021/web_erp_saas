@@ -15,6 +15,7 @@
             <template #icon><ArrowLeftOutlined /></template>
             {{ $t('Back') }}
           </a-button>
+          <AuditHistoryButton type="purchase" />
           <a-button
             v-if="auth.can('Purchases_edit') && purchase.purchase_has_return === 'no'"
             @click="$router.push(`/purchases/${purchase.id}/edit`)"
@@ -71,6 +72,7 @@
           <div class="inv-ref-badge">{{ purchase.Ref }}</div>
           <table class="inv-meta">
             <tr><td>{{ $t('date') }}</td><td>{{ dateTime(purchase.date) }}</td></tr>
+            <tr v-if="purchase.order_reference"><td>{{ $t('Order_Reference') }}</td><td>{{ purchase.order_reference }}</td></tr>
             <tr>
               <td>{{ $t('Status') }}</td>
               <td>
@@ -99,7 +101,7 @@
             <div v-if="purchase.supplier_phone">{{ $t('Phone') }}: {{ purchase.supplier_phone }}</div>
             <div v-if="purchase.supplier_email">{{ $t('Email') }}: {{ purchase.supplier_email }}</div>
             <div v-if="purchase.supplier_adr">{{ $t('Adress') }}: {{ purchase.supplier_adr }}</div>
-            <div v-if="purchase.supplier_tax">Tax #: {{ purchase.supplier_tax }}</div>
+            <div v-if="purchase.supplier_tax">{{ $t('Tax_Hash') }}: {{ purchase.supplier_tax }}</div>
           </div>
         </a-col>
         <a-col :xs="24" :md="12">
@@ -125,7 +127,7 @@
           <template v-if="column.key === 'product'">
             <div style="font-weight: 500">{{ record.name }}</div>
             <div class="muted">{{ record.code }}</div>
-            <div v-if="record.is_imei && record.imei_number" class="muted">SN: {{ record.imei_number }}</div>
+            <div v-if="record.is_imei && record.imei_number" class="muted">{{ $t('SN') }}: {{ record.imei_number }}</div>
             <div v-if="(record.batches || []).length">
               <a-tag v-for="(b, i) in record.batches" :key="i" style="margin-top: 2px">
                 {{ b.batch_number || b.batch_no || b }}
@@ -146,13 +148,13 @@
       <div class="inv-summary">
         <!-- Summary labels hardcoded English in legacy's invoice too. -->
         <table>
-          <tr><td>Subtotal:</td><td>{{ docMoney(subtotal) }}</td></tr>
-          <tr><td>Order Tax:</td><td>{{ docMoney(purchase.TaxNet) }}</td></tr>
+          <tr><td>{{ $t('Subtotal') }}:</td><td>{{ docMoney(subtotal) }}</td></tr>
+          <tr><td>{{ $t('OrderTax') }}:</td><td>{{ docMoney(purchase.TaxNet) }}</td></tr>
           <tr v-if="Number(purchase.discount) > 0">
-            <td>Discount:</td>
+            <td>{{ $t('Discount') }}:</td>
             <td class="neg">- {{ docMoney(purchase.discount) }}</td>
           </tr>
-          <tr><td>Shipping:</td><td>{{ docMoney(purchase.shipping) }}</td></tr>
+          <tr><td>{{ $t('Shipping') }}:</td><td>{{ docMoney(purchase.shipping) }}</td></tr>
           <tr class="grand"><td>{{ $t('Total') }}:</td><td>{{ docMoney(purchase.GrandTotal) }}</td></tr>
           <tr><td>{{ $t('Paid') }}:</td><td style="color: #52c41a">{{ docMoney(purchase.paid_amount) }}</td></tr>
           <tr><td>{{ $t('Due') }}:</td><td style="color: #ff4d4f">{{ docMoney(purchase.due) }}</td></tr>
@@ -177,11 +179,13 @@ import { ref, computed, createVNode, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message, Modal } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
+import { applyIssuer } from '../../lib/invoiceIssuer';
 import {
   ArrowLeftOutlined, PrinterOutlined, EditOutlined, DeleteOutlined,
   ExclamationCircleOutlined, MailOutlined, MessageOutlined, FilePdfOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import AuditHistoryButton from '../../components/AuditHistoryButton.vue';
 import { useFormat } from '../../composables/useFormat';
 import { useDetailsCurrency } from '../../composables/useDetailsCurrency';
 import { useAuthStore } from '../../stores/auth';
@@ -292,7 +296,9 @@ onMounted(async () => {
     const data = await http.get(`purchases/${route.params.id}`);
     purchase.value = data.purchase || {};
     details.value = data.details || [];
-    company.value = data.company || {};
+    // Branch letterhead: the invoice header shows the warehouse that issued
+    // the document, each field falling back to the company settings.
+    company.value = applyIssuer(data.company || {}, data.issuer);
   } catch (e) {
     message.error(t('InvalidData'));
     router.push('/purchases');

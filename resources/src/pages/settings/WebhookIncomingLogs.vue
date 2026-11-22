@@ -14,7 +14,7 @@
     <DataTable :crud="crud" :columns="columns">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'status'">
-          <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
+          <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
         </template>
         <template v-else-if="column.key === 'signature_valid'">
           <a-tag v-if="record.signature_valid === true || record.signature_valid === 1" color="success">{{ tf('Valid', 'Valid') }}</a-tag>
@@ -36,9 +36,9 @@
         <a-descriptions size="small" :column="2" bordered style="margin-bottom: 12px">
           <a-descriptions-item :label="tf('Source', 'Source')">{{ active.source }}</a-descriptions-item>
           <a-descriptions-item :label="tf('Event', 'Event')">{{ active.event }}</a-descriptions-item>
-          <a-descriptions-item :label="$t('Status')"><a-tag :color="statusColor(active.status)">{{ active.status }}</a-tag></a-descriptions-item>
+          <a-descriptions-item :label="$t('Status')"><a-tag :color="statusColor(active.status)">{{ statusLabel(active.status) }}</a-tag></a-descriptions-item>
           <a-descriptions-item label="IP">{{ active.ip || '—' }}</a-descriptions-item>
-          <a-descriptions-item v-if="active.error_message" :label="tf('Error', 'Error')" :span="2">{{ active.error_message }}</a-descriptions-item>
+          <a-descriptions-item v-if="active.error_message" :label="tf('Webhook_Error', 'Error')" :span="2">{{ active.error_message }}</a-descriptions-item>
         </a-descriptions>
         <h4>{{ tf('Headers', 'Headers') }}</h4>
         <pre class="log-pre">{{ formatJson(active.headers) }}</pre>
@@ -66,11 +66,11 @@ const { t } = useI18n();
 const sourceFilter = ref('');
 const statusFilter = ref('');
 const statusOptions = [
-  { value: '', label: tf('All_statuses', 'All statuses') },
+  { value: '', label: tf('All_Statuses', 'All statuses') },
   { value: 'received', label: tf('Received', 'Received') },
   { value: 'processed', label: tf('Processed', 'Processed') },
   { value: 'failed', label: tf('Failed', 'Failed') },
-  { value: 'ignored', label: tf('Ignored', 'Ignored') },
+  { value: 'ignored', label: tf('Status_Ignored', 'Ignored') },
 ];
 const active = ref(null);
 
@@ -91,6 +91,9 @@ const columns = computed(() => [
   { title: t('Action'), key: 'actions', width: 80, align: 'center' },
 ]);
 
+function statusLabel(s) {
+  return (s && statusOptions.find(o => o.value === s)?.label) || s;
+}
 function statusColor(s) {
   return { processed: 'success', received: 'blue', failed: 'error', ignored: 'default' }[s] || 'default';
 }

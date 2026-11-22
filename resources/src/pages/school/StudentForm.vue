@@ -1,8 +1,8 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="isEdit ? 'Edit student' : 'Admit student'"
-      :breadcrumb="['School', 'Students', isEdit ? $t('Edit') : $t('Add')]"
+      :title="isEdit ? $t('Sc_Edit_Student') : $t('Sc_Admit_Student')"
+      :breadcrumb="[$t('Sc_School'), $t('Sc_Students'), isEdit ? $t('Edit') : $t('Add')]"
     >
       <template #actions>
         <a-button @click="back">{{ $t('Cancel') }}</a-button>
@@ -15,126 +15,126 @@
     <a-form v-else ref="formRef" :model="form" :rules="rules" layout="vertical">
       <a-row :gutter="16">
         <a-col :xs="24" :lg="16">
-          <a-card size="small" title="Student" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Sc_Student')" style="margin-bottom: 16px">
             <a-row :gutter="16">
               <a-col :xs="24" :md="12">
-                <a-form-item label="Full name *" name="name">
+                <a-form-item :label="$t('Sc_Full_Name') + ' *'" name="name">
                   <a-input v-model:value="form.name" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
                 <a-form-item
-                  label="Admission number"
-                  :extra="isEdit ? null : 'Leave empty and one is issued automatically'"
+                  :label="$t('Sc_Admission_Number')"
+                  :extra="isEdit ? null : $t('Sc_Admission_Auto_Hint')"
                 >
                   <a-input v-model:value="form.admission_number" placeholder="ADM-000001" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Gender *" name="gender">
+                <a-form-item :label="$t('Sc_Gender') + ' *'" name="gender">
                   <a-select v-model:value="form.gender" :options="GENDERS" />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Date of birth" name="date_of_birth">
+                <a-form-item :label="$t('Sc_Date_Of_Birth')" name="date_of_birth">
                   <a-date-picker v-model:value="form.date_of_birth" style="width: 100%" value-format="YYYY-MM-DD" />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Admitted on" name="admission_date">
+                <a-form-item :label="$t('Sc_Admitted_On')" name="admission_date">
                   <a-date-picker v-model:value="form.admission_date" style="width: 100%" value-format="YYYY-MM-DD" />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Status *" name="status">
+                <a-form-item :label="$t('Status') + ' *'" name="status">
                   <a-select v-model:value="form.status" :options="STUDENT_STATUSES" />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Blood group">
-                  <a-input v-model:value="form.blood_group" placeholder="e.g. O+" allow-clear />
+                <a-form-item :label="$t('Sc_Blood_Group')">
+                  <a-input v-model:value="form.blood_group" :placeholder="$t('Sc_Blood_Group_Placeholder')" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Phone">
+                <a-form-item :label="$t('Phone')">
                   <a-input v-model:value="form.phone" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="Email" name="email">
+                <a-form-item :label="$t('Email')" name="email">
                   <a-input v-model:value="form.email" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="16">
-                <a-form-item label="Address">
+                <a-form-item :label="$t('Address')">
                   <a-input v-model:value="form.address" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
-                <a-form-item label="City">
+                <a-form-item :label="$t('City')">
                   <a-input v-model:value="form.city" allow-clear />
                 </a-form-item>
               </a-col>
             </a-row>
           </a-card>
 
-          <a-card size="small" title="Placement" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Sc_Placement')" style="margin-bottom: 16px">
             <a-alert
               type="info" show-icon banner
               :message="currentYearName
-                ? `Placing this student creates their enrolment for ${currentYearName}.`
-                : 'No academic year is marked current — set one up before placing students.'"
+                ? $t('Sc_Placement_Hint_Year', { year: currentYearName })
+                : $t('Sc_No_Current_Year_Placement')"
               style="margin-bottom: 16px"
             />
             <a-row :gutter="16">
               <a-col :xs="24" :md="8">
-                <a-form-item label="Class">
+                <a-form-item :label="$t('Sc_Class')">
                   <a-select
                     v-model:value="form.class_id" allow-clear show-search option-filter-prop="label"
-                    :options="classOptions" placeholder="Not placed yet" @change="onClassChange"
+                    :options="classOptions" :placeholder="$t('Sc_Not_Placed_Yet')" @change="onClassChange"
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="8">
-                <a-form-item label="Section">
+                <a-form-item :label="$t('Sc_Section')">
                   <a-select
                     v-model:value="form.section_id" allow-clear show-search option-filter-prop="label"
-                    :options="sectionOptions" :disabled="!form.class_id" placeholder="Any"
+                    :options="sectionOptions" :disabled="!form.class_id" :placeholder="$t('Sc_Any')"
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="8">
-                <a-form-item label="Roll number">
+                <a-form-item :label="$t('Sc_Roll_Number')">
                   <a-input v-model:value="form.roll_number" allow-clear />
                 </a-form-item>
               </a-col>
             </a-row>
           </a-card>
 
-          <a-card size="small" title="Guardian">
+          <a-card size="small" :title="$t('Sc_Guardian')">
             <a-row :gutter="16">
               <a-col :xs="24" :md="8">
-                <a-form-item label="Name">
+                <a-form-item :label="$t('Name')">
                   <a-input v-model:value="form.guardian_name" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="8">
-                <a-form-item label="Relationship">
-                  <a-input v-model:value="form.guardian_relation" placeholder="e.g. Mother" allow-clear />
+                <a-form-item :label="$t('Sc_Relationship')">
+                  <a-input v-model:value="form.guardian_relation" :placeholder="$t('Sc_Relationship_Placeholder')" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="8">
-                <a-form-item label="Phone">
+                <a-form-item :label="$t('Phone')">
                   <a-input v-model:value="form.guardian_phone" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="Email" name="guardian_email">
+                <a-form-item :label="$t('Email')" name="guardian_email">
                   <a-input v-model:value="form.guardian_email" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="Occupation" style="margin-bottom: 0">
+                <a-form-item :label="$t('Sc_Occupation')" style="margin-bottom: 0">
                   <a-input v-model:value="form.guardian_occupation" allow-clear />
                 </a-form-item>
               </a-col>
@@ -143,40 +143,40 @@
         </a-col>
 
         <a-col :xs="24" :lg="8">
-          <a-card size="small" title="Photo" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Sc_Photo')" style="margin-bottom: 16px">
             <div class="photo">
-              <img v-if="previewUrl" :src="previewUrl" alt="Student" />
+              <img v-if="previewUrl" :src="previewUrl" :alt="$t('Sc_Student')" />
               <span v-else class="photo-empty"><UserOutlined /></span>
             </div>
             <a-space>
               <a-upload :show-upload-list="false" accept="image/*" :before-upload="pickImage">
                 <a-button>
                   <template #icon><UploadOutlined /></template>
-                  {{ previewUrl ? 'Replace' : 'Upload' }}
+                  {{ previewUrl ? $t('Sc_Replace') : $t('Upload') }}
                 </a-button>
               </a-upload>
               <a-button v-if="previewUrl" danger @click="clearImage">{{ $t('Delete') }}</a-button>
             </a-space>
           </a-card>
 
-          <a-card size="small" title="Medical" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Sc_Medical')" style="margin-bottom: 16px">
             <a-form-item style="margin-bottom: 0">
               <a-textarea
                 v-model:value="form.medical_notes" :rows="3"
-                placeholder="Allergies, conditions, medication…"
+                :placeholder="$t('Sc_Medical_Placeholder')"
               />
             </a-form-item>
           </a-card>
 
-          <a-card size="small" title="Links" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Sc_Links')" style="margin-bottom: 16px">
             <a-form-item
               :label="$t('Customer')"
-              extra="Link to the CRM customer who pays the fees"
+              :extra="$t('Sc_Client_Link_Hint')"
               style="margin-bottom: 0"
             >
               <a-select
                 v-model:value="form.client_id" allow-clear show-search
-                option-filter-prop="label" :options="clientOptions" placeholder="Not linked"
+                option-filter-prop="label" :options="clientOptions" :placeholder="$t('Sc_Not_Linked')"
               />
             </a-form-item>
           </a-card>
@@ -214,8 +214,9 @@ import PageHeader from '../../components/PageHeader.vue';
 import { uploadForm } from '../../lib/upload';
 import http from '../../lib/http';
 import { GENDERS, STUDENT_STATUSES } from './schoolOptions';
-import { t } from '../../i18n';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
@@ -244,8 +245,8 @@ const rules = computed(() => ({
   name: required(),
   gender: required(),
   status: required(),
-  email: [{ type: 'email', message: t('InvalidData', 'Enter a valid email address') }],
-  guardian_email: [{ type: 'email', message: t('InvalidData', 'Enter a valid email address') }],
+  email: [{ type: 'email', message: t('Enter_Valid_Email') }],
+  guardian_email: [{ type: 'email', message: t('Enter_Valid_Email') }],
 }));
 
 const meta = ref({});
@@ -335,7 +336,7 @@ async function submit() {
     if (res.status >= 200 && res.status < 300) {
       message.success(isEdit.value
         ? t('Updated_in_successfully', 'Updated successfully')
-        : `Student admitted — ${res.data?.admission_number || ''}`);
+        : t('Sc_Student_Admitted_Number', { number: res.data?.admission_number || '' }));
       router.push(isEdit.value ? `/school/students/${route.params.id}` : `/school/students/${res.data.id}`);
       return;
     }

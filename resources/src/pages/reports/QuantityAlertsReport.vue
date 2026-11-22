@@ -3,6 +3,8 @@
     <PageHeader :title="$t('ProductQuantityAlerts')" :breadcrumb="[$t('Reports'), $t('ProductQuantityAlerts')]">
       <template #actions>
         <a-space wrap>
+          <!-- Product data: hidden for roles with disable_product_export -->
+          <template v-if="auth.canExportProducts">
           <a-button :loading="exporting === 'pdf'" @click="exportList('pdf')">
             <template #icon><FilePdfOutlined /></template>
             {{ $t('PDF') }}
@@ -15,6 +17,7 @@
             <template #icon><PrinterOutlined /></template>
             {{ $t('print') }}
           </a-button>
+          </template>
         </a-space>
       </template>
     </PageHeader>
@@ -119,8 +122,10 @@ import ReportChart from '../../components/ReportChart.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { exportExcel, exportPdf, printRows } from '../../lib/exporters';
 import http from '../../lib/http';
+import { useAuthStore } from '../../stores/auth';
 
 const { t } = useI18n();
+const auth = useAuthStore();
 
 const warehouseId = ref(undefined);
 const filterParams = () => ({ warehouse: warehouseId.value || '' });
@@ -197,6 +202,7 @@ async function allRows() {
 }
 
 async function exportList(kind) {
+  if (!auth.canExportProducts) return;
   exporting.value = kind;
   try {
     const rows = await allRows();
@@ -208,6 +214,7 @@ async function exportList(kind) {
 }
 
 async function doPrint() {
+  if (!auth.canExportProducts) return;
   // Open the window synchronously so the popup isn't blocked.
   const win = window.open('', '_blank');
   const rows = await allRows();

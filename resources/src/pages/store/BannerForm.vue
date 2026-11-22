@@ -22,12 +22,12 @@
               </a-select>
               <a-alert type="info" show-icon style="margin-top: 10px">
                 <template #message>
-                  <strong>{{ posInfo.label }}</strong> — Recommended: {{ posInfo.w }} × {{ posInfo.h }} ({{ posInfo.ratioText }})
+                  <strong>{{ posInfo.label }}</strong> — {{ $t('Store_Banner_Recommended', { w: posInfo.w, h: posInfo.h, ratio: posInfo.ratioText }) }}
                 </template>
                 <template v-if="imgW && imgH" #description>
-                  Uploaded: {{ imgW }} × {{ imgH }} ({{ uploadedRatioText }})
-                  <span v-if="aspectMismatch"> • Aspect ratio differs from recommendation</span>
-                  <span v-else> • Looks good ✅</span>
+                  {{ $t('Store_Banner_Uploaded', { w: imgW, h: imgH, ratio: uploadedRatioText }) }}
+                  <span v-if="aspectMismatch"> • {{ $t('Store_Banner_Aspect_Differs') }}</span>
+                  <span v-else> • {{ $t('Store_Banner_Looks_Good') }}</span>
                 </template>
               </a-alert>
             </a-form-item>
@@ -56,13 +56,13 @@
           </a-space>
         </a-card>
 
-        <a-card size="small" title="Size guide">
+        <a-card size="small" :title="$t('Size guide')">
           <ul style="margin: 0; padding-left: 18px; font-size: 13px; color: rgba(var(--ink-rgb), 0.65)">
-            <li>Top (Left/Right): 1200×600 (2:1)</li>
-            <li>Center (Left/Right): 1200×600 (2:1)</li>
-            <li>Footer (Left/Right): 1200×600 (2:1)</li>
+            <li>{{ $t('Store_Banner_Guide_Top') }}</li>
+            <li>{{ $t('Store_Banner_Guide_Center') }}</li>
+            <li>{{ $t('Store_Banner_Guide_Footer') }}</li>
           </ul>
-          <div style="margin-top: 8px; font-size: 12px; color: rgba(var(--ink-rgb), 0.45)">Tip: Use 2x for retina (e.g., 2400×1200).</div>
+          <div style="margin-top: 8px; font-size: 12px; color: rgba(var(--ink-rgb), 0.45)">{{ $t('Store_Banner_Retina_Tip') }}</div>
         </a-card>
       </a-col>
     </a-row>
@@ -93,20 +93,20 @@ const id = route.params.id || 'new';
 const isNew = computed(() => id === 'new' || !id);
 
 const POSITIONS = [
-  { value: 'top_left', label: 'Top — Left' },
-  { value: 'top_right', label: 'Top — Right' },
-  { value: 'center_left', label: 'Center — Left' },
-  { value: 'center_right', label: 'Center — Right' },
-  { value: 'footer_left', label: 'Footer — Left' },
-  { value: 'footer_right', label: 'Footer — Right' },
+  { value: 'top_left', label: t('Store_Banner_Pos_Top_Left') },
+  { value: 'top_right', label: t('Store_Banner_Pos_Top_Right') },
+  { value: 'center_left', label: t('Store_Banner_Pos_Center_Left') },
+  { value: 'center_right', label: t('Store_Banner_Pos_Center_Right') },
+  { value: 'footer_left', label: t('Store_Banner_Pos_Footer_Left') },
+  { value: 'footer_right', label: t('Store_Banner_Pos_Footer_Right') },
 ];
 const REC = {
-  top_left: { w: 1200, h: 600, label: 'Top — Left' },
-  top_right: { w: 1200, h: 600, label: 'Top — Right' },
-  center_left: { w: 1200, h: 600, label: 'Center — Left' },
-  center_right: { w: 1200, h: 600, label: 'Center — Right' },
-  footer_left: { w: 1200, h: 600, label: 'Footer — Left' },
-  footer_right: { w: 1200, h: 600, label: 'Footer — Right' },
+  top_left: { w: 1200, h: 600, label: t('Store_Banner_Pos_Top_Left') },
+  top_right: { w: 1200, h: 600, label: t('Store_Banner_Pos_Top_Right') },
+  center_left: { w: 1200, h: 600, label: t('Store_Banner_Pos_Center_Left') },
+  center_right: { w: 1200, h: 600, label: t('Store_Banner_Pos_Center_Right') },
+  footer_left: { w: 1200, h: 600, label: t('Store_Banner_Pos_Footer_Left') },
+  footer_right: { w: 1200, h: 600, label: t('Store_Banner_Pos_Footer_Right') },
 };
 
 const loading = ref(true);

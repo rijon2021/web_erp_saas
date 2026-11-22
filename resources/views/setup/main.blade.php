@@ -18,10 +18,11 @@
     $setupSteps = [
         1 => ['label' => 'Server requirements', 'desc' => 'PHP version & extensions', 'url' => '/setup'],
         2 => ['label' => 'Application', 'desc' => 'Name, URL, environment & key', 'url' => '/setup/step-1'],
-        3 => ['label' => 'Central database', 'desc' => 'Connection & credentials', 'url' => '/setup/step-2'],
-        4 => ['label' => 'Review & install', 'desc' => 'Confirm and finish', 'url' => '/setup/step-3'],
+        3 => ['label' => 'Licence', 'desc' => 'Purchase code or licence key', 'url' => '/setup/license'],
+        4 => ['label' => 'Central database', 'desc' => 'Connection & credentials', 'url' => '/setup/step-2'],
+        5 => ['label' => 'Review & install', 'desc' => 'Confirm and finish', 'url' => '/setup/step-3'],
     ];
-    $stepByPath = ['setup' => 1, 'setup/step-1' => 2, 'setup/step-2' => 3, 'setup/step-3' => 4];
+    $stepByPath = ['setup' => 1, 'setup/step-1' => 2, 'setup/license' => 3, 'setup/step-2' => 4, 'setup/step-3' => 5];
     // A view may pin the step explicitly (e.g. the install-error page, rendered
     // from POST /setup/lastStep). Otherwise derive it from the path; the finish
     // page (and anything unmapped) shows every step as done.

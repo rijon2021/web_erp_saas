@@ -1,8 +1,8 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="isEdit ? 'Edit vehicle' : 'Add vehicle'"
-      :breadcrumb="['Fleet Management', 'Vehicles', isEdit ? $t('Edit') : $t('Add')]"
+      :title="isEdit ? $t('Fl_Edit_Vehicle') : $t('Fl_Add_Vehicle')"
+      :breadcrumb="[$t('Fl_Fleet_Management'), $t('Fl_Vehicles'), isEdit ? $t('Edit') : $t('Add')]"
     >
       <template #actions>
         <a-button @click="$router.push('/fleet/vehicles')">{{ $t('Cancel') }}</a-button>
@@ -16,133 +16,133 @@
       <a-row :gutter="16">
         <!-- Identity -->
         <a-col :xs="24" :lg="16">
-          <a-card size="small" title="Vehicle" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Fl_Vehicle')" style="margin-bottom: 16px">
             <a-row :gutter="16">
               <a-col :xs="24" :md="12">
-                <a-form-item label="Name *" name="name">
-                  <a-input v-model:value="form.name" placeholder="e.g. Delivery van 1" allow-clear />
+                <a-form-item :label="$t('Name') + ' *'" name="name">
+                  <a-input v-model:value="form.name" :placeholder="$t('Fl_Name_Placeholder')" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="Plate number *" name="plate_number">
+                <a-form-item :label="$t('Fl_Plate_Number') + ' *'" name="plate_number">
                   <a-input v-model:value="form.plate_number" placeholder="e.g. 1234-AB-56" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
-                <a-form-item label="Type *" name="type">
+                <a-form-item :label="$t('Type') + ' *'" name="type">
                   <a-select v-model:value="form.type" :options="VEHICLE_TYPES" />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
-                <a-form-item label="Status *" name="status">
+                <a-form-item :label="$t('Status') + ' *'" name="status">
                   <a-select v-model:value="form.status" :options="VEHICLE_STATUSES" />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
-                <a-form-item label="Fuel type *" name="fuel_type">
+                <a-form-item :label="$t('Fl_Fuel_Type') + ' *'" name="fuel_type">
                   <a-select v-model:value="form.fuel_type" :options="FUEL_TYPES" />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="8">
-                <a-form-item label="Make">
+                <a-form-item :label="$t('Fl_Make')">
                   <a-input v-model:value="form.make" placeholder="e.g. Toyota" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="8">
-                <a-form-item label="Model">
+                <a-form-item :label="$t('Fl_Model')">
                   <a-input v-model:value="form.model" placeholder="e.g. Hiace" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="4">
-                <a-form-item label="Year" name="year">
+                <a-form-item :label="$t('Fl_Year')" name="year">
                   <a-input-number v-model:value="form.year" :min="1900" :max="2200" style="width: 100%" />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="4">
-                <a-form-item label="Colour">
+                <a-form-item :label="$t('Fl_Colour')">
                   <a-input v-model:value="form.color" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="VIN / chassis no.">
+                <a-form-item :label="$t('Fl_VIN')">
                   <a-input v-model:value="form.vin" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Odometer" name="odometer">
+                <a-form-item :label="$t('Fl_Odometer')" name="odometer">
                   <a-input-number v-model:value="form.odometer" :min="0" :step="1" style="width: 100%" />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Tank capacity" name="tank_capacity">
+                <a-form-item :label="$t('Fl_Tank_Capacity')" name="tank_capacity">
                   <a-input-number v-model:value="form.tank_capacity" :min="0" :step="1" style="width: 100%" />
                 </a-form-item>
               </a-col>
             </a-row>
           </a-card>
 
-          <a-card size="small" title="Assignment & purchase" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Fl_Assignment_And_Purchase')" style="margin-bottom: 16px">
             <a-row :gutter="16">
               <a-col :xs="24" :md="12">
                 <a-form-item :label="$t('Warehouse')">
                   <a-select
                     v-model:value="form.warehouse_id" allow-clear show-search
                     option-filter-prop="label" :options="warehouseOptions"
-                    placeholder="Not assigned to a branch"
+                    :placeholder="$t('Fl_Not_Assigned_To_Branch')"
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="Default driver">
+                <a-form-item :label="$t('Fl_Default_Driver')">
                   <a-select
                     v-model:value="form.employee_id" allow-clear show-search
                     option-filter-prop="label" :options="employeeOptions"
-                    placeholder="No driver assigned"
+                    :placeholder="$t('Fl_No_Driver_Assigned')"
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="Purchase date" name="purchase_date">
+                <a-form-item :label="$t('Fl_Purchase_Date')" name="purchase_date">
                   <a-date-picker v-model:value="form.purchase_date" style="width: 100%" value-format="YYYY-MM-DD" />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="Purchase price" name="purchase_price">
+                <a-form-item :label="$t('Fl_Purchase_Price')" name="purchase_price">
                   <a-input-number v-model:value="form.purchase_price" :min="0" :step="1" style="width: 100%" />
                 </a-form-item>
               </a-col>
             </a-row>
           </a-card>
 
-          <a-card size="small" title="Compliance" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Fl_Compliance')" style="margin-bottom: 16px">
             <a-alert
               type="info" show-icon banner
-              message="Dates set here drive the dashboard's “needs attention” alerts, 30 days ahead."
+              :message="$t('Fl_Compliance_Dates_Hint')"
               style="margin-bottom: 16px"
             />
             <a-row :gutter="16">
               <a-col :xs="24" :md="12">
-                <a-form-item label="Insurance provider">
+                <a-form-item :label="$t('Fl_Insurance_Provider')">
                   <a-input v-model:value="form.insurance_provider" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="Policy number">
+                <a-form-item :label="$t('Fl_Policy_Number')">
                   <a-input v-model:value="form.insurance_policy" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
-                <a-form-item label="Insurance expiry" name="insurance_expiry">
+                <a-form-item :label="$t('Fl_Insurance_Expiry')" name="insurance_expiry">
                   <a-date-picker v-model:value="form.insurance_expiry" style="width: 100%" value-format="YYYY-MM-DD" />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
-                <a-form-item label="Registration expiry" name="registration_expiry">
+                <a-form-item :label="$t('Fl_Registration_Expiry')" name="registration_expiry">
                   <a-date-picker v-model:value="form.registration_expiry" style="width: 100%" value-format="YYYY-MM-DD" />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
-                <a-form-item label="Inspection due" name="inspection_expiry">
+                <a-form-item :label="$t('Fl_Inspection_Due')" name="inspection_expiry">
                   <a-date-picker v-model:value="form.inspection_expiry" style="width: 100%" value-format="YYYY-MM-DD" />
                 </a-form-item>
               </a-col>
@@ -152,9 +152,9 @@
 
         <!-- Photo + notes -->
         <a-col :xs="24" :lg="8">
-          <a-card size="small" title="Photo" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Fl_Photo')" style="margin-bottom: 16px">
             <div class="photo">
-              <img v-if="previewUrl" :src="previewUrl" alt="Vehicle" />
+              <img v-if="previewUrl" :src="previewUrl" :alt="$t('Fl_Vehicle')" />
               <!-- Tracks the Type select, so the placeholder confirms the choice. -->
               <span v-else class="photo-empty">
                 <component :is="typeIcon(form.type)" :size="48" :stroke-width="1.4" />
@@ -164,16 +164,16 @@
               <a-upload :show-upload-list="false" accept="image/*" :before-upload="pickImage">
                 <a-button>
                   <template #icon><UploadOutlined /></template>
-                  {{ previewUrl ? 'Replace' : 'Upload' }}
+                  {{ previewUrl ? $t('Fl_Replace') : $t('Upload') }}
                 </a-button>
               </a-upload>
               <a-button v-if="previewUrl" danger @click="clearImage">{{ $t('Delete') }}</a-button>
             </a-space>
-            <p class="photo-hint">JPG or PNG, up to 5 MB.</p>
+            <p class="photo-hint">{{ $t('Fl_Photo_Hint') }}</p>
           </a-card>
 
           <a-card size="small" :title="$t('Note')">
-            <a-textarea v-model:value="form.notes" :rows="6" placeholder="Anything worth knowing about this vehicle…" />
+            <a-textarea v-model:value="form.notes" :rows="6" :placeholder="$t('Fl_Notes_Placeholder')" />
           </a-card>
         </a-col>
       </a-row>

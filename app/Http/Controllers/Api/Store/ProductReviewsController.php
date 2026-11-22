@@ -12,7 +12,7 @@ class ProductReviewsController extends Controller
 {
     public function index(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_reviews', StoreSetting::class);
 
         $query = ProductReview::with('product:id,name,code')->orderByDesc('created_at');
 
@@ -57,7 +57,7 @@ class ProductReviewsController extends Controller
 
     public function setStatus(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_reviews', StoreSetting::class);
 
         $data = $request->validate([
             'status' => ['required', Rule::in(ProductReview::STATUSES)],
@@ -72,7 +72,7 @@ class ProductReviewsController extends Controller
 
     public function destroy(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_reviews', StoreSetting::class);
 
         ProductReview::findOrFail($id)->delete();
 

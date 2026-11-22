@@ -19,8 +19,8 @@ use Illuminate\Support\Str;
  * server: `url` on each row points straight at the file, and download() exists
  * only to force the original filename as an attachment.
  *
- * Because that directory is web-reachable, uploads with an executable
- * extension are rejected — see EXECUTABLE_EXTENSIONS.
+ * Because that directory is web-reachable, only allow-listed extensions are
+ * accepted — see SafeUpload::DOCUMENT + EXTRA_EXTENSIONS.
  *
  * The list endpoint follows the admin's usual contract
  * (page/SortField/SortType/search/limit -> { documents, totalRows }) so the
@@ -32,12 +32,14 @@ class DocumentArchiveController extends Controller
     private const UPLOAD_DIR = 'documents';
 
     /**
-     * Never accept these: the archive directory is served by the web server, so
-     * a stored .php would be a remote-code-execution hole rather than a file.
+     * Archive-only additions to SafeUpload::DOCUMENT. The archive directory is
+     * served by the web server, so this is an ALLOWLIST: anything else (.php,
+     * .html, .svg, .xhtml, .js, …) would run as code or as a page on the app's
+     * origin instead of being a file.
      */
-    private const EXECUTABLE_EXTENSIONS = [
-        'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phps', 'phar',
-        'cgi', 'pl', 'py', 'sh', 'bash', 'exe', 'com', 'bat', 'cmd', 'jsp', 'asp', 'aspx', 'htaccess',
+    private const EXTRA_EXTENSIONS = [
+        'avi', 'mkv', 'tif', 'tiff', 'heic', 'psd', 'ai', 'eps', 'dwg', 'dxf', 'odg',
+        'eml', 'msg', 'md', 'log', 'tar', 'gz', 'pages', 'numbers', 'key',
     ];
 
     /** Sortable columns, whitelisted — anything computed would 1054 in MySQL. */
@@ -189,6 +191,11 @@ class DocumentArchiveController extends Controller
         $files = $request->file('files');
         $single = count($files) === 1;
         $created = [];
+
+        // Refuse the whole batch before writing anything if one file is not allowed.
+        foreach ($files as $file) {
+            $this->archiveExtension($file);
+        }
 
         foreach ($files as $file) {
             $stored = $this->storeFile($file);
@@ -548,12 +555,8 @@ class DocumentArchiveController extends Controller
      */
     private function storeFile($file)
     {
-        $original = $file->getClientOriginalName();
-        $extension = strtolower($file->getClientOriginalExtension());
-
-        if (in_array($extension, self::EXECUTABLE_EXTENSIONS, true)) {
-            abort(422, 'Files of type .' . $extension . ' cannot be archived.');
-        }
+        $original = \App\Support\SafeUpload::displayName($file);
+        $extension = $this->archiveExtension($file);
 
         $uploadPath = upload_public_path(self::UPLOAD_DIR);
         if (! file_exists($uploadPath)) {
@@ -577,6 +580,20 @@ class DocumentArchiveController extends Controller
             'extension' => $extension,
             'size' => $size,
         ];
+    }
+
+    /**
+     * Allow-listed (lower-case) extension of an upload; aborts 422 otherwise.
+     */
+    private function archiveExtension($file): string
+    {
+        $extension = strtolower(trim((string) $file->getClientOriginalExtension()));
+
+        if ($extension === '' || ! in_array($extension, array_merge(\App\Support\SafeUpload::DOCUMENT, self::EXTRA_EXTENSIONS), true)) {
+            abort(422, 'Files of type .' . ($extension ?: '(none)') . ' cannot be archived.');
+        }
+
+        return $extension;
     }
 
     private function present(Document $doc, array $uploaders = [])

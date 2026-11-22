@@ -48,17 +48,47 @@
 
     // Plan summary: sidebar feature gates + the limit-reached modal.
     $__planSummary = app(\App\Services\TenantLimitsService::class)->getPlanSummary();
+
+    // Default primary colour chosen in Super admin > Settings > General >
+    // Tenant Settings (null = built-in). The ui store uses it until a user
+    // picks their own colour in the customizer.
+    // App name used when the tenant's own settings row has none: the
+    // platform's default tenant app name, not a hard-coded brand.
+    try {
+        $__centralSettings = \App\Models\Central\GeneralSetting::instance();
+        $__defaultPrimaryColor = $__centralSettings->tenantPrimaryColor();
+        $__fallbackAppName = $__centralSettings->getTenantDefaults()['app_name'];
+    } catch (\Throwable $e) {
+        $__defaultPrimaryColor = null;
+        $__fallbackAppName = config('app.name', 'POS');
+    }
+    $__appName = ($app_settings->app_name ?? null) ?: $__fallbackAppName;
+    $__bootColor = $__defaultPrimaryColor ?? \App\Models\Central\GeneralSetting::BUILTIN_TENANT_COLOR;
 @endphp
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    {{-- Direction before first paint, so Arabic doesn't flash LTR while the
+         bundle loads. Same rule as the ui store's `direction` getter
+         (resources/src/stores/ui.js), which takes over once the app mounts. --}}
+    <script>
+      (function () {
+        try {
+          var lang = localStorage.getItem('language') || 'en';
+          var o = localStorage.getItem('next_rtl_override');
+          var rtl = o === '1' || (o !== '0' && lang === 'ar');
+          document.documentElement.setAttribute('dir', rtl ? 'rtl' : 'ltr');
+          document.documentElement.setAttribute('lang', lang);
+        } catch (e) {}
+      })();
+    </script>
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <meta name="app-version" content="{{ $appVersion }}">
     <meta name="viewport" content="width=device-width,initial-scale=1.0" />
     @include('partials.tenant-font')
     <link rel="icon" href="{{ global_asset(upload_path('settings') . '/' . ($app_settings->favicon ?? 'favicon.ico')) }}">
-    <title>{{ $app_settings->app_name ?? 'Stocky | Ultimate Inventory With POS' }}</title>
+    <title>{{ $__appName }}</title>
 
     {{-- PWA — Settings > PWA can switch the install prompt off entirely. --}}
     @if(($app_settings->pwa_enabled ?? true))
@@ -67,15 +97,16 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="{{ $app_settings->pwa_short_name ?: ($app_settings->app_name ?? 'Stocky') }}">
+    <meta name="apple-mobile-web-app-title" content="{{ ($app_settings->pwa_short_name ?? null) ?: $__appName }}">
     <link rel="apple-touch-icon" href="{{ pwa_icon_url(192) }}">
     @endif
 
     <script>
         window.__planSummary = @json($__planSummary);
         window.__uploadPath = '{{ upload_path() }}';
-        window.__appName = @json($app_settings->app_name ?? 'Stocky');
+        window.__appName = @json($__appName);
         window.__pageTitleSuffix = @json($app_settings->page_title_suffix ?? 'Ultimate Inventory With POS');
+        window.__defaultPrimaryColor = @json($__defaultPrimaryColor);
     </script>
 
     @foreach ($cssFiles as $css)
@@ -106,8 +137,8 @@
         .boot-loader__spinner {
           width: 40px;
           height: 40px;
-          border: 3px solid rgba(109, 40, 217, 0.15);
-          border-top-color: #6d28d9;
+          border: 3px solid {{ $__bootColor }}26;
+          border-top-color: {{ $__bootColor }};
           border-radius: 50%;
           animation: boot-spin 0.8s linear infinite;
         }
@@ -115,7 +146,7 @@
       </style>
       <div class="boot-loader">
         <div class="boot-loader__spinner"></div>
-        <div>{{ $app_settings->app_name ?? 'Stocky' }}</div>
+        <div>{{ $__appName }}</div>
       </div>
     </div>
 

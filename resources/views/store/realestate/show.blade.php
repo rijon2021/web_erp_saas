@@ -19,7 +19,7 @@
   $amenities = is_array($property->amenities) ? array_values(array_filter($property->amenities)) : [];
   $waNumber = preg_replace('/[^0-9]/', '', (string) $property->agent_whatsapp);
   $areaTxt = !is_null($property->area) ? rtrim(rtrim(number_format((float)$property->area,2),'0'),'.').' '.$property->area_unit : '—';
-  $pricePerUnit = ($property->area > 0 && $property->purpose === 'sale') ? $currency.number_format((float)$property->price / (float)$property->area) : null;
+  $pricePerUnit = ($property->area > 0 && $property->purpose === 'sale') ? store_with_currency($currency, number_format((float)$property->price / (float)$property->area)) : null;
 @endphp
 
 <div class="re-container" style="padding-top:18px">
@@ -94,7 +94,7 @@
         @if($loc)<div class="re-card-loc" style="font-size:15px;margin-top:8px"><x-store.icon name="map-pin" />{{ $loc }}</div>@endif
       </div>
       <div style="text-align:end">
-        <div style="font-size:32px;font-weight:800;color:var(--re-accent);letter-spacing:-.01em">{{ $currency }}{{ number_format((float)$property->price) }}@if($property->purpose==='rent')<span style="font-size:15px;color:var(--re-muted);font-weight:500"> /{{ __('messages.Month') }}</span>@endif</div>
+        <div style="font-size:32px;font-weight:800;color:var(--re-accent);letter-spacing:-.01em">{{ store_with_currency($currency, number_format((float) $property->price)) }}@if($property->purpose==='rent')<span style="font-size:15px;color:var(--re-muted);font-weight:500"> /{{ __('messages.Month') }}</span>@endif</div>
         @if($pricePerUnit)<div style="color:var(--re-muted);font-size:13px">{{ $pricePerUnit }} / {{ $property->area_unit }}</div>@endif
       </div>
     </div>
@@ -133,7 +133,7 @@
           @php
             $rows = [
               [__('messages.PropertyType'), $property->category->name ?? '—'],
-              [__('messages.Price'), $currency.number_format((float)$property->price).($property->purpose==='rent' ? ' /'.__('messages.Month') : '')],
+              [__('messages.Price'), store_with_currency($currency, number_format((float)$property->price)).($property->purpose==='rent' ? ' /'.__('messages.Month') : '')],
               [__('messages.Area'), $areaTxt],
               [__('messages.Bedrooms'), $property->bedrooms ?? '—'],
               [__('messages.Bathrooms'), $property->bathrooms ?? '—'],

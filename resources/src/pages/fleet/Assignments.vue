@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <PageHeader title="Assignments" :breadcrumb="['Fleet Management', 'Assignments']">
+    <PageHeader :title="$t('Fl_Assignments')" :breadcrumb="[$t('Fl_Fleet_Management'), $t('Fl_Assignments')]">
       <template #actions>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
-          Assign vehicle
+          {{ $t('Fl_Assign_Vehicle') }}
         </a-button>
       </template>
     </PageHeader>
@@ -12,22 +12,22 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search purpose or destination…"
+          v-model:value="crud.search.value" :placeholder="$t('Fl_Search_Purpose_Or_Destination')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.vehicle_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All vehicles"
+          option-filter-prop="label" :placeholder="$t('Fl_All_Vehicles')"
           :options="vehicleOptions" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.employee_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All drivers"
+          option-filter-prop="label" :placeholder="$t('Fl_All_Drivers')"
           :options="employeeOptions" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item" allow-clear
-          placeholder="All statuses" :options="ASSIGNMENT_STATUSES" @change="crud.reload"
+          :placeholder="$t('Fl_All_Statuses')" :options="ASSIGNMENT_STATUSES" @change="crud.reload"
         />
         <a-range-picker v-model:value="filters.range" class="tb-range" value-format="YYYY-MM-DD" @change="crud.reload" />
       </div>
@@ -41,7 +41,7 @@
         <template v-else-if="column.key === 'start_date'">{{ dateTime(record.start_date) }}</template>
         <template v-else-if="column.key === 'end_date'">
           <span v-if="record.end_date">{{ dateTime(record.end_date) }}</span>
-          <span v-else class="muted">Still out</span>
+          <span v-else class="muted">{{ $t('Fl_Still_Out') }}</span>
         </template>
         <template v-else-if="column.key === 'distance'">
           {{ record.distance !== null ? number(record.distance, 0) : '—' }}
@@ -53,7 +53,7 @@
         </template>
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
-            <a-tooltip v-if="record.status === 'active'" title="Return vehicle">
+            <a-tooltip v-if="record.status === 'active'" :title="$t('Fl_Return_Vehicle')">
               <a-button type="text" size="small" @click="openClose(record)">
                 <template #icon><RollbackOutlined /></template>
               </a-button>
@@ -75,30 +75,30 @@
 
     <!-- Create / edit -->
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit assignment' : 'Assign vehicle'" :width="620"
+      :open="formOpen" :title="editing ? $t('Fl_Edit_Assignment') : $t('Fl_Assign_Vehicle')" :width="620"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Vehicle *" name="vehicle_id">
+            <a-form-item :label="$t('Fl_Vehicle') + ' *'" name="vehicle_id">
               <a-select
                 v-model:value="form.vehicle_id" show-search option-filter-prop="label"
-                :options="vehicleOptions" placeholder="Select a vehicle" @change="onVehicleChange"
+                :options="vehicleOptions" :placeholder="$t('Fl_Select_A_Vehicle')" @change="onVehicleChange"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Driver *" name="employee_id">
+            <a-form-item :label="$t('Fl_Driver') + ' *'" name="employee_id">
               <a-select
                 v-model:value="form.employee_id" show-search option-filter-prop="label"
-                :options="employeeOptions" placeholder="Select a driver"
+                :options="employeeOptions" :placeholder="$t('Fl_Select_A_Driver')"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Out from *" name="start_date">
+            <a-form-item :label="$t('Fl_Out_From') + ' *'" name="start_date">
               <a-date-picker
                 v-model:value="form.start_date" show-time style="width: 100%"
                 value-format="YYYY-MM-DD HH:mm:ss"
@@ -106,7 +106,7 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Back on" name="end_date">
+            <a-form-item :label="$t('Fl_Back_On')" name="end_date">
               <a-date-picker
                 v-model:value="form.end_date" show-time style="width: 100%"
                 value-format="YYYY-MM-DD HH:mm:ss"
@@ -114,27 +114,27 @@
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Start odometer">
+            <a-form-item :label="$t('Fl_Start_Odometer')">
               <a-input-number v-model:value="form.start_odometer" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="End odometer">
+            <a-form-item :label="$t('Fl_End_Odometer')">
               <a-input-number v-model:value="form.end_odometer" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Status *" name="status">
+            <a-form-item :label="$t('Status') + ' *'" name="status">
               <a-select v-model:value="form.status" :options="ASSIGNMENT_STATUSES" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Purpose">
-              <a-input v-model:value="form.purpose" placeholder="e.g. Customer delivery" allow-clear />
+            <a-form-item :label="$t('Fl_Purpose')">
+              <a-input v-model:value="form.purpose" :placeholder="$t('Fl_Purpose_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Destination">
+            <a-form-item :label="$t('Fl_Destination')">
               <a-input v-model:value="form.destination" allow-clear />
             </a-form-item>
           </a-col>
@@ -149,18 +149,18 @@
 
     <!-- Return the vehicle -->
     <a-modal
-      :open="closeOpen" title="Return vehicle" :width="420"
-      :confirm-loading="closing" ok-text="Return" :cancel-text="$t('Cancel')"
+      :open="closeOpen" :title="$t('Fl_Return_Vehicle')" :width="420"
+      :confirm-loading="closing" :ok-text="$t('Fl_Return')" :cancel-text="$t('Cancel')"
       @ok="submitClose" @cancel="closeOpen = false"
     >
       <a-form layout="vertical">
-        <a-form-item label="Returned on">
+        <a-form-item :label="$t('Fl_Returned_On')">
           <a-date-picker
             v-model:value="closeForm.end_date" show-time style="width: 100%"
             value-format="YYYY-MM-DD HH:mm:ss"
           />
         </a-form-item>
-        <a-form-item label="End odometer" extra="Pushes the vehicle's reading forward">
+        <a-form-item :label="$t('Fl_End_Odometer')" :extra="$t('Fl_Pushes_Reading_Forward')">
           <a-input-number v-model:value="closeForm.end_odometer" :min="0" style="width: 100%" />
         </a-form-item>
       </a-form>
@@ -209,14 +209,14 @@ const crud = useCrudTable('fleet/assignments', {
 });
 
 const columns = computed(() => [
-  { title: 'Vehicle', key: 'vehicle', dataIndex: 'vehicle_name', width: 200 },
-  { title: 'Driver', dataIndex: 'driver_name', key: 'driver_name', width: 170 },
-  { title: 'Out from', key: 'start_date', dataIndex: 'start_date', sorter: true, width: 160 },
-  { title: 'Back on', key: 'end_date', dataIndex: 'end_date', sorter: true, width: 160 },
-  { title: 'Distance', key: 'distance', dataIndex: 'distance', width: 100 },
-  { title: 'Purpose', dataIndex: 'purpose', key: 'purpose' },
-  { title: 'Destination', dataIndex: 'destination', key: 'destination', width: 150 },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 120 },
+  { title: t('Fl_Vehicle'), key: 'vehicle', dataIndex: 'vehicle_name', width: 200 },
+  { title: t('Fl_Driver'), dataIndex: 'driver_name', key: 'driver_name', width: 170 },
+  { title: t('Fl_Out_From'), key: 'start_date', dataIndex: 'start_date', sorter: true, width: 160 },
+  { title: t('Fl_Back_On'), key: 'end_date', dataIndex: 'end_date', sorter: true, width: 160 },
+  { title: t('Fl_Distance'), key: 'distance', dataIndex: 'distance', width: 100 },
+  { title: t('Fl_Purpose'), dataIndex: 'purpose', key: 'purpose' },
+  { title: t('Fl_Destination'), dataIndex: 'destination', key: 'destination', width: 150 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 120 },
   { title: '', key: 'actions', width: 120 },
 ]);
 
@@ -335,7 +335,7 @@ async function submitClose() {
   closing.value = true;
   try {
     await http.post(`fleet/assignments/${closingRecord.value.id}/close`, closeForm.value);
-    message.success('Vehicle returned.');
+    message.success(t('Fl_Vehicle_Returned'));
     closeOpen.value = false;
     crud.fetchRows();
     loadMeta();

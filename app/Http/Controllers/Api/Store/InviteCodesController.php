@@ -12,7 +12,7 @@ class InviteCodesController extends Controller
 {
     public function index(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_invite_codes', StoreSetting::class);
 
         $query = InviteCode::query()->orderBy('created_at', 'desc');
 
@@ -43,7 +43,7 @@ class InviteCodesController extends Controller
 
     public function store(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_invite_codes', StoreSetting::class);
 
         $data = $request->validate([
             'code' => 'nullable|string|max:64|unique:invite_codes,code',
@@ -66,7 +66,7 @@ class InviteCodesController extends Controller
 
     public function show(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_invite_codes', StoreSetting::class);
 
         $code = InviteCode::withCount('registrations')->findOrFail($id);
 
@@ -75,7 +75,7 @@ class InviteCodesController extends Controller
 
     public function update(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_invite_codes', StoreSetting::class);
 
         $code = InviteCode::findOrFail($id);
 
@@ -92,7 +92,7 @@ class InviteCodesController extends Controller
 
     public function destroy(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_invite_codes', StoreSetting::class);
 
         $code = InviteCode::findOrFail($id);
         $code->delete();
@@ -102,7 +102,7 @@ class InviteCodesController extends Controller
 
     public function generateBatch(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_invite_codes', StoreSetting::class);
 
         $data = $request->validate([
             'count' => 'required|integer|min:1|max:50',

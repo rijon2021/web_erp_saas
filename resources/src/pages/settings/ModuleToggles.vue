@@ -3,15 +3,15 @@
     <a-alert
       type="info"
       show-icon
-      message="Turn business modules on or off"
-      description="A disabled module disappears from the sidebar and its pages become unreachable for every user. No data is deleted — switching a module back on restores it exactly as it was."
+      :message="$t('Module_Toggles_Title')"
+      :description="$t('Module_Toggles_Desc')"
       style="margin-bottom: 16px"
     />
 
     <div class="mt-toolbar">
       <a-space>
-        <a-button size="small" @click="setAll(true)">Enable all</a-button>
-        <a-button size="small" @click="setAll(false)">Disable all</a-button>
+        <a-button size="small" @click="setAll(true)">{{ $t('Enable_All_Modules') }}</a-button>
+        <a-button size="small" @click="setAll(false)">{{ $t('Disable_All_Modules') }}</a-button>
       </a-space>
       <a-space>
         <a-button danger :loading="resetting" @click="confirmReset">
@@ -87,7 +87,9 @@ collect(MENU);
 // listed; no plan data loaded = everything listed (plan store semantics).
 const modules = TOGGLEABLE_MODULES
   .filter(m => !featureByKey[m.key] || plan.featureEnabled(featureByKey[m.key]))
-  .map(m => ({ ...m, iconCmp: iconByKey[m.key] }));
+  // Copy descriptors, not values: label/description are i18n getters and a
+  // spread would freeze them in the locale active at setup.
+  .map(m => Object.defineProperties({ iconCmp: iconByKey[m.key] }, Object.getOwnPropertyDescriptors(m)));
 
 const loading = ref(true);
 const saving = ref(false);
@@ -135,7 +137,7 @@ async function save() {
 function confirmReset() {
   Modal.confirm({
     title: t('Reset_to_Default'),
-    content: 'Re-enable every module for all users?',
+    content: t('Module_Reset_Confirm'),
     okText: t('Reset_to_Default'),
     okType: 'danger',
     onOk: reset,

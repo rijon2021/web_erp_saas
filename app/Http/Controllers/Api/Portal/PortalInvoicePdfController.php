@@ -101,7 +101,9 @@ class PortalInvoicePdfController extends Controller
                 $data['Net_price'] = $detail->price - ($data['DiscountNet'] ?? 0) - $tax_price;
                 $data['taxe'] = number_format($detail->price - $data['Net_price'] - ($data['DiscountNet'] ?? 0), 2, '.', '');
             }
-            $data['is_imei'] = optional($detail->product)->is_imei ?? 0;
+            $data['is_imei'] = (optional($detail->product)->is_imei ?? 0)
+                // Combo lines print the serials of their tracked components.
+                || (optional($detail->product)->type === 'is_combo' && $detail->imei_number);
             $data['imei_number'] = $detail->imei_number ?? '';
 
             $details[] = $data;
@@ -110,6 +112,8 @@ class PortalInvoicePdfController extends Controller
         $Html = view('pdf.sale_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($sale_data->warehouse_id, $settings),
             'sale' => $sale,
             'details' => $details,
         ])->render();
@@ -129,7 +133,7 @@ class PortalInvoicePdfController extends Controller
     private function assertPortalActive($portalClient): void
     {
         if ((int) $portalClient->status !== 1) {
-            abort(403, 'Portal access is disabled');
+            abort(403, __('portal.portal_disabled'));
         }
     }
 }

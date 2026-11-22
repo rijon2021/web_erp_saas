@@ -3,11 +3,11 @@
     <PageHeader :title="$t('productsList')" :breadcrumb="[$t('Products'), $t('productsList')]">
       <template #actions>
         <a-space wrap>
-          <a-button :loading="exporting === 'pdf'" @click="exportList('pdf')">
+          <a-button v-if="auth.canExportProducts" :loading="exporting === 'pdf'" @click="exportList('pdf')">
             <template #icon><FilePdfOutlined /></template>
             PDF
           </a-button>
-          <a-button :loading="exporting === 'xlsx'" @click="exportList('xlsx')">
+          <a-button v-if="auth.canExportProducts" :loading="exporting === 'xlsx'" @click="exportList('xlsx')">
             <template #icon><FileExcelOutlined /></template>
             EXCEL
           </a-button>
@@ -49,11 +49,27 @@
             @change="crud.reload()"
           />
         </a-col>
+        <a-col v-if="supplierEnabled" :xs="12" :md="8" :xl="4">
+          <div class="filter-label">{{ $t('Supplier') }}</div>
+          <a-select
+            v-model:value="filters.provider_id" style="width: 100%" allow-clear show-search
+            option-filter-prop="label" :placeholder="$t('Choose_Supplier')" :options="providerOptions"
+            @change="crud.reload()"
+          />
+        </a-col>
         <a-col :xs="12" :md="8" :xl="5">
           <div class="filter-label">{{ $t('warehouse') }}</div>
           <a-select
             v-model:value="filters.warehouse_id" style="width: 100%" allow-clear show-search
             option-filter-prop="label" :placeholder="$t('Choose_Warehouse')" :options="warehouseOptions"
+            @change="crud.reload()"
+          />
+        </a-col>
+        <a-col v-if="licenseFeature" :xs="12" :md="8" :xl="4">
+          <div class="filter-label">{{ $t('LicK_Software_License') }}</div>
+          <a-select
+            v-model:value="filters.license" style="width: 100%" allow-clear
+            :placeholder="$t('All')" :options="licenseFilterOptions"
             @change="crud.reload()"
           />
         </a-col>
@@ -75,7 +91,7 @@
     <template v-if="view === 'grid'">
       <a-spin :spinning="crud.loading.value">
         <div v-if="crud.rows.value.length" class="grid">
-          <article v-for="p in crud.rows.value" :key="p.id" class="pcard">
+          <article v-for="p in gridRows" :key="p.id" class="pcard">
             <!-- a-image gives click-to-zoom (the antd lightbox) for free; the card
                  still navigates via the title and the view action. -->
             <div class="pcard-media">
@@ -85,13 +101,16 @@
                 :fallback="uploadUrl('products', 'no-image.png')"
               />
               <a-tag v-if="p.type" class="pcard-type">{{ p.type }}</a-tag>
-              <span class="pcard-qty">{{ p.quantity }}</span>
+              <span class="pcard-qty" :title="quantityTitle">{{ p.quantity }}</span>
             </div>
 
             <div class="pcard-body">
               <h3 class="pcard-name" :title="p.name">
                 <a @click="$router.push(`/products/${p.id}`)">{{ p.name }}</a>
               </h3>
+              <a-tooltip v-if="isLicense(p)" :title="licenseSourceLabel(p)">
+                <a-tag color="purple" class="type-tag">{{ $t('LicK_Software_License') }}</a-tag>
+              </a-tooltip>
               <p class="pcard-sub">{{ subtitleOf(p) }}</p>
 
               <div class="pcard-codes">
@@ -153,30 +172,51 @@
         <a-card v-else>
           <a-empty :description="$t('NodataAvailable')" style="padding: 32px 0" />
         </a-card>
+        <!-- Cards past the first batch mount as this sentinel scrolls into view. -->
+        <div v-if="gridRows.length < crud.rows.value.length" ref="gridSentinel" class="grid-sentinel">
+          <a-spin size="small" />
+        </div>
       </a-spin>
 
       <div v-if="crud.total.value" class="pager">
         <a-pagination
           :current="crud.page.value" :page-size="crud.limit.value" :total="crud.total.value"
-          :page-size-options="PAGE_SIZE_OPTIONS" :build-option-text="buildPageSizeOptionText"
+          :page-size-options="crud.pageSizeChoices.value" :build-option-text="buildPageSizeOptionText"
           :show-total="n => `${n}`" show-size-changer @change="onGridPageChange"
         />
       </div>
     </template>
 
     <DataTable v-else :crud="crud" :columns="columns" selectable>
+      <!-- AI product writer for the selected rows -->
+      <template #toolbar>
+        <a-button
+          v-if="aiWriterReady && auth.can('products_edit') && crud.selectedIds.value.length"
+          @click="aiBulkOpen = true"
+        >
+          <template #icon><ThunderboltOutlined /></template>
+          {{ tf('Ai_Write_Product', 'Write with AI') }} ({{ crud.selectedIds.value.length }})
+        </a-button>
+      </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'image'">
           <img
             :src="uploadUrl('products', record.image || 'no-image.png')"
             alt=""
+            loading="lazy"
+            decoding="async"
             style="width: 42px; height: 42px; object-fit: cover; border-radius: 6px"
           />
         </template>
         <template v-else-if="column.key === 'name'">
           <div class="name-cell">
             <a @click="$router.push(`/products/${record.id}`)">{{ record.name }}</a>
-            <a-tag v-if="record.type" class="type-tag">{{ record.type }}</a-tag>
+            <div class="name-tags">
+              <a-tag v-if="record.type" class="type-tag">{{ record.type }}</a-tag>
+              <a-tooltip v-if="isLicense(record)" :title="licenseSourceLabel(record)">
+                <a-tag color="purple" class="type-tag">{{ $t('LicK_Software_License') }}</a-tag>
+              </a-tooltip>
+            </div>
           </div>
         </template>
         <template v-else-if="column.key === 'code'">
@@ -225,6 +265,13 @@
       </template>
     </DataTable>
 
+    <AiBulkProductWriter
+      v-if="aiWriterReady"
+      v-model:open="aiBulkOpen"
+      :product-ids="crud.selectedIds.value"
+      :names="aiBulkNames"
+      @saved="crud.fetchRows()"
+    />
   </div>
 </template>
 
@@ -236,20 +283,23 @@
  * standard nested. Detail is Vue 3; add/edit/import stay legacy until the
  * product form batch.
  */
-import { ref, computed, watch, createVNode } from 'vue';
+import { ref, computed, watch, createVNode, onBeforeUnmount } from 'vue';
 import { message, Modal } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import {
   PlusOutlined, EyeOutlined, EditOutlined, DeleteOutlined, CopyOutlined,
   FilePdfOutlined, FileExcelOutlined, UploadOutlined, ExclamationCircleOutlined,
   BarcodeOutlined, QrcodeOutlined,
-  AppstoreOutlined, UnorderedListOutlined,
+  AppstoreOutlined, UnorderedListOutlined, ThunderboltOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import AiBulkProductWriter from '../../components/ai/AiBulkProductWriter.vue';
+import { useAiWriter } from '../../composables/useAiWriter';
 import DataTable from '../../components/DataTable.vue';
-import { useCrudTable, PAGE_SIZE_OPTIONS, buildPageSizeOptionText } from '../../composables/useCrudTable';
+import { useCrudTable, buildPageSizeOptionText } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { useAuthStore } from '../../stores/auth';
+import { usePlanStore } from '../../stores/plan';
 import { exportExcel, exportPdf } from '../../lib/exporters';
 import http from '../../lib/http';
 import { uploadUrl } from '../../lib/uploadUrl';
@@ -259,8 +309,11 @@ const { t } = useI18n();
 const { money } = useFormat();
 const auth = useAuthStore();
 
+const plan = usePlanStore();
+
 const filters = ref({
-  code: '', name: '', category_id: undefined, brand_id: undefined, warehouse_id: undefined,
+  code: '', name: '', category_id: undefined, brand_id: undefined, provider_id: undefined, warehouse_id: undefined,
+  license: undefined,
 });
 
 const filterParams = () => ({
@@ -268,14 +321,35 @@ const filterParams = () => ({
   name: filters.value.name || '',
   category_id: filters.value.category_id || '',
   brand_id: filters.value.brand_id || '',
+  provider_id: filters.value.provider_id || '',
   warehouse_id: filters.value.warehouse_id || '',
+  license: filters.value.license || '',
 });
+
+/* Software License products (plan feature license_keys): rows carry
+ * license_mode none|pool|generated; the filter sends license=1|pool|generated. */
+const licenseFeature = computed(() => plan.featureEnabled('license_keys'));
+const licenseFilterOptions = computed(() => [
+  { value: '1', label: t('LicK_All_License_Products') },
+  { value: 'pool', label: t('LicK_Source_Pool') },
+  { value: 'generated', label: t('LicK_Source_Generated') },
+]);
+const isLicense = r => !!r.license_mode && r.license_mode !== 'none';
+const licenseSourceLabel = r => (r.license_mode === 'generated' ? t('LicK_Source_Generated') : t('LicK_Source_Pool'));
 
 const crud = useCrudTable('products', {
   rowsKey: 'products',
   params: filterParams,
 });
 crud.fetchRows();
+
+/* AI product writer (bulk, on the selected rows) */
+const { options: aiWriterOptions, load: loadAiWriter } = useAiWriter();
+const aiWriterReady = computed(() => !!aiWriterOptions.value?.ready);
+const aiBulkOpen = ref(false);
+// Names for selected rows on the current page; others show as #id.
+const aiBulkNames = computed(() => Object.fromEntries(crud.rows.value.map(r => [r.id, r.name])));
+loadAiWriter();
 
 const categoryOptions = computed(() =>
   (crud.payload.value?.categories || []).map(c => ({ value: c.id, label: c.name }))
@@ -286,6 +360,25 @@ const brandOptions = computed(() =>
 const warehouseOptions = computed(() =>
   (crud.payload.value?.warehouses || []).map(w => ({ value: w.id, label: w.name }))
 );
+const supplierEnabled = computed(() => crud.payload.value?.product_supplier_enabled === true);
+// Settings → Features → Restrict products by warehouse: show which branch owns each product.
+const ownershipEnabled = computed(() => crud.payload.value?.restrict_products_by_warehouse === true);
+const providerOptions = computed(() =>
+  (crud.payload.value?.providers || []).map(p => ({ value: p.id, label: p.name }))
+);
+
+// The Warehouse filter means "stocked in" (home warehouse OR qte > 0 there), so
+// the Home warehouse column can legitimately disagree with it. Naming the
+// selected warehouse in the Quantity header makes that reading explicit in the
+// table and in the PDF/Excel exports.
+const selectedWarehouseName = computed(() =>
+  warehouseOptions.value.find(w => w.value === filters.value.warehouse_id)?.label || ''
+);
+const quantityTitle = computed(() =>
+  selectedWarehouseName.value
+    ? t('Quantity_in_warehouse', { warehouse: selectedWarehouseName.value })
+    : t('Quantity')
+);
 
 const columns = computed(() => [
   { title: t('image'), key: 'image', width: 70, exportable: false },
@@ -295,14 +388,22 @@ const columns = computed(() => [
   { title: t('Code'), dataIndex: 'code', key: 'code', sorter: true },
   // Money columns sit next to Code so a variant's codes and its stacked
   // cost/price lines can be read across without scanning past Brand/Category.
-  { title: t('Cost'), dataIndex: 'cost', key: 'cost', align: 'right', sorter: true },
+  ...(auth.canSeeCost
+    ? [{ title: t('Cost'), dataIndex: 'cost', key: 'cost', align: 'right', sorter: true }]
+    : []),
   { title: t('Price'), dataIndex: 'price', key: 'price', align: 'right', sorter: true },
   // Off by default — users can enable them from the table's columns dropdown.
   { title: t('Wholesale_Price'), dataIndex: 'wholesale_price', key: 'wholesale_price', align: 'right', sorter: true, defaultHidden: true },
   { title: t('Min_Selling_Price'), dataIndex: 'min_price', key: 'min_price', align: 'right', sorter: true, defaultHidden: true },
   { title: t('Brand'), dataIndex: 'brand', key: 'brand' },
+  ...(supplierEnabled.value
+    ? [{ title: t('Supplier'), dataIndex: 'provider_name', key: 'provider_name' }]
+    : []),
+  ...(ownershipEnabled.value
+    ? [{ title: t('Home_Warehouse'), dataIndex: 'warehouse_name', key: 'warehouse_name' }]
+    : []),
   { title: t('Categorie'), dataIndex: 'category', key: 'category' },
-  { title: t('Quantity'), dataIndex: 'quantity', key: 'quantity', align: 'right', sorter: true },
+  { title: quantityTitle.value, dataIndex: 'quantity', key: 'quantity', align: 'right', sorter: true },
   { title: t('Action'), key: 'actions', width: 160, align: 'center' },
 ]);
 
@@ -324,6 +425,27 @@ function onGridPageChange(page, pageSize) {
   crud.limit.value = pageSize;
   crud.fetchRows();
 }
+
+/* The card grid mounts a lightbox-enabled image per card, so an "All" page of
+ * a few thousand products is revealed in batches as the user scrolls instead
+ * of all at once (which exhausted the tab). */
+const GRID_BATCH = 96;
+const gridShown = ref(GRID_BATCH);
+const gridSentinel = ref(null);
+const gridRows = computed(() => crud.rows.value.slice(0, gridShown.value));
+watch(() => crud.rows.value, () => { gridShown.value = GRID_BATCH; });
+
+let gridObserver = null;
+watch(gridSentinel, el => {
+  gridObserver?.disconnect();
+  gridObserver = null;
+  if (!el || typeof IntersectionObserver === 'undefined') return;
+  gridObserver = new IntersectionObserver(entries => {
+    if (entries.some(e => e.isIntersecting)) gridShown.value += GRID_BATCH;
+  }, { rootMargin: '600px 0px' });
+  gridObserver.observe(el);
+});
+onBeforeUnmount(() => gridObserver?.disconnect());
 
 /**
  * A card has room for one number, not a stacked column: collapse a variant
@@ -371,13 +493,15 @@ const exportColumns = computed(() => [
       return [r.code || '', ...variants.map(c => `- ${c}`)].filter(Boolean).join('\n');
     },
   },
-  { title: t('Cost'), dataIndex: 'cost' },
+  ...(auth.canSeeCost ? [{ title: t('Cost'), dataIndex: 'cost' }] : []),
   { title: t('Price'), dataIndex: 'price' },
   { title: t('Wholesale_Price'), dataIndex: 'wholesale_price' },
   { title: t('Min_Selling_Price'), dataIndex: 'min_price' },
   { title: t('Brand'), dataIndex: 'brand' },
+  ...(supplierEnabled.value ? [{ title: t('Supplier'), dataIndex: 'provider_name' }] : []),
+  ...(ownershipEnabled.value ? [{ title: t('Home_Warehouse'), dataIndex: 'warehouse_name' }] : []),
   { title: t('Categorie'), dataIndex: 'category' },
-  { title: t('Quantity'), dataIndex: 'quantity' },
+  { title: quantityTitle.value, dataIndex: 'quantity' },
 ]);
 
 const exporting = ref(null);
@@ -385,6 +509,7 @@ const exporting = ref(null);
 // (Vehicle fitment is a stocky feature — no vehicles/* API on this backend.)
 
 async function exportList(kind) {
+  if (!auth.canExportProducts) return;
   exporting.value = kind;
   try {
     const data = await http.get('products', {
@@ -466,6 +591,11 @@ function duplicate(record) {
   height: 128px;
   padding: 8px;
   background: rgba(128, 128, 128, 0.08);
+}
+.grid-sentinel {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
 }
 .pcard-media :deep(.ant-image) {
   width: 100%;
@@ -593,10 +723,19 @@ function duplicate(record) {
   align-items: flex-start;
   gap: 4px;
 }
-.name-cell .type-tag {
+.name-cell .type-tag,
+.pcard-body .type-tag {
   margin-inline-end: 0;
   font-size: 11px;
   line-height: 16px;
+}
+.name-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.pcard-body .type-tag {
+  margin-top: 4px;
 }
 
 /* One row per value: the parent plus each variant underneath. */

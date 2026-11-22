@@ -30,7 +30,15 @@ class CategorieController extends BaseController
         }
 
         $query = Category::query()
-            ->whereNull('deleted_at')
+            ->whereNull('deleted_at');
+
+        // Settings -> Features: optionally show only categories that have a
+        // product this user may see (owned by / stocked in one of their
+        // warehouses). A category with no product at all stays visible, so a
+        // new one is never hidden from its author.
+        $this->scopeMasterDataToProducts($query, fn ($sub) => $sub->whereColumn('products.category_id', 'categories.id'));
+
+        $query
             ->when($search !== '', function ($q) use ($search) {
                 $q->where(function ($qq) use ($search) {
                     $qq->where('name', 'like', "%{$search}%")

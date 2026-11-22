@@ -14,7 +14,7 @@
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'webhook'">{{ record.webhook ? record.webhook.name : '—' }}</template>
         <template v-else-if="column.key === 'status'">
-          <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
+          <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
         </template>
         <template v-else-if="column.key === 'response_code'">
           <a-tag v-if="record.response_code" :color="httpColor(record.response_code)">{{ record.response_code }}</a-tag>
@@ -36,15 +36,15 @@
           <a-descriptions-item :label="tf('Event', 'Event')">{{ active.event }}</a-descriptions-item>
           <a-descriptions-item :label="tf('Webhook', 'Webhook')">{{ active.webhook && active.webhook.name }}</a-descriptions-item>
           <a-descriptions-item label="URL" :span="2">{{ active.webhook && active.webhook.url }}</a-descriptions-item>
-          <a-descriptions-item :label="$t('Status')"><a-tag :color="statusColor(active.status)">{{ active.status }}</a-tag></a-descriptions-item>
-          <a-descriptions-item :label="tf('Response_code', 'Response code')">{{ active.response_code || '—' }}</a-descriptions-item>
+          <a-descriptions-item :label="$t('Status')"><a-tag :color="statusColor(active.status)">{{ statusLabel(active.status) }}</a-tag></a-descriptions-item>
+          <a-descriptions-item :label="tf('Response_Code', 'Response code')">{{ active.response_code || '—' }}</a-descriptions-item>
           <a-descriptions-item :label="tf('Attempt', 'Attempt')">{{ active.attempt }}</a-descriptions-item>
           <a-descriptions-item :label="tf('Duration', 'Duration')">{{ active.duration_ms }} ms</a-descriptions-item>
-          <a-descriptions-item v-if="active.error_message" :label="tf('Error', 'Error')" :span="2">{{ active.error_message }}</a-descriptions-item>
+          <a-descriptions-item v-if="active.error_message" :label="tf('Webhook_Error', 'Error')" :span="2">{{ active.error_message }}</a-descriptions-item>
         </a-descriptions>
         <h4>{{ tf('Payload', 'Payload') }}</h4>
         <pre class="log-pre">{{ formatJson(active.payload) }}</pre>
-        <h4>{{ tf('Response_body', 'Response body') }}</h4>
+        <h4>{{ tf('Response_Body', 'Response body') }}</h4>
         <pre class="log-pre">{{ active.response_body || '—' }}</pre>
       </template>
     </a-modal>
@@ -67,9 +67,9 @@ import { t as tf } from '../../i18n';
 const { t } = useI18n();
 const statusFilter = ref('');
 const statusOptions = [
-  { value: '', label: tf('All_statuses', 'All statuses') },
+  { value: '', label: tf('All_Statuses', 'All statuses') },
   { value: 'pending', label: tf('Pending', 'Pending') },
-  { value: 'retrying', label: tf('Retrying', 'Retrying') },
+  { value: 'retrying', label: tf('Status_Retrying', 'Retrying') },
   { value: 'success', label: tf('Success', 'Success') },
   { value: 'failed', label: tf('Failed', 'Failed') },
 ];
@@ -92,6 +92,9 @@ const columns = computed(() => [
   { title: t('Action'), key: 'actions', width: 80, align: 'center' },
 ]);
 
+function statusLabel(s) {
+  return (s && statusOptions.find(o => o.value === s)?.label) || s;
+}
 function statusColor(s) {
   return { success: 'success', failed: 'error', pending: 'default', retrying: 'warning' }[s] || 'default';
 }

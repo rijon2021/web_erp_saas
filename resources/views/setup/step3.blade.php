@@ -7,7 +7,7 @@
 
     <div class="d-block" id="content">
 
-        <p class="eyebrow">Step 4 of 4</p>
+        <p class="eyebrow">Step 5 of 5</p>
         <h1>Review &amp; install</h1>
         <p class="lead-text">These settings will be written to your .env file, then the central database will be prepared and the super admin account created.</p>
 
@@ -15,6 +15,19 @@
             @csrf
 
             <div class="summary-list" id="tochange">
+
+                <div class="form-group">
+                    <div class="row">
+                        <div class="col-12 col-md-5">Licence</div>
+                        <div class="col-12 col-md-7">
+                            @if(session('setup.license'))
+                                Activated on {{ session('setup.license.domain') }} · licence …{{ session('setup.license.hint') }}
+                            @else
+                                Not activated — you can activate later from Super Admin → Settings → Licence
+                            @endif
+                        </div>
+                    </div>
+                </div>
 
                 @if($data['APP_NAME'] != 'old')
                     <div class="form-group">
@@ -97,6 +110,32 @@
                     </div>
                 @endif
 
+            </div>
+
+            <h2 style="margin-top:28px;">Super admin account</h2>
+            <p class="lead-text">This is the super admin login for the central panel. There is no default password — choose your own.</p>
+
+            @if ($errors->any())
+                <div class="alert-banner danger" style="text-align:left;">
+                    <i class="fa fa-exclamation-triangle"></i>
+                    <span>@foreach ($errors->all() as $error){{ $error }}@if (! $loop->last)<br>@endif @endforeach</span>
+                </div>
+            @endif
+
+            <div class="form-grid">
+                <div class="form-group full">
+                    <label for="admin_email">Super admin email</label>
+                    <input type="email" class="form-control" id="admin_email" name="admin_email" value="{{ old('admin_email') }}" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="admin_password">Password</label>
+                    <span class="tip" title="At least 8 characters, with upper and lower case letters, a number and a symbol"><i class="fa fa-question-circle" aria-hidden="true"></i></span>
+                    <input type="password" class="form-control" id="admin_password" name="admin_password" required minlength="8" autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label for="admin_password_confirmation">Confirm password</label>
+                    <input type="password" class="form-control" id="admin_password_confirmation" name="admin_password_confirmation" required minlength="8" autocomplete="new-password">
+                </div>
             </div>
 
             <div class="alert-banner warning" style="margin-top:18px;">

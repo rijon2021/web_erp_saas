@@ -38,14 +38,32 @@ class MrpProductionOrderMaterial extends Model
         return $this->belongsTo(Product::class, 'product_id');
     }
 
+    /** Raw-material batches this line was issued from (FEFO on release). */
+    public function batches()
+    {
+        return $this->hasMany(MrpProductionOrderMaterialBatch::class, 'production_order_material_id');
+    }
+
     /** Issued less anything handed back — the quantity actually consumed. */
     public function qtyConsumed(): float
     {
         return round((float) $this->qty_issued - (float) $this->qty_returned, 6);
     }
 
-    public function shortfall(): float
+    /** Required less what has already been consumed: what still has to leave the store. */
+    public function qtyOutstanding(): float
     {
         return round(max(0, (float) $this->qty_required - $this->qtyConsumed()), 6);
+    }
+
+    /**
+     * How much of the outstanding quantity the warehouse cannot cover.
+     *
+     * Short = required - consumed - on hand, floored at zero. A line that is
+     * fully in stock is not short even though nothing has been issued yet.
+     */
+    public function shortfall(float $onHand): float
+    {
+        return round(max(0, $this->qtyOutstanding() - max(0.0, $onHand)), 6);
     }
 }

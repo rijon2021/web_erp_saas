@@ -18,6 +18,13 @@ class PosSetting extends Model
         'show_paid', 'show_due', 'show_payments', 'show_zatca_qr',
         'cash_drawer_auto_open', 'cash_drawer_printer_name',
         'direct_network_printing', 'network_printer_ip', 'network_printer_port',
+        'require_void_approval',
+        'confirm_zero_price',
+        // Stock quantity shown next to each hit in the POS search dropdown
+        'show_search_stock',
+        // Blank customer signature line under the receipt (any layout)
+        'show_signature_line',
+        'scale_barcode_enabled', 'scale_barcode_formats',
     ];
 
     protected $casts = [
@@ -58,5 +65,8 @@ class PosSetting extends Model
         'cash_drawer_auto_open' => 'boolean',
         'direct_network_printing' => 'boolean',
         'network_printer_port' => 'integer',
+        'require_void_approval' => 'boolean',
+        'scale_barcode_enabled' => 'boolean',
+        'scale_barcode_formats' => 'array',
     ];
 }

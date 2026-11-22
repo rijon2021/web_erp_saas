@@ -43,6 +43,12 @@
             font-family: var(--tenant-font) !important;
         }
     </style>
+@else
+    {{-- Default RTL/Arabic face (theme.css [dir="rtl"] body + App.vue token).
+         The font files are only fetched once RTL text actually uses them. --}}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
 @endif
 <script>
     // Google family name (null when a system stack / no font is selected) and

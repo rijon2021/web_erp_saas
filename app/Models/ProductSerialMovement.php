@@ -19,6 +19,7 @@ class ProductSerialMovement extends Model
     const ACTION_PURCHASE_RETURNED = 'purchase_returned';
     const ACTION_STATUS_CHANGED = 'status_changed';
     const ACTION_ADJUSTED = 'adjusted';
+    const ACTION_TRANSFERRED = 'transferred';
 
     protected $fillable = [
         'product_serial_id', 'serial_number',

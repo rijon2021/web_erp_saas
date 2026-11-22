@@ -59,7 +59,9 @@ class TenantSslcommerzService
             throw new RuntimeException('SSLCommerz is not configured for this tenant.');
         }
 
-        $tranId = 'sslc_' . bin2hex(random_bytes(16));
+        // SSLCommerz caps tran_id at 30 characters: 5-char prefix + 24 hex
+        // (96 bits of entropy) = 29 chars.
+        $tranId = 'sslc_' . bin2hex(random_bytes(12));
 
         $response = Http::asForm()->timeout(30)->post($this->baseUrl() . '/gwprocess/v4/api.php', [
             'store_id'         => $c['store_id'],
@@ -72,9 +74,10 @@ class TenantSslcommerzService
             'cancel_url'       => $cancelUrl,
             'ipn_url'          => $ipnUrl,
             'emi_option'       => 0,
-            'cus_name'         => mb_substr($customer['name'] !== '' ? $customer['name'] : 'Customer', 0, 100),
-            'cus_email'        => mb_substr($customer['email'] !== '' ? $customer['email'] : 'customer@example.com', 0, 100),
-            'cus_add1'         => mb_substr($customer['address'] !== '' ? $customer['address'] : 'N/A', 0, 100),
+            // SSLCommerz field limits: cus_name/cus_email/cus_add1 are 50 chars.
+            'cus_name'         => mb_substr($customer['name'] !== '' ? $customer['name'] : 'Customer', 0, 50),
+            'cus_email'        => mb_substr($customer['email'] !== '' ? $customer['email'] : 'customer@example.com', 0, 50),
+            'cus_add1'         => mb_substr($customer['address'] !== '' ? $customer['address'] : 'N/A', 0, 50),
             'cus_city'         => 'N/A',
             'cus_postcode'     => 'N/A',
             'cus_country'      => 'Bangladesh',

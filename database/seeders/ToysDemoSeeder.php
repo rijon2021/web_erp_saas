@@ -384,7 +384,7 @@ class ToysDemoSeeder extends Seeder
         $s->forceFill([
             'theme' => 'toys',
             'theme_options' => $opts,
-            'store_name' => in_array($s->store_name, [null, '', 'StoreX', 'TechNova', 'LittleJoy', 'HavenHomes', 'FreshMart'], true) ? 'LittleJoy' : $s->store_name,
+            'store_name' => in_array($s->store_name, [null, '', 'StoreX', 'TechNova', 'LittleJoy', 'HavenHomes', 'FreshMart', 'Atelier'], true) ? 'LittleJoy' : $s->store_name,
             'primary_color' => '#7b6fd0',
             'secondary_color' => '#e8557a',
             'topbar_text_left' => 'Welcome Offer! Get 15% OFF on your first order',
@@ -396,7 +396,7 @@ class ToysDemoSeeder extends Seeder
         // in the database but hidden from the storefront.
         if (Schema::hasColumn('products', 'hide_from_online_store')) {
             Product::where('code', 'like', 'TY-%')->update(['hide_from_online_store' => 0]);
-            Product::where('code', 'like', 'EL-%')->orWhere('code', 'like', 'GR-%')->update(['hide_from_online_store' => 1]);
+            Product::where('code', 'like', 'EL-%')->orWhere('code', 'like', 'GR-%')->orWhere('code', 'like', 'FA-%')->update(['hide_from_online_store' => 1]);
         }
 
         if (function_exists('store_url_config_clear')) {

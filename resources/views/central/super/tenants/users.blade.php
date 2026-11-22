@@ -28,9 +28,19 @@
             <p class="page-subtitle mb-0">{{ __('central.ManageUsersForTenant', ['tenant' => $displayName]) }}</p>
         </div>
     </div>
-    <a href="{{ route('super.tenants.show', $tenant) }}" class="btn btn-outline btn-sm">
-        <i class="bi bi-arrow-left"></i> {{ __('central.BackToTenant') }}
-    </a>
+    <div class="d-flex flex-wrap align-items-center gap-2">
+        @unless($error)
+            <form method="POST" action="{{ route('super.tenants.force-logout', $tenant) }}" class="d-inline" data-swal-confirm="{{ json_encode(['title' => __('central.ForceLogoutAllTitle'), 'text' => __('central.ForceLogoutAllText', ['tenant' => $displayName]), 'icon' => 'warning', 'confirmButtonText' => __('central.YesForceLogout'), 'confirmButtonColor' => '#ef4444']) }}">
+                @csrf
+                <button type="submit" class="btn btn-outline btn-sm btn-outline-danger-soft">
+                    <i class="bi bi-box-arrow-right"></i> {{ __('central.ForceLogoutAll') }}
+                </button>
+            </form>
+        @endunless
+        <a href="{{ route('super.tenants.show', $tenant) }}" class="btn btn-outline btn-sm">
+            <i class="bi bi-arrow-left"></i> {{ __('central.BackToTenant') }}
+        </a>
+    </div>
 </div>
 
 @if($error)
@@ -168,6 +178,12 @@
                             @else
                                 <span class="badge badge-cancelled">{{ __('central.Blocked') }}</span>
                             @endif
+                            @php $forcedAt = \App\Support\Security\ForceLogout::revokedAt($user)?->timezone(config('app.timezone')); @endphp
+                            @if($forcedAt)
+                                <div class="text-muted fs-xs3 mt-1" title="{{ $forcedAt->format('M d, Y H:i') }}">
+                                    <i class="bi bi-box-arrow-right"></i> {{ __('central.ForcedLogoutAgo', ['time' => $forcedAt->diffForHumans()]) }}
+                                </div>
+                            @endif
                         </td>
                         <td class="action-cell">
                             @if($user->statut && $tenant->isActive())
@@ -178,6 +194,12 @@
                                     </button>
                                 </form>
                             @endif
+                            <form method="POST" action="{{ route('super.tenants.users.force-logout', [$tenant, $user->id]) }}" class="d-inline" data-swal-confirm="{{ json_encode(['title' => __('central.ForceLogoutUserTitle'), 'text' => __('central.ForceLogoutUserText', ['name' => $user->firstname . ' ' . $user->lastname]), 'icon' => 'warning', 'confirmButtonText' => __('central.YesForceLogout'), 'confirmButtonColor' => '#ef4444']) }}">
+                                @csrf
+                                <button type="submit" class="btn btn-outline btn-sm">
+                                    <i class="bi bi-box-arrow-right"></i> {{ __('central.ForceLogout') }}
+                                </button>
+                            </form>
                             <button type="button"
                                     class="btn btn-outline btn-sm"
                                     data-change-password-url="{{ route('super.tenants.users.password', [$tenant, $user->id]) }}"

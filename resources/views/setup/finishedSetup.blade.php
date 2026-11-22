@@ -8,8 +8,9 @@
             $setupBaseUrl = request()->getSchemeAndHttpHost();
         }
         $superAdminLoginUrl = $superAdminLoginUrl ?? $setupBaseUrl . '/super/login';
-        $superAdminEmail = $superAdminEmail ?? 'superadmin@stockysaas.site';
-        $superAdminPassword = $superAdminPassword ?? '123456';
+        // No default credentials: only the e-mail chosen during the install
+        // is shown (never a password).
+        $superAdminEmail = $superAdminEmail ?? null;
     @endphp
 
     <div class="finish-wrap">
@@ -33,26 +34,27 @@
                 </span>
             </div>
 
-            <div class="credential-row">
-                <span class="credential-label"><i class="fa fa-envelope"></i> Email</span>
-                <span class="credential-value-wrap">
-                    <span class="credential-value" id="val-email">{{ $superAdminEmail }}</span>
-                    <button type="button" class="copy-btn" data-copy-target="val-email" aria-label="Copy email"><i class="fa fa-copy"></i><span>Copy</span></button>
-                </span>
-            </div>
+            @if (! empty($superAdminEmail))
+                <div class="credential-row">
+                    <span class="credential-label"><i class="fa fa-envelope"></i> Email</span>
+                    <span class="credential-value-wrap">
+                        <span class="credential-value" id="val-email">{{ $superAdminEmail }}</span>
+                        <button type="button" class="copy-btn" data-copy-target="val-email" aria-label="Copy email"><i class="fa fa-copy"></i><span>Copy</span></button>
+                    </span>
+                </div>
 
-            <div class="credential-row">
-                <span class="credential-label"><i class="fa fa-lock"></i> Password</span>
-                <span class="credential-value-wrap">
-                    <span class="credential-value" id="val-password">{{ $superAdminPassword }}</span>
-                    <button type="button" class="copy-btn" data-copy-target="val-password" aria-label="Copy password"><i class="fa fa-copy"></i><span>Copy</span></button>
-                </span>
-            </div>
+                <div class="credential-row">
+                    <span class="credential-label"><i class="fa fa-lock"></i> Password</span>
+                    <span class="credential-value-wrap">
+                        <span class="credential-value">The password you chose during installation</span>
+                    </span>
+                </div>
+            @endif
         </div>
 
         <div class="alert-banner warning" style="text-align:left;">
             <i class="fa fa-exclamation-triangle"></i>
-            <span><strong>Important:</strong> change the super admin password right after your first login, and remove the default credentials from your .env file.</span>
+            <span><strong>Tip:</strong> turn on two-factor authentication for the super admin account after your first login, and remove any APP_SUPER_ADMIN_* values from your .env file.</span>
         </div>
 
         <a href="{{ $superAdminLoginUrl }}" class="btn btn-accent">Go to super admin login <i class="fa fa-arrow-right"></i></a>

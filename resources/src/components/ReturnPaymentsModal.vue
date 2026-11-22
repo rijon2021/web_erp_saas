@@ -9,7 +9,9 @@
     <a-table :columns="columns" :data-source="payments" :pagination="false" row-key="id" size="small" :scroll="{ x: 'max-content' }">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'montant'">{{ money(record.montant) }}</template>
-        <template v-else-if="column.key === 'method'">{{ record.payment_method?.name || '---' }}</template>
+        <template v-else-if="column.key === 'method'">
+          {{ record.wallet_transaction_id ? $t('Supplier_Wallet') : (record.payment_method?.name || '---') }}
+        </template>
         <template v-else-if="column.key === 'actions'">
           <a-space>
             <a-tooltip :title="$t('DownloadPdf')">

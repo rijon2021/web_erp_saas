@@ -14,9 +14,18 @@ class PermissionsSeeder extends Seeder
      */
     public function run()
     {
-        // Insert some stuff
-        DB::table('permissions')->insert(
-            [[
+        DB::table('permissions')->insertOrIgnore(self::rows());
+    }
+
+    /**
+     * Every tenant permission (id + slug). The platform updater
+     * (App\Services\Updater\PlatformUpgradeTasks) creates any slug missing from
+     * an existing tenant from this same list, so a new permission only ever
+     * needs adding here.
+     */
+    public static function rows(): array
+    {
+        return [[
                 'id' => 1,
                 'name' => 'users_view',
             ],
@@ -1364,7 +1373,199 @@ class PermissionsSeeder extends Seeder
                     'name' => 'business_modules',
                 ],
 
-            ]
-        );
+                // Accounting V2 → Reconciliation (operational balances vs GL)
+                [
+                    'id' => 313,
+                    'name' => 'accounting_reconciliation',
+                ],
+
+                // Products → restrictions (ticking them TAKES AWAY access).
+                // Never attached to role 1: PermissionRoleSeeder skips them and
+                // the updaters exclude them from the owner's grant-all.
+                [
+                    'id' => 314,
+                    'name' => 'hide_product_cost',
+                ],
+                [
+                    'id' => 315,
+                    'name' => 'disable_product_export',
+                ],
+
+                // Online Store → one permission per submenu
+                ['id' => 316, 'name' => 'store_visit'],
+                ['id' => 317, 'name' => 'store_invite_codes'],
+                ['id' => 318, 'name' => 'store_pending_customers'],
+                ['id' => 319, 'name' => 'store_customers_without_login'],
+                ['id' => 320, 'name' => 'store_customers_with_login'],
+                ['id' => 321, 'name' => 'store_shipping_methods'],
+                ['id' => 322, 'name' => 'store_tax_rates'],
+                ['id' => 323, 'name' => 'store_coupons'],
+                ['id' => 324, 'name' => 'store_flash_sales'],
+                ['id' => 325, 'name' => 'store_reviews'],
+                ['id' => 326, 'name' => 'store_popups'],
+                ['id' => 327, 'name' => 'store_quote_requests'],
+                ['id' => 328, 'name' => 'store_returns'],
+                ['id' => 329, 'name' => 'store_pages'],
+                ['id' => 330, 'name' => 'store_menus'],
+
+                // Courier integration
+                ['id' => 331, 'name' => 'courier_settings'],
+                ['id' => 332, 'name' => 'courier_book'],
+                ['id' => 333, 'name' => 'courier_shipments'],
+                ['id' => 334, 'name' => 'courier_reports'],
+
+                // Rental Management
+                ['id' => 335, 'name' => 'rnt_dashboard'],
+                ['id' => 336, 'name' => 'rnt_items_view'],
+                ['id' => 337, 'name' => 'rnt_items_add'],
+                ['id' => 338, 'name' => 'rnt_items_edit'],
+                ['id' => 339, 'name' => 'rnt_items_delete'],
+                ['id' => 340, 'name' => 'rnt_categories'],
+                ['id' => 341, 'name' => 'rnt_settings'],
+                ['id' => 342, 'name' => 'rnt_customers_view'],
+                ['id' => 343, 'name' => 'rnt_customers_add'],
+                ['id' => 344, 'name' => 'rnt_customers_edit'],
+                ['id' => 345, 'name' => 'rnt_customers_delete'],
+                ['id' => 346, 'name' => 'rnt_contracts_view'],
+                ['id' => 347, 'name' => 'rnt_contracts_add'],
+                ['id' => 348, 'name' => 'rnt_contracts_edit'],
+                ['id' => 349, 'name' => 'rnt_contracts_delete'],
+                ['id' => 350, 'name' => 'rnt_availability'],
+                ['id' => 351, 'name' => 'rnt_reservations_view'],
+                ['id' => 352, 'name' => 'rnt_reservations_add'],
+                ['id' => 353, 'name' => 'rnt_reservations_edit'],
+                ['id' => 354, 'name' => 'rnt_reservations_delete'],
+                ['id' => 355, 'name' => 'rnt_billing_view'],
+                ['id' => 356, 'name' => 'rnt_payments_add'],
+                ['id' => 357, 'name' => 'rnt_billing_manage'],
+                ['id' => 358, 'name' => 'rnt_payments_delete'],
+                ['id' => 359, 'name' => 'rnt_handover'],
+                ['id' => 360, 'name' => 'rnt_deposits'],
+                ['id' => 361, 'name' => 'rnt_maintenance'],
+                ['id' => 362, 'name' => 'rnt_expenses'],
+                ['id' => 363, 'name' => 'rnt_reports'],
+                ['id' => 364, 'name' => 'rnt_reminders'],
+
+                // CRM: Leads & Sales Pipeline
+                ['id' => 365, 'name' => 'crm_dashboard'],
+                ['id' => 366, 'name' => 'crm_leads_view'],
+                ['id' => 367, 'name' => 'crm_leads_add'],
+                ['id' => 368, 'name' => 'crm_leads_edit'],
+                ['id' => 369, 'name' => 'crm_leads_delete'],
+                ['id' => 370, 'name' => 'crm_view_all'],
+                ['id' => 371, 'name' => 'crm_import_export'],
+                ['id' => 372, 'name' => 'crm_settings'],
+                ['id' => 373, 'name' => 'crm_deals_view'],
+                ['id' => 374, 'name' => 'crm_deals_add'],
+                ['id' => 375, 'name' => 'crm_deals_edit'],
+                ['id' => 376, 'name' => 'crm_deals_delete'],
+                ['id' => 377, 'name' => 'crm_activities_view'],
+                ['id' => 378, 'name' => 'crm_activities_add'],
+                ['id' => 379, 'name' => 'crm_activities_edit'],
+                ['id' => 380, 'name' => 'crm_activities_delete'],
+                ['id' => 381, 'name' => 'crm_customers_view'],
+                ['id' => 382, 'name' => 'crm_contacts_manage'],
+                ['id' => 383, 'name' => 'crm_messages'],
+                ['id' => 384, 'name' => 'crm_web_forms'],
+                ['id' => 385, 'name' => 'crm_reports'],
+                ['id' => 386, 'name' => 'crm_targets'],
+
+                // Sales > Offline Sales
+                ['id' => 387, 'name' => 'pos_offline_sales'],
+
+                // Asset Management lifecycle
+                ['id' => 388, 'name' => 'asset_assignments'],
+                ['id' => 389, 'name' => 'asset_maintenance'],
+                ['id' => 390, 'name' => 'asset_transfers'],
+                ['id' => 391, 'name' => 'asset_reports'],
+
+                // Settings > Audit Log
+                ['id' => 392, 'name' => 'audit_log'],
+
+                // E-Invoicing: Angola AGT + DR Congo DGI
+                ['id' => 393, 'name' => 'agt_settings'],
+                ['id' => 394, 'name' => 'dgi_settings'],
+
+                // Client Portal section (accounts / invitations, settings + languages)
+                ['id' => 395, 'name' => 'portal_accounts'],
+                ['id' => 396, 'name' => 'portal_settings'],
+
+                // Products: size guides (size charts)
+                ['id' => 397, 'name' => 'size_guides'],
+
+                // Online Store: Car Dealership theme leads
+                ['id' => 398, 'name' => 'store_vehicle_leads'],
+
+                // Restaurant Management (plan feature `restaurant`)
+                ['id' => 399, 'name' => 'rst_dashboard'],
+                ['id' => 400, 'name' => 'rst_floor'],
+                ['id' => 401, 'name' => 'rst_orders_take'],
+                ['id' => 402, 'name' => 'rst_orders_void'],
+                ['id' => 403, 'name' => 'rst_discounts'],
+                ['id' => 404, 'name' => 'rst_billing'],
+                ['id' => 405, 'name' => 'rst_menu'],
+                ['id' => 406, 'name' => 'rst_reservations'],
+                ['id' => 407, 'name' => 'rst_reports'],
+                ['id' => 408, 'name' => 'rst_setup'],
+                ['id' => 409, 'name' => 'rst_settings'],
+                ['id' => 410, 'name' => 'rst_kitchen'],
+
+                // Booking Management upgrade (plan feature `bookings`)
+                ['id' => 411, 'name' => 'bookings_settings'],
+                ['id' => 412, 'name' => 'bookings_services'],
+                ['id' => 413, 'name' => 'bookings_staff'],
+                ['id' => 414, 'name' => 'bookings_reports'],
+
+                // AI Assistant (plan feature `ai_assistant`)
+                ['id' => 415, 'name' => 'ai_assistant'],
+                ['id' => 416, 'name' => 'ai_settings'],
+
+                // Printful print-on-demand (plan feature `printful`)
+                ['id' => 417, 'name' => 'printful_settings'],
+
+                // POS: remove items without approval / approve with a PIN (plan feature `pos`)
+                ['id' => 418, 'name' => 'pos_void_items'],
+
+                // POS Devices: card terminals / fiscal registers (plan feature `pos_terminals`)
+                ['id' => 419, 'name' => 'pos_terminals_manage'],
+                ['id' => 420, 'name' => 'pos_terminals_transactions'],
+
+                // REST API keys: Settings > API (plan feature `api`)
+                ['id' => 421, 'name' => 'api_keys'],
+
+                // Reports > Due Collection: payments collected against outstanding sales
+                ['id' => 422, 'name' => 'due_collection_report'],
+
+                // Settings > Custom Domain: tenant-owned domains (plan feature custom_domains)
+                ['id' => 423, 'name' => 'custom_domains'],
+
+                // Integrations > OpenCart (plan feature `opencart`)
+                ['id' => 424, 'name' => 'opencart_settings'],
+
+                // People > Supplier Wallets (plan feature `supplier_wallet`):
+                // view balances/ledger, and move money (top-up, refund, adjust, freeze)
+                ['id' => 425, 'name' => 'supplier_wallet_view'],
+                ['id' => 426, 'name' => 'supplier_wallet_manage'],
+
+                // People > Customer Wallets (plan feature `customer_wallet`):
+                // view balances/ledger/withdrawals; move money, settings and
+                // withdrawals; issue and redeem gift cards
+                ['id' => 427, 'name' => 'customer_wallet_view'],
+                ['id' => 428, 'name' => 'customer_wallet_manage'],
+                ['id' => 429, 'name' => 'gift_cards_manage'],
+
+                // Reports > POS Sales: sales by seller / transfer / cash
+                ['id' => 430, 'name' => 'pos_sales_report'],
+
+                // Products > License Keys (plan feature `license_keys`): view
+                // keys/licenses; add/import/restock/write off/issue/resend +
+                // settings; extend/suspend/revoke/reset activations; reveal +
+                // export full keys
+                ['id' => 431, 'name' => 'license_keys_view'],
+                ['id' => 432, 'name' => 'license_keys_manage'],
+                ['id' => 433, 'name' => 'license_keys_control'],
+                ['id' => 434, 'name' => 'license_keys_reveal'],
+
+            ];
     }
 }

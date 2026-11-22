@@ -11,6 +11,8 @@
 
 import dayjs from 'dayjs';
 import { useAuthStore } from '../stores/auth';
+import { t as tf } from '../i18n';
+import { stripBidiIsolates } from './priceFormat';
 
 /**
  * Global export defaults (System Settings → Export tab), stored in
@@ -40,6 +42,11 @@ function valueOf(col, row) {
     const v = key ? row[key] : '';
     if (v === null || v === undefined) return '';
     return typeof v === 'object' ? JSON.stringify(v) : v;
+}
+
+// Spreadsheet cell: strings lose the currency bidi marks, numbers stay numbers.
+function exportCell(v) {
+    return typeof v === 'string' ? stripBidiIsolates(v) : v;
 }
 
 /** Columns that can't produce text (action buttons, images) are skipped. */
@@ -132,7 +139,7 @@ const PDF_FONT = 'Vazirmatn';
 const PDF_FONT_URL = '/fonts/Vazirmatn-Bold.ttf';
 const RTL_LOCALES = ['ar', 'fa', 'ur', 'he'];
 
-function usePdfFont(doc) {
+export function usePdfFont(doc) {
     try {
         // Only the Bold weight ships with the app, so both styles map to it.
         doc.addFont(PDF_FONT_URL, PDF_FONT, 'normal');
@@ -146,7 +153,7 @@ function usePdfFont(doc) {
 }
 
 /** RTL layout follows the admin's language, as the legacy export did. */
-function isRtlUi() {
+export function isRtlUi() {
     if (typeof document === 'undefined') return false;
     if (document.documentElement.dir === 'rtl') return true;
     return RTL_LOCALES.includes(String(document.documentElement.lang || '').slice(0, 2));
@@ -157,8 +164,8 @@ export async function exportExcel(filename, columns, rows, { foot = null } = {})
     const cols = exportable(columns);
     const data = [
         cols.map(headerOf),
-        ...rows.map(r => cols.map(c => valueOf(c, r))),
-        ...(foot ? [foot] : []),
+        ...rows.map(r => cols.map(c => exportCell(valueOf(c, r)))),
+        ...(foot ? [foot.map(exportCell)] : []),
     ];
     const ws = XLSX.utils.aoa_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -202,14 +209,14 @@ export async function exportPdf(title, columns, rows, { landscape = null, foot =
 
     autoTable(doc, {
         head: [cols.map(headerOf)],
-        body: rows.map(r => cols.map(c => String(valueOf(c, r)))),
+        body: rows.map(r => cols.map(c => stripBidiIsolates(valueOf(c, r)))),
         startY,
         // autoTable would otherwise fall back to helvetica per cell and lose the
         // Arabic glyphs, whatever font the doc itself is set to.
         styles: { fontSize: 8, font, halign: rtl ? 'right' : 'left' },
         headStyles: { fillColor: [109, 40, 217], font, fontStyle: 'bold' }, // brand purple
         ...(foot ? {
-            foot: [foot.map(v => String(v))],
+            foot: [foot.map(stripBidiIsolates)],
             footStyles: { fillColor: [240, 240, 240], textColor: 20, fontStyle: 'bold', font },
             showFoot: 'lastPage', // grand total once, at the end
         } : {}),
@@ -231,7 +238,7 @@ export function printRows(title, columns, rows, { subtitle = [], landscape = tru
     // the click handler) and pass it here, so pop-up blockers don't kill it.
     const w = win || window.open('', '_blank');
     if (!w) {
-        window.alert('Please allow popups to print');
+        window.alert(tf('Allow_Popups_To_Print', 'Please allow popups to print'));
         return;
     }
     // RTL content needs dir="rtl" here too, not just on the PDF path.

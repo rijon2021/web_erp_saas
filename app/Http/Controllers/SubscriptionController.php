@@ -132,7 +132,9 @@ class SubscriptionController extends BaseController
 
         // Check if next billing date is today, generate invoice immediately
         if (Carbon::parse($subscription->next_billing_date)->isToday()) {
-            $subscription->generateInvoice();
+            $invoice = $subscription->generateInvoice();
+            // Software License products (this path takes no stock itself).
+            \App\Services\LicenseKeys\LicenseSubscriptions::afterInvoice($subscription, $invoice, false);
         }
 
         return response()->json([

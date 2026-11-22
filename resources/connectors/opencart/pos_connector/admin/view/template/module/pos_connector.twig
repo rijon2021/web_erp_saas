@@ -1,0 +1,71 @@
+{{ header }}{{ column_left }}
+<div id="content">
+  <div class="page-header">
+    <div class="container-fluid">
+      <div class="float-end">
+        <button type="submit" form="form-module" data-bs-toggle="tooltip" title="{{ button_save }}" class="btn btn-primary"><i class="fa-solid fa-floppy-disk"></i></button>
+        <a href="{{ back }}" data-bs-toggle="tooltip" title="{{ button_back }}" class="btn btn-light"><i class="fa-solid fa-reply"></i></a>
+      </div>
+      <h1>{{ heading_title }}</h1>
+      <ol class="breadcrumb">
+        {% for breadcrumb in breadcrumbs %}
+          <li class="breadcrumb-item"><a href="{{ breadcrumb.href }}">{{ breadcrumb.text }}</a></li>
+        {% endfor %}
+      </ol>
+    </div>
+  </div>
+  <div class="container-fluid">
+    <div class="card">
+      <div class="card-header"><i class="fa-solid fa-pencil"></i> {{ text_edit }}</div>
+      <div class="card-body">
+        <p>{{ text_help }}</p>
+        <form id="form-module" action="{{ save }}" method="post" data-oc-toggle="ajax">
+          <div class="row mb-3">
+            <label class="col-sm-2 col-form-label">{{ entry_store_url }}</label>
+            <div class="col-sm-10">
+              <input type="text" value="{{ store_url }}" class="form-control" readonly>
+            </div>
+          </div>
+          <div class="row mb-3">
+            <label class="col-sm-2 col-form-label">{{ entry_secret }}</label>
+            <div class="col-sm-10">
+              <div class="input-group">
+                <input type="text" id="input-secret" value="{{ secret }}" class="form-control" readonly>
+                <button type="button" id="button-regenerate" class="btn btn-warning">{{ button_regenerate }}</button>
+              </div>
+            </div>
+          </div>
+          <div class="row mb-3">
+            <label class="col-sm-2 col-form-label">{{ entry_webhook }}</label>
+            <div class="col-sm-10">
+              <input type="text" value="{{ webhook_url ?: text_not_connected }}" class="form-control" readonly>
+            </div>
+          </div>
+          <div class="row mb-3">
+            <label class="col-sm-2 col-form-label">{{ entry_status }}</label>
+            <div class="col-sm-10">
+              <div class="form-check form-switch form-switch-lg">
+                <input type="hidden" name="module_pos_connector_status" value="0">
+                <input type="checkbox" name="module_pos_connector_status" value="1" id="input-status" class="form-check-input"{% if module_pos_connector_status %} checked{% endif %}>
+              </div>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+<script type="text/javascript"><!--
+$('#button-regenerate').on('click', function () {
+    $.post('{{ regenerate|replace({'&amp;': '&'}) }}', function (json) {
+        if (json['secret']) {
+            $('#input-secret').val(json['secret']);
+        }
+
+        if (json['error'] || json['success']) {
+            $('#alert').prepend('<div class="alert alert-' + (json['error'] ? 'danger' : 'success') + ' alert-dismissible"><i class="fa-solid fa-circle-check"></i> ' + (json['error'] || json['success']) + ' <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>');
+        }
+    }, 'json');
+});
+//--></script>
+{{ footer }}

@@ -1,9 +1,14 @@
 <template>
   <div class="page">
-    <PageHeader title="FBR Digital Invoicing (Pakistan)" :breadcrumb="[$t('Settings'), 'FBR E-Invoicing']" />
+    <PageHeader :title="$t('Fbr_Page_Title')" :breadcrumb="[$t('Settings'), $t('FBR_Settings')]" />
 
     <a-skeleton v-if="loading" active :paragraph="{ rows: 10 }" />
     <a-card v-else size="small">
+      <a-alert
+        v-if="!platformEnabled"
+        type="error" show-icon style="margin-bottom: 12px"
+        :message="tf('Einvoice_Platform_Off', 'This integration is temporarily disabled by the platform administrator. Invoices are not transmitted until it is switched back on.')"
+      />
       <a-tabs v-model:activeKey="tab" @change="onTab">
         <!-- ======================= Configuration ======================= -->
         <a-tab-pane key="config" :tab="tf('Configuration', 'Configuration')">
@@ -31,9 +36,9 @@
               <a-col :xs="24" :md="12">
                 <a-form-item
                   :label="tf('Security_Token_Bearer', 'Security Token (Bearer)')"
-                  :extra="form.has_token ? `A token is saved (••••${form.token_last4 || ''}). Leave blank to keep it.` : 'Obtain the token from the PRAL / IRIS e-invoicing portal.'"
+                  :extra="form.has_token ? $t('Fbr_Token_Saved', { last4: form.token_last4 || '' }) : $t('Fbr_Token_Obtain')"
                 >
-                  <a-input-password v-model:value="bearerToken" autocomplete="new-password" placeholder="Paste the token from the PRAL / IRIS e-invoicing portal" />
+                  <a-input-password v-model:value="bearerToken" autocomplete="new-password" :placeholder="$t('Fbr_Token_Placeholder')" />
                 </a-form-item>
               </a-col>
               <a-col v-if="form.environment === 'sandbox'" :xs="24" :md="12">
@@ -123,27 +128,30 @@
         <!-- ======================= Guide ======================= -->
         <a-tab-pane key="guide" :tab="tf('Guide', 'Guide')">
           <a-typography>
-            <h3>What is FBR Digital Invoicing?</h3>
-            <p>
-              Under SRO 69(I)/2025, the Federal Board of Revenue (Pakistan) requires integrated businesses to report
-              sales invoices electronically in real time through the PRAL Digital Invoicing (DI) API. Each accepted sale
-              receives an official FBR invoice number, and receipts must display that number together with a
-              verification QR code.
-            </p>
-            <h3>Steps to go live</h3>
+            <h3>{{ $t('Fbr_Guide_What_Title') }}</h3>
+            <p>{{ $t('Fbr_Guide_What_Body') }}</p>
+            <h3>{{ $t('Fbr_Guide_Steps_Title') }}</h3>
             <ol>
-              <li>Register on the FBR IRIS e-invoicing portal and obtain a <strong>sandbox</strong> security token.</li>
-              <li>Configure your seller profile on the Configuration tab (NTN/CNIC, business name, province, address), paste the token, and enable the integration with the environment set to <strong>sandbox</strong>.</li>
-              <li>Make test sales covering the scenario(s) FBR assigned to you (pick the scenario in the Sandbox Scenario field). Check the Documents tab to confirm they come back <a-tag color="success">valid</a-tag>.</li>
-              <li>Once FBR approves your sandbox testing, obtain the <strong>production</strong> token from the portal, paste it here, and switch the environment to <strong>production</strong>.</li>
-              <li>Receipts automatically show the FBR invoice number and QR code once a sale is accepted — no extra steps needed at the point of sale.</li>
+              <i18n-t keypath="Fbr_Guide_Step_1" tag="li">
+                <template #sandbox><strong>{{ $t('Fbr_Sandbox_Lower') }}</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Fbr_Guide_Step_2" tag="li">
+                <template #sandbox><strong>{{ $t('Fbr_Sandbox_Lower') }}</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Fbr_Guide_Step_3" tag="li">
+                <template #valid><a-tag color="success">valid</a-tag></template>
+              </i18n-t>
+              <i18n-t keypath="Fbr_Guide_Step_4" tag="li">
+                <template #production><strong>{{ $t('Fbr_Production_Lower') }}</strong></template>
+              </i18n-t>
+              <li>{{ $t('Fbr_Guide_Step_5') }}</li>
             </ol>
-            <h3>Good to know</h3>
+            <h3>{{ $t('Cr_Guide_Good_To_Know') }}</h3>
             <ul>
-              <li>Set HS codes per product on the product form (field "HS Code"). The Default HS Code configured here is only used for products without one.</li>
-              <li>Unregistered walk-in customers are reported to FBR as "Unregistered".</li>
-              <li>Registered buyers need their NTN entered in the customer's Tax Number field so they are reported as registered.</li>
-              <li>Failed or invalid submissions can be retried from the Documents tab after fixing the cause; the Logs tab shows the raw API exchanges for troubleshooting.</li>
+              <li>{{ $t('Fbr_Guide_Note_1') }}</li>
+              <li>{{ $t('Fbr_Guide_Note_2') }}</li>
+              <li>{{ $t('Fbr_Guide_Note_3') }}</li>
+              <li>{{ $t('Fbr_Guide_Note_4') }}</li>
             </ul>
           </a-typography>
         </a-tab-pane>
@@ -176,6 +184,7 @@ const busy = ref(false);
 const tab = ref('config');
 const bearerToken = ref('');
 const company = ref({ name: '', address: '' });
+const platformEnabled = ref(true);
 const form = ref({
   enabled: false, auto_submit: true, environment: 'sandbox', has_token: false, token_last4: null,
   seller_ntn_cnic: '', seller_business_name: '', seller_province: '', seller_address: '',
@@ -193,15 +202,15 @@ const documents = ref({ data: [], total: 0, last_page: 1, current_page: 1 });
 const docPage = ref(1);
 const docStatus = ref('');
 const docsLoading = ref(false);
-const docStatusOptions = [
-  { value: '', label: tf('All_statuses', 'All statuses') },
-  { value: 'valid', label: 'Valid' }, { value: 'invalid', label: 'Invalid' },
-  { value: 'error', label: 'Error' }, { value: 'pending', label: 'Pending' },
-];
+const docStatusOptions = computed(() => [
+  { value: '', label: tf('All_Statuses', 'All statuses') },
+  { value: 'valid', label: t('Valid') }, { value: 'invalid', label: t('Invalid') },
+  { value: 'error', label: t('Webhook_Error') }, { value: 'pending', label: t('Pending') },
+]);
 const docColumns = computed(() => [
   { title: '#', dataIndex: 'id', key: 'id', width: 70 },
-  { title: 'Ref', dataIndex: 'invoice_ref', key: 'invoice_ref' },
-  { title: 'FBR Invoice No', dataIndex: 'fbr_invoice_number', key: 'fbr_invoice_number' },
+  { title: t('Reference'), dataIndex: 'invoice_ref', key: 'invoice_ref' },
+  { title: t('Fbr_Invoice_No'), dataIndex: 'fbr_invoice_number', key: 'fbr_invoice_number' },
   { title: tf('Environment', 'Environment'), key: 'environment', width: 120 },
   { title: t('Status'), key: 'status', width: 100 },
   { title: tf('Error', 'Error'), key: 'error' },
@@ -217,7 +226,7 @@ const logColumns = computed(() => [
   { title: t('date'), dataIndex: 'created_at', key: 'created_at', width: 160 },
   { title: t('Action'), dataIndex: 'action', key: 'action', width: 140 },
   { title: 'HTTP', key: 'http_status', width: 80 },
-  { title: 'Endpoint', dataIndex: 'endpoint', key: 'endpoint' },
+  { title: t('Endpoint'), dataIndex: 'endpoint', key: 'endpoint' },
   { title: tf('Response', 'Response'), key: 'response_body' },
 ]);
 
@@ -230,11 +239,12 @@ async function load() {
     const data = await http.get('fbr/settings');
     Object.assign(form.value, data.settings || {});
     company.value = data.company || company.value;
+    platformEnabled.value = data.platform_enabled !== false;
     environmentOptions.value = data.environments || [];
     scenarioOptions.value = data.scenarios || [];
     provinceOptions.value = data.provinces || [];
   } catch (e) {
-    message.error(e?.data?.message || 'Failed loading FBR settings');
+    message.error(e?.data?.message || t('Fbr_Load_Failed'));
   } finally {
     loading.value = false;
   }
@@ -249,7 +259,7 @@ async function save() {
     bearerToken.value = '';
     message.success(t('Successfully_Updated'));
   } catch (e) {
-    message.error(e?.data?.message || 'Save failed');
+    message.error(e?.data?.message || t('Fbr_Save_Failed'));
   } finally {
     busy.value = false;
   }
@@ -258,9 +268,9 @@ async function testConnection() {
   busy.value = true;
   try {
     const data = await http.post('fbr/test-connection', {});
-    (data.success ? message.success : message.warning)(data.message || (data.success ? 'Connection OK' : 'Connection failed'));
+    (data.success ? message.success : message.warning)(data.message || (data.success ? t('Fbr_Connection_Ok') : t('Connection_failed')));
   } catch (e) {
-    message.error(e?.data?.message || 'Connection test failed');
+    message.error(e?.data?.message || t('Fbr_Connection_Test_Failed'));
   } finally {
     busy.value = false;
   }
@@ -271,7 +281,7 @@ async function loadDocuments(page) {
   try {
     documents.value = await http.get('fbr/documents', { limit: 20, page: docPage.value, status: docStatus.value || undefined });
   } catch (e) {
-    message.error('Failed loading documents');
+    message.error(t('Fbr_Docs_Load_Failed'));
   } finally {
     docsLoading.value = false;
   }
@@ -280,11 +290,11 @@ async function retry(doc) {
   busy.value = true;
   try {
     const data = await http.post(`fbr/sales/${doc.source_id}/submit`, {});
-    if (data.success) message.success('Status: ' + data.status + (data.fbr_invoice_number ? ' — ' + data.fbr_invoice_number : ''));
-    else message.warning(data.error || ('Status: ' + data.status));
+    if (data.success) message.success(t('Fbr_Status_Msg', { status: data.status }) + (data.fbr_invoice_number ? ' — ' + data.fbr_invoice_number : ''));
+    else message.warning(data.error || t('Fbr_Status_Msg', { status: data.status }));
     loadDocuments(docPage.value);
   } catch (e) {
-    message.error(e?.data?.message || 'Retry failed');
+    message.error(e?.data?.message || t('Zatca_Retry_Failed'));
   } finally {
     busy.value = false;
   }
@@ -294,7 +304,7 @@ async function loadLogs() {
   try {
     logs.value = (await http.get('fbr/logs', { limit: 50 })) || [];
   } catch (e) {
-    message.error('Failed loading logs');
+    message.error(t('Fbr_Logs_Load_Failed'));
   } finally {
     logsLoading.value = false;
   }

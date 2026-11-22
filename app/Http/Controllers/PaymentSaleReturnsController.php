@@ -11,6 +11,8 @@ use App\Models\Role;
 use App\Models\SaleReturn;
 use App\Models\Setting;
 use App\Models\sms_gateway;
+use App\Services\CustomerWallet\CustomerWalletService;
+use App\Services\SupplierWallet\WalletException;
 use App\utils\helpers;
 use ArPHP\I18N\Arabic;
 use Carbon\Carbon;
@@ -127,6 +129,7 @@ class PaymentSaleReturnsController extends BaseController
             $item['sale_return_id'] = $Payment['SaleReturn']->id;
             $item['client_name'] = $Payment['SaleReturn']['client']?->name ?? '---';
             $item['payment_method'] = $Payment['payment_method']?->name ?? '---';
+            $item['wallet_transaction_id'] = $Payment->wallet_transaction_id ?? null;
             $item['montant'] = $Payment->montant;
             $item['account_name'] = $Payment['account'] ? $Payment['account']->account_name : '---';
             $item['user_name'] = $Payment['user'] ? $Payment['user']->username : '---';
@@ -155,8 +158,18 @@ class PaymentSaleReturnsController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'create', PaymentSaleReturns::class);
 
+        // Customer-wallet tender: the refund is credited to the customer's
+        // wallet instead of leaving a cash account.
+        $wallets = app(CustomerWalletService::class);
+        $toWallet = $wallets->isWalletMethod($request['payment_method_id']);
+
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $toWallet ? 'nullable' : $this->paymentAccountRule()]);
+
         if ($request['montant'] > 0) {
-            \DB::transaction(function () use ($request) {
+            try {
+            \DB::transaction(function () use ($request, $wallets, $toWallet) {
                 $user = Auth::user();
                 // New way: Check user's record_view field (user-level boolean)
                 // Backward compatibility: If record_view is null, fall back to role permission check
@@ -184,26 +197,32 @@ class PaymentSaleReturnsController extends BaseController
                     $payment_statut = 'unpaid';
                 }
 
+                $ref = $this->getNumberOrder();
+                $walletTxId = null;
+                if ($toWallet) {
+                    $walletTxId = $wallets->creditFromReturn((int) $SaleReturn->client_id, (float) $request['montant'], [
+                        'reference_type' => SaleReturn::class,
+                        'reference_id' => $SaleReturn->id,
+                        'note' => 'Sale return '.$SaleReturn->Ref.' · '.$ref,
+                        'date' => $request['date'],
+                        'user_id' => Auth::id(),
+                    ])->id;
+                }
+
                 PaymentSaleReturns::create([
                     'sale_return_id' => $request['sale_return_id'],
-                    'account_id' => $request['account_id'] ? $request['account_id'] : null,
-                    'Ref' => $this->getNumberOrder(),
+                    'account_id' => (! $toWallet && $request['account_id']) ? $request['account_id'] : null,
+                    'Ref' => $ref,
                     'date' => $request['date'],
                     'payment_method_id' => $request['payment_method_id'],
                     'montant' => $request['montant'],
-                    'change' => $request['change'],
+                    'change' => $toWallet ? 0 : $request['change'],
                     'notes' => $request['notes'],
                     'user_id' => Auth::user()->id,
-                ]);
+                ] + CustomerWalletService::txColumn($walletTxId));
 
-                $account = Account::where('id', $request['account_id'])->exists();
-
-                if ($account) {
-                    // Account exists, perform the update
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance - $request['montant'],
-                    ]);
+                if (! $toWallet) {
+                    Account::adjustBalance($request['account_id'], -$request['montant']);
                 }
 
                 $SaleReturn->update([
@@ -212,6 +231,9 @@ class PaymentSaleReturnsController extends BaseController
                 ]);
 
             }, 10);
+            } catch (WalletException $e) {
+                return $e->toResponse();
+            }
         }
 
         return response()->json(['success' => true, 'message' => 'Payment Create successfully'], 200);
@@ -232,7 +254,15 @@ class PaymentSaleReturnsController extends BaseController
 
         $this->authorizeForUser($request->user('api'), 'update', PaymentSaleReturns::class);
 
-        \DB::transaction(function () use ($id, $request) {
+        $wallets = app(CustomerWalletService::class);
+        $toWallet = $wallets->isWalletMethod($request['payment_method_id']);
+
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $toWallet ? 'nullable' : $this->paymentAccountRule()]);
+
+        try {
+        \DB::transaction(function () use ($id, $request, $wallets, $toWallet) {
             $user = Auth::user();
             // New way: Check user's record_view field (user-level boolean)
             // Backward compatibility: If record_view is null, fall back to role permission check
@@ -262,35 +292,37 @@ class PaymentSaleReturnsController extends BaseController
                 $payment_statut = 'unpaid';
             }
 
-            // delete old balance
-            $account = Account::where('id', $payment->account_id)->exists();
+            // delete old balance (a wallet credit is taken back out of the wallet)
+            $hadWallet = ! empty($payment->wallet_transaction_id);
+            if ($hadWallet) {
+                $wallets->reversePayment($payment, 'Return payment', ['note' => 'Return payment '.$payment->Ref.' edited']);
+            } else {
+                Account::adjustBalance($payment->account_id, $payment->montant);
+            }
 
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance + $payment->montant,
-                ]);
+            $walletTxId = null;
+            if ($toWallet && (float) $request['montant'] > 0) {
+                $walletTxId = $wallets->creditFromReturn((int) $SaleReturn->client_id, (float) $request['montant'], [
+                    'reference_type' => SaleReturn::class,
+                    'reference_id' => $SaleReturn->id,
+                    'note' => 'Sale return '.$SaleReturn->Ref.' · '.$payment->Ref,
+                    'date' => $request['date'],
+                    'user_id' => Auth::id(),
+                ])->id;
             }
 
             $payment->update([
                 'date' => $request['date'],
-                'account_id' => $request['account_id'] ? $request['account_id'] : null,
+                'account_id' => (! $toWallet && $request['account_id']) ? $request['account_id'] : null,
                 'payment_method_id' => $request['payment_method_id'],
                 'montant' => $request['montant'],
-                'change' => $request['change'],
+                'change' => $toWallet ? 0 : $request['change'],
                 'notes' => $request['notes'],
-            ]);
+            ] + (($hadWallet || $walletTxId) ? ['wallet_transaction_id' => $walletTxId] : []));
 
             // update new account
-            $new_account = Account::where('id', $request['account_id'])->exists();
-
-            if ($new_account) {
-                // Account exists, perform the update
-                $new_account = Account::find($request['account_id']);
-                $new_account->update([
-                    'balance' => $new_account->balance - $request['montant'],
-                ]);
+            if (! $toWallet) {
+                Account::adjustBalance($request['account_id'], -$request['montant']);
             }
 
             $SaleReturn->update([
@@ -299,6 +331,9 @@ class PaymentSaleReturnsController extends BaseController
             ]);
 
         }, 10);
+        } catch (WalletException $e) {
+            return $e->toResponse();
+        }
 
         return response()->json(['success' => true, 'message' => 'Payment Update successfully'], 200);
     }
@@ -342,14 +377,11 @@ class PaymentSaleReturnsController extends BaseController
                 'deleted_at' => Carbon::now(),
             ]);
 
-            $account = Account::where('id', $payment->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance + $payment->montant,
-                ]);
+            if (! empty($payment->wallet_transaction_id)) {
+                // Credited to the wallet: take it back out.
+                app(CustomerWalletService::class)->reversePayment($payment, 'Return payment');
+            } else {
+                Account::adjustBalance($payment->account_id, $payment->montant);
             }
 
             $SaleReturn->update([
@@ -370,10 +402,26 @@ class PaymentSaleReturnsController extends BaseController
         $last = DB::table('payment_sale_returns')->latest('id')->first();
 
         if ($last) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = $nwMsg[1] + 1;
-            $code = $nwMsg[0].'_'.$inMsg;
+            $item = (string) ($last->Ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[0], $nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $inMsg = $nwMsg[1] + 1;
+                $code = $nwMsg[0].$sep.$inMsg;
+            } else {
+                $code = 'INV/RT_1111';
+            }
         } else {
             $code = 'INV/RT_1111';
         }
@@ -408,6 +456,8 @@ class PaymentSaleReturnsController extends BaseController
 
         $payment = PaymentSaleReturns::with('SaleReturn', 'SaleReturn.client')->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $payment);
+
         $payment_data['return_Ref'] = $payment['SaleReturn']->Ref;
         $payment_data['client_name'] = $payment['SaleReturn']['client']?->name ?? '---';
         $payment_data['client_phone'] = $payment['SaleReturn']['client']->phone;
@@ -425,6 +475,8 @@ class PaymentSaleReturnsController extends BaseController
         $Html = view('pdf.Payment_Sale_Return', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve(optional($payment->SaleReturn)->warehouse_id, $settings),
             'payment' => $payment_data,
         ])->render();
 
@@ -450,7 +502,8 @@ class PaymentSaleReturnsController extends BaseController
         $gateway = sms_gateway::where('id', $settings->sms_gateway)
             ->where('deleted_at', '=', null)->first();
 
-        $url = url('/api/payment_return_sale_pdf/'.$request->id);
+        $this->authorizeDocumentView($request, $payment);
+        $url = $payment->shareUrl();
         $receiverNumber = $payment['SaleReturn']['client']->phone;
         $message = 'Dear'.' '.$payment['SaleReturn']['client']?->name." \n We are contacting you in regard to a Payment #".$payment['SaleReturn']->Ref.' '.$url.' '."that has been created on your account. \n We look forward to conducting future business with you.";
 

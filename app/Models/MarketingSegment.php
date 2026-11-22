@@ -12,7 +12,7 @@ class MarketingSegment extends Model
     protected $table = 'marketing_segments';
 
     protected $fillable = [
-        'name', 'description', 'all_customers', 'filters', 'customers_count', 'created_by',
+        'name', 'description', 'audience', 'all_customers', 'filters', 'customers_count', 'created_by',
     ];
 
     protected $casts = [

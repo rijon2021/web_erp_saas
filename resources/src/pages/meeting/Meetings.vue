@@ -153,8 +153,8 @@
  * Meetings: GET meeting/meetings → {meetings, totalRows}; filters status/type;
  * JSON form posts the whole meeting object (POST meeting/meetings,
  * PUT meeting/meetings/{id}); users from GET users_list_for_select.
- * Type/status/platform labels are humanized snake_case in legacy too — no
- * translation keys exist for them. Dashboard/calendar/reports stay legacy.
+ * Type/status labels come from meetingLabels.js; platform names are brands
+ * and stay humanized snake_case, as in legacy.
  */
 import { ref, computed, onMounted } from 'vue';
 import { message } from 'ant-design-vue';
@@ -164,6 +164,7 @@ import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import http from '../../lib/http';
+import { meetingLabel } from './meetingLabels';
 
 const { t } = useI18n();
 
@@ -186,8 +187,9 @@ const crud = useCrudTable('meeting/meetings', {
   params: filterParams,
 });
 
-// Humanize snake_case, matching legacy's format_label (no i18n keys exist).
-const label = s => String(s || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+// Translated label for known values; anything else (platform brand names)
+// is humanized snake_case, matching legacy's format_label.
+const label = s => meetingLabel(s, v => String(v || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
 
 const columns = computed(() => [
   { title: t('Title'), dataIndex: 'title', key: 'title', sorter: true },

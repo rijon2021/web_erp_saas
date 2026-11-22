@@ -157,8 +157,8 @@
               <a-form-item :label="$t('Custom_SMS_Headers')">
                 <div class="kv-editor">
                   <div v-for="(row, i) in headerRows" :key="'h' + i" class="kv-row">
-                    <a-input v-model:value="row.key" placeholder="Key" />
-                    <a-input v-model:value="row.value" placeholder="Value" />
+                    <a-input v-model:value="row.key" :placeholder="$t('Key')" />
+                    <a-input v-model:value="row.value" :placeholder="$t('Value')" />
                     <a-button type="text" danger @click="headerRows.splice(i, 1)">
                       <template #icon><DeleteOutlined /></template>
                     </a-button>
@@ -173,8 +173,8 @@
               <a-form-item :label="$t('Custom_SMS_Payload')" :extra="$t('Custom_SMS_Payload_Hint')">
                 <div class="kv-editor">
                   <div v-for="(row, i) in payloadRows" :key="'p' + i" class="kv-row">
-                    <a-input v-model:value="row.key" placeholder="Key" />
-                    <a-input v-model:value="row.value" placeholder="Value" />
+                    <a-input v-model:value="row.key" :placeholder="$t('Key')" />
+                    <a-input v-model:value="row.value" :placeholder="$t('Value')" />
                     <a-button type="text" danger @click="payloadRows.splice(i, 1)">
                       <template #icon><DeleteOutlined /></template>
                     </a-button>
@@ -239,27 +239,27 @@ const selected = ref('twilio');
 // title; `configuredBy` is a non-secret field that proves it has been saved
 // (secret fields come back blank from the API, so they can't signal config).
 const providers = [
-  { key: 'twilio', name: 'Twilio', desc: 'Global voice & SMS API', color: '#F22F46', icon: MessageOutlined, match: 'twilio', configuredBy: () => twilio.value.TWILIO_SID },
-  { key: 'termi', name: 'Termii', desc: 'Messaging for Africa', color: '#00B383', icon: ThunderboltOutlined, match: 'termi', configuredBy: () => termi.value.TERMI_SENDER },
-  { key: 'infobip', name: 'Infobip', desc: 'Omnichannel messaging cloud', color: '#EB5A1E', icon: GlobalOutlined, match: 'infobip', configuredBy: () => infobip.value.sender_from || infobip.value.base_url },
+  { key: 'twilio', name: 'Twilio', get desc() { return t('Sms_Desc_Twilio'); }, color: '#F22F46', icon: MessageOutlined, match: 'twilio', configuredBy: () => twilio.value.TWILIO_SID },
+  { key: 'termi', name: 'Termii', get desc() { return t('Sms_Desc_Termii'); }, color: '#00B383', icon: ThunderboltOutlined, match: 'termi', configuredBy: () => termi.value.TERMI_SENDER },
+  { key: 'infobip', name: 'Infobip', get desc() { return t('Sms_Desc_Infobip'); }, color: '#EB5A1E', icon: GlobalOutlined, match: 'infobip', configuredBy: () => infobip.value.sender_from || infobip.value.base_url },
   { key: 'custom', name: t('Custom_SMS_Gateway'), desc: t('Custom_SMS_Api_Url'), color: '#6E56CF', icon: ApiOutlined, match: 'custom', configuredBy: () => custom.value.api_url },
 ];
 
 const fields = {
   twilio: [
-    { model: 'TWILIO_SID', label: 'Account SID (TWILIO_SID)' },
-    { model: 'TWILIO_TOKEN', label: 'Auth Token (TWILIO_TOKEN)', secret: true },
-    { model: 'TWILIO_FROM', label: 'From Number (TWILIO_FROM)' },
+    { model: 'TWILIO_SID', get label() { return t('Sms_Account_SID') + ' (TWILIO_SID)'; } },
+    { model: 'TWILIO_TOKEN', get label() { return t('Sms_Auth_Token') + ' (TWILIO_TOKEN)'; }, secret: true },
+    { model: 'TWILIO_FROM', get label() { return t('Sms_From_Number') + ' (TWILIO_FROM)'; } },
   ],
   termi: [
-    { model: 'TERMI_KEY', label: 'API Key (TERMI_KEY)', secret: true },
-    { model: 'TERMI_SECRET', label: 'API Secret (TERMI_SECRET)', secret: true },
-    { model: 'TERMI_SENDER', label: 'Sender ID (TERMI_SENDER)' },
+    { model: 'TERMI_KEY', get label() { return t('API_Key') + ' (TERMI_KEY)'; }, secret: true },
+    { model: 'TERMI_SECRET', get label() { return t('API_Secret') + ' (TERMI_SECRET)'; }, secret: true },
+    { model: 'TERMI_SENDER', get label() { return t('Sender_ID') + ' (TERMI_SENDER)'; } },
   ],
   infobip: [
-    { model: 'api_key', label: 'API Key', secret: true },
-    { model: 'sender_from', label: 'Sender / From' },
-    { model: 'base_url', label: 'Base URL', placeholder: 'https://' },
+    { model: 'api_key', get label() { return t('API_Key'); }, secret: true },
+    { model: 'sender_from', get label() { return t('Sms_Sender_From'); } },
+    { model: 'base_url', get label() { return t('Sms_Base_URL'); }, placeholder: 'https://' },
   ],
 };
 

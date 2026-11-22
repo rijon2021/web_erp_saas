@@ -8,6 +8,7 @@
     export-endpoint="report/internal_location_report"
     :export-params="filterParams"
     export-rows-key="rows"
+    product-data
   >
     <template #filters>
       <a-select

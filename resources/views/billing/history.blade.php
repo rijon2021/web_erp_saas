@@ -95,7 +95,7 @@
                         <span class="fw-bold">{{ $payment->invoice_number ?? '—' }}</span>
                     </td>
                     <td>
-                        {{ $payment->plan->name ?? 'N/A' }}
+                        {{ $payment->plan->name ?? ($payment->metadata['checkout_name'] ?? 'N/A') }}
                         <span class="text-muted">({{ ucfirst($payment->billing_cycle) }})</span>
                     </td>
                     <td>

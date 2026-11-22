@@ -88,7 +88,9 @@ class PortalAdminController extends Controller
         $portalClient = PortalClient::where('client_id', $client->id)->first();
 
         if ($portalClient) {
-            $portalClient->update(['status' => 0]);
+            // Also void any pending invitation, or its link would re-activate
+            // the account (setPassword sets status = 1).
+            $portalClient->forceFill(['status' => 0, 'invitation_token' => null, 'invitation_sent_at' => null])->save();
         }
 
         return response()->json(['success' => true, 'message' => 'Portal access disabled']);

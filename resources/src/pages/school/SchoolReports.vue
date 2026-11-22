@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHeader :title="$t('School Reports')" :breadcrumb="[$t('School'), $t('Reports')]">
+    <PageHeader :title="$t('Sc_School_Reports')" :breadcrumb="[$t('School'), $t('Reports')]">
       <template #actions>
         <a-button :loading="exporting === 'excel'" @click="doExport('excel')">
           <template #icon><FileExcelOutlined /></template>
@@ -78,10 +78,13 @@
           <span v-if="record.earliest_due">
             {{ date(record.earliest_due) }}
             <a-tag v-if="record.days_overdue > 0" color="error" class="tag-tight">
-              {{ record.days_overdue }}{{ $t('d_late') }}
+              {{ $t('Sc_N_Days_Late', { n: record.days_overdue }) }}
             </a-tag>
           </span>
           <span v-else class="muted">—</span>
+        </template>
+        <template v-else-if="column.key === 'busiest_day'">
+          {{ record.busiest_day ? labelOf(WEEK_DAYS, record.busiest_day) : '' }}
         </template>
       </template>
     </DataTable>
@@ -105,16 +108,18 @@ import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { exportExcel, exportPdf } from '../../lib/exporters';
+import { WEEK_DAYS, labelOf } from './schoolOptions';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const { money, number, date } = useFormat();
 
 const REPORTS = [
   { key: 'enrollment', title: t('Enrolment', 'Enrolment'), endpoint: 'school/reports/enrollment', sort: 'students', searchHint: t('Search_Class', 'Search class…'), dateRange: false },
   { key: 'attendance', title: t('Attendance', 'Attendance'), endpoint: 'school/reports/attendance', sort: 'rate', searchHint: t('Search_Class', 'Search class…'), dateRange: true },
   { key: 'absentees', title: t('Poor_Attendance', 'Poor attendance'), endpoint: 'school/reports/absentees', sort: 'rate', searchHint: t('Search_Student', 'Search student…'), dateRange: true },
-  { key: 'performance', title: t('Exam_Performance', 'Exam performance'), endpoint: 'school/reports/performance', sort: 'average_pct', searchHint: t('Search', 'Search…'), dateRange: false },
+  { key: 'performance', title: t('Exam_Performance', 'Exam performance'), endpoint: 'school/reports/performance', sort: 'average_pct', searchHint: t('Sc_Search_Ellipsis'), dateRange: false },
   { key: 'fees', title: t('Fee_Collection', 'Fee collection'), endpoint: 'school/reports/fees', sort: 'outstanding', searchHint: t('Search_Class', 'Search class…'), dateRange: true },
   { key: 'defaulters', title: t('Fee_Defaulters', 'Fee defaulters'), endpoint: 'school/reports/defaulters', sort: 'due', searchHint: t('Search_Student_Or_Guardian', 'Search student or guardian…'), dateRange: false },
   { key: 'teachers', title: t('Teacher_Workload', 'Teacher workload'), endpoint: 'school/reports/teachers', sort: 'weekly_periods', searchHint: t('Search_Teacher', 'Search teacher…'), dateRange: false },
@@ -251,7 +256,7 @@ const totalTiles = computed(() => {
 const meta = ref({});
 const exams = ref([]);
 const yearOptions = computed(() => (meta.value.academic_years || []).map(y => ({
-  value: y.id, label: y.is_current ? `${y.name} (${t('Current', 'current')})` : y.name,
+  value: y.id, label: y.is_current ? t('Sc_Year_Name_Current', { name: y.name }) : y.name,
 })));
 const classOptions = computed(() => (meta.value.classes || []).map(c => ({ value: c.id, label: c.name })));
 const examOptions = computed(() => exams.value.map(e => ({ value: e.id, label: e.name })));
@@ -278,7 +283,7 @@ async function doExport(kind) {
     });
     const rows = data?.rows || [];
     if (!rows.length) {
-      message.warning(t('NodataAvailable', 'Nothing to export'));
+      message.warning(t('Sc_Nothing_To_Export'));
       return;
     }
     const title = `${t('School', 'School')} — ${current.value.title}`;

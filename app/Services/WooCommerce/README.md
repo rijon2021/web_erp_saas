@@ -39,7 +39,7 @@ State is stored in two places:
 `POST woocommerce/sync/products` (default `mode=push`) → creates a `SyncJob`, a progress token,
 and dispatches `WooCommerceProductsSyncJob` on queue **`woocommerce-sync`**.
 
-1. Job builds/loads the **remote index** (see §4), then processes up to `WOO_PRODUCTS_PER_JOB`
+1. Job builds/loads the **remote index** (see §4), then processes up to *Products per batch* (per-tenant tuning)
    products ordered by `id`, starting after the saved cursor `last_product_id`.
 2. After the batch it counts remaining products (`id > last_product_id`). If any remain it sets
    stage `queued_next_batch` and **re-dispatches itself** on `woocommerce-sync`.
@@ -52,8 +52,31 @@ over the remote catalog. Re-dispatches until `done`.
 
 ### Stock push (Stocky → Woo)
 `POST woocommerce/sync/stock` (alias `woocommerce/sync-stock`) → dispatches
-`WooCommerceStockSyncJob` on **`woocommerce-stock`**. Batches of `WOO_STOCK_PRODUCTS_PER_JOB`,
+`WooCommerceStockSyncJob` on **`woocommerce-stock`**. Batches of *Products per stock batch* (per-tenant tuning),
 re-dispatching until no products remain.
+
+### Automatic sync (opt-in, Stocky → Woo)
+Two switches on the Settings tab, `woocommerce_settings.auto_sync_products` / `auto_sync_stock`
+(both off by default), handled by [`AutoSync.php`](AutoSync.php) +
+[`../../Jobs/WooCommerceAutoSyncJob.php`](../../Jobs/WooCommerceAutoSyncJob.php):
+
+- **Products:** `ProductsController` store / update / duplicate call `AutoSync::productSaved()`.
+  The product is pushed (`pushProducts(..., $productIds)`, which skips the remote index and
+  looks each SKU up directly), then its stock. Imports are not hooked.
+- **Stock:** the `product_warehouse` observer calls `AutoSync::stockChanged()` on every qty
+  change (sales, POS, returns, purchases, adjustments, transfers). Combos built from a moved
+  component are added; products without a `woocommerce_id` are dropped.
+  Pushed with `syncStock(null, $productIds)` (quantities only, no media).
+
+Changes are collected per request and flushed once: in a web request the job runs **after the
+response** in the same process (no worker or cron needed); on the CLI / inside a job it goes on
+`woocommerce-stock`. Jobs re-read the switches; `flush()` checks the plan still has `woocommerce`.
+Each job adds its ids to a per-store pending list (file cache) and drains it in rounds of 50
+only if no other job is running (non-blocking lock) — so pushes never overlap, never wait,
+and are never dropped. If a round fails completely and the store doesn't answer a ping, the ids
+go back on the list and auto-sync pauses 5 minutes. Woo → Stocky pulls (products pull job, order import)
+run inside `AutoSync::muted()` so they don't bounce back. Results are logged under action
+`auto_sync`. Bulk query-builder updates fire no model events and are not seen.
 
 ### Synchronous flows (no queue)
 Categories, brands, customers and orders run **inline inside the request** via `SyncService`
@@ -183,36 +206,54 @@ at a different store).
 
 ---
 
-## 7. Configuration (`.env`)
+## 7. Configuration
 
-### Credentials (stored in DB via the Settings UI, not `.env`)
+### Credentials (per tenant, stored in DB via the Settings UI, not `.env`)
 `store_url`, `consumer_key`, `consumer_secret`, and optional `wp_username` / `wp_app_password`
 (WordPress application password, required for image/media uploads).
 
-### Tuning env vars
+### Sync tuning (per tenant — WooCommerce settings tab → "Sync tuning")
+Depends on each tenant's own store (catalogue size, WordPress host speed), so each tenant sets it.
+Stored as columns on `woocommerce_settings`; read with `WooCommerceSetting::tuning($settings)`,
+which clamps every value to `config('woocommerce.tenant_limits')`. No `.env` fallback.
 
-| Var | Default | Purpose |
-|-----|--------:|---------|
-| `WOO_PRODUCTS_PER_JOB` | `5` | Products processed per push/pull batch (push clamped 1–100, pull 1–200). Higher = fewer batches, longer per job. |
-| `WOO_STOCK_PRODUCTS_PER_JOB` | `1` | Products per stock batch. |
-| `QUEUE_WORKER_TIMEOUT` | `1200` | Per-job timeout (s) for inline/scheduled workers. Must exceed the slowest single batch. |
-| `WOO_REMOTE_INDEX_TTL` | `900` | Remote index cache TTL (s); capped at 3600. `0` disables caching. |
-| `WOO_REMOTE_INDEX_PAGE_CAP` | `200` | Max pages (×100) when building the index. Raise for very large stores. |
-| `WOO_SYNC_STUCK_SECONDS` | `600` | Heartbeat staleness before a run is marked stuck. |
-| `WOO_SYNC_QUEUE_WAIT_SECONDS` | `1800` | Extra grace while between batches (`queued*` stages). |
-| `WOO_POLL_TICK_MAX_SECONDS` | `300` | Max time a no-cron browser tick may run a batch inline. |
-| `WOO_MAX_CONSECUTIVE_FAILURES` | `7` | Abort a push after this many consecutive Woo API failures. |
-| `WOO_TIMEOUT_MS_BATCH` | `30000` | Timeout (ms) for Woo batch create/update calls. |
-| `WOO_HTTP_RETRIES` / `WOO_HTTP_RETRY_BASE_MS` | `2` / `300` | Client retry count and backoff base. |
-| `WOO_WP_MEDIA_UPLOAD_TIMEOUT` | `60`/`120` | Timeout (s) for WordPress media uploads. |
-| `WOO_WP_MEDIA_RETRIES` / `WOO_WP_MEDIA_RETRY_SLEEP_MS` | `1`–`2` / `250`–`800` | Media upload retry behaviour. |
-| `WOO_WP_MEDIA_SEARCH_TIMEOUT` | `10`/`15` | Timeout (s) for existing-media lookups. |
-| `WOO_API_BASE_URL` | — | Override the API base (tunneling/local proxy); keeps the real `Host` header. |
-| `WOO_PULL_STATS_PAGE_CAP` / `WOO_AUTOLINK_PAGE_CAP` | `200` | Page caps for pull-stats and auto-link scans. |
-| `WOO_PULL_ORDER_NOTES_MAX` | `25` | Max Woo order notes pulled per order. |
-| `WOO_SKU_SEARCH_PAGE_CAP` | `5` | Page cap for per-SKU remote searches. |
-| `WOO_*_VARIATIONS_PAGE_CAP` | `50`–`100` | Page caps for variation list/pull/delete. |
-| `WOO_ALLOW_ALT_SKU_ON_LOOKUP_CONFLICT` | `false` | Allow alternate-SKU linking when a lookup is ambiguous. |
+| Setting (column) | Default | Purpose |
+|------------------|--------:|---------|
+| `products_per_job` | `2` | Products processed per push/pull batch (the jobs also clamp push 1–100, pull 1–200). |
+| `stock_products_per_job` | `3` | Products per stock batch. |
+| `remote_index_page_cap` | `500` | Max pages (×100) when building the remote index. Raise for very large stores. |
+| `sku_search_page_cap` | `10` | Page cap for per-SKU remote searches. |
+| `allow_alt_sku_on_lookup_conflict` | `false` | On a SKU clash with an unrelated Woo product, push under an alternate SKU instead of skipping. |
+
+### Platform limits (server-wide — `config/woocommerce.php`, set via `.env`)
+Depend on the host (PHP time limits, worker timeout), so they apply to every tenant. Always read
+them with `config('woocommerce.…')` — never `env()` at runtime, which returns null once
+`php artisan config:cache` has run.
+
+| Var | Config key | Default | Purpose |
+|-----|------------|--------:|---------|
+| `QUEUE_WORKER_TIMEOUT` | `queue.worker_timeout` (config/queue.php) | `1200` | Per-job timeout (s) for inline/scheduled workers. Must exceed the slowest single batch. |
+| `WOO_TIMEOUT_MS_BATCH` | `timeout_ms_batch` | `30000` | Timeout (ms) for Woo batch create/update calls. |
+| `WOO_HTTP_RETRIES` / `WOO_HTTP_RETRY_BASE_MS` | `http_retries` / `http_retry_base_ms` | `2` / `300` | Client retry count and backoff base. |
+| `WOO_MAX_CONSECUTIVE_FAILURES` | `max_consecutive_failures` | `7` | Abort a push after this many consecutive Woo API failures. |
+| `WOO_SYNC_STUCK_SECONDS` | `sync_stuck_seconds` | `600` | Heartbeat staleness before a run is marked stuck. |
+| `WOO_SYNC_QUEUE_WAIT_SECONDS` | `sync_queue_wait_seconds` | `1800` | Extra grace while between batches (`queued*` stages). |
+| `WOO_POLL_TICK_MAX_SECONDS` | `poll_tick_max_seconds` | `300` | Max time a no-cron browser tick may run a batch inline. |
+| `WOO_WP_MEDIA_SEARCH_TIMEOUT` | `wp_media.search_timeout` | `15` | Timeout (s) for existing-media lookups. |
+| `WOO_WP_MEDIA_UPLOAD_TIMEOUT` | `wp_media.upload_timeout` | `240` | Timeout (s) for WordPress media uploads. |
+| `WOO_WP_MEDIA_RETRIES` / `WOO_WP_MEDIA_RETRY_SLEEP_MS` | `wp_media.retries` / `wp_media.retry_sleep_ms` | `2` / `500` | Media retry behaviour. |
+| `WOO_REMOTE_INDEX_TTL` | `remote_index_ttl` | `900` | Remote index cache TTL (s); capped at 3600. `0` disables caching. |
+| `WOO_PULL_STATS_PAGE_CAP` / `WOO_AUTOLINK_PAGE_CAP` | `pull_stats_page_cap` / `autolink_page_cap` | `200` | Page caps for pull-stats and auto-link scans. |
+| `WOO_PULL_ORDER_NOTES_MAX` | `pull_order_notes_max` | `25` | Max Woo order notes pulled per order. |
+| `WOO_{VARIATIONS_LIST,PULL_VARIATIONS,DELETE_VARIATIONS}_PAGE_CAP` | `variations_list_page_cap` … | `100` / `50` / `50` | Page caps for variation list/pull/delete. |
+| `WOO_MAX_PRODUCTS_PER_JOB`, `WOO_MAX_STOCK_PRODUCTS_PER_JOB`, `WOO_MAX_REMOTE_INDEX_PAGE_CAP`, `WOO_MAX_SKU_SEARCH_PAGE_CAP` | `tenant_limits.*` | `50` / `100` / `2000` / `50` | Upper bounds for the per-tenant tuning above. |
+| `WOO_API_BASE_URL` | `api_base_url` | — | **Developer only.** Sends every tenant's API calls to this address (tunnel/proxy), keeping the real `Host` header. Never set in production. |
+
+### Console
+`php artisan tenants:run woocommerce:sync --option="scope=stock"` runs a sync for each tenant with
+its own credentials and tuning. (The old `woocommerce:push-products` / `woocommerce:sync-stock`
+commands were removed: they read one global store from `.env` and would have pushed every tenant's
+catalogue into it.)
 
 ---
 
@@ -240,7 +281,7 @@ All under the tenant API prefix and gated by `tenant.feature:woocommerce`
 |---------|--------------|-----|
 | Imports a few products then stuck at `queued_next_batch` | No worker consuming `woocommerce-sync` / `woocommerce-stock` | Configure a worker (§3 Option A or B). The first batch runs via `dispatchAfterResponse`, so a few products always import even with no worker — that's the tell. |
 | `stuck: no worker heartbeat for Ns` in the UI | Worker not running, or watching the wrong queues | Confirm the worker's `--queue` includes both woo queues; check `php artisan queue:work` is alive. |
-| Very slow large pushes / Woo rate-limit errors | Remote index rebuilt too often, or batch too small | Ensure `WOO_REMOTE_INDEX_TTL > 0`; raise `WOO_PRODUCTS_PER_JOB`. |
+| Very slow large pushes / Woo rate-limit errors | Remote index rebuilt too often, or batch too small | Ensure `WOO_REMOTE_INDEX_TTL > 0`; raise *Products per batch* (Settings tab → Sync tuning). |
 | Duplicate products created on Woo after a reset | Stale remote index | Already handled (reset invalidates the index). If it recurs, set `WOO_REMOTE_INDEX_TTL=0` temporarily. |
 | Images not uploading | Missing/invalid `wp_username` + `wp_app_password`, or media timeout | Set a WordPress application password; raise `WOO_WP_MEDIA_UPLOAD_TIMEOUT`. |
 | Sync only advances while the browser tab is open | Relying on the no-cron tick | Set up a worker/scheduler (§3). |

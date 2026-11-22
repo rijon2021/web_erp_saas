@@ -2,17 +2,22 @@
 
 namespace App\Models;
 
+use App\Traits\HasShareToken;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class PaymentPurchaseReturns extends Model
 {
-    use SoftDeletes;
+    use HasShareToken, SoftDeletes;
+
+    const SHARE_TYPE = 'payment_return_purchase';
 
     protected $dates = ['deleted_at'];
 
     protected $fillable = [
         'purchase_return_id', 'date', 'montant', 'change', 'Ref', 'payment_method_id', 'user_id', 'notes', 'account_id',
+        // Set when the refund was credited to the supplier wallet instead of cash.
+        'wallet_transaction_id',
     ];
 
     protected $casts = [

@@ -104,6 +104,7 @@ class StorePaymentMethodService
             'cod' => __('messages.CashOnDelivery'),
             'mobile_money' => __('messages.MobileMoney'),
             'credit_card' => __('messages.CreditCard'),
+            'wallet' => __('messages.PayWithWallet'),
             'paypal' => 'PayPal',
             'paystack' => 'Paystack',
             'flutterwave' => 'Flutterwave',

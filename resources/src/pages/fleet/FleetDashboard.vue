@@ -1,18 +1,18 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Fleet Dashboard"
-      subtitle="Vehicles, running costs and everything falling due."
-      :breadcrumb="['Fleet Management', 'Dashboard']"
+      :title="$t('Page_Fleet_Dashboard')"
+      :subtitle="$t('Fl_Dashboard_Subtitle')"
+      :breadcrumb="[$t('Fl_Fleet_Management'), $t('Dashboard')]"
     >
       <template #actions>
         <a-button @click="$router.push('/fleet/vehicles')">
           <template #icon><UnorderedListOutlined /></template>
-          All vehicles
+          {{ $t('Fl_All_Vehicles') }}
         </a-button>
         <a-button v-if="canAdd" type="primary" @click="$router.push('/fleet/vehicles/create')">
           <template #icon><PlusOutlined /></template>
-          Add vehicle
+          {{ $t('Fl_Add_Vehicle') }}
         </a-button>
       </template>
     </PageHeader>
@@ -24,42 +24,42 @@
           <span class="kpi-ic kpi-ic--brand"><CarOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.total || 0 }}</span>
-            <span class="kpi-label">Vehicles</span>
+            <span class="kpi-label">{{ $t('Fl_Vehicles') }}</span>
           </span>
         </button>
         <button type="button" class="kpi" @click="$router.push('/fleet/vehicles?status=active')">
           <span class="kpi-ic kpi-ic--ok"><CheckCircleOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.active || 0 }}</span>
-            <span class="kpi-label">Active</span>
+            <span class="kpi-label">{{ $t('Fl_Active') }}</span>
           </span>
         </button>
         <button type="button" class="kpi" @click="$router.push('/fleet/vehicles?status=maintenance')">
           <span class="kpi-ic kpi-ic--warn"><ToolOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.in_maintenance || 0 }}</span>
-            <span class="kpi-label">In maintenance</span>
+            <span class="kpi-label">{{ $t('Fl_In_Maintenance') }}</span>
           </span>
         </button>
         <button type="button" class="kpi" @click="$router.push('/fleet/assignments?status=active')">
           <span class="kpi-ic kpi-ic--info"><UserOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.assigned || 0 }}</span>
-            <span class="kpi-label">Out with drivers</span>
+            <span class="kpi-label">{{ $t('Fl_Out_With_Drivers') }}</span>
           </span>
         </button>
         <div class="kpi kpi--static">
           <span class="kpi-ic kpi-ic--fuel"><FireOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ money(data.fuel_cost_month || 0) }}</span>
-            <span class="kpi-label">Fuel this month</span>
+            <span class="kpi-label">{{ $t('Fl_Fuel_This_Month') }}</span>
           </span>
         </div>
         <div class="kpi kpi--static">
           <span class="kpi-ic kpi-ic--cost"><DollarOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ money(data.maintenance_cost_month || 0) }}</span>
-            <span class="kpi-label">Maintenance this month</span>
+            <span class="kpi-label">{{ $t('Fl_Maintenance_This_Month') }}</span>
           </span>
         </div>
       </div>
@@ -69,17 +69,17 @@
           <ReportChart
             :data="data.cost_trend || []"
             :fields="[
-              { key: 'fuel', label: 'Fuel' },
-              { key: 'maintenance', label: 'Maintenance' },
+              { key: 'fuel', label: $t('Fl_Fuel') },
+              { key: 'maintenance', label: $t('Fl_Maintenance') },
             ]"
-            title="Running costs — last 6 months"
+            :title="$t('Fl_Running_Costs_6_Months')"
             type="bar"
             x-key="month"
             :height="300"
             :format="money"
           />
 
-          <a-card size="small" title="Fleet composition" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Fl_Fleet_Composition')" style="margin-bottom: 16px">
             <div v-if="composition.length" class="breakdown">
               <div v-for="row in composition" :key="row.type" class="breakdown-row">
                 <span class="breakdown-label">{{ labelOf(VEHICLE_TYPES, row.type) }}</span>
@@ -90,7 +90,7 @@
                 <span class="breakdown-count">{{ row.count }}</span>
               </div>
             </div>
-            <a-empty v-else :image="simpleEmptyImage" description="No vehicles yet" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Fl_No_Vehicles_Yet_Short')" />
           </a-card>
         </a-col>
 
@@ -100,11 +100,11 @@
             <template #title>
               <span class="alert-title">
                 <WarningOutlined :style="{ color: alerts.length ? '#d97706' : undefined }" />
-                Needs attention
+                {{ $t('Fl_Needs_Attention') }}
               </span>
             </template>
             <template #extra>
-              <a-tag v-if="overdueCount" color="error">{{ overdueCount }} overdue</a-tag>
+              <a-tag v-if="overdueCount" color="error">{{ overdueCount }} {{ $t('Fl_Overdue') }}</a-tag>
             </template>
 
             <div v-if="alerts.length" class="alert-list">
@@ -116,23 +116,23 @@
                 <span class="alert-dot" :class="alert.days < 0 ? 'overdue' : 'soon'"></span>
                 <span class="alert-body">
                   <span class="alert-vehicle">{{ alert.vehicle_name }}</span>
-                  <span class="alert-meta">{{ alert.label }} · {{ date(alert.date) }}</span>
+                  <span class="alert-meta">{{ alertLabel(alert) }} · {{ date(alert.date) }}</span>
                 </span>
                 <a-tag :color="alert.days < 0 ? 'error' : 'warning'">
-                  {{ alert.days < 0 ? `${Math.abs(alert.days)}d overdue` : `${alert.days}d` }}
+                  {{ alert.days < 0 ? $t('Fl_N_D_Overdue', { n: Math.abs(alert.days) }) : `${alert.days}${$t('Fl_D')}` }}
                 </a-tag>
               </button>
             </div>
             <a-empty
               v-else :image="simpleEmptyImage"
-              description="Nothing due in the next 30 days"
+              :description="$t('Fl_Nothing_Due_30_Days')"
               style="padding: 20px 0"
             />
           </a-card>
 
-          <a-card size="small" title="Recent maintenance">
+          <a-card size="small" :title="$t('Fl_Recent_Maintenance')">
             <template #extra>
-              <a-button type="link" size="small" @click="$router.push('/fleet/maintenance')">View all</a-button>
+              <a-button type="link" size="small" @click="$router.push('/fleet/maintenance')">{{ $t('Fl_View_All') }}</a-button>
             </template>
             <a-list :data-source="data.recent_maintenance || []" size="small">
               <template #renderItem="{ item }">
@@ -151,7 +151,7 @@
                 </a-list-item>
               </template>
               <template #empty>
-                <a-empty :image="simpleEmptyImage" description="No maintenance recorded" />
+                <a-empty :image="simpleEmptyImage" :description="$t('Fl_No_Maintenance_Recorded')" />
               </template>
             </a-list>
           </a-card>
@@ -195,6 +195,18 @@ const loading = ref(false);
 
 const alerts = computed(() => data.value.alerts || []);
 const overdueCount = computed(() => alerts.value.filter(a => a.days < 0).length);
+
+/** The API sends an English label per alert kind; show the translated one. */
+const ALERT_LABEL_KEYS = {
+  insurance_expiry: 'Fl_Insurance',
+  registration_expiry: 'Fl_Registration',
+  inspection_expiry: 'Fl_Inspection',
+  service: 'Fl_Next_Service',
+};
+function alertLabel(alert) {
+  const key = ALERT_LABEL_KEYS[alert.kind];
+  return key ? t(key) : alert.label;
+}
 
 /** Type counts as percentages of the fleet, biggest first. */
 const composition = computed(() => {

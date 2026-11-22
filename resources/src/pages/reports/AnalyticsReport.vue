@@ -76,7 +76,8 @@
             </div>
           </a-card>
         </a-col>
-        <a-col :span="24">
+        <!-- Gross/net profit are derived from stock at purchase price -->
+        <a-col v-if="auth.canSeeCost" :span="24">
           <a-card size="small">
             <div class="profit-row">
               <strong>{{ $t('Gross_Profit') }}:</strong>
@@ -121,16 +122,18 @@ import { useFormat } from '../../composables/useFormat';
 import http from '../../lib/http';
 import DateRangePicker from '../../components/DateRangePicker.vue';
 import ViewCurrencySelect from '../../components/ViewCurrencySelect.vue';
+import { useAuthStore } from '../../stores/auth';
 
 const { t } = useI18n();
 const { money } = useFormat();
+const auth = useAuthStore();
 
 const QUICK_RANGES = [
   { key: 'today', labelKey: 'Today' },
   { key: 'yesterday', labelKey: 'Yesterday' },
-  { key: '7d', label: '7D' },
-  { key: '30d', label: '30D' },
-  { key: '90d', label: '90D' },
+  { key: '7d', labelKey: '7D' },
+  { key: '30d', labelKey: '30D' },
+  { key: '90d', labelKey: '90D' },
   { key: 'mtd', labelKey: 'MTD' },
   { key: 'ytd', labelKey: 'YTD' },
 ];
@@ -146,27 +149,31 @@ const warehouseLabel = computed(() => warehouses.value.find(w => w.id === wareho
 
 const n = v => Number(v) || 0;
 
-const leftRows = computed(() => [
-  { label: t('Opening_Stock_By_Purchase_Price'), value: n(data.value.opening_stock_purchase_price) },
+// Rows flagged `cost` (stock at purchase price, adjustments at cost) drop for
+// roles with hide_product_cost.
+const costFilter = rows => (auth.canSeeCost ? rows : rows.filter(r => !r.cost));
+
+const leftRows = computed(() => costFilter([
+  { label: t('Opening_Stock_By_Purchase_Price'), value: n(data.value.opening_stock_purchase_price), cost: true },
   { label: t('Opening_Stock_By_Sale_Price'), value: n(data.value.opening_stock_sale_price) },
   { label: t('Total_Purchase_Excl_Tax_Discount'), value: n(data.value.total_purchase_excl_tax) },
-  { label: t('Total_Stock_Adjustment'), value: n(data.value.total_stock_adjustment) },
+  { label: t('Total_Stock_Adjustment'), value: n(data.value.total_stock_adjustment), cost: true },
   { label: t('Total_Expense'), value: n(data.value.total_expense) },
   { label: t('Total_Purchase_Shipping_Charge'), value: n(data.value.total_purchase_shipping_charge) },
   { label: t('Total_Transfer_Shipping_Charge'), value: n(data.value.total_transfer_shipping_charge) },
   { label: t('Total_Sell_Discount'), value: n(data.value.total_sell_discount) },
   { label: t('Total_Customer_Reward'), value: n(data.value.total_customer_reward) },
   { label: t('Total_Sell_Return'), value: n(data.value.total_sell_return) },
-]);
+]));
 
-const rightRows = computed(() => [
-  { label: t('Closing_Stock_By_Purchase_Price'), value: n(data.value.closing_stock_purchase_price) },
+const rightRows = computed(() => costFilter([
+  { label: t('Closing_Stock_By_Purchase_Price'), value: n(data.value.closing_stock_purchase_price), cost: true },
   { label: t('Closing_Stock_By_Sale_Price'), value: n(data.value.closing_stock_sale_price) },
   { label: t('Total_Sales_Excl_Tax_Discount'), value: n(data.value.total_sales_excl_tax) },
   { label: t('Total_Sell_Shipping_Charge'), value: n(data.value.total_sell_shipping_charge) },
   { label: t('Total_Purchase_Return'), value: n(data.value.total_purchase_return) },
   { label: t('Total_Purchase_Discount'), value: n(data.value.total_purchase_discount) },
-]);
+]));
 
 const grossProfit = computed(() => {
   const totalPurchasePrice = n(data.value.opening_stock_purchase_price) + n(data.value.total_purchase_excl_tax);
@@ -235,12 +242,12 @@ function printReport() {
 <h1>${title}</h1><div class="meta">${meta}</div>
 <div class="card"><h2>${t('Opening_Purchase')}</h2><table>${table(leftRows.value)}</table></div>
 <div class="card"><h2>${t('Closing_Sales')}</h2><table>${table(rightRows.value)}</table></div>
-<div class="card">
+${auth.canSeeCost ? `<div class="card">
   <div class="profit"><span>${t('Gross_Profit')}:</span><span>${money(grossProfit.value)}</span></div>
   <div class="formula">${t('Formula_Gross_Profit')}</div>
   <div class="profit"><span>${t('Net_Profit')}:</span><span>${money(netProfit.value)}</span></div>
   <div class="formula">${t('Formula_Net_Profit')}</div>
-</div>
+</div>` : ''}
 </body></html>`;
 
   const w = window.open('', '_blank');

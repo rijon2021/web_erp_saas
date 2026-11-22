@@ -33,7 +33,7 @@
           <a-descriptions-item :label="$t('Items')">{{ transfer.items }}</a-descriptions-item>
           <a-descriptions-item :label="$t('FromWarehouse')">{{ transfer.from_warehouse }}</a-descriptions-item>
           <a-descriptions-item :label="$t('ToWarehouse')">{{ transfer.to_warehouse }}</a-descriptions-item>
-          <a-descriptions-item :label="$t('Total')">{{ money(transfer.GrandTotal) }}</a-descriptions-item>
+          <a-descriptions-item v-if="auth.canSeeCost" :label="$t('Total')">{{ money(transfer.GrandTotal) }}</a-descriptions-item>
           <a-descriptions-item :label="$t('Status')">
             <a-tag :color="transfer.statut === 'completed' ? 'success' : transfer.statut === 'sent' ? 'warning' : 'error'">
               {{ transfer.statut === 'completed' ? $t('complete') : transfer.statut === 'sent' ? $t('Sent') : $t('Pending') }}
@@ -69,6 +69,10 @@
                 <a-tag v-for="(b, i) in record.batches" :key="i" style="margin-top: 2px">
                   {{ b.batch_number || b.batch_no || b }}
                 </a-tag>
+              </div>
+              <div v-if="(record.serial_numbers || []).length" style="margin-top: 4px">
+                <span class="muted">{{ $t('Serial_Numbers') }}:</span>
+                <a-tag v-for="sn in record.serial_numbers" :key="sn" color="processing" style="margin-top: 2px">{{ sn }}</a-tag>
               </div>
             </template>
             <template v-else-if="column.key === 'quantity'">{{ record.quantity }} {{ record.unit }}</template>
@@ -107,7 +111,8 @@ const details = ref([]);
 const itemColumns = computed(() => [
   { title: t('ProductName'), key: 'product' },
   { title: t('Quantity'), key: 'quantity', align: 'right' },
-  { title: t('Total'), key: 'total', align: 'right' },
+  // Line totals are cost-based: hidden for roles with hide_product_cost.
+  ...(auth.canSeeCost ? [{ title: t('Total'), key: 'total', align: 'right' }] : []),
 ]);
 
 const downloadingPdf = ref(false);

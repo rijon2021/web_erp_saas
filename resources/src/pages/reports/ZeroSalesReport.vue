@@ -8,6 +8,7 @@
     export-endpoint="report/zero_sales_products"
     :export-params="filterParams"
     export-rows-key="report"
+    product-data
   >
     <template #actions>
       <!-- Multi-Currency: view amounts converted (display-only) -->

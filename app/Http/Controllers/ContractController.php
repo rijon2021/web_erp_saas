@@ -15,6 +15,8 @@ use App\Models\Project;
 use App\Models\Setting;
 use App\utils\helpers;
 use Carbon\Carbon;
+use HTMLPurifier;
+use HTMLPurifier_Config;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -347,7 +349,7 @@ class ContractController extends Controller
             'start_date' => $contract->start_date,
             'end_date' => $contract->end_date,
             'status' => $contract->status,
-            'description' => $contract->description,
+            'description' => $this->purifyRichText($contract->description),
             'signer_name' => $contract->signer_name,
             'signed_at' => $contract->signed_at ? $contract->signed_at->format('F j, Y H:i') : null,
             'signed_ip' => $contract->signed_ip,
@@ -376,6 +378,39 @@ class ContractController extends Controller
             : $pdf->download($filename);
     }
 
+    /**
+     * Clean editor-supplied HTML before it reaches a PDF template.
+     *
+     * Contract descriptions and template bodies are rich text rendered with
+     * {!! !!}, so whatever the editor stored is handed straight to dompdf.
+     * Malformed markup derails the layout silently (show_warnings is off), and
+     * the same strings are reused outside the PDF. Allowed tags mirror the
+     * notification templates, plus the table markup contracts rely on.
+     */
+    private function purifyRichText(?string $html): string
+    {
+        if ($html === null || trim($html) === '') {
+            return '';
+        }
+
+        $config = HTMLPurifier_Config::createDefault();
+        $config->set('Core.Encoding', 'UTF-8');
+        $config->set('HTML.Allowed', 'div[style],h1,h2,h3,h4,h5,h6,p[style],b,strong,i,em,u,ul,ol,li,br,hr,pre,blockquote,span[style],table,thead,tbody,tr,td[style|colspan|rowspan],th[style|colspan|rowspan]');
+        $config->set('CSS.AllowedProperties', 'font-size, font-weight, color, background-color, text-align, width, padding, margin, border');
+        // HTMLPurifier needs a writable cache dir; storage keeps it out of vendor/.
+        $cacheDir = storage_path('app/htmlpurifier');
+        if (! is_dir($cacheDir)) {
+            @mkdir($cacheDir, 0755, true);
+        }
+        if (is_dir($cacheDir) && is_writable($cacheDir)) {
+            $config->set('Cache.SerializerPath', $cacheDir);
+        } else {
+            $config->set('Cache.DefinitionImpl', null);
+        }
+
+        return (new HTMLPurifier($config))->purify($html);
+    }
+
     /** Render a template merged with a contract's data as a PDF (preview or download). */
     public function templatePdf(Request $request, $contractId, $templateId)
     {
@@ -383,7 +418,7 @@ class ContractController extends Controller
 
         $contract = Contract::with('client', 'project', 'employee')->whereNull('deleted_at')->findOrFail($contractId);
         $template = ContractTemplate::findOrFail($templateId);
-        $body = $template->render($contract);
+        $body = $this->purifyRichText($template->render($contract));
 
         $title = e($template->name) . ' — ' . e($contract->contract_number);
         $Html = '<!doctype html><html><head><meta charset="UTF-8"><title>' . $title . '</title>'

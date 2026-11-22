@@ -1,14 +1,14 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Work Centres"
-      subtitle="Where work happens, and what an hour there costs."
-      :breadcrumb="['Manufacturing', 'Work Centres']"
+      :title="$t('Mrp_Work_Centres')"
+      :subtitle="$t('Mrp_Work_Centres_Subtitle')"
+      :breadcrumb="[$t('Manufacturing'), $t('Mrp_Work_Centres')]"
     >
       <template #actions>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
-          New work centre
+          {{ $t('Mrp_New_Work_Centre') }}
         </a-button>
       </template>
     </PageHeader>
@@ -20,8 +20,8 @@
           <div class="sub">{{ record.code }}</div>
         </template>
         <template v-else-if="column.key === 'rates'">
-          {{ money(record.hourly_cost) }}/h labour
-          <div class="sub">{{ money(record.overhead_rate) }}/h overhead</div>
+          {{ money(record.hourly_cost) }}/h {{ $t('Mrp_Labour') }}
+          <div class="sub">{{ money(record.overhead_rate) }}/h {{ $t('Mrp_Overhead_Lc') }}</div>
         </template>
         <template v-else-if="column.key === 'efficiency_pct'">
           <a-tag :color="efficiencyColor(record.efficiency_pct)">{{ record.efficiency_pct }}%</a-tag>
@@ -35,7 +35,7 @@
         </template>
         <template v-else-if="column.key === 'is_active'">
           <a-tag :color="record.is_active ? 'success' : 'default'">
-            {{ record.is_active ? 'Active' : 'Inactive' }}
+            {{ record.is_active ? $t('Mrp_Active') : $t('Mrp_Inactive') }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'actions'">
@@ -56,49 +56,49 @@
     </DataTable>
 
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit work centre' : 'New work centre'" :width="620"
+      :open="formOpen" :title="editing ? $t('Mrp_Edit_Work_Centre') : $t('Mrp_New_Work_Centre')" :width="620"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="8">
-            <a-form-item label="Code *" name="code">
-              <a-input v-model:value="form.code" placeholder="e.g. ASSY-1" allow-clear />
+            <a-form-item :label="$t('Mrp_Code') + ' *'" name="code">
+              <a-input v-model:value="form.code" :placeholder="$t('Mrp_Eg_Work_Centre_Code')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="16">
-            <a-form-item label="Name *" name="name">
-              <a-input v-model:value="form.name" placeholder="e.g. Assembly line 1" allow-clear />
+            <a-form-item :label="$t('Name') + ' *'" name="name">
+              <a-input v-model:value="form.name" :placeholder="$t('Mrp_Eg_Work_Centre_Name')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
             <a-form-item :label="$t('Warehouse')" name="warehouse_id">
               <a-select
                 v-model:value="form.warehouse_id" show-search option-filter-prop="label"
-                :options="warehouseOptions" allow-clear placeholder="Any"
+                :options="warehouseOptions" allow-clear :placeholder="$t('Mrp_Any_Warehouse')"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="12">
-            <a-form-item label="Units per hour" name="capacity_per_hour" extra="Nominal throughput">
+            <a-form-item :label="$t('Mrp_Units_Per_Hour')" name="capacity_per_hour" :extra="$t('Mrp_Nominal_Throughput')">
               <a-input-number v-model:value="form.capacity_per_hour" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Labour per hour" name="hourly_cost">
+            <a-form-item :label="$t('Mrp_Labour_Per_Hour')" name="hourly_cost">
               <a-input-number v-model:value="form.hourly_cost" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Overhead per hour" name="overhead_rate">
+            <a-form-item :label="$t('Mrp_Overhead_Per_Hour')" name="overhead_rate">
               <a-input-number v-model:value="form.overhead_rate" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
             <a-form-item
-              label="Efficiency %" name="efficiency_pct"
-              extra="Below 100 stretches the time an operation really takes"
+              :label="$t('Mrp_Efficiency_Pct')" name="efficiency_pct"
+              :extra="$t('Mrp_Efficiency_Hint')"
             >
               <a-input-number v-model:value="form.efficiency_pct" :min="1" :max="200" style="width: 100%" />
             </a-form-item>
@@ -110,7 +110,7 @@
           </a-col>
           <a-col :span="24">
             <a-form-item style="margin-bottom: 0">
-              <a-checkbox v-model:checked="form.is_active">Active</a-checkbox>
+              <a-checkbox v-model:checked="form.is_active">{{ $t('Mrp_Active') }}</a-checkbox>
             </a-form-item>
           </a-col>
         </a-row>
@@ -143,13 +143,13 @@ const { money, number } = useFormat();
 const crud = useCrudTable('mrp/work-centers', { rowsKey: 'work_centers' });
 
 const columns = computed(() => [
-  { title: 'Work centre', key: 'name', dataIndex: 'name', sorter: true },
-  { title: 'Warehouse', dataIndex: 'warehouse_name', key: 'warehouse_name', width: 160 },
-  { title: 'Rates', key: 'rates', width: 180 },
-  { title: 'Capacity', key: 'capacity_per_hour', dataIndex: 'capacity_per_hour', width: 110, align: 'right' },
-  { title: 'Efficiency', key: 'efficiency_pct', dataIndex: 'efficiency_pct', width: 110, align: 'center' },
-  { title: 'Queued', key: 'open_operations', dataIndex: 'open_operations', width: 100, align: 'center' },
-  { title: 'Status', key: 'is_active', dataIndex: 'is_active', width: 110 },
+  { title: t('Mrp_Work_Centre'), key: 'name', dataIndex: 'name', sorter: true },
+  { title: t('Warehouse'), dataIndex: 'warehouse_name', key: 'warehouse_name', width: 160 },
+  { title: t('Mrp_Rates'), key: 'rates', width: 180 },
+  { title: t('Mrp_Capacity'), key: 'capacity_per_hour', dataIndex: 'capacity_per_hour', width: 110, align: 'right' },
+  { title: t('Mrp_Efficiency'), key: 'efficiency_pct', dataIndex: 'efficiency_pct', width: 110, align: 'center' },
+  { title: t('Mrp_Queued'), key: 'open_operations', dataIndex: 'open_operations', width: 100, align: 'center' },
+  { title: t('Status'), key: 'is_active', dataIndex: 'is_active', width: 110 },
   { title: '', key: 'actions', width: 100, align: 'center' },
 ]);
 
@@ -196,7 +196,7 @@ async function submit() {
     editing.value = null;
     crud.fetchRows();
   } catch (e) {
-    message.error(firstError(e) || 'Could not save that work centre');
+    message.error(firstError(e) || t('Mrp_Could_Not_Save_Work_Centre'));
   } finally {
     saving.value = false;
   }

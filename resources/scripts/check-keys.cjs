@@ -84,13 +84,17 @@ bundledKeys(keys);
 // The client portal (src/portal) has its own bundled messages
 // (src/portal/messages.js, generated from stocky's lang/{locale}/portal.php)
 // Ã¢â‚¬â€ its $t() keys are checked against that file instead of the seeder.
+// Since the stocky portal port (2026-10-19) the messages are served by
+// GET /api/portal/translations/{locale} from resources/lang/{locale}/portal.php
+// (plus each tenant's portal_translations rows), so check against en/portal.php.
 const portalKeys = new Set();
 {
-    const pm = path.join(ROOT, 'resources', 'src', 'portal', 'messages.js');
+    const pm = path.join(ROOT, 'resources', 'lang', 'en', 'portal.php');
     if (fs.existsSync(pm)) {
-        const src = fs.readFileSync(pm, 'utf8');
-        const json = src.slice(src.indexOf('export default ') + 15).replace(/;\s*$/, '');
-        try { for (const k of Object.keys(JSON.parse(json).en || {})) portalKeys.add(k); } catch (e) { /* regenerate */ }
+        try {
+            const out = require('child_process').execFileSync('php', ['-r', 'echo json_encode(array_keys(require $argv[1]));', pm]);
+            for (const k of JSON.parse(String(out))) portalKeys.add(k);
+        } catch (e) { /* php not on PATH: portal keys are reported missing */ }
     }
 }
 const isPortal = f => path.resolve(f).startsWith(path.join(ROOT, 'resources', 'src', 'portal') + path.sep);

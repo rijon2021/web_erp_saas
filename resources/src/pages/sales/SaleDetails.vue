@@ -15,12 +15,17 @@
             <template #icon><ArrowLeftOutlined /></template>
             {{ $t('Back') }}
           </a-button>
+          <AuditHistoryButton type="sale" />
           <a-button
             v-if="auth.can('Sales_edit') && sale.sale_has_return === 'no'"
             @click="$router.push(`/sales/${sale.id}/edit`)"
           >
             <template #icon><EditOutlined /></template>
             {{ $t('EditSale') }}
+          </a-button>
+          <a-button v-if="canAssignSerials" @click="openAssignSerials">
+            <template #icon><BarcodeOutlined /></template>
+            {{ $t('Assign_Serials') }}
           </a-button>
           <a-button :loading="sendingEmail" @click="sendEmail">
             <template #icon><MailOutlined /></template>
@@ -33,6 +38,17 @@
           <a-button :loading="downloadingPdf" @click="downloadPdf">
             <template #icon><FilePdfOutlined /></template>
             PDF
+          </a-button>
+           <a-button :loading="downloadingPdf" @click="downloadChallanPdf">
+            <template #icon><FilePdfOutlined /></template>
+            Challan
+          </a-button>
+          <a-button
+            v-if="courierEnabled && auth.can('courier_book') && auth.can('courier_shipments')"
+            @click="courierPanel?.openBooking()"
+          >
+            <template #icon><CarOutlined /></template>
+            {{ $t('Cr_Send_To_Courier') }}
           </a-button>
           <a-button @click="printInvoice">
             <template #icon><PrinterOutlined /></template>
@@ -49,6 +65,29 @@
         </a-space>
       </template>
     </PageHeader>
+
+    <!-- Serialized items sold without serials (channel orders, quick sales).
+         Kept outside the loading v-if / v-else pair below. -->
+    <a-alert
+      v-if="!loading && serialsMissing"
+      type="warning"
+      show-icon
+      :message="$t('Serials_Missing_Alert')"
+      style="margin-bottom: 16px"
+    >
+      <template v-if="canAssignSerials" #action>
+        <a-button size="small" type="primary" @click="openAssignSerials">{{ $t('Assign_Serials') }}</a-button>
+      </template>
+    </a-alert>
+
+    <!-- Internal note, hidden when printing. Kept outside the loading v-if / v-else pair below. -->
+    <a-alert v-if="!loading && sale.online_order" type="info" show-icon class="sale-online-order" style="margin-bottom: 16px">
+      <template #message>
+        {{ $t('Sale_FromOnlineOrder') }}
+        <router-link v-if="auth.can('Orders_view')" :to="`/store/orders/${sale.online_order.id}`">{{ sale.online_order.ref }}</router-link>
+        <template v-else>{{ sale.online_order.ref }}</template>
+      </template>
+    </a-alert>
 
     <div v-if="loading" style="display: flex; justify-content: center; padding: 96px 0">
       <a-spin size="large" />
@@ -71,6 +110,7 @@
           <div class="inv-ref-badge">{{ sale.Ref }}</div>
           <table class="inv-meta">
             <tr><td>{{ $t('date') }}</td><td>{{ dateTime(sale.date) }}</td></tr>
+            <tr v-if="sale.order_reference"><td>{{ $t('Order_Reference') }}</td><td>{{ sale.order_reference }}</td></tr>
             <tr>
               <td>{{ $t('Status') }}</td>
               <td>
@@ -99,7 +139,7 @@
             <div v-if="sale.client_phone">{{ $t('Phone') }}: {{ sale.client_phone }}</div>
             <div v-if="sale.client_email">{{ $t('Email') }}: {{ sale.client_email }}</div>
             <div v-if="sale.client_adr">{{ $t('Adress') }}: {{ sale.client_adr }}</div>
-            <div v-if="sale.client_tax">Tax #: {{ sale.client_tax }}</div>
+            <div v-if="sale.client_tax">{{ $t('Tax_Hash') }}: {{ sale.client_tax }}</div>
           </div>
         </a-col>
         <a-col :xs="24" :md="12">
@@ -125,7 +165,7 @@
           <template v-if="column.key === 'product'">
             <div style="font-weight: 500">{{ record.name }}</div>
             <div class="muted">{{ record.code }}</div>
-            <div v-if="record.is_imei && record.imei_number" class="muted">SN: {{ record.imei_number }}</div>
+            <div v-if="record.is_imei && record.imei_number" class="muted">{{ $t('SN') }}: {{ record.imei_number }}</div>
             <div v-if="record.is_batch_tracked && (record.batches || []).length">
               <a-tag v-for="(b, i) in record.batches" :key="i" style="margin-top: 2px">
                 {{ b.batch_number || b.batch_no || b }}
@@ -149,10 +189,10 @@
       <div class="inv-summary">
         <!-- Summary labels hardcoded English in legacy's invoice too. -->
         <table>
-          <tr><td>Subtotal:</td><td>{{ docMoney(subtotal) }}</td></tr>
-          <tr><td>Order Tax:</td><td>{{ docMoney(sale.TaxNet) }}</td></tr>
+          <tr><td>{{ $t('Subtotal') }}:</td><td>{{ docMoney(subtotal) }} fdsfs</td></tr>
+          <tr><td>{{ $t('OrderTax') }}:</td><td>{{ docMoney(sale.TaxNet) }}</td></tr>
           <tr v-if="Number(sale.discount) > 0">
-            <td>Discount:</td>
+            <td>{{ $t('Discount') }}:</td>
             <td class="neg">
               <template v-if="String(sale.discount_Method || '2') === '1'">
                 - {{ num(sale.discount) }}% ({{ docMoney(discountAmount) }})
@@ -161,10 +201,10 @@
             </td>
           </tr>
           <tr v-if="Number(sale.discount_from_points) > 0">
-            <td>Discount from Points:</td>
+            <td>{{ $t('Discount_from_Points') }}:</td>
             <td class="neg">- {{ docMoney(sale.discount_from_points) }}</td>
           </tr>
-          <tr><td>Shipping:</td><td>{{ docMoney(sale.shipping) }}</td></tr>
+          <tr><td>{{ $t('Shipping') }}:</td><td>{{ docMoney(sale.shipping) }}</td></tr>
           <tr class="grand"><td>{{ $t('Total') }}:</td><td>{{ docMoney(sale.GrandTotal) }}</td></tr>
           <tr><td>{{ $t('Paid') }}:</td><td style="color: #52c41a">{{ docMoney(sale.paid_amount) }}</td></tr>
           <tr><td>{{ $t('Due') }}:</td><td style="color: #ff4d4f">{{ docMoney(sale.due) }}</td></tr>
@@ -182,6 +222,44 @@
         {{ company.invoice_footer }}
       </div>
     </a-card>
+
+    <!-- Courier booking, status, COD and tracking timeline -->
+    <CourierShipmentPanel v-if="!loading && sale.id" ref="courierPanel" :sale-id="sale.id" />
+
+    <!-- License keys delivered with this sale (plan feature license_keys) -->
+    <SaleLicenseKeysCard v-if="!loading && sale.id" :sale-id="sale.id" />
+
+    <a-modal
+      v-model:open="assignOpen"
+      :title="$t('Assign_Serials')"
+      :confirm-loading="assignSaving"
+      :ok-text="$t('Save')"
+      width="720px"
+      destroy-on-close
+      @ok="saveSerials"
+    >
+      <div v-for="line in assignDraft" :key="line.sale_detail_id" class="assign-line">
+        <div class="assign-line-head">
+          <strong>{{ line.name }}</strong>
+          <span class="muted"> {{ line.code }} · {{ line.qty_label }}</span>
+        </div>
+        <ComboSerialPicker
+          v-if="hasComboSerials(line)"
+          :line="line"
+          :base-params="{ warehouse_id: sale.warehouse_id, include_sale_id: sale.id }"
+        />
+        <SerialPicker
+          v-else
+          :line="line"
+          :fetch-params="{
+            product_id: line.product_id,
+            warehouse_id: sale.warehouse_id,
+            include_sale_id: sale.id,
+            ...(line.product_variant_id ? { product_variant_id: line.product_variant_id } : {}),
+          }"
+        />
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -197,11 +275,19 @@ import { ref, computed, createVNode, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message, Modal } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
+import { applyIssuer } from '../../lib/invoiceIssuer';
 import {
   ArrowLeftOutlined, PrinterOutlined, EditOutlined, DeleteOutlined,
-  ExclamationCircleOutlined, MailOutlined, MessageOutlined, FilePdfOutlined,
+  ExclamationCircleOutlined, MailOutlined, MessageOutlined, FilePdfOutlined, CarOutlined, BarcodeOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import SerialPicker from '../../components/SerialPicker.vue';
+import ComboSerialPicker from '../../components/ComboSerialPicker.vue';
+import { hasComboSerials, comboSerialMismatch } from '../../lib/comboSerials';
+import AuditHistoryButton from '../../components/AuditHistoryButton.vue';
+import CourierShipmentPanel from '../couriers/CourierShipmentPanel.vue';
+import SaleLicenseKeysCard from '../license_keys/SaleLicenseKeysCard.vue';
+import { usePlanStore } from '../../stores/plan';
 import { useFormat } from '../../composables/useFormat';
 import { useDetailsCurrency } from '../../composables/useDetailsCurrency';
 import { useAuthStore } from '../../stores/auth';
@@ -213,6 +299,9 @@ import { uploadUrl } from '../../lib/uploadUrl';
 const { t } = useI18n();
 const { date, dateTime } = useFormat();
 const auth = useAuthStore();
+const plan = usePlanStore();
+const courierPanel = ref(null);
+const courierEnabled = computed(() => plan.featureEnabled('couriers'));
 const route = useRoute();
 const router = useRouter();
 
@@ -227,6 +316,86 @@ const company = ref({});
 const sendingEmail = ref(false);
 const sendingSms = ref(false);
 const downloadingPdf = ref(false);
+
+/*
+ * Serial / IMEI assignment for a completed sale (POST sales/{id}/serials).
+ * Each detail carries serial_line = {sale_detail_id, product_id,
+ * product_variant_id, tracked, serial_components, serial_numbers,
+ * serial_groups} straight from the serial ledger.
+ */
+const serialLines = computed(() => details.value.filter(d => d.serial_line
+  && (d.serial_line.tracked || (d.serial_line.serial_components || []).length)));
+// serial_line.units = base units the line moved (quantity × pack × sale
+// unit, computed by the server): one serial each. As a unit-less "quantity"
+// it also drives the pickers' and combo helpers' counts.
+const serialUnitsOf = d => Number(d.serial_line?.units ?? d.quantity) || 0;
+const serialLineMissing = d => {
+  const l = { ...d.serial_line, quantity: serialUnitsOf(d) };
+  return hasComboSerials(l)
+    ? comboSerialMismatch(l)
+    : (l.serial_numbers || []).length !== serialUnitsOf(d);
+};
+const serialsMissing = computed(() => sale.value.statut === 'completed'
+  && serialLines.value.some(serialLineMissing));
+const canAssignSerials = computed(() => auth.can('Sales_edit')
+  && sale.value.statut === 'completed'
+  && sale.value.sale_has_return === 'no'
+  && serialLines.value.length > 0);
+
+const assignOpen = ref(false);
+const assignSaving = ref(false);
+const assignDraft = ref([]);
+
+function openAssignSerials() {
+  assignDraft.value = serialLines.value.map(d => {
+    const l = d.serial_line;
+    const combo = (l.serial_components || []).length > 0;
+    const groups = { ...(l.serial_groups || {}) };
+    const serials = combo
+      ? l.serial_components.flatMap(c => groups[c.product_id] || [])
+      : [...(l.serial_numbers || [])];
+    return {
+      sale_detail_id: l.sale_detail_id,
+      product_id: l.product_id,
+      product_variant_id: l.product_variant_id,
+      name: d.name,
+      code: d.code,
+      quantity: serialUnitsOf(d),
+      qty_label: `${num(d.quantity)} ${d.pack_name || d.unit_sale || ''}`.trim(),
+      serial_components: l.serial_components || [],
+      serial_groups: groups,
+      serial_numbers: serials,
+      imei_number: serials.join(','),
+    };
+  });
+  assignOpen.value = true;
+}
+
+async function saveSerials() {
+  // A line is either left empty or complete — the backend enforces the same.
+  const bad = assignDraft.value.find(l => {
+    const count = (l.serial_numbers || []).length;
+    if (!count) return false;
+    return hasComboSerials(l) ? comboSerialMismatch(l) : count !== Math.round(Number(l.quantity) || 0);
+  });
+  if (bad) {
+    message.warning(`${t('Serials_Count_Mismatch')} — ${bad.name}`);
+    return;
+  }
+  assignSaving.value = true;
+  try {
+    await http.post(`sales/${sale.value.id}/serials`, {
+      details: assignDraft.value.map(l => ({ sale_detail_id: l.sale_detail_id, serial_numbers: l.serial_numbers })),
+    });
+    message.success(t('Serials_Saved'));
+    assignOpen.value = false;
+    await load();
+  } catch (e) {
+    message.error(e?.data?.message || t('InvalidData'));
+  } finally {
+    assignSaving.value = false;
+  }
+}
 
 const num = v => {
   const n = Number(v);
@@ -294,6 +463,16 @@ async function downloadPdf() {
   }
 }
 
+async function downloadChallanPdf() {
+  downloadingPdf.value = true;
+  try {
+    await http.download(`sale_challan_pdf/${sale.value.id}`, `Sale_${sale.value.Ref}.pdf`);
+  } catch (e) {
+    message.error(t('InvalidData'));
+  } finally {
+    downloadingPdf.value = false;
+  }
+}
 function removeSale() {
   Modal.confirm({
     title: t('Delete_Title'),
@@ -314,12 +493,18 @@ function removeSale() {
   });
 }
 
+async function load() {
+  const data = await http.get(`sales/${route.params.id}`);
+  sale.value = data.sale || {};
+  details.value = data.details || [];
+  // Branch letterhead: the invoice header shows the warehouse that issued
+  // the document, each field falling back to the company settings.
+  company.value = applyIssuer(data.company || {}, data.issuer);
+}
+
 onMounted(async () => {
   try {
-    const data = await http.get(`sales/${route.params.id}`);
-    sale.value = data.sale || {};
-    details.value = data.details || [];
-    company.value = data.company || {};
+    await load();
   } catch (e) {
     message.error(t('InvalidData'));
     router.push('/sales');
@@ -330,6 +515,14 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.assign-line + .assign-line {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(var(--ink-rgb), 0.08);
+}
+.assign-line-head {
+  margin-bottom: 6px;
+}
 .inv-head {
   display: flex;
   justify-content: space-between;
@@ -418,7 +611,8 @@ onMounted(async () => {
   /* Print just the invoice card. */
   :global(.ant-layout-sider),
   :global(.ant-layout-header),
-  :global(.page-header) {
+  :global(.page-header),
+  :global(.sale-online-order) {
     display: none !important;
   }
   #sale-invoice {

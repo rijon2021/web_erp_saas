@@ -1,6 +1,6 @@
 <template>
   <DataTable :crud="crud" :columns="columns" :row-key="rowKey">
-    <template #toolbar>
+    <template v-if="exportable" #toolbar>
       <a-button size="small" @click="print">
         <template #icon><PrinterOutlined /></template>
         {{ $t('print') }}
@@ -70,6 +70,8 @@ const props = defineProps({
   sums: { type: Array, default: () => [] },
   // Heading used by print and PDF.
   title: { type: String, required: true },
+  // False hides print/PDF/Excel (product data under disable_product_export).
+  exportable: { type: Boolean, default: true },
 });
 
 const { t } = useI18n();

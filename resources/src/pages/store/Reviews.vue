@@ -39,7 +39,7 @@
             </a-tooltip>
           </template>
           <template v-else-if="column.key === 'status'">
-            <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
           </template>
           <template v-else-if="column.key === 'created_at'">
             {{ formatDate(record.created_at) }}
@@ -94,6 +94,9 @@ const columns = computed(() => [
   { title: t('Actions'), key: 'actions', width: 210 },
 ]);
 
+function statusLabel(s) {
+  return { pending: t('Pending'), approved: t('Approved'), rejected: t('Rejected') }[s] || s;
+}
 function statusColor(s) {
   return { pending: 'warning', approved: 'success', rejected: 'error' }[s] || 'default';
 }

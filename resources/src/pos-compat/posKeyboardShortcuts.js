@@ -223,12 +223,14 @@ export default {
       // modal's own Esc-to-close behaviour AND still fire the cart-clear
       // shortcut — exactly the bug where pressing Esc from inside the
       // open payment modal was wiping the cart. Returning early defers
-      // to the modal naturally.
+      // to the modal naturally. Ant Design dialogs (e.g. "Change due") set
+      // no body class, so an open .ant-modal-wrap counts as well.
       try {
         if (
           typeof document !== "undefined" &&
           document.body &&
-          document.body.classList.contains("modal-open")
+          (document.body.classList.contains("modal-open") ||
+            Array.prototype.some.call(document.querySelectorAll(".ant-modal-wrap"), (w) => w.style.display !== "none"))
         ) {
           return;
         }
@@ -246,6 +248,14 @@ export default {
         if (shortcut.match(e)) {
           e.preventDefault();
           e.stopPropagation();
+          // From inside a field: commit it first (a lowered cart quantity may
+          // need a manager PIN), and stop if that opened a modal.
+          if (fromInput && typeof e.target.blur === "function") {
+            try { e.target.blur(); } catch (e3) { /* ignore */ }
+            try {
+              if (document.body.classList.contains("modal-open")) return;
+            } catch (e4) { /* ignore */ }
+          }
           try {
             shortcut.action(this);
           } catch (err) {

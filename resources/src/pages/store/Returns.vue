@@ -32,7 +32,7 @@
             {{ record.type === 'cancellation' ? $t('Cancellation') : $t('Return') }}
           </template>
           <template v-else-if="column.key === 'status'">
-            <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
+            <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
           </template>
           <template v-else-if="column.key === 'reason'">
             <a-tooltip :title="record.reason">
@@ -40,7 +40,7 @@
             </a-tooltip>
           </template>
           <template v-else-if="column.key === 'refund_amount'">
-            {{ Number(record.refund_amount).toFixed(2) }}
+            {{ fmtNum(record.refund_amount) }}
           </template>
           <template v-else-if="column.key === 'created_at'">
             {{ formatDate(record.created_at) }}
@@ -85,6 +85,9 @@
 </template>
 
 <script setup>
+import { useFormat } from '../../composables/useFormat';
+// Shared money formatter (Price Format separators, precision, Hide Zero Decimals).
+const { number: fmtNum } = useFormat();
 /**
  * Returns/cancellation requests — GET store/returns?search&status&type →
  * {data}; approve POST store/returns/{id}/approve {admin_note,
@@ -120,6 +123,9 @@ const columns = computed(() => [
   { title: t('Actions'), key: 'actions', width: 210 },
 ]);
 
+function statusLabel(s) {
+  return { requested: t('Requested'), approved: t('Approved'), refunded: t('Refunded'), rejected: t('Rejected') }[s] || s;
+}
 function statusColor(s) {
   return { requested: 'warning', approved: 'processing', refunded: 'success', rejected: 'error' }[s] || 'default';
 }

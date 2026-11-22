@@ -2,11 +2,15 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\LoginAttempt;
 use App\Models\OauthAccessToken;
 use App\Models\OauthRefreshToken;
 use App\Models\User;
 use App\Models\UserLoginSession;
 use App\Support\LoginSessionKey;
+use App\Support\Security\Captcha;
+use App\Support\Security\LoginGuard;
+use App\Support\Security\SecurityOptions;
 use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Http\Request;
 use App\Models\Setting;
@@ -226,6 +230,153 @@ class SecuritySettingsController extends Controller
         }
 
         return response()->json(['success' => true, 'revoked' => (count($otherTokenIds) + (int) $revokedCookieCount)]);
+    }
+
+    // ------------------------------------------------------------------
+    // System Settings > Security: login CAPTCHA, lockout, session rules
+    // ------------------------------------------------------------------
+
+    public function getLoginSecurity(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'update', Setting::class);
+
+        return response()->json([
+            'options' => SecurityOptions::forClient(SecurityOptions::get(SecurityOptions::TENANT), SecurityOptions::TENANT),
+            'defaults' => SecurityOptions::forClient(SecurityOptions::DEFAULTS, SecurityOptions::TENANT),
+            'providers' => collect(Captcha::EXTERNAL)->map(fn ($p, $key) => [
+                'value' => $key,
+                'label' => $p['label'],
+                'script' => $p['script'],
+                'class' => $p['class'],
+            ])->values(),
+            'image_captcha' => Captcha::hasGd(),
+            'migrated' => $this->securityMigrated(),
+        ]);
+    }
+
+    public function updateLoginSecurity(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'update', Setting::class);
+
+        if (! \Schema::hasColumn('settings', 'security_options')) {
+            return response()->json(['message' => 'Run the tenant database migrations first (php artisan tenants:migrate).'], 422);
+        }
+
+        $request->validate([
+            'captcha_provider' => 'nullable|in:'.implode(',', SecurityOptions::PROVIDERS),
+            'captcha_site_key' => 'nullable|string|max:255',
+            'captcha_secret_key' => 'nullable|string|max:255',
+            'captcha_mode' => 'nullable|in:'.implode(',', SecurityOptions::CAPTCHA_MODES),
+            'captcha_after_failures' => 'nullable|integer|min:1|max:20',
+            'lockout_max_attempts' => 'nullable|integer|min:2|max:50',
+            'lockout_minutes' => 'nullable|integer|min:1|max:1440',
+            'lockout_scope' => 'nullable|in:'.implode(',', SecurityOptions::LOCKOUT_SCOPES),
+            'session_timeout_minutes' => 'nullable|integer|min:0|max:43200',
+        ]);
+
+        $input = $request->only(array_keys(SecurityOptions::DEFAULTS));
+
+        if ($problem = SecurityOptions::captchaKeyProblem(SecurityOptions::TENANT, $input, $request->input('captcha_test_token'), $request->ip())) {
+            return response()->json(['message' => $problem], 422);
+        }
+
+        $options = SecurityOptions::save(SecurityOptions::TENANT, $input);
+
+        return response()->json([
+            'success' => true,
+            'options' => SecurityOptions::forClient($options, SecurityOptions::TENANT),
+        ]);
+    }
+
+    /**
+     * Sign-in audit log + the lockouts that are active right now.
+     * Filters: event, search (email/IP), page, limit.
+     */
+    public function loginAttempts(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'update', Setting::class);
+
+        if (! $this->securityMigrated()) {
+            return response()->json(['attempts' => [], 'totalRows' => 0, 'locked' => [], 'migrated' => false]);
+        }
+
+        $limit = max(1, min(100, (int) $request->input('limit', 20)));
+        $page = max(1, (int) $request->input('page', 1));
+
+        $base = LoginAttempt::query()
+            ->when(in_array($request->input('event'), LoginAttempt::EVENTS, true), fn ($q) => $q->where('event', $request->input('event')))
+            ->when($request->filled('search'), function ($q) use ($request) {
+                $s = '%'.str_replace(['%', '_'], ['\%', '\_'], (string) $request->input('search')).'%';
+                $q->where(fn ($qq) => $qq->where('email', 'LIKE', $s)->orWhere('ip_address', 'LIKE', $s));
+            });
+
+        $total = (clone $base)->count();
+        $rows = (clone $base)->orderByDesc('id')->offset(($page - 1) * $limit)->limit($limit)->get();
+
+        $attempts = $rows->map(fn (LoginAttempt $a) => [
+            'id' => $a->id,
+            'email' => $a->email,
+            'ip_address' => $a->ip_address,
+            'device' => $this->formatDeviceFromUserAgent((string) $a->user_agent),
+            'event' => $a->event,
+            'created_at' => $a->created_at,
+        ])->values();
+
+        // From the lockout index in the cache, not the log: unblocking must
+        // work even when sign-in activity recording is off.
+        $locked = collect(LoginGuard::activeLocks(SecurityOptions::TENANT))
+            ->map(fn ($a) => [
+                'email' => $a['email'],
+                'ip_address' => $a['ip_address'],
+                'locked_at' => date(DATE_ATOM, $a['locked_at']),
+                'seconds_left' => $a['seconds_left'],
+            ])
+            ->values();
+
+        return response()->json([
+            'attempts' => $attempts,
+            'totalRows' => $total,
+            'locked' => $locked,
+            'migrated' => true,
+        ]);
+    }
+
+    public function unlockLogin(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'update', Setting::class);
+
+        $request->validate([
+            'email' => 'nullable|string|max:191',
+            'ip_address' => 'nullable|ip',
+        ]);
+
+        if (! $request->filled('email') && ! $request->filled('ip_address')) {
+            return response()->json(['message' => 'An email or IP address is required.'], 422);
+        }
+
+        LoginGuard::unlock(SecurityOptions::TENANT, $request->input('email'), $request->input('ip_address'));
+
+        return response()->json(['success' => true]);
+    }
+
+    public function clearLoginAttempts(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'update', Setting::class);
+
+        if ($this->securityMigrated()) {
+            LoginAttempt::query()->delete();
+        }
+
+        return response()->json(['success' => true]);
+    }
+
+    private function securityMigrated(): bool
+    {
+        try {
+            return \Schema::hasColumn('settings', 'security_options') && \Schema::hasTable('login_attempts');
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     private function resolveCurrentSessionKey(Request $request, int $userId, $passportToken): ?string

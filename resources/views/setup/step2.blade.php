@@ -1,7 +1,7 @@
 @extends('setup.main')
 @section('content')
 
-    <p class="eyebrow">Step 3 of 4</p>
+    <p class="eyebrow">Step 4 of 5</p>
     <h1>Central database</h1>
     <p class="lead-text">Point Stocky SaaS at an empty MySQL database for the central application (super admin, plans, tenants registry). Test the connection before you continue.</p>
 
@@ -35,7 +35,7 @@
             <div class="form-group full">
                 <label for="db_database" id="db_database_label">Database name</label>
                 <span class="tip" title="The name of an existing, empty database. Tenant databases are created automatically later by the same MySQL user."><i class="fa fa-question-circle" aria-hidden="true"></i></span>
-                <input type="text" class="form-control" id="db_database" name="db_database" placeholder="stocky_saas" required value="{{ $data['DB_DATABASE'] }}">
+                <input type="text" class="form-control" id="db_database" name="db_database" placeholder="saas_central" required value="{{ $data['DB_DATABASE'] }}">
             </div>
 
             <div class="form-group">
@@ -54,7 +54,7 @@
         <a id="testdb" class="btn btn-dark text-white"> Test connection <i class="fa fa-plug"></i></a>
 
         <div class="pane-nav">
-            <a href="/setup/step-1" class="btn btn-ghost"><i class="fa fa-angle-left"></i> Back</a>
+            <a href="/setup/license" class="btn btn-ghost"><i class="fa fa-angle-left"></i> Back</a>
             <button type="submit" class="btn btn-accent next_step d-none">Continue <i class="fa fa-angle-right"></i></button>
         </div>
     </form>

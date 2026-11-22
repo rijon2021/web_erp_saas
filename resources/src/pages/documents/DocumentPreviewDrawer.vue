@@ -16,12 +16,12 @@
           <div class="dv-sub">{{ doc.file_name }} · {{ doc.size_label }}</div>
         </div>
       </div>
-      <span v-else>Document</span>
+      <span v-else>{{ $t('Document') }}</span>
     </template>
 
     <template #extra>
       <a-space v-if="doc">
-        <a-tooltip :title="doc.is_starred ? 'Remove star' : 'Star this document'">
+        <a-tooltip :title="doc.is_starred ? $t('Remove_Star') : $t('Star_This_Document')">
           <a-button type="text" :disabled="!canEdit" @click="toggleStar">
             <template #icon>
               <StarFilled v-if="doc.is_starred" style="color: #faad14" />
@@ -31,7 +31,7 @@
         </a-tooltip>
         <a-button :loading="downloading" @click="download">
           <template #icon><DownloadOutlined /></template>
-          Download
+          {{ $t('Download') }}
         </a-button>
         <a-button v-if="canEdit" type="primary" @click="$emit('edit', doc)">
           <template #icon><EditOutlined /></template>
@@ -52,10 +52,10 @@
             <span class="dv-noprev-icon" :style="{ color: kind.color, background: tint(kind.color) }">
               <component :is="kind.icon" />
             </span>
-            <div class="dv-noprev-title">No inline preview for {{ (doc.extension || 'this file').toUpperCase() }}</div>
+            <div class="dv-noprev-title">{{ doc.extension ? $t('Doc_No_Inline_Preview_For', { ext: doc.extension.toUpperCase() }) : $t('No_Inline_Preview') }}</div>
             <a-button type="primary" ghost :loading="downloading" @click="download">
               <template #icon><DownloadOutlined /></template>
-              Download to open
+              {{ $t('Download_To_Open') }}
             </a-button>
           </div>
         </div>
@@ -66,29 +66,29 @@
         />
 
         <a-tabs v-model:activeKey="tab" class="dv-tabs">
-          <a-tab-pane key="details" tab="Details">
+          <a-tab-pane key="details" :tab="$t('Details')">
             <a-descriptions :column="{ xs: 1, sm: 2 }" size="small" bordered>
-              <a-descriptions-item label="Folder">
+              <a-descriptions-item :label="$t('Folder')">
                 <a-tag v-if="doc.folder_name">{{ doc.folder_name }}</a-tag>
-                <span v-else class="muted">Uncategorised</span>
+                <span v-else class="muted">{{ $t('Uncategorised') }}</span>
               </a-descriptions-item>
-              <a-descriptions-item label="Type">{{ kind.label }} · {{ (doc.extension || '—').toUpperCase() }}</a-descriptions-item>
-              <a-descriptions-item label="Size">{{ doc.size_label }}</a-descriptions-item>
-              <a-descriptions-item label="Version">v{{ doc.version }}</a-descriptions-item>
-              <a-descriptions-item label="Reference">
+              <a-descriptions-item :label="$t('Type')">{{ kind.label }} · {{ (doc.extension || '—').toUpperCase() }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Size')">{{ doc.size_label }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Version')">v{{ doc.version }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Reference')">
                 <span v-if="doc.reference">{{ doc.reference }}</span>
                 <span v-else class="muted">—</span>
               </a-descriptions-item>
-              <a-descriptions-item label="Expiry">
+              <a-descriptions-item :label="$t('Expiry')">
                 <span v-if="doc.expiry_date">{{ date(doc.expiry_date) }}</span>
                 <span v-else class="muted">—</span>
               </a-descriptions-item>
-              <a-descriptions-item label="Uploaded by">
+              <a-descriptions-item :label="$t('Uploaded_By')">
                 <span v-if="doc.uploaded_by_name">{{ doc.uploaded_by_name }}</span>
                 <span v-else class="muted">—</span>
               </a-descriptions-item>
-              <a-descriptions-item label="Added">{{ dateTime(doc.created_at) }}</a-descriptions-item>
-              <a-descriptions-item label="Tags" :span="2">
+              <a-descriptions-item :label="$t('Added')">{{ dateTime(doc.created_at) }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Tags')" :span="2">
                 <template v-if="doc.tags && doc.tags.length">
                   <a-tag v-for="tg in doc.tags" :key="tg" color="purple">{{ tg }}</a-tag>
                 </template>
@@ -102,8 +102,8 @@
 
             <div v-if="canDelete" class="dv-danger">
               <div>
-                <div class="dv-danger-title">Delete this document</div>
-                <div class="dv-danger-sub">It leaves the archive; the stored file is kept.</div>
+                <div class="dv-danger-title">{{ $t('Delete_This_Document') }}</div>
+                <div class="dv-danger-sub">{{ $t('Delete_Document_Hint') }}</div>
               </div>
               <a-button danger @click="remove">
                 <template #icon><DeleteOutlined /></template>
@@ -114,7 +114,7 @@
 
           <a-tab-pane key="versions">
             <template #tab>
-              Versions
+              {{ $t('Versions') }}
               <a-badge :count="versions.length" :number-style="{ backgroundColor: '#6d28d9' }" />
             </template>
 
@@ -126,7 +126,7 @@
             >
               <a-button :loading="replacing" block>
                 <template #icon><UploadOutlined /></template>
-                Upload a new version
+                {{ $t('Upload_New_Version') }}
               </a-button>
             </a-upload>
 
@@ -137,7 +137,7 @@
                     <template #title>
                       <span class="dv-ver">
                         v{{ item.version }}
-                        <a-tag v-if="item.version === doc.version" color="green">Current</a-tag>
+                        <a-tag v-if="item.version === doc.version" color="green">{{ $t('Current') }}</a-tag>
                       </span>
                     </template>
                     <template #description>
@@ -149,12 +149,12 @@
                     </template>
                   </a-list-item-meta>
                   <template #actions>
-                    <a-tooltip title="Download this version">
+                    <a-tooltip :title="$t('Download_This_Version')">
                       <a-button size="small" type="text" @click="downloadVersion(item)">
                         <template #icon><DownloadOutlined /></template>
                       </a-button>
                     </a-tooltip>
-                    <a-tooltip v-if="canEdit && item.version !== doc.version" title="Make this the current file">
+                    <a-tooltip v-if="canEdit && item.version !== doc.version" :title="$t('Make_Current_File')">
                       <a-button size="small" type="text" @click="restoreVersion(item)">
                         <template #icon><UndoOutlined /></template>
                       </a-button>
@@ -163,7 +163,7 @@
                 </a-list-item>
               </template>
               <template #empty>
-                <a-empty description="No version history yet" />
+                <a-empty :description="$t('No_Version_History')" />
               </template>
             </a-list>
           </a-tab-pane>
@@ -192,7 +192,7 @@ import http from '../../lib/http';
 import { uploadForm } from '../../lib/upload';
 import { useFormat } from '../../composables/useFormat';
 import { kindOf } from './documentKinds';
-import { t } from '../../i18n';
+import { t, i18n } from '../../i18n';
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -219,8 +219,8 @@ const kind = computed(() => kindOf(doc.value));
 const expiryAlert = computed(() => {
   const days = doc.value?.days_to_expiry;
   if (days === null || days === undefined) return null;
-  if (days < 0) return { type: 'error', text: `This document expired ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago.` };
-  if (days <= 30) return { type: 'warning', text: `Expires in ${days} day${days === 1 ? '' : 's'} (${date(doc.value.expiry_date)}).` };
+  if (days < 0) return { type: 'error', text: i18n.global.t(Math.abs(days) === 1 ? 'Doc_Expired_1_Day_Ago' : 'Doc_Expired_N_Days_Ago', { n: Math.abs(days) }) };
+  if (days <= 30) return { type: 'warning', text: i18n.global.t(days === 1 ? 'Doc_Expires_In_1_Day' : 'Doc_Expires_In_N_Days', { n: days, date: date(doc.value.expiry_date) }) };
   return null;
 });
 
@@ -270,7 +270,7 @@ async function download() {
   try {
     await http.download(`documents/${doc.value.id}/download`, doc.value.file_name);
   } catch (e) {
-    message.error('Could not download this file.');
+    message.error(t('Could_Not_Download_File'));
   } finally {
     downloading.value = false;
   }
@@ -278,7 +278,7 @@ async function download() {
 
 function downloadVersion(version) {
   http.download(`documents/${doc.value.id}/versions/${version.id}/download`, version.file_name)
-    .catch(() => message.error('Could not download this version.'));
+    .catch(() => message.error(t('Doc_Could_Not_Download_Version')));
 }
 
 async function toggleStar() {
@@ -296,19 +296,19 @@ function uploadVersion(file) {
   replacing.value = true;
   const fd = new FormData();
   fd.append('file', file);
-  fd.append('note', `Replaced ${doc.value.file_name}`);
+  fd.append('note', `${t('Replaced')} ${doc.value.file_name}`);
 
   uploadForm(`documents/${doc.value.id}/versions`, fd)
     .then(res => {
       if (res.status >= 200 && res.status < 300) {
-        message.success('New version uploaded.');
+        message.success(t('New_Version_Uploaded'));
         load();
         emit('changed');
       } else {
-        message.error(res?.data?.message || 'Could not upload the new version.');
+        message.error(res?.data?.message || t('Could_Not_Upload_Version'));
       }
     })
-    .catch(() => message.error('Could not upload the new version.'))
+    .catch(() => message.error(t('Could_Not_Upload_Version')))
     .finally(() => { replacing.value = false; });
 
   return false;
@@ -316,15 +316,15 @@ function uploadVersion(file) {
 
 function restoreVersion(version) {
   Modal.confirm({
-    title: `Restore v${version.version}?`,
+    title: i18n.global.t('Doc_Restore_Version_N', { n: version.version }),
     icon: createVNode(ExclamationCircleOutlined),
-    content: 'The current file stays in history — restoring adds a new version pointing at this file.',
-    okText: 'Restore',
+    content: t('Restore_Version_Text'),
+    okText: t('Restore'),
     cancelText: t('Cancel', 'Cancel'),
     async onOk() {
       try {
         await http.post(`documents/${doc.value.id}/versions/${version.id}/restore`);
-        message.success('Version restored.');
+        message.success(t('Version_Restored'));
         await load();
         emit('changed');
       } catch (e) {

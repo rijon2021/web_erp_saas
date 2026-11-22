@@ -44,6 +44,10 @@
     ];
   })->values();
   $productStock = $variants->isEmpty() ? (int) max(0, $p->stock ?? 0) : null;
+  // Shopify-style options (Color / Size): null for legacy flat variant lists.
+  $variantOptions = store_variant_options($p);
+  // Size chart (Products > Size guides); null when none / not migrated.
+  $sizeGuide = $p->activeSizeGuide();
 
   // ----- Availability (mirrors store.partials.product-card) -----
   $allowOverselling = (bool) ($s->allow_overselling ?? true);
@@ -120,7 +124,7 @@
 
     {{-- ===== Gallery ===== --}}
     <div>
-      <div class="rounded-xl overflow-hidden border border-line-subtle bg-bg-surface">
+      <div class="pdp-gallery-main rounded-xl overflow-hidden border border-line-subtle bg-bg-surface">
         <img id="pdpMainImg" src="{{ $imgUrl }}" alt="{{ $p->name }}"
              class="w-full h-auto object-contain max-h-[520px] mx-auto cursor-zoom-in">
       </div>
@@ -135,6 +139,17 @@
           @endforeach
         </div>
       @endif
+      @if(!empty($premium['video_url']))
+        @if($premium['video_embed'])
+          <button type="button" class="px-btn px-btn-ghost px-btn-sm" style="margin-top: 12px" onclick="window.pxOpenVideo && window.pxOpenVideo(@js($premium['video_embed']))">
+            <x-store.icon name="play" class="w-4 h-4" />{{ __('messages.PxWatchVideo') }}
+          </button>
+        @else
+          <a href="{{ $premium['video_url'] }}" target="_blank" rel="noopener" class="px-btn px-btn-ghost px-btn-sm" style="margin-top: 12px">
+            <x-store.icon name="play" class="w-4 h-4" />{{ __('messages.PxWatchVideo') }}
+          </a>
+        @endif
+      @endif
     </div>
 
     {{-- ===== Summary ===== --}}
@@ -142,7 +157,7 @@
       @if($p->brand)
         <div class="text-sm text-fg-muted mb-1">{{ $p->brand->name }}</div>
       @endif
-      <h1 class="text-2xl lg:text-3xl font-bold text-fg-primary mb-2">{{ $p->name }}</h1>
+      <h1 class="pdp-title text-2xl lg:text-3xl font-bold text-fg-primary mb-2">{{ $p->name }}</h1>
 
       {{-- Rating (server-rendered, refined by the reviews fetch) --}}
       <div class="flex items-center gap-2 mb-3 text-sm">
@@ -166,6 +181,27 @@
         </div>
       @endunless
 
+      {{-- Electronics Premium: key spec tiles + compare toggle --}}
+      @if(!empty($premium))
+        @if(!empty($premium['highlights']))
+          <div class="px-hl" aria-label="{{ __('messages.PxKeySpecs') }}">
+            @foreach($premium['highlights'] as $hl)
+              <div><span>{{ $hl['label'] }}</span><b>{{ $hl['value'] }}</b></div>
+            @endforeach
+          </div>
+        @endif
+        @if(Route::has('store.compare'))
+          @php
+            $pxCmpItem = json_encode(['id' => (int) $p->id, 'name' => (string) $p->name, 'image' => $imgUrl, 'url' => product_url($p->id), 'price' => $hidePrices ? '' : store_money($minPrice)], JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP);
+          @endphp
+          <label class="px-cmp-toggle" style="border: 0; padding: 0; margin-bottom: 16px; font-size: 14px"
+                 x-data='pxCompareToggle({!! $pxCmpItem !!})' :class="{ 'is-on': on }">
+            <input type="checkbox" :checked="on" @change="toggle($event)">
+            <span x-text="text">{{ __('messages.PxAddToCompare') }}</span>
+          </label>
+        @endif
+      @endif
+
       {{-- Short description --}}
       @if($p->note)
         <div class="text-sm text-fg-secondary mb-4 leading-relaxed">
@@ -174,7 +210,10 @@
       @endif
 
       {{-- Variants --}}
-      @if($variants->isNotEmpty())
+      @if($variants->isNotEmpty() && $variantOptions)
+        {{-- Options mode: one button group per option (Color, Size...), resolved to a variant by JS --}}
+        <div id="pdpOptionGroups" class="mb-4" data-options='@json($variantOptions)'></div>
+      @elseif($variants->isNotEmpty())
         <div class="mb-4">
           <div class="text-sm font-medium text-fg-secondary mb-2">{{ __('messages.Options') }}</div>
           <div id="pdpVariants" class="flex flex-wrap gap-2">
@@ -186,6 +225,12 @@
               </button>
             @endforeach
           </div>
+        </div>
+      @endif
+
+      @if($sizeGuide)
+        <div class="mb-4 -mt-1">
+          <button type="button" class="pdp-size-guide-link" data-size-guide-open aria-haspopup="dialog"><x-store.icon name="ruler" />{{ __('messages.SizeGuide') }}</button>
         </div>
       @endif
 
@@ -213,7 +258,7 @@
       @elseif(! $hidePrices)
         <div class="flex items-stretch gap-3 mb-3 flex-wrap">
           {{-- Quantity stepper --}}
-          <div class="inline-flex items-center border border-line-subtle rounded-lg overflow-hidden">
+          <div class="pdp-qty inline-flex items-center border border-line-subtle rounded-lg overflow-hidden">
             <button type="button" id="pdpQtyMinus" class="px-3 py-2 hover:bg-bg-muted" aria-label="-"><x-store.icon name="minus" class="w-4 h-4" /></button>
             <input id="pdpQty" type="number" min="1" value="1" class="w-14 text-center border-0 focus:ring-0 bg-transparent">
             <button type="button" id="pdpQtyPlus" class="px-3 py-2 hover:bg-bg-muted" aria-label="+"><x-store.icon name="plus" class="w-4 h-4" /></button>
@@ -284,10 +329,14 @@
   </div>
 
   {{-- ===== Tabs ===== --}}
+  @if(!empty($premium))
+    @include('store.electronics_premium.partials.pdp-bundle', ['p' => $p, 'premium' => $premium, 'hidePrices' => $hidePrices, 'currency' => $currency])
+  @endif
+
   <div class="mt-12" id="pdpTabs">
     <div class="border-b border-line-subtle flex gap-6 overflow-x-auto">
       <button type="button" class="pdp-tab is-active py-3 border-b-2 border-accent-500 font-medium whitespace-nowrap" data-tab="description">{{ __('messages.Description') }}</button>
-      @if(count($specs))<button type="button" class="pdp-tab py-3 border-b-2 border-transparent text-fg-muted whitespace-nowrap" data-tab="specification">{{ __('messages.ProductSpecification') }}</button>@endif
+      @if(count($specs) || !empty($premium['groups']))<button type="button" class="pdp-tab py-3 border-b-2 border-transparent text-fg-muted whitespace-nowrap" data-tab="specification">{{ __('messages.ProductSpecification') }}</button>@endif
       <button type="button" class="pdp-tab py-3 border-b-2 border-transparent text-fg-muted whitespace-nowrap" data-tab="reviews" id="pdpTabReviews">{{ __('messages.Reviews') }} (<span id="pdpTabReviewCount">{{ $reviewStats['count'] ?? 0 }}</span>)</button>
       @if($p->brand)<button type="button" class="pdp-tab py-3 border-b-2 border-transparent text-fg-muted whitespace-nowrap" data-tab="vendor">{{ __('messages.Vendor') }}</button>@endif
     </div>
@@ -301,8 +350,23 @@
       </div>
 
       {{-- Specification --}}
-      @if(count($specs))
+      @if(count($specs) || !empty($premium['groups']))
         <div class="pdp-panel hidden" data-panel="specification">
+          @if(!empty($premium['groups']))
+            <div class="px-spec-groups">
+              @foreach($premium['groups'] as $groupTitle => $rows)
+                <div class="px-spec-group">
+                  <div class="px-kicker" style="color: var(--px-muted)">{{ $groupTitle }}</div>
+                  <dl>
+                    @foreach($rows as $row)
+                      <div><dt>{{ $row['label'] }}</dt><dd>{{ $row['value'] }}</dd></div>
+                    @endforeach
+                  </dl>
+                </div>
+              @endforeach
+            </div>
+          @endif
+          @if(count($specs))
           <table class="w-full text-sm max-w-2xl">
             <tbody>
               @foreach($specs as $row)
@@ -313,6 +377,7 @@
               @endforeach
             </tbody>
           </table>
+          @endif
         </div>
       @endif
 
@@ -343,6 +408,10 @@
   </div>
 
   {{-- ===== Related ("You may also like") ===== --}}
+  @if(!empty($premium))
+    @include('store.electronics_premium.partials.pdp-compare', ['p' => $p, 'premium' => $premium, 'hidePrices' => $hidePrices])
+  @endif
+
   @if($related->count())
     <section class="mt-12">
       <div class="flex items-end justify-between mb-6">
@@ -351,17 +420,26 @@
           <h2 class="section-title mt-1">{{ __('messages.RelatedProducts') }}</h2>
         </div>
       </div>
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6">
+      <div class="{{ !empty($premium) ? 'px-grid' : 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6' }}">
         @foreach($related as $rp)
-          @include('store.partials.product-card', ['p' => $rp, 'currency' => $currency])
+          @if(!empty($premium))
+            @include('store.electronics_premium.partials.product-card', ['p' => $rp, 'currency' => $currency])
+          @else
+            @include('store.partials.product-card', ['p' => $rp, 'currency' => $currency])
+          @endif
         @endforeach
       </div>
     </section>
+  @endif
+
+  @if(!empty($premium))
+    @include('store.electronics_premium.partials.pdp-sticky', ['p' => $p, 'hidePrices' => $hidePrices, 'quoteOnly' => $quoteOnly, 'imgUrl' => $imgUrl, 'minPrice' => $minPrice, 'compareAt' => $compareAt])
   @endif
 </div>
 
 {{-- Reuse the shop's quick-view + variant picker + cart engine for the related cards --}}
 @include('store.partials.shop-modals-scripts', ['currency' => $currency])
+@include('store.partials.size-guide-modal', ['sizeGuide' => $sizeGuide])
 
 <script>
 (function(){
@@ -387,7 +465,7 @@
     selected = { id: VARIANTS[0].id, price: VARIANTS[0].display_price, stock: VARIANTS[0].stock, image: VARIANTS[0].image || IMG, name: VARIANTS[0].name };
   }
 
-  function fmt(v){ try { return (typeof fmtMoney === 'function') ? fmtMoney(v) : (CURRENCY + Number(v).toFixed(2)); } catch(e){ return CURRENCY + Number(v).toFixed(2); } }
+  function fmt(v){ try { return (typeof fmtMoney === 'function') ? fmtMoney(v) : storeWithCurrency(CURRENCY, Number(v).toFixed(2)); } catch(e){ return storeWithCurrency(CURRENCY, Number(v).toFixed(2)); } }
 
   // ---- Gallery ----
   var mainImg = document.getElementById('pdpMainImg');
@@ -425,6 +503,8 @@
     if (priceEl){ priceEl.textContent = v.display_price_formatted || fmt(selected.price); }
     if (v.image && v.image !== 'null' && mainImg){ mainImg.src = v.image; selected.image = v.image; }
     refreshAvailability();
+    // Themes that show a running total (Electronics Premium bundle) follow the selected variant.
+    window.dispatchEvent(new CustomEvent('pdp:variant', { detail: { id: selected.id, price: selected.price } }));
   }
   document.querySelectorAll('.pdp-variant').forEach(function(btn){
     btn.addEventListener('click', function(){
@@ -434,6 +514,20 @@
       applyVariant(VARIANTS.find(function(v){ return Number(v.id) === id; }) || null);
     });
   });
+  // Options mode: Color / Size button groups rendered by the shared
+  // StoreVariantOptions helper (home-modals-scripts), resolved to a variant.
+  var optionGroupsEl = document.getElementById('pdpOptionGroups');
+  if (optionGroupsEl && window.StoreVariantOptions){
+    var optData = null;
+    try { optData = JSON.parse(optionGroupsEl.getAttribute('data-options') || 'null'); } catch(e){ optData = null; }
+    if (optData && optData.options){
+      window.StoreVariantOptions.mount(optionGroupsEl, { options: optData.options, map: optData.map, variants: VARIANTS }, {
+        preselectId: selected.id,
+        allowOversell: ALLOW_OVERSELL || IS_PREORDER,
+        onChange: function(v){ applyVariant(v); }
+      });
+    }
+  }
   refreshAvailability();
 
   // ---- Quantity ----

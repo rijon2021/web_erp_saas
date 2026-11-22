@@ -20,6 +20,10 @@ class ProductSerial extends Model
     const STATUS_RETURNED_SUPPLIER = 'returned_supplier';
     const STATUS_DAMAGED = 'damaged';
     const STATUS_RESERVED = 'reserved';
+    // Set by adjustments: a component unit assembled into a kit (combo), and a
+    // unit written off by an adjustment "sub".
+    const STATUS_IN_KIT = 'in_kit';
+    const STATUS_WRITTEN_OFF = 'written_off';
 
     protected $fillable = [
         'serial_number',

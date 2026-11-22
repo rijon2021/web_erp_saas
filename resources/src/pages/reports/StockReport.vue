@@ -8,6 +8,7 @@
     export-endpoint="report/stock"
     :export-params="filterParams"
     export-rows-key="report"
+    product-data
   >
     <!-- Stock health over the WHOLE filtered set (backend summary /
          category_units / low_stock), not the visible page. -->

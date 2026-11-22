@@ -37,7 +37,7 @@
         <a-tab-pane key="orders" :tab="$t('Orders')">
           <OrdersTab @ready="noop" @refreshed="onChildRefreshed" />
         </a-tab-pane>
-        <a-tab-pane key="logs" :tab="'Logs'">
+        <a-tab-pane key="logs" :tab="$t('Logs')">
           <LogsTab @ready="noop" />
         </a-tab-pane>
       </a-tabs>

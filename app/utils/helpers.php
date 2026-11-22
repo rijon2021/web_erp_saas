@@ -91,65 +91,49 @@ class helpers
         return false;
     }
 
+    /**
+     * The tenant's default currency, or null when none is set or it was deleted.
+     * Read through the memoised settings row, so the relation loads once per
+     * request instead of three queries on every call (these run per sale line).
+     */
+    private static function defaultCurrency(): ?Currency
+    {
+        $settings = Setting::current();
+        if (! $settings || ! $settings->currency_id) {
+            return null;
+        }
+
+        $currency = $settings->Currency;
+
+        return ($currency && $currency->deleted_at === null) ? $currency : null;
+    }
+
     // Get Currency
     public function Get_Currency()
     {
-        $settings = Setting::with('Currency')->where('deleted_at', '=', null)->first();
-
-        if ($settings && $settings->currency_id) {
-            if (Currency::where('id', $settings->currency_id)
-                ->where('deleted_at', '=', null)
-                ->first()) {
-                $symbol = $settings['Currency']->symbol;
-            } else {
-                $symbol = '';
-            }
-        } else {
-            $symbol = '';
-        }
-
-        return $symbol;
+        return static::defaultCurrency()->symbol ?? '';
     }
 
     // Get Currency COde
     public function Get_Currency_Code()
     {
-        $settings = Setting::with('Currency')->where('deleted_at', '=', null)->first();
-
-        if ($settings && $settings->currency_id) {
-            if (Currency::where('id', $settings->currency_id)
-                ->where('deleted_at', '=', null)
-                ->first()) {
-                $code = $settings['Currency']->code;
-            } else {
-                $code = 'usd';
-            }
-        } else {
-            $code = 'usd';
-        }
-
-        return $code;
+        return static::defaultCurrency()->code ?? 'usd';
     }
 
     /**
-     * Whether the Multi-Currency module is enabled for this tenant. Read once
-     * per request and cached statically like price_decimals().
+     * Whether the Multi-Currency module is enabled for this tenant. Read through
+     * the memoised settings row (per request / per job, keyed by tenant — a
+     * function-level static here leaked one tenant's value to the next job of
+     * a queue worker).
      */
     public static function multi_currency_enabled()
     {
-        static $enabled = null;
-
-        if ($enabled === null) {
-            try {
-                $enabled = (bool) Setting::where('deleted_at', '=', null)
-                    ->value('enable_multi_currency');
-            } catch (\Throwable $e) {
-                // Settings table/column may not exist yet (tenant not migrated) — fall back.
-                $enabled = false;
-            }
+        try {
+            return (bool) (Setting::current()->enable_multi_currency ?? false);
+        } catch (\Throwable $e) {
+            // Settings table/column may not exist yet (tenant not migrated) — fall back.
+            return false;
         }
-
-        return $enabled;
     }
 
     /**
@@ -242,7 +226,7 @@ class helpers
             return ['currency_id' => null, 'exchange_rate' => null];
         }
 
-        $default = Setting::where('deleted_at', '=', null)->value('currency_id');
+        $default = Setting::current()->currency_id ?? null;
         if ((int) $currencyId === (int) $default) {
             return ['currency_id' => null, 'exchange_rate' => null];
         }
@@ -266,64 +250,210 @@ class helpers
      * Resolve the configured monetary precision.
      *
      * Driven by the "Enable 3 Decimal Pricing" setting: returns 3 when enabled,
-     * 2 otherwise. The setting is read once per request and cached statically so
-     * the many formatting call sites don't each hit the database.
+     * 2 otherwise. Read through the memoised settings row (Setting::current())
+     * so the many formatting call sites don't each hit the database, without a
+     * function-level static that would outlive the tenant in a queue worker.
      *
      * @return int 2 or 3
      */
     public static function price_decimals()
     {
-        static $decimals = null;
-
-        if ($decimals === null) {
-            try {
-                $enabled = (bool) Setting::where('deleted_at', '=', null)
-                    ->value('enable_3_decimal_pricing');
-                $decimals = $enabled ? 3 : 2;
-            } catch (\Throwable $e) {
-                // Settings table/column may not exist yet (e.g. during migration) — fall back.
-                $decimals = 2;
-            }
+        try {
+            return (bool) (Setting::current()->enable_3_decimal_pricing ?? false) ? 3 : 2;
+        } catch (\Throwable $e) {
+            // Settings table/column may not exist yet (e.g. during migration) — fall back.
+            return 2;
         }
-
-        return $decimals;
     }
 
     /**
-     * Format price for display based on price_format setting
+     * Apply the "Resize Product Images" setting to an Intervention image:
+     * when the switch is off the image is kept at its original dimensions,
+     * otherwise it is fitted into a product_image_max_size box (aspect ratio
+     * kept, never upscaled) — the behaviour that used to be hard-coded to
+     * 800x800 at every product upload site. Reads the memoised settings row
+     * (no function-level static: a queue worker serves many tenants).
      *
-     * @param float $number The number to format
-     * @param int|null $decimals Number of decimal places (default: the configured price precision, 2 or 3)
-     * @param string|null $priceFormat The price format key ('comma_dot', 'dot_comma', 'space_comma', or null for default)
-     * @return string Formatted price string
+     * @param  \Intervention\Image\Image  $image
+     * @return \Intervention\Image\Image  the same instance, for chaining ->save()
      */
-    public function formatPriceDisplay($number, $decimals = null, $priceFormat = null)
+    public static function apply_product_image_resize($image)
+    {
+        $max = 800;
+        try {
+            $setting = Setting::current();
+            // Never saved / column missing => keep the historical 800x800.
+            $enabled = $setting === null ? true : (bool) ($setting->product_image_resize ?? true);
+            $max = $enabled ? max(0, (int) ($setting->product_image_max_size ?? 800)) : 0;
+        } catch (\Throwable $e) {
+            // Settings table/column may not exist yet (e.g. during migration).
+        }
+
+        if ($max > 0) {
+            $image->resize($max, $max, function ($constraint) {
+                $constraint->aspectRatio();
+                $constraint->upsize();
+            });
+        }
+
+        return $image;
+    }
+
+    /**
+     * Accepted values of the "Currency Position" setting:
+     *   'before'         => "SAR 100" (the default)
+     *   'before_nospace' => "SAR100"
+     *   'after'          => "100 SAR"
+     *   'after_nospace'  => "100SAR"
+     * Mirrors CURRENCY_POSITIONS in resources/src/lib/priceFormat.js.
+     */
+    public const CURRENCY_POSITIONS = ['before', 'before_nospace', 'after', 'after_nospace'];
+
+    /**
+     * Where the currency symbol goes relative to the amount ("Currency
+     * Position" setting). Unknown/missing values read as 'before'.
+     *
+     * @return string one of self::CURRENCY_POSITIONS
+     */
+    public static function currency_position()
+    {
+        try {
+            $value = Setting::current()->currency_position ?? 'before';
+        } catch (\Throwable $e) {
+            $value = 'before';
+        }
+
+        return in_array($value, self::CURRENCY_POSITIONS, true) ? $value : 'before';
+    }
+
+    /** True when the symbol goes after the amount ('after' / 'after_nospace'). */
+    public static function currency_after(): bool
+    {
+        return str_starts_with(self::currency_position(), 'after');
+    }
+
+    /** True when the symbol touches the amount (the *_nospace positions). */
+    public static function currency_nospace(): bool
+    {
+        return str_ends_with(self::currency_position(), '_nospace');
+    }
+
+    /**
+     * "Hide Zero Decimals" system setting: whole-number amounts are shown
+     * without their fraction (100.00 => 100; 100.50 keeps its decimals).
+     * Display only; see format_price().
+     *
+     * @return bool
+     */
+    public static function hide_zero_decimals()
+    {
+        try {
+            return (bool) (Setting::current()->hide_zero_decimals ?? false);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Attach a currency symbol to an already-formatted amount, honouring the
+     * Currency Position setting. An empty symbol returns the amount alone.
+     * No Unicode bidi controls (dompdf has no bidi support and would print
+     * them as boxes).
+     *
+     * An Arabic/Hebrew symbol is joined with a no-break space instead of a
+     * plain one: the PDF controllers run ArPHP's arIdentify/utf8Glyphs over
+     * the HTML, and an Arabic run extends over following spaces and digits,
+     * so "ر.س 100.00" was reversed as a whole into "٠٠.١٠٠ س.ر". The no-break
+     * space ends the run at the symbol, leaving the amount untouched. Latin
+     * symbols keep the ASCII space (the ESC/POS text receipt is single-byte).
+     *
+     * The *_nospace positions drop the separator for Latin symbols ("$100").
+     * An Arabic/Hebrew symbol keeps its no-break space even then: with nothing
+     * between them the digits would join the Arabic run and be reversed.
+     *
+     * @param string|null $symbol
+     * @param string $formatted
+     * @return string
+     */
+    public static function with_currency($symbol, $formatted)
+    {
+        $symbol = trim((string) $symbol);
+        if ($symbol === '') {
+            return (string) $formatted;
+        }
+
+        $rtl = (bool) preg_match('/[\x{0590}-\x{08FF}\x{FB1D}-\x{FDFF}\x{FE70}-\x{FEFF}]/u', $symbol);
+        $sep = $rtl ? "\u{00A0}" : (self::currency_nospace() ? '' : ' ');
+
+        return self::currency_after()
+            ? $formatted.$sep.$symbol
+            : $symbol.$sep.$formatted;
+    }
+
+    /**
+     * Format an amount for display: thousands/decimal separators from the
+     * Price Format setting, the configured precision (2 or 3) unless
+     * $decimals is given, and the Hide Zero Decimals switch (a whole number
+     * drops its ".00"; any other fraction is kept). The single PHP-side
+     * formatter used by the PDFs, receipts and notification texts; mirrors
+     * formatPriceDisplay() in resources/src/lib/priceFormat.js.
+     *
+     * @param float|string|null $number
+     * @param int|null $decimals null = the configured price precision
+     * @param string|null $priceFormat 'comma_dot' | 'dot_comma' | 'space_comma' | null (= the setting; '' = default separators)
+     * @param bool|null $hideZeroDecimals null = the setting
+     * @return string
+     */
+    public static function format_price($number, $decimals = null, $priceFormat = null, $hideZeroDecimals = null)
     {
         $number = (float) $number;
         $decimals = $decimals === null ? self::price_decimals() : (int) $decimals;
+        if ($priceFormat === null) {
+            try {
+                $priceFormat = Setting::current()->price_format ?? null;
+            } catch (\Throwable $e) {
+                $priceFormat = null;
+            }
+        }
 
-        // If no price format specified, use default number_format
-        if (empty($priceFormat)) {
-            return number_format($number, $decimals, '.', ',');
-        }
-        
-        // Format based on price_format setting
         switch ($priceFormat) {
-            case 'comma_dot':
-                // 1,234.56 (thousand , decimal .)
-                return number_format($number, $decimals, '.', ',');
-                
-            case 'dot_comma':
-                // 1.234,56 (thousand . decimal ,)
-                return number_format($number, $decimals, ',', '.');
-                
-            case 'space_comma':
-                // 1 234,56 (thousand space, decimal ,)
-                return number_format($number, $decimals, ',', ' ');
-                
+            case 'dot_comma':   // 1.234,56
+                $dec = ',';
+                $thousands = '.';
+                break;
+            case 'space_comma': // 1 234,56
+                $dec = ',';
+                $thousands = ' ';
+                break;
+            case 'comma_dot':   // 1,234.56
             default:
-                // Fallback to default format
-                return number_format($number, $decimals, '.', ',');
+                $dec = '.';
+                $thousands = ',';
         }
+
+        $formatted = number_format($number, $decimals, $dec, $thousands);
+
+        $hide = $hideZeroDecimals === null ? self::hide_zero_decimals() : (bool) $hideZeroDecimals;
+        if ($hide && $decimals > 0) {
+            $pos = strrpos($formatted, $dec);
+            if ($pos !== false && preg_match('/^0+$/', substr($formatted, $pos + 1))) {
+                $formatted = substr($formatted, 0, $pos);
+            }
+        }
+
+        return $formatted;
+    }
+
+    /**
+     * Legacy name of format_price() (kept for callers outside this repo).
+     *
+     * @param float $number
+     * @param int|null $decimals
+     * @param string|null $priceFormat
+     * @return string
+     */
+    public static function formatPriceDisplay($number, $decimals = null, $priceFormat = null)
+    {
+        return self::format_price($number, $decimals, $priceFormat === null ? '' : $priceFormat);
     }
 }

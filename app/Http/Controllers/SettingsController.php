@@ -13,6 +13,8 @@ use App\Models\sms_gateway;
 use App\Models\User;
 use App\Models\UserWarehouse;
 use App\Models\Warehouse;
+use App\Services\ComboStockService;
+use App\Support\LoginPageAppearance;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Intervention\Image\ImageManagerStatic as Image;
@@ -26,12 +28,13 @@ class SettingsController extends Controller
         $this->authorizeForUser($request->user('api'), 'update', Setting::class);
 
         $setting = Setting::findOrFail($id);
+        $canRemoveBranding = Setting::canRemoveBranding();
         $currentAvatar = $setting->logo;
         // Only process logo if a file was actually uploaded
         if ($request->hasFile('logo') && $request->file('logo')->isValid()) {
             $image = $request->file('logo');
             $path = upload_public_path('settings');
-            $filename = rand(11111111, 99999999).$image->getClientOriginalName();
+            $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::imageExtension($image, 'image'));
 
             $image_resize = Image::make($image->getRealPath());
 
@@ -175,8 +178,10 @@ class SettingsController extends Controller
             'company_name_ar' => $request['company_name_ar'] ?? $setting->company_name_ar,
             'vat_number' => $request['vat_number'] ?? $setting->vat_number,
             'zatca_enabled' => ($request['zatca_enabled'] == '1' || $request['zatca_enabled'] == 'true' || $request['zatca_enabled'] === 1 || $request['zatca_enabled'] === true) ? 1 : 0,
-            'footer' => $request['footer'],
-            'developed_by' => $request['developed_by'],
+            // Without the remove_branding plan feature the stored platform
+            // branding is kept whatever the request sends.
+            'footer' => $canRemoveBranding ? $request['footer'] : $setting->footer,
+            'developed_by' => $canRemoveBranding ? $request['developed_by'] : $setting->developed_by,
             'is_invoice_footer' => $is_invoice_footer,
             'invoice_format' => $invoice_format,
             'invoice_logo_width' => $invoice_logo_width,
@@ -242,6 +247,31 @@ class SettingsController extends Controller
             'allow_overselling' => $request->has('allow_overselling')
                 ? (($request['allow_overselling'] == '1' || $request['allow_overselling'] == 'true' || $request['allow_overselling'] === 1 || $request['allow_overselling'] === true) ? 1 : 0)
                 : (int) ($setting->allow_overselling ?? 0),
+            // Warehouse Letterhead: invoices/receipts print the issuing
+            // warehouse instead of the company block (default off)
+            'enable_warehouse_letterhead' => $request->has('enable_warehouse_letterhead')
+                ? (($request['enable_warehouse_letterhead'] == '1' || $request['enable_warehouse_letterhead'] == 'true' || $request['enable_warehouse_letterhead'] === 1 || $request['enable_warehouse_letterhead'] === true) ? 1 : 0)
+                : (int) ($setting->enable_warehouse_letterhead ?? 0),
+            // Warehouse-scoped master data: when on, a user assigned to specific
+            // warehouses also sees only the products/customers/suppliers/brands
+            // connected to them. Documents are always restricted regardless.
+            'restrict_master_data_by_warehouse' => $request->has('restrict_master_data_by_warehouse')
+                ? (($request['restrict_master_data_by_warehouse'] == '1' || $request['restrict_master_data_by_warehouse'] == 'true' || $request['restrict_master_data_by_warehouse'] === 1 || $request['restrict_master_data_by_warehouse'] === true) ? 1 : 0)
+                : (int) ($setting->restrict_master_data_by_warehouse ?? 0),
+            // Warehouse-owned products: when on, a user assigned to specific
+            // warehouses sees only products whose home warehouse is theirs or
+            // that hold stock in one of theirs (default off)
+            'restrict_products_by_warehouse' => $request->has('restrict_products_by_warehouse')
+                ? (($request['restrict_products_by_warehouse'] == '1' || $request['restrict_products_by_warehouse'] == 'true' || $request['restrict_products_by_warehouse'] === 1 || $request['restrict_products_by_warehouse'] === true) ? 1 : 0)
+                : (int) ($setting->restrict_products_by_warehouse ?? 0),
+            // Customer performance score + rating on the customer page (default on)
+            'customer_performance_enabled' => $request->has('customer_performance_enabled')
+                ? (($request['customer_performance_enabled'] == '1' || $request['customer_performance_enabled'] == 'true' || $request['customer_performance_enabled'] === 1 || $request['customer_performance_enabled'] === true) ? 1 : 0)
+                : (int) ($setting->customer_performance_enabled ?? 1),
+            // Default supplier field on the product form (default off)
+            'product_supplier_enabled' => $request->has('product_supplier_enabled')
+                ? (($request['product_supplier_enabled'] == '1' || $request['product_supplier_enabled'] == 'true' || $request['product_supplier_enabled'] === 1 || $request['product_supplier_enabled'] === true) ? 1 : 0)
+                : (int) ($setting->product_supplier_enabled ?? 0),
             // Kitchen display toggle (when true, POS can route orders to the Kitchen Display page)
             'enable_kitchen_display' => $request->has('enable_kitchen_display')
                 ? (($request['enable_kitchen_display'] == '1' || $request['enable_kitchen_display'] == 'true' || $request['enable_kitchen_display'] === 1 || $request['enable_kitchen_display'] === true) ? 1 : 0)
@@ -267,23 +297,25 @@ class SettingsController extends Controller
             'backup_s3_bucket' => $request['backup_s3_bucket'] ?? null,
             'backup_s3_region' => $request['backup_s3_region'] ?? null,
             'backup_s3_access_key' => $request['backup_s3_access_key'] ?? null,
-            'backup_s3_secret_key' => $request->has('backup_s3_secret_key') && $request['backup_s3_secret_key'] !== '' ? $request['backup_s3_secret_key'] : $setting->backup_s3_secret_key,
+            'backup_s3_secret_key' => \App\Casts\EncryptedOrPlain::encrypt($request->has('backup_s3_secret_key') && $request['backup_s3_secret_key'] !== '' ? $request['backup_s3_secret_key'] : $setting->backup_s3_secret_key),
             'backup_s3_endpoint' => $request['backup_s3_endpoint'] ?? null,
             'backup_s3_path_style' => ($request['backup_s3_path_style'] == '1' || $request['backup_s3_path_style'] == 'true' || $request['backup_s3_path_style'] === 1 || $request['backup_s3_path_style'] === true) ? 1 : 0,
             // Google Drive settings
             'backup_gdrive_folder_id' => $request['backup_gdrive_folder_id'] ?? null,
-            'backup_gdrive_access_token' => $request->has('backup_gdrive_access_token') && $request['backup_gdrive_access_token'] !== '' ? $request['backup_gdrive_access_token'] : $setting->backup_gdrive_access_token,
-            'backup_gdrive_refresh_token' => $request->has('backup_gdrive_refresh_token') && $request['backup_gdrive_refresh_token'] !== '' ? $request['backup_gdrive_refresh_token'] : $setting->backup_gdrive_refresh_token,
+            'backup_gdrive_access_token' => \App\Casts\EncryptedOrPlain::encrypt($request->has('backup_gdrive_access_token') && $request['backup_gdrive_access_token'] !== '' ? $request['backup_gdrive_access_token'] : $setting->backup_gdrive_access_token),
+            'backup_gdrive_refresh_token' => \App\Casts\EncryptedOrPlain::encrypt($request->has('backup_gdrive_refresh_token') && $request['backup_gdrive_refresh_token'] !== '' ? $request['backup_gdrive_refresh_token'] : $setting->backup_gdrive_refresh_token),
             'backup_gdrive_client_id' => $request['backup_gdrive_client_id'] ?? null,
-            'backup_gdrive_client_secret' => $request->has('backup_gdrive_client_secret') && $request['backup_gdrive_client_secret'] !== '' ? $request['backup_gdrive_client_secret'] : $setting->backup_gdrive_client_secret,
+            'backup_gdrive_client_secret' => \App\Casts\EncryptedOrPlain::encrypt($request->has('backup_gdrive_client_secret') && $request['backup_gdrive_client_secret'] !== '' ? $request['backup_gdrive_client_secret'] : $setting->backup_gdrive_client_secret),
             // Dropbox settings
             'backup_dropbox_path' => $request['backup_dropbox_path'] ?? null,
-            'backup_dropbox_access_token' => $request->has('backup_dropbox_access_token') && $request['backup_dropbox_access_token'] !== '' ? $request['backup_dropbox_access_token'] : $setting->backup_dropbox_access_token,
+            'backup_dropbox_access_token' => \App\Casts\EncryptedOrPlain::encrypt($request->has('backup_dropbox_access_token') && $request['backup_dropbox_access_token'] !== '' ? $request['backup_dropbox_access_token'] : $setting->backup_dropbox_access_token),
             // POS offline sync toggle (when false, POS requires online and disables offline queueing)
             'offline_sync_enabled' => $request->has('offline_sync_enabled')
                 ? (($request['offline_sync_enabled'] == '1' || $request['offline_sync_enabled'] == 'true' || $request['offline_sync_enabled'] === 1 || $request['offline_sync_enabled'] === true) ? 1 : 0)
                 : (int) ($setting->offline_sync_enabled ?? 1),
         ] + $this->pharmacySettingsPayload($request, $setting));
+        // A query-builder update fires no model events: drop the memoised row.
+        Setting::forgetCurrent();
 
         if (! empty($currency)) {
             $currencyModel = \App\Models\Currency::find($currency);
@@ -311,6 +343,114 @@ class SettingsController extends Controller
                         ->update(['is_default' => false]);
                 }
             }
+        }
+
+        // Virtual combo stock — written apart so a tenant that has not run its
+        // migration yet can still save the rest of the form.
+        if ($request->has('virtual_combo_stock') && \Schema::hasColumn('settings', 'virtual_combo_stock')) {
+            $v = $request['virtual_combo_stock'];
+            Setting::whereId($id)->update(['virtual_combo_stock' => ($v == '1' || $v == 'true' || $v === 1 || $v === true) ? 1 : 0]);
+            Setting::forgetCurrent();
+        }
+
+        // E-invoicing switches (Angola AGT, DR Congo DGI) — written apart so a
+        // tenant that has not run the e-invoicing migration can still save.
+        foreach (['agt_einvoice_enabled', 'dgi_einvoice_enabled'] as $einvoiceFlag) {
+            if ($request->has($einvoiceFlag) && \Schema::hasColumn('settings', $einvoiceFlag)) {
+                $v = $request[$einvoiceFlag];
+                Setting::whereId($id)->update([$einvoiceFlag => ($v == '1' || $v == 'true' || $v === 1 || $v === true) ? 1 : 0]);
+                Setting::forgetCurrent();
+            }
+        }
+
+        // Features switches added by a later migration — written apart so a
+        // tenant that has not run 2026_11_02_000001 yet can still save the form.
+        $laterBoolFlags = ['product_image_resize', 'enable_pos_salesperson_switch'];
+        foreach ($laterBoolFlags as $laterFlag) {
+            if ($request->has($laterFlag) && \Schema::hasColumn('settings', $laterFlag)) {
+                $v = $request[$laterFlag];
+                Setting::whereId($id)->update([$laterFlag => ($v == '1' || $v == 'true' || $v === 1 || $v === true) ? 1 : 0]);
+                Setting::forgetCurrent();
+            }
+        }
+        if ($request->has('product_image_max_size') && \Schema::hasColumn('settings', 'product_image_max_size')) {
+            Setting::whereId($id)->update(['product_image_max_size' => max(50, min(5000, (int) $request['product_image_max_size']))]);
+            Setting::forgetCurrent();
+        }
+        // Global export defaults (JSON: scope, totals, pdf_orientation,
+        // filename_date, pdf_meta) — kept when the payload is malformed JSON.
+        if ($request->has('export_settings') && \Schema::hasColumn('settings', 'export_settings')
+            && is_string($request['export_settings']) && is_array(json_decode($request['export_settings'], true))) {
+            Setting::whereId($id)->update(['export_settings' => $request['export_settings']]);
+            Setting::forgetCurrent();
+        }
+
+        // Currency position (symbol before/after the amount, with or without a
+        // space) — also written apart, for the same not-yet-migrated reason.
+        if (in_array($request['currency_position'], \App\utils\helpers::CURRENCY_POSITIONS, true) && \Schema::hasColumn('settings', 'currency_position')) {
+            Setting::whereId($id)->update(['currency_position' => $request['currency_position']]);
+            Setting::forgetCurrent();
+        }
+
+        // Hide zero decimals (100.00 shown as 100) - written apart for the
+        // same not-yet-migrated reason.
+        if ($request->has('hide_zero_decimals') && \Schema::hasColumn('settings', 'hide_zero_decimals')) {
+            Setting::whereId($id)->update(['hide_zero_decimals' => in_array($request['hide_zero_decimals'], ['1', 1, true, 'true'], true) ? 1 : 0]);
+            Setting::forgetCurrent();
+        }
+
+        // Features > Edit Selling Price on Purchase - written apart for the
+        // same not-yet-migrated reason (2026_11_07_000003).
+        if ($request->has('purchase_update_selling_price') && \Schema::hasColumn('settings', 'purchase_update_selling_price')) {
+            Setting::whereId($id)->update(['purchase_update_selling_price' => in_array($request['purchase_update_selling_price'], ['1', 1, true, 'true'], true) ? 1 : 0]);
+            Setting::forgetCurrent();
+        }
+        if ($request->has('purchase_update_product_cost') && \Schema::hasColumn('settings', 'purchase_update_product_cost')) {
+            Setting::whereId($id)->update(['purchase_update_product_cost' => in_array($request['purchase_update_product_cost'], ['1', 1, true, 'true'], true) ? 1 : 0]);
+            Setting::forgetCurrent();
+        }
+
+        // Features > Different Prices per Store - written apart for the same
+        // not-yet-migrated reason (2026_11_09_000005).
+        if ($request->has('warehouse_prices_enabled') && \Schema::hasColumn('settings', 'warehouse_prices_enabled')) {
+            Setting::whereId($id)->update(['warehouse_prices_enabled' => in_array($request['warehouse_prices_enabled'], ['1', 1, true, 'true'], true) ? 1 : 0]);
+            Setting::forgetCurrent();
+        }
+
+        // Supplier Wallet switches (Settings > Features) - written apart for
+        // the same not-yet-migrated reason.
+        foreach (['supplier_wallet_enabled', 'supplier_wallet_allow_negative'] as $walletFlag) {
+            if ($request->has($walletFlag) && \Schema::hasColumn('settings', $walletFlag)) {
+                Setting::whereId($id)->update([$walletFlag => in_array($request[$walletFlag], ['1', 1, true, 'true'], true) ? 1 : 0]);
+                Setting::forgetCurrent();
+            }
+        }
+
+        // Customer Wallet switches (Settings > Features). Turning the wallet on
+        // creates / re-activates the "Customer Wallet" payment method; turning
+        // it off takes that method out of the payment forms.
+        foreach (['customer_wallet_enabled', 'customer_wallet_allow_negative'] as $walletFlag) {
+            if ($request->has($walletFlag) && \Schema::hasColumn('settings', $walletFlag)) {
+                $on = in_array($request[$walletFlag], ['1', 1, true, 'true'], true);
+                Setting::whereId($id)->update([$walletFlag => $on ? 1 : 0]);
+                Setting::forgetCurrent();
+                if ($walletFlag === 'customer_wallet_enabled') {
+                    $customerWallets = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+                    $customerWallets->syncPaymentMethod($on && $customerWallets->planAllows());
+                }
+            }
+        }
+
+        // Generated product codes: prefix + next number (blank = random codes
+        // as before). Written apart for the same not-yet-migrated reason.
+        if ($request->has('product_code_prefix') && \Schema::hasColumn('settings', 'product_code_prefix')) {
+            $prefix = preg_replace('/[^A-Za-z0-9\-_.\/]/', '', (string) $request['product_code_prefix']);
+            $next = (int) $request['product_code_next'];
+            Setting::whereId($id)->update([
+                'product_code_prefix' => $prefix !== '' ? mb_substr($prefix, 0, 20) : null,
+                'product_code_next' => $next > 0 ? $next : null,
+            ]);
+            Setting::forgetCurrent();
         }
 
         // Apply the new timezone to the current process right away; subsequent
@@ -409,6 +549,11 @@ class SettingsController extends Controller
 
         return response()->json([
             'pos_settings' => $PosSetting,
+            // Global invoice layout lives on the settings row; the POS Settings
+            // page reads it from here so the select reflects the stored value.
+            'invoice_format' => $settings && in_array($settings->invoice_format, ['thermal', 'a4'], true)
+                ? $settings->invoice_format
+                : 'thermal',
         ], 200);
 
     }
@@ -548,6 +693,11 @@ class SettingsController extends Controller
             $data['show_zatca_qr'] = ($request['show_zatca_qr'] == '1' || $request['show_zatca_qr'] == 'true' || $request['show_zatca_qr'] === true) ? 1 : 0;
         }
 
+        // Customer signature line under the receipt (column added by 2026_11_07_000005).
+        if ($request->has('show_signature_line') && \Illuminate\Support\Facades\Schema::hasColumn('pos_settings', 'show_signature_line')) {
+            $data['show_signature_line'] = ($request['show_signature_line'] == '1' || $request['show_signature_line'] == 'true' || $request['show_signature_line'] === true) ? 1 : 0;
+        }
+
         if ($request->has('cash_drawer_auto_open')) {
             $data['cash_drawer_auto_open'] = ($request['cash_drawer_auto_open'] == '1' || $request['cash_drawer_auto_open'] == 'true' || $request['cash_drawer_auto_open'] === true);
         }
@@ -632,7 +782,32 @@ class SettingsController extends Controller
         // Receipt layout (1, 2, 3, 4, 5) – only if sent (POS Receipt page)
         if ($request->has('receipt_layout')) {
             $candidate = (int) $request['receipt_layout'];
-            $data['receipt_layout'] = in_array($candidate, [1, 2, 3, 4, 5], true) ? $candidate : 1;
+            $data['receipt_layout'] = in_array($candidate, [1, 2, 3, 4, 5, 6], true) ? $candidate : 1;
+        }
+
+        // Manager PIN to remove POS items (column added by 2026_10_27_000003).
+        if ($request->has('require_void_approval') && \Illuminate\Support\Facades\Schema::hasColumn('pos_settings', 'require_void_approval')) {
+            $data['require_void_approval'] = ($request['require_void_approval'] == '1' || $request['require_void_approval'] == 'true' || $request['require_void_approval'] === true) ? 1 : 0;
+        }
+
+        // Ask before selling an item at 0 (column added by 2026_11_01_000003).
+        if ($request->has('confirm_zero_price') && \Illuminate\Support\Facades\Schema::hasColumn('pos_settings', 'confirm_zero_price')) {
+            $data['confirm_zero_price'] = ($request['confirm_zero_price'] == '1' || $request['confirm_zero_price'] == 'true' || $request['confirm_zero_price'] === true) ? 1 : 0;
+        }
+
+        // Stock quantity in the POS search dropdown (column added by 2026_11_07_000004).
+        if ($request->has('show_search_stock') && \Illuminate\Support\Facades\Schema::hasColumn('pos_settings', 'show_search_stock')) {
+            $data['show_search_stock'] = ($request['show_search_stock'] == '1' || $request['show_search_stock'] == 'true' || $request['show_search_stock'] === true) ? 1 : 0;
+        }
+
+        // Weighing-scale labels (System Settings > Weighing scale; columns
+        // added by 2026_10_27_000004).
+        if ($request->has('scale_barcode_enabled') && \Illuminate\Support\Facades\Schema::hasColumn('pos_settings', 'scale_barcode_enabled')) {
+            $data['scale_barcode_enabled'] = ($request['scale_barcode_enabled'] == '1' || $request['scale_barcode_enabled'] == 'true' || $request['scale_barcode_enabled'] === true) ? 1 : 0;
+        }
+
+        if ($request->has('scale_barcode_formats') && \Illuminate\Support\Facades\Schema::hasColumn('pos_settings', 'scale_barcode_formats')) {
+            $data['scale_barcode_formats'] = \App\Services\Pos\ScaleBarcode::validateFormats($request->input('scale_barcode_formats'));
         }
 
         if (! empty($data)) {
@@ -640,7 +815,7 @@ class SettingsController extends Controller
         }
 
         return response()->json(['success' => true]);
-    } 
+    }
 
     // -------------- Get All Settings ---------------\\
 
@@ -740,6 +915,8 @@ class SettingsController extends Controller
             $item['transfer_prefix'] = $settings->transfer_prefix ?? '';
             $item['sale_return_prefix'] = $settings->sale_return_prefix ?? '';
             $item['purchase_return_prefix'] = $settings->purchase_return_prefix ?? '';
+            $item['product_code_prefix'] = $settings->product_code_prefix ?? '';
+            $item['product_code_next'] = $settings->product_code_next ?? null;
             // ZATCA settings
             $item['company_name_ar'] = $settings->company_name_ar;
             $item['vat_number'] = $settings->vat_number;
@@ -751,8 +928,22 @@ class SettingsController extends Controller
             $item['date_format'] = $settings->date_format ?? 'YYYY-MM-DD';
             // Optional price format for frontend display (used by POS)
             $item['price_format'] = $settings->price_format;
+            $item['currency_position'] = $settings->currency_position ?? 'before';
             // Monetary precision toggle (3-decimal pricing)
             $item['enable_3_decimal_pricing'] = (bool) ($settings->enable_3_decimal_pricing ?? false);
+            // Whole-number amounts shown without their .00 fraction (display only)
+            $item['hide_zero_decimals'] = (bool) ($settings->hide_zero_decimals ?? false);
+            // Supplier Wallet (Settings > Features)
+            $item['supplier_wallet_enabled'] = (bool) ($settings->supplier_wallet_enabled ?? false);
+            $item['supplier_wallet_allow_negative'] = (bool) ($settings->supplier_wallet_allow_negative ?? false);
+            // Customer Wallet (Settings > Features)
+            $item['customer_wallet_enabled'] = (bool) ($settings->customer_wallet_enabled ?? false);
+            $item['customer_wallet_allow_negative'] = (bool) ($settings->customer_wallet_allow_negative ?? false);
+            // Selling price field on purchase lines (Settings > Features)
+            $item['purchase_update_selling_price'] = (bool) ($settings->purchase_update_selling_price ?? false);
+            $item['purchase_update_product_cost'] = (bool) ($settings->purchase_update_product_cost ?? false);
+            // Different prices per store (Settings > Features)
+            $item['warehouse_prices_enabled'] = (bool) ($settings->warehouse_prices_enabled ?? false);
             // Show product GTIN/barcode field on the product create form (default false)
             $item['show_product_gtin'] = (bool) ($settings->show_product_gtin ?? false);
             $item['show_serial_tracking'] = (bool) ($settings->show_serial_tracking ?? false);
@@ -763,8 +954,29 @@ class SettingsController extends Controller
             $item['enable_multi_currency'] = (bool) ($settings->enable_multi_currency ?? false);
             // Allow Overselling global switch (default false)
             $item['allow_overselling'] = (bool) ($settings->allow_overselling ?? false);
+            // Warehouse-owned products switch — returned here so the System
+            // Settings form does not load it undefined and turn it off on save.
+            $item['restrict_products_by_warehouse'] = (bool) ($settings->restrict_products_by_warehouse ?? false);
+            $item['virtual_combo_stock'] = (bool) ($settings->virtual_combo_stock ?? false);
+            $item['agt_einvoice_enabled'] = (bool) ($settings->agt_einvoice_enabled ?? false);
+            $item['dgi_einvoice_enabled'] = (bool) ($settings->dgi_einvoice_enabled ?? false);
+            $item['virtual_combo_stock_warning'] = $this->virtualComboSwitchWarning();
+            // Warehouse Letterhead master switch — must be returned here or the
+            // System Settings form loads it undefined and every save turns it off.
+            $item['enable_warehouse_letterhead'] = (bool) ($settings->enable_warehouse_letterhead ?? false);
             // Kitchen display toggle (default false)
             $item['enable_kitchen_display'] = (bool) ($settings->enable_kitchen_display ?? false);
+            // Every Features-tab switch must be returned here: the System
+            // Settings form posts the whole row, so a key it loads undefined
+            // is sent back as 0 and silently switched off on the next save.
+            $item['restrict_master_data_by_warehouse'] = (bool) ($settings->restrict_master_data_by_warehouse ?? false);
+            $item['customer_performance_enabled'] = (bool) ($settings->customer_performance_enabled ?? true);
+            $item['product_supplier_enabled'] = (bool) ($settings->product_supplier_enabled ?? false);
+            $item['product_image_resize'] = (bool) ($settings->product_image_resize ?? true);
+            $item['product_image_max_size'] = (int) ($settings->product_image_max_size ?? 800);
+            $item['enable_pos_salesperson_switch'] = (bool) ($settings->enable_pos_salesperson_switch ?? false);
+            // Global export defaults (JSON string or null = built-in defaults)
+            $item['export_settings'] = $settings->export_settings ?? null;
             // Accounting automatic journal generation toggle (default false = manual)
             $item['accounting_auto_generate_journals'] = (bool) ($settings->accounting_auto_generate_journals ?? false);
             // Purchase form section toggles (default off)
@@ -781,6 +993,13 @@ class SettingsController extends Controller
             $item['backup_s3_access_key'] = $settings->backup_s3_access_key ?? null;
             // Only include secret key if include_secrets is true (for security)
             $includeSecrets = $request->has('include_secrets') && ($request->input('include_secrets') == '1' || $request->input('include_secrets') == 'true' || $request->input('include_secrets') === 1 || $request->input('include_secrets') === true);
+            // get_Settings_data feeds the whole SPA (every staff role), so the cloud
+            // credentials are only released to users allowed to manage backups
+            // (UserPolicy::backup = `backup` or `setting_system` permission).
+            if ($includeSecrets) {
+                $viewer = $request->user('api');
+                $includeSecrets = $viewer && $viewer->can('backup', \App\Models\User::class);
+            }
             if ($includeSecrets) {
                 $item['backup_s3_secret_key'] = $settings->backup_s3_secret_key ?? null;
             } else {
@@ -842,7 +1061,7 @@ class SettingsController extends Controller
 
             $languages = Language::where('is_active', true)->get(['name', 'locale']);
             $accounts = Account::whereNull('deleted_at')->get(['id', 'account_name', 'account_num']);
-            $payment_methods = PaymentMethod::active()->whereNull('deleted_at')->get(['id', 'name']);
+            $payment_methods = PaymentMethod::active()->exceptCustomerWallet()->whereNull('deleted_at')->get(['id', 'name']);
 
             return response()->json([
                 'settings' => $item,
@@ -854,6 +1073,7 @@ class SettingsController extends Controller
                 'payment_methods' => $payment_methods,
                 'zones_array' => $zones_array,
                 'languages' => $languages,
+                'font_options' => Setting::fontOptions(),
             ], 200);
         } else {
             return response()->json(['statut' => 'error'], 500);
@@ -974,6 +1194,8 @@ class SettingsController extends Controller
             $item['transfer_prefix'] = $settings->transfer_prefix ?? '';
             $item['sale_return_prefix'] = $settings->sale_return_prefix ?? '';
             $item['purchase_return_prefix'] = $settings->purchase_return_prefix ?? '';
+            $item['product_code_prefix'] = $settings->product_code_prefix ?? '';
+            $item['product_code_next'] = $settings->product_code_next ?? null;
             // ZATCA settings
             $item['company_name_ar'] = $settings->company_name_ar;
             $item['vat_number'] = $settings->vat_number;
@@ -985,8 +1207,22 @@ class SettingsController extends Controller
             $item['date_format'] = $settings->date_format ?? 'YYYY-MM-DD';
             // Optional price format for frontend display (used by POS)
             $item['price_format'] = $settings->price_format;
+            $item['currency_position'] = $settings->currency_position ?? 'before';
             // Monetary precision toggle (3-decimal pricing)
             $item['enable_3_decimal_pricing'] = (bool) ($settings->enable_3_decimal_pricing ?? false);
+            // Whole-number amounts shown without their .00 fraction (display only)
+            $item['hide_zero_decimals'] = (bool) ($settings->hide_zero_decimals ?? false);
+            // Supplier Wallet (Settings > Features)
+            $item['supplier_wallet_enabled'] = (bool) ($settings->supplier_wallet_enabled ?? false);
+            $item['supplier_wallet_allow_negative'] = (bool) ($settings->supplier_wallet_allow_negative ?? false);
+            // Customer Wallet (Settings > Features)
+            $item['customer_wallet_enabled'] = (bool) ($settings->customer_wallet_enabled ?? false);
+            $item['customer_wallet_allow_negative'] = (bool) ($settings->customer_wallet_allow_negative ?? false);
+            // Selling price field on purchase lines (Settings > Features)
+            $item['purchase_update_selling_price'] = (bool) ($settings->purchase_update_selling_price ?? false);
+            $item['purchase_update_product_cost'] = (bool) ($settings->purchase_update_product_cost ?? false);
+            // Different prices per store (Settings > Features)
+            $item['warehouse_prices_enabled'] = (bool) ($settings->warehouse_prices_enabled ?? false);
             // Show product GTIN/barcode field on the product create form (default false)
             $item['show_product_gtin'] = (bool) ($settings->show_product_gtin ?? false);
             $item['show_serial_tracking'] = (bool) ($settings->show_serial_tracking ?? false);
@@ -997,8 +1233,29 @@ class SettingsController extends Controller
             $item['enable_multi_currency'] = (bool) ($settings->enable_multi_currency ?? false);
             // Allow Overselling global switch (default false)
             $item['allow_overselling'] = (bool) ($settings->allow_overselling ?? false);
+            // Warehouse-owned products switch — returned here so the System
+            // Settings form does not load it undefined and turn it off on save.
+            $item['restrict_products_by_warehouse'] = (bool) ($settings->restrict_products_by_warehouse ?? false);
+            $item['virtual_combo_stock'] = (bool) ($settings->virtual_combo_stock ?? false);
+            $item['agt_einvoice_enabled'] = (bool) ($settings->agt_einvoice_enabled ?? false);
+            $item['dgi_einvoice_enabled'] = (bool) ($settings->dgi_einvoice_enabled ?? false);
+            $item['virtual_combo_stock_warning'] = $this->virtualComboSwitchWarning();
+            // Warehouse Letterhead master switch — must be returned here or the
+            // System Settings form loads it undefined and every save turns it off.
+            $item['enable_warehouse_letterhead'] = (bool) ($settings->enable_warehouse_letterhead ?? false);
             // Kitchen display toggle (default false)
             $item['enable_kitchen_display'] = (bool) ($settings->enable_kitchen_display ?? false);
+            // Every Features-tab switch must be returned here: the System
+            // Settings form posts the whole row, so a key it loads undefined
+            // is sent back as 0 and silently switched off on the next save.
+            $item['restrict_master_data_by_warehouse'] = (bool) ($settings->restrict_master_data_by_warehouse ?? false);
+            $item['customer_performance_enabled'] = (bool) ($settings->customer_performance_enabled ?? true);
+            $item['product_supplier_enabled'] = (bool) ($settings->product_supplier_enabled ?? false);
+            $item['product_image_resize'] = (bool) ($settings->product_image_resize ?? true);
+            $item['product_image_max_size'] = (int) ($settings->product_image_max_size ?? 800);
+            $item['enable_pos_salesperson_switch'] = (bool) ($settings->enable_pos_salesperson_switch ?? false);
+            // Global export defaults (JSON string or null = built-in defaults)
+            $item['export_settings'] = $settings->export_settings ?? null;
             // Accounting automatic journal generation toggle (default false = manual)
             $item['accounting_auto_generate_journals'] = (bool) ($settings->accounting_auto_generate_journals ?? false);
             // Purchase form section toggles (default off)
@@ -1015,6 +1272,13 @@ class SettingsController extends Controller
             $item['backup_s3_access_key'] = $settings->backup_s3_access_key ?? null;
             // Only include secret key if include_secrets is true (for security)
             $includeSecrets = $request->has('include_secrets') && ($request->input('include_secrets') == '1' || $request->input('include_secrets') == 'true' || $request->input('include_secrets') === 1 || $request->input('include_secrets') === true);
+            // get_Settings_data feeds the whole SPA (every staff role), so the cloud
+            // credentials are only released to users allowed to manage backups
+            // (UserPolicy::backup = `backup` or `setting_system` permission).
+            if ($includeSecrets) {
+                $viewer = $request->user('api');
+                $includeSecrets = $viewer && $viewer->can('backup', \App\Models\User::class);
+            }
             if ($includeSecrets) {
                 $item['backup_s3_secret_key'] = $settings->backup_s3_secret_key ?? null;
             } else {
@@ -1084,6 +1348,7 @@ class SettingsController extends Controller
                 'sms_gateway' => $sms_gateway,
                 'zones_array' => $zones_array,
                 'languages' => $languages,
+                'font_options' => Setting::fontOptions(),
             ], 200);
         } else {
             return response()->json(['statut' => 'error'], 500);
@@ -1138,6 +1403,9 @@ class SettingsController extends Controller
             $item['login_hero_feature_3'] = $settings->login_hero_feature_3;
             $item['login_btn_text'] = $settings->login_btn_text;
             $item['login_footer_text'] = $settings->login_footer_text;
+            $item['login_bg_color'] = $settings->login_bg_color;
+            $item['login_page_options'] = LoginPageAppearance::options($settings);
+            $item['login_bg_image_url'] = LoginPageAppearance::imageUrl($settings);
 
             return response()->json([
                 'settings' => $item,
@@ -1162,7 +1430,7 @@ class SettingsController extends Controller
         // Handle Logo Upload
         if ($request->hasFile('logo') && $request->file('logo') != $currentLogo) {
             $logo = $request->file('logo');
-            $logoFilename = rand(11111111, 99999999).$logo->getClientOriginalName();
+            $logoFilename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::imageExtension($logo, 'image'));
             $logoPath = upload_public_path('settings/'.$logoFilename);
 
             $imageResize = Image::make($logo->getRealPath())->resize(80, 80);
@@ -1196,16 +1464,66 @@ class SettingsController extends Controller
         }
 
         // Update settings
+        // Without the remove_branding plan feature the stored platform
+        // branding is kept whatever the request sends.
+        $canRemoveBranding = Setting::canRemoveBranding();
         $setting->update([
-            'footer' => $request->input('footer'),
-            'developed_by' => $request->input('developed_by'),
+            'footer' => $canRemoveBranding ? $request->input('footer') : $setting->footer,
+            'developed_by' => $canRemoveBranding ? $request->input('developed_by') : $setting->developed_by,
             'app_name' => $request->input('app_name'),
             'page_title_suffix' => $request->input('page_title_suffix'),
             'customize_button_visible' => filter_var($request->input('customize_button_visible'), FILTER_VALIDATE_BOOLEAN),
             'hide_site_name' => filter_var($request->input('hide_site_name'), FILTER_VALIDATE_BOOLEAN),
             'logo' => $logoFilename,
             'favicon' => $faviconFilename,
-            // Login page appearance
+        ]);
+
+        return response()->json(['success' => true]);
+    }
+
+    /**
+     * Login page tab (System Settings). Read through get_appearance_settings;
+     * saved here so the Appearance tab never touches these columns.
+     * Multipart: texts, login_bg_color, login_page_options (JSON),
+     * optional login_bg_image file or remove_login_bg_image=1.
+     */
+    public function update_login_page_settings(Request $request, $id)
+    {
+        $this->authorizeForUser($request->user('api'), 'appearance_settings', Setting::class);
+
+        $request->validate([
+            'login_bg_image' => 'nullable|image|mimes:jpg,jpeg,png,webp|max:4096',
+        ]);
+
+        $setting = Setting::findOrFail($id);
+
+        if (\Schema::hasColumn('settings', 'login_bg_color')) {
+            // Rendered into an inline style on the login page, so hex only.
+            $setting->login_bg_color = LoginPageAppearance::color($request->input('login_bg_color'));
+        }
+
+        $oldImage = null;
+        if (\Schema::hasColumn('settings', 'login_page_options')) {
+            $setting->login_page_options = json_encode(LoginPageAppearance::sanitize($request->input('login_page_options')));
+
+            $oldImage = $setting->login_bg_image;
+            if ($request->hasFile('login_bg_image')) {
+                // The extension comes from the file's content, never the
+                // client's name: a PNG named x.php must not land in public/.
+                $image = $request->file('login_bg_image');
+                $extension = str_replace('jpeg', 'jpg', (string) $image->guessExtension());
+                if (! in_array($extension, ['jpg', 'png', 'webp'], true)) {
+                    return response()->json(['message' => 'The background image must be a JPG, PNG or WebP file.'], 422);
+                }
+                $filename = 'login-bg-'.uniqid().'.'.$extension;
+                $image->move(upload_public_path('settings'), $filename);
+                $setting->login_bg_image = $filename;
+            } elseif (filter_var($request->input('remove_login_bg_image'), FILTER_VALIDATE_BOOLEAN)) {
+                $setting->login_bg_image = null;
+            }
+        }
+
+        $setting->update([
             'login_hero_title' => $request->input('login_hero_title'),
             'login_hero_subtitle' => $request->input('login_hero_subtitle'),
             'login_panel_title' => $request->input('login_panel_title'),
@@ -1217,6 +1535,11 @@ class SettingsController extends Controller
             'login_btn_text' => $request->input('login_btn_text'),
             'login_footer_text' => $request->input('login_footer_text'),
         ]);
+
+        // Only once the new filename is saved.
+        if ($oldImage && $oldImage !== $setting->login_bg_image) {
+            @unlink(upload_public_path('settings/'.basename($oldImage)));
+        }
 
         return response()->json(['success' => true]);
     }
@@ -1246,7 +1569,7 @@ class SettingsController extends Controller
         // When the tenant has no icon yet (missing images/tenants/{id}/pwa),
         // pwa_icon_url() returns the shared /pwa_images default so the preview
         // still shows a valid image instead of a broken/404 one.
-        $appName = $setting->app_name ?? $setting->CompanyName ?? 'Stocky';
+        $appName = $setting->app_name ?? $setting->CompanyName ?? 'POS';
 
         return response()->json([
             'settings' => [
@@ -1483,8 +1806,31 @@ class SettingsController extends Controller
             'enable_multi_pack_selling' => (bool) ($settings->enable_multi_pack_selling ?? false),
             'enable_multi_currency' => (bool) ($settings->enable_multi_currency ?? false),
             'accounting_auto_generate_journals' => (bool) ($settings->accounting_auto_generate_journals ?? false),
+            'require_payment_account' => (bool) ($settings->require_payment_account ?? false),
             'allow_overselling' => (bool) ($settings->allow_overselling ?? false),
+            'restrict_master_data_by_warehouse' => (bool) ($settings->restrict_master_data_by_warehouse ?? false),
+            'restrict_products_by_warehouse' => (bool) ($settings->restrict_products_by_warehouse ?? false),
+            'virtual_combo_stock' => (bool) ($settings->virtual_combo_stock ?? false),
+            'customer_performance_enabled' => (bool) ($settings->customer_performance_enabled ?? true),
+            'product_supplier_enabled' => (bool) ($settings->product_supplier_enabled ?? false),
+            'enable_warehouse_letterhead' => (bool) ($settings->enable_warehouse_letterhead ?? false),
+            'agt_einvoice_enabled' => (bool) ($settings->agt_einvoice_enabled ?? false),
+            'dgi_einvoice_enabled' => (bool) ($settings->dgi_einvoice_enabled ?? false),
+        ], 'warnings' => [
+            // What flipping the switch would put at risk — shown in the
+            // confirmation dialog (null = nothing specific).
+            'virtual_combo_stock' => $this->virtualComboSwitchWarning(),
         ]], 200);
+    }
+
+    /** Risk of flipping virtual combo stock from its current value, or null. */
+    private function virtualComboSwitchWarning(): ?string
+    {
+        if (! \Schema::hasColumn('settings', 'virtual_combo_stock')) {
+            return null;
+        }
+
+        return app(ComboStockService::class)->switchRiskReason(! ComboStockService::enabled());
     }
 
     public function updateFeatureSettings(Request $request)
@@ -1498,8 +1844,19 @@ class SettingsController extends Controller
         $boolFields = [
             'enable_3_decimal_pricing', 'enable_kitchen_display', 'show_product_gtin', 'show_serial_tracking',
             'enable_multi_pack_selling', 'enable_multi_currency', 'accounting_auto_generate_journals',
-            'allow_overselling',
+            'require_payment_account',
+            'allow_overselling', 'restrict_master_data_by_warehouse', 'restrict_products_by_warehouse', 'customer_performance_enabled',
+            'product_supplier_enabled', 'enable_warehouse_letterhead',
         ];
+        // Added by a later migration: skip it until the tenant has the column.
+        if (\Schema::hasColumn('settings', 'virtual_combo_stock')) {
+            $boolFields[] = 'virtual_combo_stock';
+        }
+        foreach (['agt_einvoice_enabled', 'dgi_einvoice_enabled'] as $einvoiceFlag) {
+            if (\Schema::hasColumn('settings', $einvoiceFlag)) {
+                $boolFields[] = $einvoiceFlag;
+            }
+        }
 
         // Only fields present in the payload are written — anything omitted
         // keeps its stored value, mirroring the has() guards in update().
@@ -1513,8 +1870,157 @@ class SettingsController extends Controller
 
         if ($data) {
             Setting::whereId($setting->id)->update($data);
+            Setting::forgetCurrent();
         }
 
         return response()->json(['success' => true], 200);
+    }
+
+    // ------------------ Mobile app settings ------------------\\
+
+    /** Modules the app can hide; these keys are what the Flutter app checks. */
+    public const MOBILE_MODULE_KEYS = [
+        'dashboard', 'pos', 'products', 'sales', 'purchases', 'quotations',
+        'returns', 'customers', 'suppliers', 'expenses', 'adjustments',
+        'transfers', 'reports', 'accounting', 'store_orders', 'hrm', 'users',
+    ];
+
+    /**
+     * Every mobile-app knob shown in System Settings → Mobile App.
+     * Missing columns (migration not run) read as null and behave exactly
+     * like "not configured", so the app keeps its built-in defaults.
+     */
+    public function get_mobile_settings(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'appearance_settings', Setting::class);
+
+        $setting = Setting::where('deleted_at', '=', null)->first();
+        $logo = $setting->mobile_logo ?? null;
+        $logoPath = $logo ? upload_public_path('settings').DIRECTORY_SEPARATOR.$logo : null;
+
+        return response()->json([
+            'settings' => [
+                'id' => $setting ? $setting->id : null,
+                'mobile_app_enabled' => (bool) ($setting->mobile_app_enabled ?? true),
+                'mobile_app_name' => $setting->mobile_app_name ?? '',
+                'mobile_logo' => $logo ?? '',
+                'mobile_logo_url' => ($logo && $logoPath && file_exists($logoPath))
+                    ? '/'.upload_path('settings').'/'.$logo.'?v='.filemtime($logoPath)
+                    : null,
+                'mobile_primary_color' => $setting->mobile_primary_color ?? '',
+                'mobile_theme_mode' => $setting->mobile_theme_mode ?? 'system',
+                'mobile_min_version' => $setting->mobile_min_version ?? '',
+                'mobile_maintenance_message' => $setting->mobile_maintenance_message ?? '',
+                'mobile_modules' => ($setting && $setting->mobile_modules)
+                    ? json_decode($setting->mobile_modules, true)
+                    : null,
+                'mobile_offline_enabled' => (bool) ($setting->mobile_offline_enabled ?? true),
+                'mobile_scanner_enabled' => (bool) ($setting->mobile_scanner_enabled ?? true),
+                'mobile_allow_price_edit' => (bool) ($setting->mobile_allow_price_edit ?? true),
+                'mobile_support_phone' => $setting->mobile_support_phone ?? '',
+                'mobile_support_email' => $setting->mobile_support_email ?? '',
+                // Shown as placeholders when the matching field is left empty.
+                'app_name' => $setting->app_name ?? config('app.name'),
+                'default_logo_url' => receipt_logo_url($setting->logo ?? null),
+                'module_keys' => self::MOBILE_MODULE_KEYS,
+            ],
+        ]);
+    }
+
+    public function update_mobile_settings(Request $request)
+    {
+        $this->authorizeForUser($request->user('api'), 'appearance_settings', Setting::class);
+
+        $request->validate([
+            'logo' => 'sometimes|file|image|mimes:png,jpg,jpeg,webp|max:2048',
+            'mobile_app_name' => 'sometimes|nullable|string|max:120',
+            'mobile_primary_color' => 'sometimes|nullable|string|regex:/^#[0-9a-fA-F]{6}$/',
+            'mobile_theme_mode' => 'sometimes|nullable|in:system,light,dark',
+            'mobile_min_version' => 'sometimes|nullable|string|max:20',
+            'mobile_maintenance_message' => 'sometimes|nullable|string|max:500',
+            'mobile_modules' => 'sometimes|nullable|string',
+            'mobile_support_phone' => 'sometimes|nullable|string|max:40',
+            'mobile_support_email' => 'sometimes|nullable|email|max:120',
+        ]);
+
+        $setting = Setting::where('deleted_at', '=', null)->firstOrFail();
+
+        $boolean = function ($value, $default = true) {
+            if ($value === null) {
+                return $default;
+            }
+
+            return filter_var($value, FILTER_VALIDATE_BOOLEAN);
+        };
+
+        $setting->mobile_app_enabled = $boolean($request->input('mobile_app_enabled'));
+        $setting->mobile_app_name = $request->input('mobile_app_name') ?: null;
+        $setting->mobile_primary_color = $request->input('mobile_primary_color') ?: null;
+        $setting->mobile_theme_mode = $request->input('mobile_theme_mode') ?: 'system';
+        $setting->mobile_min_version = $request->input('mobile_min_version') ?: null;
+        $setting->mobile_maintenance_message = $request->input('mobile_maintenance_message') ?: null;
+        $setting->mobile_offline_enabled = $boolean($request->input('mobile_offline_enabled'));
+        $setting->mobile_scanner_enabled = $boolean($request->input('mobile_scanner_enabled'));
+        $setting->mobile_allow_price_edit = $boolean($request->input('mobile_allow_price_edit'));
+        $setting->mobile_support_phone = $request->input('mobile_support_phone') ?: null;
+        $setting->mobile_support_email = $request->input('mobile_support_email') ?: null;
+
+        // Only keys the app knows about are stored, so a stale browser tab
+        // cannot introduce unknown module flags.
+        if ($request->filled('mobile_modules')) {
+            $decoded = json_decode((string) $request->input('mobile_modules'), true);
+            if (is_array($decoded)) {
+                $clean = [];
+                foreach (self::MOBILE_MODULE_KEYS as $key) {
+                    if (array_key_exists($key, $decoded)) {
+                        $clean[$key] = (bool) $decoded[$key];
+                    }
+                }
+                $setting->mobile_modules = json_encode($clean);
+            }
+        }
+
+        // Stored with the workspace's other logos (images/tenants/{id}/settings).
+        if ($request->hasFile('logo') && $request->file('logo')->isValid()) {
+            $dir = upload_public_path('settings');
+            if (! file_exists($dir)) {
+                @mkdir($dir, 0755, true);
+            }
+
+            $filename = 'mobile-app-logo-'.time().'.png';
+            Image::make($request->file('logo')->getRealPath())
+                ->resize(512, 512, function ($constraint) {
+                    $constraint->aspectRatio();
+                    $constraint->upsize();
+                })
+                ->encode('png')
+                ->save($dir.DIRECTORY_SEPARATOR.$filename);
+
+            // Drop the previous file so uploads do not pile up.
+            $old = $setting->mobile_logo;
+            if ($old && $old !== $filename) {
+                $oldPath = $dir.DIRECTORY_SEPARATOR.$old;
+                if (file_exists($oldPath)) {
+                    @unlink($oldPath);
+                }
+            }
+
+            $setting->mobile_logo = $filename;
+        }
+
+        if ($request->boolean('remove_logo')) {
+            $old = $setting->mobile_logo;
+            if ($old) {
+                $oldPath = upload_public_path('settings').DIRECTORY_SEPARATOR.$old;
+                if (file_exists($oldPath)) {
+                    @unlink($oldPath);
+                }
+            }
+            $setting->mobile_logo = null;
+        }
+
+        $setting->save();
+
+        return response()->json(['success' => true]);
     }
 }

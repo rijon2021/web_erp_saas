@@ -14,5 +14,7 @@ class TrimStrings extends Middleware
     protected $except = [
         'password',
         'password_confirmation',
+        // POS Devices: the bridge's raw answer is HMAC-checked byte for byte.
+        'raw',
     ];
 }

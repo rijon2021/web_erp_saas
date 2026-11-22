@@ -25,8 +25,17 @@ class PaymentProofController extends Controller
     /** GET /store/my/orders/{id}/payment-proofs */
     public function index(Request $request, $id)
     {
-        $order = $this->ownedOrder($id);
+        return $this->indexFor($this->ownedOrder($id));
+    }
 
+    /** GET /store/order/{token}/payment-proofs — guest order (secret link). */
+    public function guestIndex(Request $request, $token)
+    {
+        return $this->indexFor(GuestOrderController::orderForToken($token));
+    }
+
+    protected function indexFor(OnlineOrder $order)
+    {
         return response()->json([
             'payment_method' => $order->payment_method,
             'payment_status' => $order->payment_status ?? 'pending',
@@ -39,8 +48,17 @@ class PaymentProofController extends Controller
     /** POST /store/my/orders/{id}/payment-proofs */
     public function store(Request $request, $id)
     {
-        $order = $this->ownedOrder($id);
+        return $this->storeFor($request, $this->ownedOrder($id));
+    }
 
+    /** POST /store/order/{token}/payment-proofs — guest order (secret link). */
+    public function guestStore(Request $request, $token)
+    {
+        return $this->storeFor($request, GuestOrderController::orderForToken($token));
+    }
+
+    protected function storeFor(Request $request, OnlineOrder $order)
+    {
         if (! StorePaymentMethodService::requiresProof($order->payment_method)) {
             return response()->json(['error' => __('messages.ProofNotApplicable')], 422);
         }
@@ -70,7 +88,10 @@ class PaymentProofController extends Controller
         }
 
         $file = $request->file('file');
-        $ext = strtolower($file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'jpg');
+        // Customers upload this: the stored extension comes from the content,
+        // never the client name (a PDF/HTML polyglot named .html would
+        // otherwise be served as a page under public/).
+        $ext = \App\Support\SafeUpload::contentExtension($file, ['jpg', 'png', 'webp', 'pdf'], 'file');
         $filename = (string) Str::uuid().'.'.$ext;
         $file->move($dir, $filename);
 

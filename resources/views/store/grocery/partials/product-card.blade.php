@@ -14,10 +14,11 @@
     return ['id' => (int) ($v->id ?? 0), 'name' => (string) ($v->name ?? ''), 'price' => (float) ($v->price ?? 0), 'display_price' => $final, 'display_price_formatted' => store_money($final), 'image' => product_image_url_or_null($v->image ?? null), 'stock' => (int) max(0, $v->stock ?? $v->qty ?? 0)];
   })->values();
   $productStock = $variants->isEmpty() ? (int) max(0, $p->stock ?? 0) : null;
+  $variantOptions = store_variant_options($p); // null = legacy flat list
   $isPreorder = (bool) ($p->is_preorder ?? false);
   $preorderAlways = (bool) ($p->preorder_always ?? false);
   $preorderDate = $p->preorder_available_date ? store_date($p->preorder_available_date) : null;
-  $quoteOnly = false;
+  $quoteOnly = (($p->type ?? '') === 'is_service');
   $allowOverselling = isset($s) ? (bool) ($s->allow_overselling ?? true) : true;
   // "Always in stock" products are sold regardless of stock: no cart cap, never shown out of stock.
   if ((bool) ($p->always_in_stock ?? false)) {
@@ -63,7 +64,7 @@
     <button type="button" class="gr-card-action js-quick-view" title="{{ __('messages.QuickView') }}" aria-label="{{ __('messages.QuickView') }}"
             data-id="{{ $p->id }}" data-slug="{{ $productSlug }}" data-name="{{ e($p->name) }}" data-price="{{ number_format($minPrice, \App\utils\helpers::price_decimals(), '.', '') }}"
             data-image="{{ $imgUrl }}" data-gallery='@json($galleryUrls)' data-currency="{{ $currency }}" data-description="{{ e($descShort) }}"
-            data-stock="{{ $isPreorderActive ? '' : ($productStock !== null ? $productStock : '') }}" data-delivery-date="{{ $preorderDate ?? '' }}" data-quote-only="{{ $quoteOnly ? '1' : '0' }}" data-variants='@json($variantPayload)'><x-store.icon name="eye" /></button>
+            data-stock="{{ $isPreorderActive ? '' : ($productStock !== null ? $productStock : '') }}" data-delivery-date="{{ $preorderDate ?? '' }}" data-quote-only="{{ $quoteOnly ? '1' : '0' }}" data-variants='@json($variantPayload)' data-options='@json($variantOptions)'><x-store.icon name="eye" /></button>
   </div>
   <div class="gr-card-body">
     @if($unitLine !== '')<span class="gr-card-unit">{{ $unitLine }}</span>@endif
@@ -82,7 +83,7 @@
                 data-out-of-stock="{{ $isAvailable ? '0' : '1' }}" data-is-preorder="{{ $isPreorderActive ? '1' : '0' }}"
                 data-id="{{ $p->id }}" data-slug="{{ $productSlug }}" data-name="{{ e($p->name) }}" data-price="{{ number_format($minPrice, \App\utils\helpers::price_decimals(), '.', '') }}"
                 data-image="{{ $imgUrl }}" data-gallery='@json($galleryUrls)' data-currency="{{ $currency }}" data-qty="1" data-product-id="{{ $p->id }}" data-product-image="{{ $imgUrl }}"
-                data-variants='@json($variantPayload)' data-stock="{{ $isPreorderActive ? '' : ($productStock !== null ? $productStock : '') }}" data-added-label="{{ __('messages.Added') }}">
+                data-variants='@json($variantPayload)' data-options='@json($variantOptions)' data-stock="{{ $isPreorderActive ? '' : ($productStock !== null ? $productStock : '') }}" data-added-label="{{ __('messages.Added') }}">
           @if($isPreorderActive)<x-store.icon name="clock" />@else<x-store.icon name="plus" />@endif{{ $isPreorderActive ? __('messages.PreOrder') : __('messages.Add') }}
         </button>
       @elseif($quoteOnly)

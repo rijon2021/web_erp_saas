@@ -9,7 +9,7 @@
 
     <a-drawer
       v-model:open="open"
-      placement="right"
+      :placement="ui.direction === 'rtl' ? 'left' : 'right'"
       root-class-name="cz-drawer"
       :width="300"
       :title="$t('Settings')"
@@ -17,7 +17,7 @@
     >
       <!-- Sidebar layout — legacy's "Sidebar 1 / Sidebar 2" picker. -->
       <div class="cz-section">
-        <div class="cz-label">Sidebar Layout</div>
+        <div class="cz-label">{{ $t('Sidebar_Layout') }}</div>
         <div class="cz-layouts">
           <button
             v-for="opt in SIDEBAR_LAYOUTS" :key="opt.value"
@@ -39,7 +39,7 @@
                 <span class="cz-body"></span>
               </template>
             </div>
-            <span>{{ opt.label }}</span>
+            <span>{{ $t(opt.labelKey) }}</span>
           </button>
         </div>
       </div>
@@ -48,7 +48,7 @@
 
       <!-- Primary colour -->
       <div class="cz-section">
-        <div class="cz-label">Primary Color</div>
+        <div class="cz-label">{{ $t('Primary_Color') }}</div>
         <div class="cz-swatches">
           <button
             v-for="c in PRESETS" :key="c"
@@ -60,10 +60,10 @@
           </button>
         </div>
         <div class="cz-custom">
-          <span>Custom:</span>
+          <span>{{ $t('Custom') }}:</span>
           <input type="color" :value="ui.primaryColor" @input="e => ui.setPrimaryColor(e.target.value)" />
           <code>{{ ui.primaryColor }}</code>
-          <a-button type="link" size="small" @click="ui.resetPrimaryColor()">Reset</a-button>
+          <a-button type="link" size="small" @click="ui.resetPrimaryColor()">{{ $t('Reset') }}</a-button>
         </div>
       </div>
 
@@ -71,7 +71,7 @@
 
       <!-- Dark mode -->
       <div class="cz-section cz-row">
-        <span class="cz-label" style="margin: 0">Dark Mode</span>
+        <span class="cz-label" style="margin: 0">{{ $t('DarkMode') }}</span>
         <a-switch :checked="ui.dark" @change="ui.toggleDark()" />
       </div>
 
@@ -79,7 +79,7 @@
 
       <!-- RTL -->
       <div class="cz-section cz-row">
-        <span class="cz-label" style="margin: 0">Enable RTL</span>
+        <span class="cz-label" style="margin: 0">{{ $t('Enable_RTL') }}</span>
         <a-switch :checked="ui.direction === 'rtl'" @change="v => ui.setRtl(v)" />
       </div>
 
@@ -118,7 +118,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import {
   SettingOutlined, CloseOutlined, CheckOutlined,
 } from '@ant-design/icons-vue';
-import { useUiStore } from '../stores/ui';
+import { useUiStore, DEFAULT_COLOR } from '../stores/ui';
 import { useAuthStore } from '../stores/auth';
 import { SUPPORTED_LOCALES } from '../i18n';
 import http from '../lib/http';
@@ -183,15 +183,17 @@ onMounted(async () => {
   } catch (e) { /* fall back to SUPPORTED_LOCALES */ }
 });
 
-// Legacy palette + the brand colour first.
-const PRESETS = ['#6d28d9', '#2f47c2', '#0f9d58', '#e91e63', '#ff9800', '#f44336', '#00bcd4', '#212121'];
+// Legacy palette, with the default colour (the admin's choice, else the
+// built-in brand colour) first.
+const BASE_PRESETS = ['#6d28d9', '#2f47c2', '#0f9d58', '#e91e63', '#ff9800', '#f44336', '#00bcd4', '#212121'];
+const PRESETS = [DEFAULT_COLOR, ...BASE_PRESETS.filter(c => c.toLowerCase() !== DEFAULT_COLOR)];
 
 // The sidebar layouts, like legacy's Sidebar picker.
 const SIDEBAR_LAYOUTS = [
-  { value: 'default', label: 'Default' },
-  { value: 'large', label: 'Large' },
-  { value: 'flat', label: 'Flat' },
-  { value: 'dark', label: 'Dark' },
+  { value: 'default', labelKey: 'Default' },
+  { value: 'large', labelKey: 'Large' },
+  { value: 'flat', labelKey: 'Sidebar_Flat' },
+  { value: 'dark', labelKey: 'Dark' },
 ];
 
 // Default true when the setting is absent, as legacy did.
@@ -205,7 +207,7 @@ function sameColor(c) {
 <style scoped>
 .cz-handle {
   position: fixed;
-  right: 24px;
+  inset-inline-end: 24px;
   bottom: 24px;
   z-index: 1001;
   width: 44px;
@@ -220,11 +222,11 @@ function sameColor(c) {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: right 0.2s;
+  transition: inset-inline-end 0.2s;
 }
-/* Slide clear of the right drawer (300px) so it doubles as a close button. */
+/* Slide clear of the drawer (300px, on the end side) so it doubles as a close button. */
 .cz-handle.open {
-  right: 324px;
+  inset-inline-end: 324px;
 }
 .cz-layouts {
   display: flex;
@@ -303,7 +305,7 @@ function sameColor(c) {
   width: 80%;
   border-radius: 2px;
   background: rgba(109, 40, 217, 0.5);
-  margin-left: 6px;
+  margin-inline-start: 6px;
 }
 .cz-lang {
   display: inline-flex;

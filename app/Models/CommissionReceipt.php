@@ -13,12 +13,13 @@ class CommissionReceipt extends Model
     protected $dates = ['deleted_at', 'paid_at'];
 
     protected $fillable = [
-        'sales_agent_id', 'Ref', 'amount', 'paid_at', 'payment_method_id', 'notes',
+        'sales_agent_id', 'Ref', 'amount', 'paid_at', 'payment_method_id', 'account_id', 'notes',
     ];
 
     protected $casts = [
         'sales_agent_id' => 'integer',
         'payment_method_id' => 'integer',
+        'account_id' => 'integer',
         'amount' => 'decimal:4',
         'paid_at' => 'date',
     ];
@@ -31,6 +32,11 @@ class CommissionReceipt extends Model
     public function paymentMethod()
     {
         return $this->belongsTo(PaymentMethod::class, 'payment_method_id');
+    }
+
+    public function account()
+    {
+        return $this->belongsTo(Account::class, 'account_id');
     }
 
     public function saleCommissions()

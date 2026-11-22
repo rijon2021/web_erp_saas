@@ -8,6 +8,8 @@ use App\Models\AdjustmentDetailBatch;
 use App\Models\Damage;
 use App\Models\DamageDetail;
 use App\Models\DamageDetailBatch;
+use App\Models\MrpProductionOrder;
+use App\Models\MrpProductionOrderMaterialBatch;
 use App\Models\Product;
 use App\Models\product_warehouse;
 use App\Models\ProductBatch;
@@ -32,6 +34,7 @@ use App\Models\TransferDetailBatch;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 
 /**
  * BatchService
@@ -51,6 +54,8 @@ class BatchService
      * Whether the schema supports batch tracking. Cached per-request.
      */
     protected ?bool $supported = null;
+
+    protected ?bool $transferPicksSupported = null;
 
     public function isSupported(): bool
     {
@@ -183,6 +188,27 @@ class BatchService
         return $out;
     }
 
+    /**
+     * Quantity-weighted average unit cost of the batch rows on a raw request
+     * detail row, or null when the row carries no priced batch. Rows without a
+     * unit cost are ignored on both sides of the division, matching the
+     * front-end's batchWeightedAvgCost() so the two never disagree.
+     */
+    public function weightedAverageCostForRow(array $row): ?float
+    {
+        $qty = 0.0;
+        $value = 0.0;
+        foreach ($this->extractBatchesFromRow($row) as $b) {
+            if ($b['unit_cost'] === null) {
+                continue;
+            }
+            $qty += (float) $b['qty'];
+            $value += (float) $b['qty'] * (float) $b['unit_cost'];
+        }
+
+        return $qty > 0 ? $value / $qty : null;
+    }
+
     protected function normalizeDate($v): ?string
     {
         if ($v === null || $v === '' || $v === 'null') {
@@ -266,16 +292,18 @@ class BatchService
      *
      * @return array<int, array<string, mixed>>
      */
-    public function availableBatchesForSale(int $productId, ?int $variantId, int $warehouseId): array
+    public function availableBatchesForSale(int $productId, ?int $variantId, int $warehouseId, bool $includeEmpty = false): array
     {
         if (! $this->isSupported() || $productId <= 0 || $warehouseId <= 0) {
             return [];
         }
 
+        // $includeEmpty: an "add" adjustment restocks a batch, so batches that
+        // are currently at zero are legitimate targets there.
         $query = ProductBatch::active()
             ->forProduct($productId)
             ->forWarehouse($warehouseId)
-            ->where('qty', '>', 0);
+            ->when(! $includeEmpty, fn ($q) => $q->where('qty', '>', 0));
 
         if ($variantId !== null) {
             $query->where('product_variant_id', $variantId);
@@ -1335,6 +1363,67 @@ class BatchService
             }
         }
 
+        // --- Manufacturing: finished goods received from a production order (qty IN) ---
+        if (Schema::hasTable('mrp_production_orders') && Schema::hasColumn('mrp_production_orders', 'product_batch_id')) {
+            $orders = MrpProductionOrder::with('warehouse:id,name')
+                ->whereNull('deleted_at')
+                ->where('product_batch_id', $batchId)
+                ->where('status', 'completed')
+                ->get();
+
+            foreach ($orders as $order) {
+                $date = $order->actual_end ? $order->actual_end->toDateString() : ($order->production_date ? $order->production_date->toDateString() : null);
+                $movements->push([
+                    'type' => 'production',
+                    'direction' => 'in',
+                    'date' => $date,
+                    'sort_key' => $this->buildSortKey($date, $order->id),
+                    'ref' => $order->reference,
+                    'ref_id' => (int) $order->id,
+                    'party_label' => 'Warehouse',
+                    'party_name' => optional($order->warehouse)->name,
+                    'party_id' => $order->warehouse_id ? (int) $order->warehouse_id : null,
+                    'qty_in' => (float) $order->qty_produced,
+                    'qty_out' => 0.0,
+                    'unit_value' => (float) $order->unit_cost > 0 ? (float) $order->unit_cost : null,
+                    'unit_label' => 'unit_cost',
+                    'pivot_id' => (int) $order->id,
+                ]);
+            }
+        }
+
+        // --- Manufacturing: raw material issued to a production order (qty OUT) ---
+        if (Schema::hasTable('mrp_production_order_material_batches')) {
+            $rows = MrpProductionOrderMaterialBatch::with(['material.order.warehouse:id,name'])
+                ->where('product_batch_id', $batchId)
+                ->get();
+
+            foreach ($rows as $r) {
+                $material = $r->material;
+                $order = $material ? $material->order : null;
+                if (! $order) {
+                    continue;
+                }
+                $date = $order->actual_start ? $order->actual_start->toDateString() : ($order->planned_start ? $order->planned_start->toDateString() : null);
+                $movements->push([
+                    'type' => 'production_consumption',
+                    'direction' => 'out',
+                    'date' => $date,
+                    'sort_key' => $this->buildSortKey($date, $order->id),
+                    'ref' => $order->reference,
+                    'ref_id' => (int) $order->id,
+                    'party_label' => 'Warehouse',
+                    'party_name' => optional($order->warehouse)->name,
+                    'party_id' => $order->warehouse_id ? (int) $order->warehouse_id : null,
+                    'qty_in' => 0.0,
+                    'qty_out' => (float) $r->qty,
+                    'unit_value' => $r->unit_cost !== null ? (float) $r->unit_cost : null,
+                    'unit_label' => 'unit_cost',
+                    'pivot_id' => (int) $r->id,
+                ]);
+            }
+        }
+
         // --- Quotations (informational — do NOT move stock) ---
         // Quotations are proposals; they reserve a batch but don't debit ProductBatch.qty.
         // We surface them in the history view so users can trace allocations, but report
@@ -1773,16 +1862,161 @@ class BatchService
         return $clean;
     }
 
+    /**
+     * Whether line picks can be kept until approval (transfer_details.batch_picks).
+     */
+    public function transferPicksSupported(): bool
+    {
+        if ($this->transferPicksSupported === null) {
+            $this->transferPicksSupported = $this->isSupported()
+                && Schema::hasTable('transfer_detail_batches')
+                && Schema::hasColumn('transfer_details', 'batch_picks');
+        }
+
+        return $this->transferPicksSupported;
+    }
+
+    /**
+     * Keep each line's picked source batches on the TransferDetail, so a
+     * transfer that doesn't move stock yet (new transfers start pending
+     * approval) can apply them when it does. Input rows and persisted details
+     * are aligned by position. A row without a `batches` key (a client that
+     * doesn't send picks) leaves the saved picks alone.
+     */
+    public function rememberTransferPicks(array $inputDetails, $persistedDetails): void
+    {
+        if (! $this->transferPicksSupported()) {
+            return;
+        }
+
+        $persistedDetails = collect($persistedDetails)->values();
+
+        foreach (array_values($inputDetails) as $i => $row) {
+            $detail = $persistedDetails->get($i);
+            if (! $detail || ! is_array($row) || ! array_key_exists('batches', $row)) {
+                continue;
+            }
+
+            $picks = $this->productIsTracked($row['product_id'] ?? $detail->product_id)
+                ? $this->extractTransferBatchesFromRow($row)
+                : [];
+
+            TransferDetail::whereKey($detail->id)->update([
+                'batch_picks' => $picks ? json_encode($picks) : null,
+            ]);
+        }
+    }
+
+    /**
+     * Apply the remembered picks of a transfer that has just started moving
+     * stock (approval). Lines whose batches already moved are skipped, and a
+     * pick the source batch can no longer cover refuses the approval.
+     */
+    public function applyRememberedTransferPicks(Transfer $transfer): void
+    {
+        if (! $this->transferPicksSupported() || ! in_array($transfer->statut, ['completed', 'sent'], true)) {
+            return;
+        }
+
+        foreach (TransferDetail::where('transfer_id', $transfer->id)->get() as $detail) {
+            if (! $this->productIsTracked($detail->product_id)
+                || TransferDetailBatch::where('transfer_detail_id', $detail->id)->exists()) {
+                continue;
+            }
+
+            $picks = $this->decodeTransferPicks($detail->batch_picks);
+            if (! empty($picks)) {
+                $this->applyTransferBatchesToDetail($transfer, $detail, $picks);
+            }
+        }
+    }
+
+    /**
+     * Remembered (not yet applied) picks per detail id, in the same shape as
+     * batchesForTransferDetails() so edit/show can fall back to them while a
+     * transfer is pending.
+     */
+    public function pickedBatchesForTransferDetails($transferDetails): array
+    {
+        if (! $this->transferPicksSupported()) {
+            return [];
+        }
+
+        $picksByDetail = [];
+        foreach (collect($transferDetails) as $detail) {
+            $picks = $this->decodeTransferPicks($detail->batch_picks ?? null);
+            if (! empty($picks) && isset($detail->id)) {
+                $picksByDetail[(int) $detail->id] = $picks;
+            }
+        }
+        if (empty($picksByDetail)) {
+            return [];
+        }
+
+        $batchIds = collect($picksByDetail)->flatten(1)->pluck('source_batch_id')->unique()->all();
+        $batches = ProductBatch::withTrashed()->whereIn('id', $batchIds)->get()->keyBy('id');
+
+        $out = [];
+        foreach ($picksByDetail as $detailId => $picks) {
+            foreach ($picks as $p) {
+                $src = $batches->get($p['source_batch_id']);
+                if (! $src) {
+                    continue;
+                }
+                $out[$detailId][] = [
+                    'source_batch_id' => (int) $src->id,
+                    'dest_batch_id' => null,
+                    'batch_no' => (string) $src->batch_no,
+                    'expiry_date' => $src->expiry_date ? $src->expiry_date->format('Y-m-d') : null,
+                    'mfg_date' => $src->mfg_date ? $src->mfg_date->format('Y-m-d') : null,
+                    'qty' => (float) $p['qty'],
+                    'unit_cost' => $p['unit_cost'] ?? ($src->unit_cost !== null ? (float) $src->unit_cost : null),
+                    'status' => (string) $src->status,
+                ];
+            }
+        }
+
+        return $out;
+    }
+
+    protected function decodeTransferPicks($raw): array
+    {
+        $decoded = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+
+        return is_array($decoded) ? $this->extractTransferBatchesFromRow([
+            'batches' => array_map(fn ($p) => [
+                'product_batch_id' => $p['source_batch_id'] ?? 0,
+                'qty' => $p['qty'] ?? 0,
+                'unit_cost' => $p['unit_cost'] ?? null,
+            ], array_filter($decoded, 'is_array')),
+        ]) : [];
+    }
+
     protected function applyTransferBatchesToDetail(Transfer $transfer, TransferDetail $detail, array $batches): void
     {
         foreach ($batches as $b) {
-            $src = ProductBatch::find($b['source_batch_id']);
-            if (! $src) {
-                continue;
-            }
             $take = (float) $b['qty'];
             if ($take <= 0) {
                 continue;
+            }
+
+            // The pick must still be this line's batch at the source and still
+            // cover the quantity: picks are kept from creation until approval,
+            // and the batch may have been sold from in between. Refusing keeps
+            // the per-batch ledger in step with warehouse stock.
+            $src = ProductBatch::find($b['source_batch_id']);
+            if (! $src
+                || (int) $src->product_id !== (int) $detail->product_id
+                || (int) $src->warehouse_id !== (int) $transfer->from_warehouse_id
+                || ($detail->product_variant_id !== null && (int) $src->product_variant_id !== (int) $detail->product_variant_id)) {
+                throw ValidationException::withMessages([
+                    'batches' => ['A selected batch is no longer available in the source warehouse. Edit the transfer and pick its batches again.'],
+                ]);
+            }
+            if ((float) $src->qty + 0.0001 < $take) {
+                throw ValidationException::withMessages([
+                    'batches' => ["Batch {$src->batch_no} has only ".(float) $src->qty." left in the source warehouse ({$take} needed). Edit the transfer and pick its batches again."],
+                ]);
             }
 
             // Debit source.

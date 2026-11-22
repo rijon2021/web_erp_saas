@@ -1,8 +1,8 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Import Customers"
-      :breadcrumb="[$t('People'), $t('Customers'), 'Import']"
+      :title="$t('Import_Customers')"
+      :breadcrumb="[$t('People'), $t('Customers'), $t('Imp_Import')]"
     >
       <template #extra>
         <a-button @click="$router.push('/customers')">{{ $t('Back') }}</a-button>
@@ -16,24 +16,17 @@
             ref="dz"
             :file="file"
             :accept="accept"
-            title="Click or drop your Excel file here"
-            hint="Allowed formats: XLSX, XLS · Max size: 20MB"
+            :title="$t('Imp_Drop_Excel_File')"
+            :hint="$t('Imp_Allowed_Excel_20MB')"
             :disabled="uploading"
             @file="loadFile"
             @clear="clearFile()"
           />
 
-          <a-alert v-if="errorMessages.length" type="error" style="margin-top: 16px" show-icon>
-            <template #message>Import failed. Fix the issues below:</template>
-            <template #description>
-              <ul style="margin: 0; padding-left: 18px">
-                <li v-for="(err, idx) in errorMessages" :key="'err-' + idx">{{ err }}</li>
-              </ul>
-            </template>
-          </a-alert>
+          <ImportErrorList :errors="errorMessages" filename="customer_import_errors" />
 
           <a-alert v-if="warningMessages.length" type="warning" style="margin-top: 16px" show-icon>
-            <template #message>Warnings</template>
+            <template #message>{{ $t('Warnings') }}</template>
             <template #description>
               <ul style="margin: 0; padding-left: 18px">
                 <li v-for="(w, idx) in warningMessages" :key="'warn-' + idx">{{ w }}</li>
@@ -45,22 +38,22 @@
 
           <div style="display: flex; justify-content: center; gap: 8px; margin-top: 20px; flex-wrap: wrap">
             <a-button type="primary" :disabled="!canSubmit || uploading" :loading="uploading" @click="submit">
-              Import now
+              {{ $t('Imp_Import_Now') }}
             </a-button>
             <a-button href="/import/exemples/customers.xlsx" target="_blank" rel="noopener">
-              <DownloadOutlined /> Download example
+              <DownloadOutlined /> {{ $t('Download_exemple') }}
             </a-button>
-            <a-button :disabled="!file || uploading" @click="clearFile()">Reset</a-button>
+            <a-button :disabled="!file || uploading" @click="clearFile()">{{ $t('Reset') }}</a-button>
           </div>
       </div>
     </a-card>
 
     <!-- Expected file format -->
-    <a-card size="small" :title="'Expected file format'">
+    <a-card size="small" :title="$t('Imp_Expected_File_Format')">
       <template #extra>
         <span style="font-size: 12px; color: rgba(var(--ink-rgb), 0.45)">
-          One row per customer ·
-          <a-tag color="green" style="margin: 0">green *</a-tag> = required
+          {{ $t('Imp_One_Row_Per_Customer') }} ·
+          <a-tag color="green" style="margin: 0">{{ $t('Imp_Green_Star') }}</a-tag> {{ $t('Imp_Equals_Required') }}
         </span>
       </template>
       <a-space wrap style="margin-bottom: 12px">
@@ -73,12 +66,12 @@
         size="small" :pagination="false" :scroll="{ x: 'max-content' }" row-key="code"
       />
       <ul style="padding-left: 18px; margin: 12px 0 0 0; font-size: 12px">
-        <li><strong>code</strong> must be an integer and unique (the database column is INT).</li>
-        <li><strong>Username</strong> is required (column name in file: <strong>name</strong>).</li>
-        <li><strong>firstname</strong> and <strong>lastname</strong> are optional.</li>
-        <li><strong>Address</strong> is the address field name expected by the backend.</li>
-        <li><strong>opening_balance</strong> is optional; if present it must be numeric and represents previous dues for this customer.</li>
-        <li><strong>email</strong> should be valid if provided; include the country code in <strong>phone</strong> when possible.</li>
+        <li><i18n-t keypath="Imp_Cust_Help_Code" tag="span"><template #code><strong>code</strong></template></i18n-t></li>
+        <li><i18n-t keypath="Imp_Cust_Help_Username" tag="span"><template #username><strong>Username</strong></template><template #name><strong>name</strong></template></i18n-t></li>
+        <li><i18n-t keypath="Imp_Cust_Help_Names" tag="span"><template #firstname><strong>firstname</strong></template><template #lastname><strong>lastname</strong></template></i18n-t></li>
+        <li><i18n-t keypath="Imp_Cust_Help_Address" tag="span"><template #address><strong>Address</strong></template></i18n-t></li>
+        <li><i18n-t keypath="Imp_Cust_Help_Opening" tag="span"><template #opening_balance><strong>opening_balance</strong></template></i18n-t></li>
+        <li><i18n-t keypath="Imp_Cust_Help_Email" tag="span"><template #email><strong>email</strong></template><template #phone><strong>phone</strong></template></i18n-t></li>
       </ul>
     </a-card>
   </div>
@@ -94,14 +87,17 @@
  */
 import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { notification } from 'ant-design-vue';
 import { DownloadOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import ImportErrorList from '../../components/ImportErrorList.vue';
 import ImportDropzone from '../../components/ImportDropzone.vue';
 import { uploadForm } from '../../lib/upload';
 import { start as startProgress, done as doneProgress } from '../../lib/progress';
 
 const router = useRouter();
+const { t } = useI18n();
 
 const endpoint = 'customers/import';
 const file = ref(null);
@@ -155,10 +151,10 @@ function clearErrors() {
 function loadFile(f) {
   clearErrors();
   const msgs = [];
-  if (f.size > maxSize) msgs.push('File is too large. Please upload a file under the 20MB limit.');
+  if (f.size > maxSize) msgs.push(t('Imp_File_Too_Large_20MB'));
   const name = f.name || '';
   const ext = name.split('.').pop().toLowerCase();
-  if (['xlsx', 'xls'].indexOf(ext) === -1) msgs.push('Unsupported file type. Please upload an .xlsx or .xls file.');
+  if (['xlsx', 'xls'].indexOf(ext) === -1) msgs.push(t('Imp_Unsupported_Excel'));
   if (msgs.length) {
     errorMessages.value = msgs;
     clearFile(false);
@@ -194,7 +190,7 @@ function onlyErrorsArray(data) {
 
 async function submit() {
   if (!file.value) {
-    errorMessages.value = ['Please choose a file to import.'];
+    errorMessages.value = [t('Imp_Choose_File')];
     return;
   }
   clearErrors();
@@ -216,8 +212,8 @@ async function submit() {
         ? errs
         : (data.message && data.message.trim().toLowerCase() !== 'validation failed'
           ? [data.message]
-          : ['Please fix the highlighted errors in your file and try again.']);
-      toast('Check the error list and fix your file.', 'Import failed', 'danger');
+          : [t('Imp_Fix_Highlighted_Errors')]);
+      toast(t('Imp_Check_Error_List'), t('Imp_Import_Failed'), 'danger');
       return;
     }
 
@@ -225,12 +221,12 @@ async function submit() {
       warningMessages.value = data.warnings;
     }
     const count = data.imported || 0;
-    toast(count + ' customers imported successfully.', 'Success', 'success');
+    toast(t('Imp_Customers_Imported', { count }), t('Success'), 'success');
     router.push('/customers');
   } catch (e) {
-    const msg = e && e.message ? String(e.message) : 'Network error. Please try again.';
+    const msg = e && e.message ? String(e.message) : t('Imp_Network_Error_Retry');
     errorMessages.value = [msg];
-    toast('Upload failed due to a network error.', 'Error', 'danger');
+    toast(t('Imp_Upload_Network_Failed'), t('Imp_Error'), 'danger');
   } finally {
     doneProgress();
     uploading.value = false;

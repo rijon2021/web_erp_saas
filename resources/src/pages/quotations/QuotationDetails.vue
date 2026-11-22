@@ -15,6 +15,7 @@
             <template #icon><ArrowLeftOutlined /></template>
             {{ $t('Back') }}
           </a-button>
+          <AuditHistoryButton type="quotation" />
           <a-button @click="printInvoice">
             <template #icon><PrinterOutlined /></template>
             {{ $t('print') }}
@@ -91,7 +92,7 @@
             <div v-if="quote.client_phone">{{ $t('Phone') }}: {{ quote.client_phone }}</div>
             <div v-if="quote.client_email">{{ $t('Email') }}: {{ quote.client_email }}</div>
             <div v-if="quote.client_adr">{{ $t('Adress') }}: {{ quote.client_adr }}</div>
-            <div v-if="quote.client_tax">Tax #: {{ quote.client_tax }}</div>
+            <div v-if="quote.client_tax">{{ $t('Tax_Hash') }}: {{ quote.client_tax }}</div>
           </div>
         </a-col>
         <a-col :xs="24" :md="12">
@@ -117,7 +118,7 @@
           <template v-if="column.key === 'product'">
             <div style="font-weight: 500">{{ record.name }}</div>
             <div class="muted">{{ record.code }}</div>
-            <div v-if="record.is_imei && record.imei_number" class="muted">SN: {{ record.imei_number }}</div>
+            <div v-if="record.is_imei && record.imei_number" class="muted">{{ $t('SN') }}: {{ record.imei_number }}</div>
           </template>
           <template v-else-if="column.key === 'price'">{{ docMoney(record.price) }}</template>
           <template v-else-if="column.key === 'quantity'">
@@ -133,13 +134,13 @@
       <div class="inv-summary">
         <!-- Summary labels hardcoded English in legacy's invoice too. -->
         <table>
-          <tr><td>Subtotal:</td><td>{{ docMoney(subtotal) }}</td></tr>
-          <tr><td>Order Tax:</td><td>{{ docMoney(quote.TaxNet) }}</td></tr>
+          <tr><td>{{ $t('Subtotal') }}:</td><td>{{ docMoney(subtotal) }}</td></tr>
+          <tr><td>{{ $t('OrderTax') }}:</td><td>{{ docMoney(quote.TaxNet) }}</td></tr>
           <tr v-if="Number(quote.discount) > 0">
-            <td>Discount:</td>
+            <td>{{ $t('Discount') }}:</td>
             <td class="neg">- {{ docMoney(quote.discount) }}</td>
           </tr>
-          <tr><td>Shipping:</td><td>{{ docMoney(quote.shipping) }}</td></tr>
+          <tr><td>{{ $t('Shipping') }}:</td><td>{{ docMoney(quote.shipping) }}</td></tr>
           <tr class="grand"><td>{{ $t('Total') }}:</td><td>{{ docMoney(quote.GrandTotal) }}</td></tr>
         </table>
       </div>
@@ -161,11 +162,13 @@ import { ref, computed, createVNode, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { message, Modal } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
+import { applyIssuer } from '../../lib/invoiceIssuer';
 import {
   ArrowLeftOutlined, PrinterOutlined, EditOutlined, DeleteOutlined,
   FilePdfOutlined, SwapOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import AuditHistoryButton from '../../components/AuditHistoryButton.vue';
 import { useFormat } from '../../composables/useFormat';
 import { useDetailsCurrency } from '../../composables/useDetailsCurrency';
 import { useAuthStore } from '../../stores/auth';
@@ -246,7 +249,9 @@ onMounted(async () => {
     const data = await http.get(`quotations/${route.params.id}`);
     quote.value = data.quote || {};
     details.value = data.details || [];
-    company.value = data.company || {};
+    // Branch letterhead: the invoice header shows the warehouse that issued
+    // the document, each field falling back to the company settings.
+    company.value = applyIssuer(data.company || {}, data.issuer);
   } catch (e) {
     message.error(t('InvalidData'));
     router.push('/quotations');

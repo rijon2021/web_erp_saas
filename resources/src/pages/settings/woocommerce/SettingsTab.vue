@@ -13,22 +13,22 @@
       </a-form-item>
       <a-row :gutter="16">
         <a-col :xs="24" :md="12">
-          <a-form-item :label="'Consumer key'" name="consumer_key">
+          <a-form-item :label="$t('Consumer_Key')" name="consumer_key">
             <a-input v-model:value="form.consumer_key" />
           </a-form-item>
         </a-col>
         <a-col :xs="24" :md="12">
-          <a-form-item :label="'Consumer secret'" name="consumer_secret">
+          <a-form-item :label="$t('Consumer_Secret')" name="consumer_secret">
             <a-input-password v-model:value="form.consumer_secret" />
           </a-form-item>
         </a-col>
         <a-col :xs="24" :md="12">
-          <a-form-item :label="'WordPress username'">
+          <a-form-item :label="$t('Woo_WordPress_Username')">
             <a-input v-model:value="form.wp_username" />
           </a-form-item>
         </a-col>
         <a-col :xs="24" :md="12">
-          <a-form-item :label="'WordPress application password'">
+          <a-form-item :label="$t('Woo_WordPress_App_Password')">
             <a-input-password v-model:value="form.wp_app_password" />
           </a-form-item>
         </a-col>
@@ -42,18 +42,44 @@
     <a-card class="guide-card" :bordered="true" style="margin-top: 24px">
       <template #title>
         <span class="guide-card-title">
+          <ThunderboltOutlined :style="{ color: token.colorInfo }" />
+          {{ $t('Woo_Automatic_Sync') }}
+        </span>
+      </template>
+
+      <p class="guide-intro">{{ $t('Woo_Auto_Sync_Intro') }}</p>
+
+      <div class="auto-sync-row">
+        <a-switch v-model:checked="form.auto_sync_products" />
+        <div>
+          <div class="auto-sync-label">{{ $t('Products') }}</div>
+          <div class="guide-intro">{{ $t('Woo_Auto_Sync_Products_Help') }}</div>
+        </div>
+      </div>
+      <div class="auto-sync-row">
+        <a-switch v-model:checked="form.auto_sync_stock" />
+        <div>
+          <div class="auto-sync-label">{{ $t('Stock') }}</div>
+          <div class="guide-intro">{{ $t('Woo_Auto_Sync_Stock_Help') }}</div>
+        </div>
+      </div>
+
+      <a-button type="primary" style="margin-top: 8px" @click="onSubmit">{{ $t('Save') }}</a-button>
+    </a-card>
+
+    <!-- Only when the server describes tunable options (sync_options_meta). -->
+    <a-card v-if="tuningFields.length" class="guide-card" :bordered="true" style="margin-top: 24px">
+      <template #title>
+        <span class="guide-card-title">
           <ControlOutlined :style="{ color: token.colorInfo }" />
-          Sync tuning
+          {{ $t('Woo_Sync_Tuning') }}
         </span>
       </template>
       <template #extra>
         <a-button size="small" :disabled="!tuningFields.length" @click="resetTuning">{{ $t('Reset') }}</a-button>
       </template>
 
-      <p class="guide-intro">
-        The defaults suit most stores. Change these only if sync is slow or times out on your hosting.
-        Every value is capped to a safe range, and clearing a field restores its default.
-      </p>
+      <p class="guide-intro">{{ $t('Woo_Sync_Tuning_Intro') }}</p>
 
       <a-collapse v-model:activeKey="tuningOpen" ghost>
         <a-collapse-panel v-for="g in tuningGroups" :key="g.key" :header="g.title">
@@ -81,19 +107,19 @@
       <template #title>
         <span class="guide-card-title">
           <BookOutlined :style="{ color: token.colorInfo }" />
-          WooCommerce Sync Guide
+          {{ $t('Woo_Sync_Guide') }}
         </span>
       </template>
 
       <div class="guide-section">
         <div class="guide-title">
           <KeyOutlined :style="{ color: token.colorInfo }" />
-          Getting API keys
+          {{ $t('Woo_Guide_Getting_Keys') }}
         </div>
         <ul class="guide-list">
-          <li><SelectOutlined :style="{ color: token.colorPrimary }" /><span>In WooCommerce: WooCommerce → Settings → Advanced → REST API.</span></li>
-          <li><PlusOutlined :style="{ color: token.colorPrimary }" /><span>Add key, choose Read/Write, then copy Consumer key and Consumer secret.</span></li>
-          <li><GlobalOutlined :style="{ color: token.colorPrimary }" /><span>Store URL: your site URL with no trailing slash (e.g. <a-typography-text code>https://yoursite.com</a-typography-text>).</span></li>
+          <li><SelectOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_Keys_1') }}</span></li>
+          <li><PlusOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_Keys_2') }}</span></li>
+          <li><GlobalOutlined :style="{ color: token.colorPrimary }" /><i18n-t keypath="Woo_Guide_Keys_3" tag="span"><template #example><a-typography-text code>https://yoursite.com</a-typography-text></template></i18n-t></li>
         </ul>
       </div>
 
@@ -102,13 +128,13 @@
       <div class="guide-section">
         <div class="guide-title">
           <UserOutlined :style="{ color: token.colorInfo }" />
-          WP Username and Application Password (optional)
+          {{ $t('Woo_Guide_WP_Title') }}
         </div>
-        <p class="guide-intro">These fields are used only for product images. The WooCommerce API (Store URL + Consumer key/secret) handles sync for products, stock, categories, brands, customers, and orders; the WordPress REST API handles the Media Library (search and upload images).</p>
+        <p class="guide-intro">{{ $t('Woo_Guide_WP_Intro') }}</p>
         <ul class="guide-list">
-          <li><PictureOutlined :style="{ color: token.colorPrimary }" /><span>When syncing products or stock, Stocky can attach product images: it first searches the WordPress Media Library for an existing image by filename; if not found, it uploads the image via the WordPress API.</span></li>
-          <li><KeyOutlined :style="{ color: token.colorPrimary }" /><span>Use a WordPress user that can manage media (e.g. Administrator). Create an Application Password in WordPress: Users → Profile (or your user) → Application Passwords — add a new one and paste it here.</span></li>
-          <li><InfoCircleOutlined :style="{ color: token.colorPrimary }" /><span>If you leave these blank, sync still works for all data (products, stock, categories, brands, customers, orders); only product image attachment (search/upload) is skipped.</span></li>
+          <li><PictureOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_WP_1') }}</span></li>
+          <li><KeyOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_WP_2') }}</span></li>
+          <li><InfoCircleOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_WP_3') }}</span></li>
         </ul>
       </div>
 
@@ -117,12 +143,13 @@
       <div class="guide-section">
         <div class="guide-title">
           <SettingOutlined :style="{ color: token.colorInfo }" />
-          How to enable
+          {{ $t('Woo_Guide_How_To_Enable') }}
         </div>
         <ul class="guide-list">
-          <li><CheckCircleOutlined :style="{ color: token.colorSuccess }" /><span>Enter Store URL, Consumer key, and Consumer secret above, then click Save.</span></li>
-          <li><CloudSyncOutlined :style="{ color: token.colorSuccess }" /><span>Use Test Connection to verify credentials.</span></li>
-          <li><ClockCircleOutlined :style="{ color: token.colorSuccess }" /><span>Use manual sync from any tab when you need to sync.</span></li>
+          <li><CheckCircleOutlined :style="{ color: token.colorSuccess }" /><span>{{ $t('Woo_Guide_Enable_1') }}</span></li>
+          <li><CloudSyncOutlined :style="{ color: token.colorSuccess }" /><span>{{ $t('Woo_Guide_Enable_2') }}</span></li>
+          <li><ClockCircleOutlined :style="{ color: token.colorSuccess }" /><span>{{ $t('Woo_Guide_Enable_3') }}</span></li>
+          <li><ThunderboltOutlined :style="{ color: token.colorSuccess }" /><span>{{ $t('Woo_Guide_Enable_4') }}</span></li>
         </ul>
       </div>
 
@@ -131,11 +158,27 @@
       <div class="guide-section">
         <div class="guide-title">
           <SyncOutlined :style="{ color: token.colorPrimary }" />
-          Manual sync (on demand)
+          {{ $t('Woo_Guide_Manual_Sync') }}
         </div>
         <ul class="guide-list">
-          <li><SwapOutlined :style="{ color: token.colorPrimary }" /><span>Sync works in both directions: Stocky → WooCommerce and WooCommerce → Stocky.</span></li>
-          <li><MenuOutlined :style="{ color: token.colorPrimary }" /><span>Manual sync is available in all WooCommerce tabs (Products, Stock, etc.); use the sync actions in each tab to run sync on demand.</span></li>
+          <li><SwapOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_Manual_1') }}</span></li>
+          <li><MenuOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_Manual_2') }}</span></li>
+        </ul>
+      </div>
+
+      <a-divider class="guide-divider" />
+
+      <div class="guide-section">
+        <div class="guide-title">
+          <ThunderboltOutlined :style="{ color: token.colorInfo }" />
+          {{ $t('Woo_Automatic_Sync') }}
+        </div>
+        <ul class="guide-list">
+          <li><CheckCircleOutlined :style="{ color: token.colorSuccess }" /><span>{{ $t('Woo_Guide_Auto_1') }}</span></li>
+          <li><CheckCircleOutlined :style="{ color: token.colorSuccess }" /><span>{{ $t('Woo_Guide_Auto_2') }}</span></li>
+          <li><ExclamationCircleOutlined :style="{ color: token.colorWarning }" /><span>{{ $t('Woo_Guide_Auto_3') }}</span></li>
+          <li><ExclamationCircleOutlined :style="{ color: token.colorWarning }" /><span>{{ $t('Woo_Guide_Auto_4') }}</span></li>
+          <li><FileTextOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_Auto_5') }}</span></li>
         </ul>
       </div>
 
@@ -144,16 +187,12 @@
       <div class="guide-section">
         <div class="guide-title">
           <FieldTimeOutlined :style="{ color: token.colorInfo }" />
-          Scheduled sync (cron)
+          {{ $t('Woo_Guide_First_Setup') }}
         </div>
         <ul class="guide-list">
-          <li><ClockCircleOutlined :style="{ color: token.colorPrimary }" /><span>Stocky → WooCommerce runs on its own: new (not-yet-linked) products every night at 02:00 (<a-typography-text code>--scope=products --only-unsynced</a-typography-text>) and stock every hour (<a-typography-text code>--scope=stock</a-typography-text>).</span></li>
-          <li><CloudSyncOutlined :style="{ color: token.colorPrimary }" /><span>WooCommerce → Stocky runs too: orders every 15 minutes (<a-typography-text code>--scope=orders</a-typography-text>, only orders changed since the last run), products at 03:00 (<a-typography-text code>--scope=pull-products</a-typography-text>) and customers at 03:30 (<a-typography-text code>--scope=customers</a-typography-text>).</span></li>
-          <li><SettingOutlined :style="{ color: token.colorPrimary }" /><span>For this to work, your server needs one cron entry that runs the Laravel scheduler every minute (on cPanel: Cron Jobs section; the same cron also processes queued sync batches):</span></li>
-        </ul>
-        <pre class="guide-code" :style="{ background: token.colorFillTertiary, borderColor: token.colorBorderSecondary }">* * * * * cd /path/to/your/app &amp;&amp; php artisan schedule:run &gt;&gt; /dev/null 2&gt;&amp;1</pre>
-        <ul class="guide-list">
-          <li><CodeOutlined :style="{ color: token.colorPrimary }" /><span>You can also run it on demand from the terminal: <a-typography-text code>php artisan woocommerce:sync --scope=products|stock|pull-products|orders|customers</a-typography-text> — add <a-typography-text code>--only-unsynced</a-typography-text> to push only products not yet linked to WooCommerce.</span></li>
+          <li><CloudSyncOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_First_1') }}</span></li>
+          <li><ClockCircleOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_First_2') }}</span></li>
+          <li><InfoCircleOutlined :style="{ color: token.colorPrimary }" /><span>{{ $t('Woo_Guide_First_3') }}</span></li>
         </ul>
       </div>
 
@@ -162,11 +201,11 @@
       <div class="guide-section">
         <div class="guide-title">
           <InfoCircleOutlined :style="{ color: token.colorInfo }" />
-          Notes
+          {{ $t('Notes') }}
         </div>
         <ul class="guide-list">
-          <li><ExclamationCircleOutlined :style="{ color: token.colorWarning }" /><span>Changing Store URL or API keys resets mappings (products, categories, brands, customers); items will sync again to the (new) store.</span></li>
-          <li><ExclamationCircleOutlined :style="{ color: token.colorWarning }" /><span>Keep SKUs consistent between Stocky and WooCommerce to avoid duplicate products and to relink safely.</span></li>
+          <li><ExclamationCircleOutlined :style="{ color: token.colorWarning }" /><span>{{ $t('Woo_Guide_Notes_1') }}</span></li>
+          <li><ExclamationCircleOutlined :style="{ color: token.colorWarning }" /><span>{{ $t('Woo_Guide_Notes_2') }}</span></li>
         </ul>
       </div>
     </a-card>
@@ -180,10 +219,12 @@
  * POST woocommerce/test-connection → {ok}. Legacy validation: store_url
  * required + must start with http(s)://; keys required.
  *
- * The same endpoint also carries `sync_options` (batch sizes, timeouts, retries,
- * lookup caps — formerly WOO_* env vars) plus `sync_options_meta`, which
- * describes every field so the tuning form below renders itself. Sending a key
- * as null/blank clears it, and the server falls back to env then to its default.
+ * The same endpoint also carries `sync_options` — this tenant's store-specific
+ * tuning (batch sizes, lookup page caps, alternate-SKU rule; formerly global
+ * WOO_* env vars) — plus `sync_options_meta`, which describes every field so the
+ * tuning form below renders itself. Sending a key as null/blank restores its
+ * default. Server limits (timeouts, retries) are platform-wide, in
+ * config/woocommerce.php, and not editable here.
  */
 import { ref, computed, onMounted } from 'vue';
 import { message, theme } from 'ant-design-vue';
@@ -192,7 +233,7 @@ import {
   InfoCircleOutlined, GlobalOutlined, PlusOutlined, SelectOutlined,
   PictureOutlined, CheckCircleOutlined, CloudSyncOutlined, ClockCircleOutlined,
   SwapOutlined, MenuOutlined, ExclamationCircleOutlined, FieldTimeOutlined,
-  CodeOutlined, ControlOutlined,
+  FileTextOutlined, ControlOutlined, ThunderboltOutlined,
 } from '@ant-design/icons-vue';
 import { useI18n } from 'vue-i18n';
 import dayjs from 'dayjs';
@@ -215,6 +256,8 @@ const form = ref({
   consumer_secret: '',
   wp_username: '',
   wp_app_password: '',
+  auto_sync_products: false,
+  auto_sync_stock: false,
 });
 
 const syncOptions = ref({});
@@ -337,6 +380,24 @@ onMounted(async () => {
 
 .guide-divider {
   margin: 14px 0;
+}
+
+.auto-sync-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.auto-sync-row .ant-switch {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.auto-sync-label {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 2px;
 }
 
 .guide-list {

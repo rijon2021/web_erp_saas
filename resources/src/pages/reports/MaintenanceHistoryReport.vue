@@ -28,7 +28,7 @@
         {{ record.scheduled_date ? date(record.scheduled_date) : '—' }}
       </template>
       <template v-else-if="column.key === 'status'">
-        <a-tag>{{ record.status }}</a-tag>
+        <a-tag>{{ statusLabel(record.status) }}</a-tag>
       </template>
     </template>
   </ReportPage>
@@ -77,8 +77,16 @@ const columns = computed(() => [
   { title: t('Technician'), dataIndex: 'technician_name', key: 'technician_name' },
   { title: t('Service_Item'), dataIndex: 'service_item', key: 'service_item' },
   { title: t('Job_Type'), dataIndex: 'job_type', key: 'job_type' },
-  { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => r.status },
+  { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => statusLabel(r.status) },
 ]);
+
+// Raw service-job status → translation key (unknown values show as-is).
+const STATUS_LABEL = {
+  pending: 'Pending', intake: 'Intake', diagnostic: 'Diagnostic', quoted: 'Quoted',
+  approved: 'Approved', in_progress: 'In_Progress', ready: 'Ready_For_Pickup',
+  delivered: 'Delivered', declined: 'Declined', cancelled: 'Cancelled', completed: 'Completed',
+};
+const statusLabel = s => (STATUS_LABEL[s] ? t(STATUS_LABEL[s]) : s);
 
 onMounted(crud.fetchRows);
 </script>

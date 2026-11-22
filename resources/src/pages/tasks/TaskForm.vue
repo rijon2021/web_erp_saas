@@ -52,17 +52,17 @@
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Priority">
-              <a-select v-model:value="form.priority" :options="TASK_PRIORITIES" allow-clear placeholder="None" />
+            <a-form-item :label="$t('Priority')">
+              <a-select v-model:value="form.priority" :options="TASK_PRIORITIES" allow-clear :placeholder="$t('None')" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Estimated hours">
+            <a-form-item :label="$t('Tk_Estimated_Hours')">
               <a-input-number v-model:value="form.estimated_hour" :min="0" :step="0.5" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Progress %" extra="Set to 100 automatically when completed">
+            <a-form-item :label="$t('Pm_Progress_Pct')" :extra="$t('Tk_Progress_Auto_Hint')">
               <a-slider v-model:value="form.task_progress" :min="0" :max="100" :step="5" />
             </a-form-item>
           </a-col>

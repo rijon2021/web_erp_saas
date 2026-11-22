@@ -9,6 +9,13 @@ class CreateSmsSettingsTable extends Migration
 {
     public function up()
     {
+        // A prior half-completed update run can leave the table in place with
+        // no record in the migrations table; re-running must not abort (and
+        // must not seed a second row).
+        if (Schema::hasTable('sms_settings')) {
+            return;
+        }
+
         Schema::create('sms_settings', function (Blueprint $table) {
             $table->increments('id');
 

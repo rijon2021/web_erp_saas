@@ -15,18 +15,22 @@ class PortalClient extends Model implements Authenticatable
         'email',
         'password',
         'status',
+        'preferred_locale',
     ];
 
     protected $hidden = [
         'password',
         'remember_token',
         'invitation_token',
+        'two_factor_secret',
+        'two_factor_recovery_codes',
     ];
 
     protected $casts = [
         'client_id' => 'integer',
         'status' => 'integer',
         'invitation_sent_at' => 'datetime',
+        'two_factor_confirmed_at' => 'datetime',
     ];
 
     public function client()

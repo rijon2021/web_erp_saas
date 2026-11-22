@@ -27,8 +27,26 @@ class EventServiceProvider extends ServiceProvider
         \App\Events\ExpenseCreated::class => [
             \App\Listeners\AccountingV2\GenerateExpenseJournal::class,
         ],
+        \App\Events\CommissionReceiptCreated::class => [
+            \App\Listeners\AccountingV2\GenerateCommissionReceiptJournal::class,
+        ],
         \App\Events\SaleReturned::class => [
             \App\Listeners\AccountingV2\GenerateSaleReturnJournal::class,
+        ],
+        \App\Events\SaleReturnUpdated::class => [
+            \App\Listeners\AccountingV2\GenerateSaleReturnAdjustment::class,
+        ],
+        \App\Events\SaleReturnDeleted::class => [
+            \App\Listeners\AccountingV2\GenerateSaleReturnReversal::class,
+        ],
+        \App\Events\PurchaseReturnCreated::class => [
+            \App\Listeners\AccountingV2\GeneratePurchaseReturnJournal::class,
+        ],
+        \App\Events\PurchaseReturnUpdated::class => [
+            \App\Listeners\AccountingV2\GeneratePurchaseReturnAdjustment::class,
+        ],
+        \App\Events\PurchaseReturnDeleted::class => [
+            \App\Listeners\AccountingV2\GeneratePurchaseReturnReversal::class,
         ],
         \App\Events\SaleUpdated::class => [
             \App\Listeners\AccountingV2\GenerateSaleAdjustment::class,
@@ -63,6 +81,16 @@ class EventServiceProvider extends ServiceProvider
         \Laravel\Passport\Events\AccessTokenCreated::class => [
             \App\Listeners\Security\RecordLoginSession::class,
         ],
+        \Illuminate\Auth\Events\Login::class => [
+            \App\Listeners\Security\StampWebSignIn::class,
+        ],
+    ];
+
+    /**
+     * Settings > Audit Log: staff sign-in / sign-out / failed sign-in.
+     */
+    protected $subscribe = [
+        \App\Listeners\Security\AuditAuthEvents::class,
     ];
 
     /**
@@ -95,6 +123,7 @@ class EventServiceProvider extends ServiceProvider
         \App\Events\ExpenseCreated::class,
         \App\Events\ExpenseUpdated::class,
         \App\Events\ExpenseDeleted::class,
+        \App\Events\CommissionReceiptCreated::class,
         \App\Events\CashRegisterOpened::class,
         \App\Events\ClientCreated::class,
         \App\Events\ProductCreated::class,
@@ -114,7 +143,12 @@ class EventServiceProvider extends ServiceProvider
         // handle. Additive: does not alter any listener registered in $listen.
         foreach ($this->webhookListen as $eventClass) {
             Event::listen($eventClass, [\App\Listeners\Webhooks\DispatchWebhooks::class, 'handle']);
+            // Telegram: not queued, so it can send right after the response.
+            Event::listen($eventClass, [\App\Listeners\Notifications\NotifyTelegram::class, 'handle']);
         }
+
+        // Booking Management: emails / WhatsApp to the customer and the owner.
+        Event::listen(\App\Events\BookingChanged::class, [\App\Services\Booking\BookingNotifier::class, 'handle']);
 
         // Low-stock webhook trigger — checked after each sale commits.
         Event::listen(\App\Events\SaleCreated::class, [\App\Listeners\Webhooks\CheckLowStock::class, 'handle']);
@@ -138,6 +172,23 @@ class EventServiceProvider extends ServiceProvider
         \App\Models\Quotation::created(function ($quotation) {
             try {
                 event(new \App\Events\QuotationCreated($quotation));
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        });
+
+        // A confirmed online order becomes a Sale; payments recorded on that
+        // Sale afterwards (cash on delivery, offline transfer) must show on the
+        // order too, or Online Orders keeps saying "pending".
+        \App\Models\Sale::updated(function ($sale) {
+            try {
+                if (! $sale->wasChanged('payment_statut')) {
+                    return;
+                }
+                $status = \App\Models\OnlineOrder::paymentStatusFromSale($sale->payment_statut);
+                \App\Models\OnlineOrder::where('sale_id', $sale->id)
+                    ->where('payment_status', '!=', 'refunded')
+                    ->update(['payment_status' => $status]);
             } catch (\Throwable $e) {
                 report($e);
             }

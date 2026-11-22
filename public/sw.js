@@ -18,7 +18,7 @@
  */
 
 // Bump this when deploying changes so old caches are purged.
-const VERSION = 'stocky-pwa-v6';
+const VERSION = 'stocky-pwa-v7';
 const STATIC_CACHE = `${VERSION}-static`;
 const SHELL_CACHE = `${VERSION}-shell`;
 
@@ -26,7 +26,10 @@ const SHELL_CACHE = `${VERSION}-shell`;
 const KILL_SWITCH = false;
 
 // Offline fallback for navigation requests when network + cache both fail.
-const OFFLINE_URL = '/offline.html';
+// /pwa/offline.html is rendered per tenant (its own app name + logo); the
+// static /offline.html stays as a generic fallback if that route is missing.
+const OFFLINE_URL = '/pwa/offline.html';
+const LEGACY_OFFLINE_URL = '/offline.html';
 
 // Precache only tiny, stable assets. Everything else is cached lazily on
 // first successful GET.
@@ -35,6 +38,7 @@ const OFFLINE_URL = '/offline.html';
 // are cached lazily on first fetch by the static-asset handler below.
 const PRECACHE_URLS = [
   OFFLINE_URL,
+  LEGACY_OFFLINE_URL,
   '/pwa/app.webmanifest',
   '/pwa_images/pwa-icon-192.png',
   '/pwa_images/pwa-icon-512.png',
@@ -188,6 +192,19 @@ function shellKeyFor(url) {
   return '/__shell_app__';
 }
 
+// The branded offline page is precached at install; re-fetch it once per SW
+// lifetime after an online navigation so a later logo / app-name change in
+// Settings reaches the cached copy without a VERSION bump.
+let offlinePageRefreshed = false;
+function refreshOfflinePage() {
+  if (offlinePageRefreshed) return;
+  offlinePageRefreshed = true;
+  caches
+    .open(STATIC_CACHE)
+    .then((cache) => cache.add(new Request(OFFLINE_URL, { cache: 'reload' })))
+    .catch(() => {});
+}
+
 async function handleNavigation(request) {
   const url = new URL(request.url);
   const shellKey = shellKeyFor(url);
@@ -201,6 +218,7 @@ async function handleNavigation(request) {
     ) {
       const cache = await caches.open(SHELL_CACHE);
       cache.put(shellKey, networkResponse.clone()).catch(() => {});
+      refreshOfflinePage();
     }
     return networkResponse;
   } catch (e) {
@@ -212,7 +230,9 @@ async function handleNavigation(request) {
       (await cache.match('/__shell_app__'));
     if (shell) return shell;
     const staticCache = await caches.open(STATIC_CACHE);
-    const offline = await staticCache.match(OFFLINE_URL);
+    const offline =
+      (await staticCache.match(OFFLINE_URL)) ||
+      (await staticCache.match(LEGACY_OFFLINE_URL));
     if (offline) return offline;
     return new Response(
       '<h1>Offline</h1><p>Application is offline and no cached shell is available yet.</p>',

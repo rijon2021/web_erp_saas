@@ -13,6 +13,8 @@ use App\Models\Role;
 use App\Models\Setting;
 use App\Models\sms_gateway;
 use App\Models\SMSMessage;
+use App\Services\SupplierWallet\SupplierWalletService;
+use App\Services\SupplierWallet\WalletException;
 use App\utils\helpers;
 use ArPHP\I18N\Arabic;
 use Carbon\Carbon;
@@ -133,7 +135,8 @@ class PaymentPurchasesController extends BaseController
             $item['Ref_Purchase'] = $Payment['purchase']->Ref;
             $item['purchase_id'] = $Payment['purchase']->id;
             $item['provider_name'] = $Payment['purchase']['provider']?->name ?? '---';
-            $item['payment_method'] = $Payment['payment_method']?->name ?? '---';
+            $item['payment_method'] = ! empty($Payment->wallet_transaction_id) ? 'Supplier Wallet' : ($Payment['payment_method']?->name ?? '---');
+            $item['wallet_transaction_id'] = $Payment->wallet_transaction_id ?? null;
             $item['montant'] = $Payment->montant;
             $item['account_name'] = $Payment['account'] ? $Payment['account']->account_name : '---';
             $item['user_name'] = $Payment['user'] ? $Payment['user']->username : '---';
@@ -142,7 +145,7 @@ class PaymentPurchasesController extends BaseController
 
         $suppliers = provider::where('deleted_at', '=', null)->get(['id', 'name']);
         $purchases = Purchase::get(['Ref', 'id']);
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->exceptCustomerWallet()->where('deleted_at', '=', null)->get(['id', 'name']);
 
         return response()->json([
             'totalRows' => $totalRows,
@@ -163,63 +166,85 @@ class PaymentPurchasesController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'create', PaymentPurchase::class);
 
+        // Supplier-wallet tender (from_wallet=1): the amount leaves the
+        // supplier's prepaid balance instead of a cash account, so no account
+        // or payment method is required.
+        $fromWallet = SupplierWalletService::wantsWallet($request);
+
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $fromWallet ? 'nullable' : $this->paymentAccountRule()]);
+
         if ($request['montant'] > 0) {
-            \DB::transaction(function () use ($request) {
-                $user = Auth::user();
-                // New way: Check user's record_view field (user-level boolean)
-                // Backward compatibility: If record_view is null, fall back to role permission check
-                $view_records = $user->hasRecordView();
-                $purchase = Purchase::findOrFail($request['purchase_id']);
+            try {
+                \DB::transaction(function () use ($request, $fromWallet) {
+                    $user = Auth::user();
+                    // New way: Check user's record_view field (user-level boolean)
+                    // Backward compatibility: If record_view is null, fall back to role permission check
+                    $view_records = $user->hasRecordView();
+                    $purchase = Purchase::findOrFail($request['purchase_id']);
 
-                // Check If User Has Permission view All Records
-                // Warehouse half of the same rule: record_view says whose documents,
-                // the assigned warehouses say which warehouses they may come from.
-                $this->abortIfDocumentWarehouseDenied($purchase);
+                    // Check If User Has Permission view All Records
+                    // Warehouse half of the same rule: record_view says whose documents,
+                    // the assigned warehouses say which warehouses they may come from.
+                    $this->abortIfDocumentWarehouseDenied($purchase);
 
-                if (! $view_records) {
-                    // Check If User->id === purchase->id
-                    $this->authorizeForUser($request->user('api'), 'check_record', $purchase);
-                }
+                    if (! $view_records) {
+                        // Check If User->id === purchase->id
+                        $this->authorizeForUser($request->user('api'), 'check_record', $purchase);
+                    }
 
-                $total_paid = $purchase->paid_amount + $request['montant'];
-                $due = $purchase->GrandTotal - $total_paid;
+                    $total_paid = $purchase->paid_amount + $request['montant'];
+                    $due = $purchase->GrandTotal - $total_paid;
 
-                if ($due === 0.0 || $due < 0.0) {
-                    $payment_statut = 'paid';
-                } elseif ($due !== $purchase->GrandTotal) {
-                    $payment_statut = 'partial';
-                } elseif ($due === $purchase->GrandTotal) {
-                    $payment_statut = 'unpaid';
-                }
+                    if ($due === 0.0 || $due < 0.0) {
+                        $payment_statut = 'paid';
+                    } elseif ($due !== $purchase->GrandTotal) {
+                        $payment_statut = 'partial';
+                    } elseif ($due === $purchase->GrandTotal) {
+                        $payment_statut = 'unpaid';
+                    }
 
-                PaymentPurchase::create([
-                    'purchase_id' => $request['purchase_id'],
-                    'account_id' => $request['account_id'] ? $request['account_id'] : null,
-                    'Ref' => $this->getNumberOrder(),
-                    'date' => $request['date'],
-                    'payment_method_id' => $request['payment_method_id'],
-                    'montant' => $request['montant'],
-                    'change' => $request['change'],
-                    'notes' => $request['notes'],
-                    'user_id' => Auth::user()->id,
-                ]);
+                    $ref = $this->getNumberOrder();
+                    $walletTxId = null;
+                    if ($fromWallet) {
+                        $walletTxId = app(SupplierWalletService::class)->payFromWallet(
+                            (int) $purchase->provider_id, (float) $request['montant'], 'purchase_payment', [
+                                'reference_type' => Purchase::class,
+                                'reference_id' => $purchase->id,
+                                'note' => 'Purchase '.$purchase->Ref.' · '.$ref,
+                                'date' => $request['date'],
+                                'user_id' => Auth::id(),
+                            ]
+                        )->id;
+                    }
 
-                $account = Account::where('id', $request['account_id'])->exists();
-
-                if ($account) {
-                    // Account exists, perform the update
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance - $request['montant'],
+                    PaymentPurchase::create([
+                        'purchase_id' => $request['purchase_id'],
+                        'account_id' => (! $fromWallet && $request['account_id']) ? $request['account_id'] : null,
+                        'Ref' => $ref,
+                        'date' => $request['date'],
+                        'payment_method_id' => $fromWallet ? null : $request['payment_method_id'],
+                        'montant' => $request['montant'],
+                        'change' => $fromWallet ? 0 : $request['change'],
+                        'notes' => $request['notes'],
+                        'user_id' => Auth::user()->id,
+                        'wallet_transaction_id' => $walletTxId,
                     ]);
-                }
 
-                $purchase->update([
-                    'paid_amount' => $total_paid,
-                    'payment_statut' => $payment_statut,
-                ]);
+                    if (! $fromWallet) {
+                        Account::adjustBalance($request['account_id'], -$request['montant']);
+                    }
 
-            }, 10);
+                    $purchase->update([
+                        'paid_amount' => $total_paid,
+                        'payment_statut' => $payment_statut,
+                    ]);
+
+                }, 10);
+            } catch (WalletException $e) {
+                return $e->toResponse();
+            }
         }
 
         return response()->json(['success' => true, 'message' => 'Payment Create successfully'], 200);
@@ -239,73 +264,95 @@ class PaymentPurchasesController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'update', PaymentPurchase::class);
 
-        \DB::transaction(function () use ($id, $request) {
-            $user = Auth::user();
-            // New way: Check user's record_view field (user-level boolean)
-            // Backward compatibility: If record_view is null, fall back to role permission check
-            $view_records = $user->hasRecordView();
-            $payment = PaymentPurchase::findOrFail($id);
+        $toWallet = SupplierWalletService::wantsWallet($request);
 
-            // Check If User Has Permission view All Records
-            // Warehouse half of the same rule: record_view says whose documents,
-            // the assigned warehouses say which warehouses they may come from.
-            $this->abortIfDocumentWarehouseDenied($payment);
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $toWallet ? 'nullable' : $this->paymentAccountRule()]);
 
-            if (! $view_records) {
-                // Check If User->id === payment->id
-                $this->authorizeForUser($request->user('api'), 'check_record', $payment);
-            }
+        try {
+            \DB::transaction(function () use ($id, $request, $toWallet) {
+                $user = Auth::user();
+                // New way: Check user's record_view field (user-level boolean)
+                // Backward compatibility: If record_view is null, fall back to role permission check
+                $view_records = $user->hasRecordView();
+                $payment = PaymentPurchase::findOrFail($id);
 
-            $purchase = Purchase::whereId($request['purchase_id'])->first();
-            $old_total_paid = $purchase->paid_amount - $payment->montant;
-            $new_total_paid = $old_total_paid + $request['montant'];
+                // Check If User Has Permission view All Records
+                // Warehouse half of the same rule: record_view says whose documents,
+                // the assigned warehouses say which warehouses they may come from.
+                $this->abortIfDocumentWarehouseDenied($payment);
 
-            $due = $purchase->GrandTotal - $new_total_paid;
-            if ($due === 0.0 || $due < 0.0) {
-                $payment_statut = 'paid';
-            } elseif ($due !== $purchase->GrandTotal) {
-                $payment_statut = 'partial';
-            } elseif ($due === $purchase->GrandTotal) {
-                $payment_statut = 'unpaid';
-            }
+                if (! $view_records) {
+                    // Check If User->id === payment->id
+                    $this->authorizeForUser($request->user('api'), 'check_record', $payment);
+                }
 
-            // delete old balance
-            $account = Account::where('id', $payment->account_id)->exists();
+                $purchase = Purchase::whereId($request['purchase_id'])->first();
+                $old_total_paid = $purchase->paid_amount - $payment->montant;
+                $new_total_paid = $old_total_paid + $request['montant'];
 
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance + $payment->montant,
+                $due = $purchase->GrandTotal - $new_total_paid;
+                if ($due === 0.0 || $due < 0.0) {
+                    $payment_statut = 'paid';
+                } elseif ($due !== $purchase->GrandTotal) {
+                    $payment_statut = 'partial';
+                } elseif ($due === $purchase->GrandTotal) {
+                    $payment_statut = 'unpaid';
+                }
+
+                // Undo the old funding: give a wallet-funded amount back to the
+                // wallet, or a cash amount back to its account. Then fund the
+                // new amount the way the request asks.
+                $wallets = app(SupplierWalletService::class);
+                $before = clone $payment; // for the accounting reversal of the old state
+                if (! empty($payment->wallet_transaction_id)) {
+                    $wallets->reverse((int) $payment->wallet_transaction_id, [
+                        'note' => 'Purchase payment '.$payment->Ref.' edited', 'user_id' => Auth::id(),
+                    ]);
+                } else {
+                    Account::adjustBalance($payment->account_id, $payment->montant);
+                }
+
+                $walletTxId = null;
+                if ($toWallet) {
+                    $walletTxId = $wallets->payFromWallet((int) $purchase->provider_id, (float) $request['montant'], 'purchase_payment', [
+                        'reference_type' => Purchase::class,
+                        'reference_id' => $purchase->id,
+                        'note' => 'Purchase '.$purchase->Ref.' · '.$payment->Ref,
+                        'date' => $request['date'],
+                        'user_id' => Auth::id(),
+                    ])->id;
+                }
+
+                $payment->update([
+                    'date' => $request['date'],
+                    'account_id' => (! $toWallet && $request['account_id']) ? $request['account_id'] : null,
+                    'payment_method_id' => $toWallet ? null : $request['payment_method_id'],
+                    'montant' => $request['montant'],
+                    'change' => $toWallet ? 0 : $request['change'],
+                    'notes' => $request['notes'],
+                    'wallet_transaction_id' => $walletTxId,
                 ]);
-            }
 
-            $payment->update([
-                'date' => $request['date'],
-                'account_id' => $request['account_id'] ? $request['account_id'] : null,
-                'payment_method_id' => $request['payment_method_id'],
-                'montant' => $request['montant'],
-                'change' => $request['change'],
-                'notes' => $request['notes'],
-            ]);
+                // update new account
+                if (! $toWallet) {
+                    Account::adjustBalance($request['account_id'], -$request['montant']);
+                }
 
-            // update new account
+                $purchase->paid_amount = $new_total_paid;
+                $purchase->payment_statut = $payment_statut;
+                $purchase->save();
 
-            $new_account = Account::where('id', $request['account_id'])->exists();
+                // Accounting V2: an edit is a reversal of the old row plus a
+                // fresh posting of the new one (model update() fires neither).
+                event(new \App\Events\PaymentPurchaseDeleted($before));
+                event(new \App\Events\PaymentPurchaseCreated($payment->fresh()));
 
-            if ($new_account) {
-                // Account exists, perform the update
-                $new_account = Account::find($request['account_id']);
-                $new_account->update([
-                    'balance' => $new_account->balance - $request['montant'],
-                ]);
-            }
-
-            $purchase->paid_amount = $new_total_paid;
-            $purchase->payment_statut = $payment_statut;
-            $purchase->save();
-
-        }, 10);
+            }, 10);
+        } catch (WalletException $e) {
+            return $e->toResponse();
+        }
 
         return response()->json(['success' => true, 'message' => 'Payment Update successfully'], 200);
     }
@@ -349,15 +396,14 @@ class PaymentPurchasesController extends BaseController
                 'deleted_at' => Carbon::now(),
             ]);
 
-            $account = Account::where('id', $payment->account_id)->exists();
+            // Wallet-funded: the amount goes back to the supplier wallet
+            // (no account to restore — account_id is null on those rows).
+            app(SupplierWalletService::class)->reversePaymentPurchase($payment, ['user_id' => Auth::id()]);
+            Account::adjustBalance($payment->account_id, $payment->montant);
 
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance + $payment->montant,
-                ]);
-            }
+            // The query-builder soft delete above fires no model event, so
+            // the Accounting V2 reversal (cash or wallet) is dispatched here.
+            event(new \App\Events\PaymentPurchaseDeleted($payment));
 
             $purchase->update([
                 'paid_amount' => $total_paid,
@@ -377,10 +423,27 @@ class PaymentPurchasesController extends BaseController
         $last = DB::table('payment_purchases')->latest('id')->first();
 
         if ($last) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = $nwMsg[1] + 1;
-            $code = $nwMsg[0].'_'.$inMsg;
+            $item = (string) ($last->Ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[0], $nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $inMsg = $nwMsg[1] + 1;
+                $code = $nwMsg[0].$sep.$inMsg;
+            } else {
+                $code = 'INV/PR_1111';
+            }
+
         } else {
             $code = 'INV/PR_1111';
         }
@@ -394,6 +457,8 @@ class PaymentPurchasesController extends BaseController
     {
         $payment = PaymentPurchase::with('purchase', 'purchase.provider')->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $payment);
+
         $payment_data['purchase_Ref'] = $payment['purchase']->Ref;
         $payment_data['supplier_name'] = $payment['purchase']['provider']?->name ?? '---';
         $payment_data['supplier_phone'] = $payment['purchase']['provider']->phone;
@@ -402,7 +467,7 @@ class PaymentPurchasesController extends BaseController
         $payment_data['montant'] = $payment->montant;
         $payment_data['Ref'] = $payment->Ref;
         $payment_data['date'] = $payment->date;
-        $payment_data['payment_method'] = $payment['payment_method']?->name ?? '---';
+        $payment_data['payment_method'] = ! empty($payment->wallet_transaction_id) ? 'Supplier Wallet' : ($payment['payment_method']?->name ?? '---');
 
         $helpers = new helpers;
         $settings = Setting::where('deleted_at', '=', null)->first();
@@ -411,6 +476,8 @@ class PaymentPurchasesController extends BaseController
         $Html = view('pdf.payments_purchase', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve(optional($payment->purchase)->warehouse_id, $settings),
             'payment' => $payment_data,
         ])->render();
 
@@ -456,7 +523,7 @@ class PaymentPurchasesController extends BaseController
 
         $payment_number = $payment->Ref;
 
-        $total_amount = $currency.' '.number_format($payment->montant, 2, '.', ',');
+        $total_amount = helpers::with_currency($currency, number_format($payment->montant, 2, '.', ','));
 
         $contact_name = $payment['purchase']['provider']?->name ?? '---';
         $business_name = $settings->CompanyName;
@@ -465,8 +532,8 @@ class PaymentPurchasesController extends BaseController
         $receiver_email = $payment['purchase']['provider']->email;
 
         // replace the text with tags
-        $message_body = str_replace('{contact_name}', $contact_name, $message_body);
-        $message_body = str_replace('{business_name}', $business_name, $message_body);
+        $message_body = str_replace('{contact_name}', e((string) $contact_name), $message_body);
+        $message_body = str_replace('{business_name}', e((string) $business_name), $message_body);
         $message_body = str_replace('{payment_number}', $payment_number, $message_body);
         $message_body = str_replace('{total_amount}', $total_amount, $message_body);
 
@@ -511,7 +578,7 @@ class PaymentPurchasesController extends BaseController
 
         $payment_number = $payment->Ref;
 
-        $total_amount = $currency.' '.number_format($payment->montant, 2, '.', ',');
+        $total_amount = helpers::with_currency($currency, number_format($payment->montant, 2, '.', ','));
 
         $contact_name = $payment['purchase']['provider']?->name ?? '---';
         $business_name = $settings->CompanyName;

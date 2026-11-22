@@ -31,6 +31,8 @@ use App\Services\TenantXpayService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 
 class CheckoutController extends Controller
 {
@@ -46,7 +48,7 @@ class CheckoutController extends Controller
     public function quote(Request $req)
     {
         $user = Auth::guard('store')->user();
-        if (! $user) {
+        if (! $user && ! \App\Models\StoreSetting::guestCheckoutEnabled()) {
             return response()->json(['error' => 'Unauthenticated'], 401);
         }
 
@@ -55,7 +57,10 @@ class CheckoutController extends Controller
             'items.*.product_id' => ['required', 'integer'],
             'items.*.product_variant_id' => ['nullable', 'integer'],
             'items.*.qty' => ['required', 'numeric', 'min:1'],
+            'items.*.option_ids' => ['nullable', 'array', 'max:30'],
+            'items.*.option_ids.*' => ['integer'],
             'shipping_method_id' => ['nullable', 'integer'],
+            'shipping_rate' => ['nullable', 'string', 'max:120'],
             'warehouse_id' => ['nullable', 'integer'],
             'coupon_code' => ['nullable', 'string', 'max:60'],
             'payment_method' => ['nullable', 'string', 'max:40'],
@@ -73,7 +78,7 @@ class CheckoutController extends Controller
         }
 
         try {
-            $warehouseIds = [$this->resolveWarehouseId((int) ($data['warehouse_id'] ?? 0))];
+            $warehouseIds = $this->stockWarehouseIds((int) ($data['warehouse_id'] ?? 0));
             $lines = $this->checkout->buildLineItems($data['items'], $warehouseIds);
             $subtotal = $lines['subtotal'];
 
@@ -84,7 +89,7 @@ class CheckoutController extends Controller
             $couponError = null;
             if ($req->filled('coupon_code')) {
                 try {
-                    $c = $this->checkout->resolveCoupon($req->input('coupon_code'), $subtotal, $user->client_id);
+                    $c = $this->checkout->resolveCoupon($req->input('coupon_code'), $subtotal, $user?->client_id);
                     $discount = $c['discount'];
                     $couponCode = $c['coupon']->code;
                 } catch (CheckoutException $e) {
@@ -95,20 +100,23 @@ class CheckoutController extends Controller
             $netSubtotal = round(max(0, $subtotal - $discount), 2);
             $tax = $this->checkout->resolveTax($netSubtotal, $country, $state);
 
-            $cartProductIds = collect($data['items'])->pluck('product_id')->filter()->unique()->all();
-            $methods = $isPickup ? collect() : $this->checkout->availableShippingMethods(
-                $country,
-                $cartProductIds
-            )->map(fn ($m) => [
-                'id' => $m->id,
-                'name' => $m->name,
-                'price' => (float) $m->price,
+            // One row per flat method, one per carrier service of a live method.
+            $choices = $isPickup
+                ? ['options' => [], 'pending' => false]
+                : $this->checkout->shippingOptions($country, $lines['items'], $this->destinationFor($req, $user), $netSubtotal);
+            $methods = collect($choices['options'])->map(fn ($o) => [
+                'id' => $o['id'],
+                'rate' => $o['rate'],
+                'name' => $o['name'],
+                'price' => (float) $o['price'],
+                'days' => $o['days'],
             ])->values();
 
-            // Shipping cost only if a valid method is chosen.
+            // Shipping cost only if a valid option is chosen.
             $shippingCost = 0.0;
             if (! $isPickup && ($chosen = $req->input('shipping_method_id'))) {
-                $match = $methods->firstWhere('id', (int) $chosen);
+                $rate = trim((string) $req->input('shipping_rate')) ?: null;
+                $match = $methods->first(fn ($m) => $m['id'] === (int) $chosen && $m['rate'] === $rate);
                 if ($match) {
                     $shippingCost = (float) $match['price'];
                 }
@@ -124,7 +132,9 @@ class CheckoutController extends Controller
                 'shipping_cost' => $shippingCost,
                 'total' => round($netSubtotal + $tax['amount'] + $shippingCost, 2),
                 'shipping_methods' => $methods,
-                'shipping_required' => $methods->isNotEmpty(),
+                'shipping_required' => $methods->isNotEmpty() || $choices['pending'],
+                // A live-rate method is waiting for the postal code / city.
+                'shipping_pending' => $choices['pending'],
                 'shipping_configured' => ! $isPickup && $this->checkout->shippingConfigured(),
                 'is_pickup' => $isPickup,
                 'country' => $country,
@@ -144,24 +154,36 @@ class CheckoutController extends Controller
         return [$country !== '' ? $country : null, $state !== '' ? $state : null];
     }
 
-    /** Warehouse the order is booked under: requested → store default → first. */
-    private function resolveWarehouseId(int $requested = 0): int
+    /**
+     * The rest of the delivery address, for live carrier rates: the posted
+     * fields, else the customer profile.
+     */
+    private function destinationFor(Request $req, $user): array
     {
-        $warehouseId = $requested;
-        if (! $warehouseId) {
-            $warehouseId = (int) DB::table('store_settings')->value('default_warehouse_id');
-        }
-        if ($warehouseId && ! Warehouse::whereKey($warehouseId)->exists()) {
-            $warehouseId = 0;
-        }
-        if (! $warehouseId) {
-            $warehouseId = (int) Warehouse::value('id');
-        }
-        if (! $warehouseId) {
-            throw new CheckoutException('No warehouse configured.', 422);
-        }
+        $client = $user && $user->client_id ? Client::find($user->client_id) : null;
+        $pick = fn (string $key, $fallback) => trim((string) ($req->input('shipping_' . $key) ?: $req->input($key) ?: ($fallback ?? '')));
 
-        return $warehouseId;
+        return [
+            'name' => $pick('name', $req->input('customer_name') ?: ($client->name ?? '')),
+            'phone' => trim((string) ($req->input('customer_phone') ?: ($client->phone ?? ''))),
+            'email' => trim((string) ($req->input('customer_email') ?: ($client->email ?? ''))),
+            'address' => $pick('address', $client->adresse ?? ''),
+            'city' => $pick('city', $client->city ?? ''),
+            'zip' => $pick('zip', $client->zip ?? ''),
+        ];
+    }
+
+    /**
+     * Warehouses a cart's stock is checked against: the requested one when the
+     * store sells from it, else every warehouse the store sells from.
+     *
+     * @return int[]
+     */
+    private function stockWarehouseIds(int $requested = 0): array
+    {
+        $ids = $this->checkout->activeWarehouseIds();
+
+        return ($requested && in_array($requested, $ids, true)) ? [$requested] : $ids;
     }
 
     /**
@@ -178,10 +200,10 @@ class CheckoutController extends Controller
         }
 
         [$country, $state] = $this->locationFor($req, $user);
-        $warehouseId = $this->resolveWarehouseId((int) $req->input('warehouse_id', 0));
         $breakdown = $this->checkout->calculate(
-            $items, [$warehouseId], $country, $state,
-            $req->input('shipping_method_id'), $req->input('coupon_code'), $user->client_id ?? null
+            $items, $this->stockWarehouseIds((int) $req->input('warehouse_id', 0)), $country, $state,
+            $req->input('shipping_method_id'), $req->input('coupon_code'), $user->client_id ?? null,
+            false, $req->input('shipping_rate'), $this->destinationFor($req, $user)
         );
 
         return (float) $breakdown['total'];
@@ -194,7 +216,7 @@ class CheckoutController extends Controller
     public function createPaymentIntent(Request $req)
     {
         $user = Auth::guard('store')->user();
-        if (! $user) {
+        if (! $user && ! \App\Models\StoreSetting::guestCheckoutEnabled()) {
             return response()->json(['error' => 'Unauthenticated'], 401);
         }
 
@@ -241,7 +263,7 @@ class CheckoutController extends Controller
             'amount' => $amountInCents,
             'currency' => $currency,
             'metadata' => [
-                'client_id' => $user->client_id ?? $user->id,
+                'client_id' => $user ? ($user->client_id ?? $user->id) : 'guest',
                 'currency_rate' => (string) $storeCurrency['rate'],
                 'currency_id' => (string) ($storeCurrency['id'] ?? ''),
             ],
@@ -261,7 +283,7 @@ class CheckoutController extends Controller
     public function createRazorpayOrder(Request $req, TenantRazorpayService $razorpay)
     {
         $user = Auth::guard('store')->user();
-        if (! $user) {
+        if (! $user && ! \App\Models\StoreSetting::guestCheckoutEnabled()) {
             return response()->json(['error' => 'Unauthenticated'], 401);
         }
 
@@ -305,7 +327,7 @@ class CheckoutController extends Controller
                 'store_' . uniqid(),
                 [
                     'source'    => 'storefront',
-                    'client_id' => (string) ($user->client_id ?? $user->id),
+                    'client_id' => (string) ($user ? ($user->client_id ?? $user->id) : 'guest'),
                 ],
                 $currencyCode
             );
@@ -331,7 +353,7 @@ class CheckoutController extends Controller
     public function createXpayIntent(Request $req, TenantXpayService $xpay)
     {
         $user = Auth::guard('store')->user();
-        if (! $user) {
+        if (! $user && ! \App\Models\StoreSetting::guestCheckoutEnabled()) {
             return response()->json(['error' => 'Unauthenticated'], 401);
         }
 
@@ -344,6 +366,7 @@ class CheckoutController extends Controller
             'shipping_method_id' => ['nullable', 'integer'],
             'coupon_code' => ['nullable', 'string', 'max:60'],
             'customer_name' => ['nullable', 'string', 'max:150'],
+            'customer_email' => ['nullable', 'string', 'max:150'],
             'customer_phone' => ['nullable', 'string', 'max:40'],
             'shipping_address' => ['nullable', 'string', 'max:250'],
             'shipping_city' => ['nullable', 'string', 'max:100'],
@@ -369,7 +392,7 @@ class CheckoutController extends Controller
             return response()->json(['error' => 'XPay is not configured.'], 500);
         }
 
-        $client = $user->client_id ? Client::find($user->client_id) : null;
+        $client = $user && $user->client_id ? Client::find($user->client_id) : null;
 
         $pick = fn (string $key, $fallback) => trim((string) (($data[$key] ?? '') !== '' ? $data[$key] : $fallback));
 
@@ -378,7 +401,7 @@ class CheckoutController extends Controller
                 $chargeTotal,
                 [
                     'name'  => $pick('customer_name', $client->name ?? $user->name ?? ''),
-                    'email' => trim((string) ($client->email ?? $user->email ?? '')),
+                    'email' => trim((string) ($client->email ?? $user->email ?? ($data['customer_email'] ?? ''))),
                     'phone' => $pick('customer_phone', $client->phone ?? ''),
                 ],
                 [
@@ -390,8 +413,8 @@ class CheckoutController extends Controller
                 ],
                 [
                     'source'          => 'storefront',
-                    'client_id'       => (string) ($user->client_id ?? $user->id),
-                    'order_reference' => 'store-' . ($user->client_id ?? $user->id) . '-' . time(),
+                    'client_id'       => (string) ($user ? ($user->client_id ?? $user->id) : 'guest'),
+                    'order_reference' => 'store-' . ($user ? ($user->client_id ?? $user->id) : 'guest') . '-' . time(),
                 ]
             );
         } catch (\Exception $e) {
@@ -410,8 +433,15 @@ class CheckoutController extends Controller
     public function store(Request $req)
     {
         $user = Auth::guard('store')->user();
-        if (! $user) {
+        if (! $user && ! \App\Models\StoreSetting::guestCheckoutEnabled()) {
             return response()->json(['error' => 'Unauthenticated'], 401);
+        }
+        // Guest checkout: no store login; the buyer is identified by the email
+        // typed at checkout (only while the admin has it switched on).
+        $isGuest = ! $user;
+        $limiterKey = 'guest-order:'.$req->ip();
+        if ($isGuest && RateLimiter::tooManyAttempts($limiterKey, 10)) {
+            return response()->json(['error' => __('messages.TooManyOrderAttempts')], 429);
         }
 
         $data = $req->validate([
@@ -419,18 +449,22 @@ class CheckoutController extends Controller
             'items.*.product_id'         => ['required', 'integer'],
             'items.*.product_variant_id' => ['nullable', 'integer'],
             'items.*.qty'                => ['required', 'numeric', 'min:1'],
+            'items.*.option_ids'         => ['nullable', 'array', 'max:30'],
+            'items.*.option_ids.*'       => ['integer'],
             'warehouse_id'               => ['nullable', 'integer'],
             'shipping_method_id'         => ['nullable', 'integer'],
+            'shipping_rate'              => ['nullable', 'string', 'max:120'],
             'coupon_code'                => ['nullable', 'string', 'max:60'],
             // Customer / shipping address (falls back to the customer profile)
             'customer_name'              => ['nullable', 'string', 'max:150'],
+            'customer_email'             => ['nullable', 'string', 'max:150'],
             'customer_phone'             => ['nullable', 'string', 'max:40'],
             'shipping_address'           => ['nullable', 'string', 'max:250'],
             'shipping_city'              => ['nullable', 'string', 'max:100'],
             'shipping_state'             => ['nullable', 'string', 'max:100'],
             'shipping_zip'               => ['nullable', 'string', 'max:30'],
             'shipping_country'           => ['nullable', 'string', 'max:100'],
-            'payment_method'             => ['required', 'string', 'in:credit_card,mobile_money,cod,razorpay,payfast,ligdicash,dodo,waafipay,bkash,sslcommerz,paymob,myfatoorah,moyasar,xpay,paypal,paystack,flutterwave,gcash,bank_transfer,cash_on_pickup'],
+            'payment_method'             => ['required', 'string', 'in:credit_card,mobile_money,cod,wallet,razorpay,payfast,ligdicash,dodo,waafipay,bkash,sslcommerz,paymob,myfatoorah,moyasar,xpay,paypal,paystack,flutterwave,gcash,bank_transfer,cash_on_pickup'],
             'pickup_branch_id'           => ['nullable', 'integer'],
             'stripe_payment_intent_id'   => ['nullable', 'string', 'max:128'],
             'xpay_intent_id'             => ['nullable', 'string', 'max:128'],
@@ -447,6 +481,18 @@ class CheckoutController extends Controller
         $storeSetting = \App\Models\StoreSetting::first();
         if (! \App\Models\StoreSetting::paymentMethodEnabled($paymentMethod, $storeSetting)) {
             return response()->json(['error' => 'This payment method is not available.'], 422);
+        }
+
+        // ---- Customer Wallet: a signed-in customer paying from their stored
+        // balance (never a guest, never on credit).
+        $customerWallets = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+        if ($paymentMethod === 'wallet') {
+            if ($isGuest) {
+                return response()->json(['error' => __('messages.WalletSignInRequired'), 'code' => 'wallet_sign_in'], 422);
+            }
+            if (! $customerWallets->checkoutEnabled()) {
+                return response()->json(['error' => 'This payment method is not available.', 'code' => 'wallet_disabled'], 422);
+            }
         }
 
         // ---- Cash on pickup: paying at the counter means collecting at a
@@ -609,6 +655,21 @@ class CheckoutController extends Controller
             }
         }
 
+        // PayPal / Paystack / Flutterwave are initiated after the order is
+        // saved, so check their credentials first: a missing key must not
+        // leave a pending order behind for every attempt.
+        $hostedGateways = [
+            'paypal' => [TenantPaypalService::class, 'PayPal'],
+            'paystack' => [TenantPaystackService::class, 'Paystack'],
+            'flutterwave' => [TenantFlutterwaveService::class, 'Flutterwave'],
+        ];
+        if (isset($hostedGateways[$paymentMethod])) {
+            [$serviceClass, $label] = $hostedGateways[$paymentMethod];
+            if (! app($serviceClass)->isConfigured()) {
+                return response()->json(['error' => $label.' is not configured.'], 500);
+            }
+        }
+
         // XPay (embedded card element, like Stripe): the browser already
         // confirmed the Payment Intent; re-fetch it now (it must have
         // succeeded) and cross-check the amount against the server-computed
@@ -643,41 +704,49 @@ class CheckoutController extends Controller
             }
         }
 
-        // Resolve warehouse
-        $warehouseId = (int) ($data['warehouse_id'] ?? 0);
-        if (! $warehouseId) {
-            $warehouseId = (int) DB::table('store_settings')->value('default_warehouse_id');
-        }
-        if ($warehouseId && ! Warehouse::whereKey($warehouseId)->exists()) {
-            $warehouseId = 0;
-        }
-        if (! $warehouseId) {
-            $warehouseId = (int) Warehouse::value('id');
-        }
-        if (! $warehouseId) {
-            return response()->json(['error' => 'No warehouse configured.'], 422);
-        }
-        // A collected order is booked under the branch the shopper chose.
-        if ($isPickup) {
-            $warehouseId = (int) $pickupBranch->warehouse_id;
+        // Resolve warehouses: stock is checked across the ones the store sells
+        // from (a collected order only against the branch the shopper chose).
+        try {
+            $warehouseIds = $isPickup
+                ? [(int) $pickupBranch->warehouse_id]
+                : $this->stockWarehouseIds((int) ($data['warehouse_id'] ?? 0));
+        } catch (CheckoutException $e) {
+            return $e->toResponse();
         }
 
         // ---- Customer information: address snapshot (shipping methods and tax
         // rates resolve from the country/state; the profile fills any blank) --
-        $client = $user->client_id ? Client::find($user->client_id) : null;
-        if (! $client) {
-            return response()->json(['error' => __('messages.CustomerProfileMissing')], 422);
+        if ($isGuest) {
+            // Everything comes from the form. An existing customer with the
+            // same email is linked to the order (created on first purchase
+            // further down), but their stored profile never fills a guest form.
+            $customer = [
+                'name' => trim((string) ($data['customer_name'] ?? '')),
+                'email' => strtolower(trim((string) ($data['customer_email'] ?? ''))),
+                'phone' => trim((string) ($data['customer_phone'] ?? '')),
+                'address' => trim((string) ($data['shipping_address'] ?? '')),
+                'city' => trim((string) ($data['shipping_city'] ?? '')),
+                'state' => trim((string) ($data['shipping_state'] ?? '')),
+                'zip' => trim((string) ($data['shipping_zip'] ?? '')),
+                'country' => trim((string) ($data['shipping_country'] ?? '')),
+            ];
+            $client = $customer['email'] !== '' ? $this->findClientByEmail($customer['email']) : null;
+        } else {
+            $client = $user->client_id ? Client::find($user->client_id) : null;
+            if (! $client) {
+                return response()->json(['error' => __('messages.CustomerProfileMissing')], 422);
+            }
+            $customer = [
+                'name' => trim((string) (($data['customer_name'] ?? '') !== '' ? $data['customer_name'] : $client->name)),
+                'email' => trim((string) ($client->email ?: $user->email)),
+                'phone' => trim((string) (($data['customer_phone'] ?? '') !== '' ? $data['customer_phone'] : $client->phone)),
+                'address' => trim((string) (($data['shipping_address'] ?? '') !== '' ? $data['shipping_address'] : $client->adresse)),
+                'city' => trim((string) (($data['shipping_city'] ?? '') !== '' ? $data['shipping_city'] : $client->city)),
+                'state' => trim((string) (($data['shipping_state'] ?? '') !== '' ? $data['shipping_state'] : $client->state)),
+                'zip' => trim((string) (($data['shipping_zip'] ?? '') !== '' ? $data['shipping_zip'] : $client->zip)),
+                'country' => trim((string) (($data['shipping_country'] ?? '') !== '' ? $data['shipping_country'] : $client->country)),
+            ];
         }
-        $customer = [
-            'name' => trim((string) (($data['customer_name'] ?? '') !== '' ? $data['customer_name'] : $client->name)),
-            'email' => trim((string) ($client->email ?: $user->email)),
-            'phone' => trim((string) (($data['customer_phone'] ?? '') !== '' ? $data['customer_phone'] : $client->phone)),
-            'address' => trim((string) (($data['shipping_address'] ?? '') !== '' ? $data['shipping_address'] : $client->adresse)),
-            'city' => trim((string) (($data['shipping_city'] ?? '') !== '' ? $data['shipping_city'] : $client->city)),
-            'state' => trim((string) (($data['shipping_state'] ?? '') !== '' ? $data['shipping_state'] : $client->state)),
-            'zip' => trim((string) (($data['shipping_zip'] ?? '') !== '' ? $data['shipping_zip'] : $client->zip)),
-            'country' => trim((string) (($data['shipping_country'] ?? '') !== '' ? $data['shipping_country'] : $client->country)),
-        ];
         // A collected order needs no shipping address; the branch country
         // stands in for the customer's when tax has to be resolved.
         if ($isPickup) {
@@ -687,11 +756,18 @@ class CheckoutController extends Controller
         // (an active shipping method is configured); stores with no shipping
         // set-up keep the lighter checkout they had before.
         $requiredFields = (! $isPickup && $this->checkout->shippingConfigured()) ? ['name', 'address', 'country'] : ['name'];
+        // A guest is reached by email only (confirmation + order link).
+        if ($isGuest) {
+            $requiredFields[] = 'email';
+        }
         $missing = [];
         foreach ($requiredFields as $field) {
             if ($customer[$field] === '') {
                 $missing[] = $field;
             }
+        }
+        if ($isGuest && $customer['email'] !== '' && ! filter_var($customer['email'], FILTER_VALIDATE_EMAIL)) {
+            $missing[] = 'email';
         }
         if ($missing) {
             return response()->json(['error' => __('messages.CustomerInfoIncomplete'), 'missing' => $missing], 422);
@@ -701,14 +777,24 @@ class CheckoutController extends Controller
         // coupon, location tax and the chosen shipping method ----------------
         try {
             $breakdown = $this->checkout->calculate(
-                $data['items'], [$warehouseId], $customer['country'] ?: null, $customer['state'] ?: null,
+                $data['items'], $warehouseIds, $customer['country'] ?: null, $customer['state'] ?: null,
                 $isPickup ? null : ($data['shipping_method_id'] ?? null),
-                $data['coupon_code'] ?? null, $user->client_id, $isPickup
+                $data['coupon_code'] ?? null, $client?->id, $isPickup,
+                $data['shipping_rate'] ?? null,
+                array_intersect_key($customer, array_flip(['name', 'phone', 'email', 'address', 'city', 'zip']))
             );
+            // The order is booked under one warehouse: the pickup branch, the
+            // requested one when the store sells from it, else the selected
+            // warehouse holding the most stock for this cart.
+            $warehouseId = count($warehouseIds) === 1
+                ? $warehouseIds[0]
+                : $this->checkout->selectFulfilmentWarehouseId($breakdown['items'], $data['warehouse_id'] ?? null);
         } catch (CheckoutException $e) {
             return $e->toResponse();
         }
 
+        // Restaurant add-ons are kept on the line (once the column exists).
+        $keepOptions = \Illuminate\Support\Facades\Schema::hasColumn('online_order_items', 'options');
         $normalizedItems = array_map(fn ($i) => [
             'product_id'         => $i['product_id'],
             'product_variant_id' => $i['product_variant_id'],
@@ -722,22 +808,26 @@ class CheckoutController extends Controller
             'is_preorder'        => $i['is_preorder'],
             'created_at'         => now(),
             'updated_at'         => now(),
-        ], $breakdown['items']);
+        ] + ($keepOptions ? ['options' => $i['options'] ?? null, 'options_label' => $i['options_label'] ?? null] : []), $breakdown['items']);
         $hasPreorderItems = (bool) $breakdown['has_preorder_items'];
 
         $grand    = (float) $breakdown['total'];
-        $clientId = $user->client_id ?? null;
+        // A guest's customer record is resolved just before the order is
+        // created (below), once every payment check has passed.
+        $clientId = $isGuest ? null : ($user->client_id ?? null);
 
         // Persist the address back to the customer profile for next time.
-        $client->fill([
-            'name' => $customer['name'] ?: $client->name,
-            'phone' => $customer['phone'] ?: $client->phone,
-            'adresse' => $customer['address'] ?: $client->adresse,
-            'city' => $customer['city'] ?: $client->city,
-            'state' => $customer['state'] ?: $client->state,
-            'zip' => $customer['zip'] ?: $client->zip,
-            'country' => $customer['country'] ?: $client->country,
-        ])->save();
+        if (! $isGuest) {
+            $client->fill([
+                'name' => $customer['name'] ?: $client->name,
+                'phone' => $customer['phone'] ?: $client->phone,
+                'adresse' => $customer['address'] ?: $client->adresse,
+                'city' => $customer['city'] ?: $client->city,
+                'state' => $customer['state'] ?: $client->state,
+                'zip' => $customer['zip'] ?: $client->zip,
+                'country' => $customer['country'] ?: $client->country,
+            ])->save();
+        }
 
         // Multi-Currency: the shopper's checkout currency (base with rate 1
         // when the module is off / nothing selected). Snapshotted on the
@@ -784,6 +874,23 @@ class CheckoutController extends Controller
             }
         }
 
+        // Customer Wallet: the balance must cover the whole order. The debit
+        // itself happens with the order insert, under a row lock.
+        if ($paymentMethod === 'wallet') {
+            $walletSummary = $customerWallets->summaryFor((int) $clientId);
+            if ($walletSummary['status'] !== 'active') {
+                return response()->json(['error' => __('messages.WalletFrozenNotice'), 'code' => 'wallet_frozen'], 422);
+            }
+            if (round((float) $walletSummary['balance'], 2) < round($grand, 2)) {
+                return response()->json([
+                    'error' => __('messages.WalletInsufficientBalance'),
+                    'code' => 'wallet_insufficient_balance',
+                    'balance' => $walletSummary['balance'],
+                    'required' => round($grand, 2),
+                ], 422);
+            }
+        }
+
         // XPay: the intent's charge must cover the server-computed total in
         // the configured currency (fails closed inside amountMatches()).
         if ($paymentMethod === 'xpay' && $xpayVerify !== null) {
@@ -824,11 +931,33 @@ class CheckoutController extends Controller
             $waafipayTransactionId = $purchase['transaction_id'] ?: null;
         }
 
-        $paymentStatus = in_array($paymentMethod, ['credit_card', 'razorpay', 'xpay'], true) || $waafipayTransactionId !== null
+        if ($isGuest) {
+            // First purchase under this email: create the customer record so
+            // the order (and its Sale, once confirmed) has someone to belong to.
+            // A matched existing customer only gets their blank fields filled —
+            // a guest must never overwrite someone's saved details.
+            $client = $client ?: Client::create([
+                'name' => $customer['name'],
+                'code' => $this->nextClientCode(),
+                'email' => $customer['email'],
+            ]);
+            $client->fill(array_filter([
+                'phone' => $client->phone ? null : $customer['phone'],
+                'adresse' => $client->adresse ? null : $customer['address'],
+                'city' => $client->city ? null : $customer['city'],
+                'state' => $client->state ? null : $customer['state'],
+                'zip' => $client->zip ? null : $customer['zip'],
+                'country' => $client->country ? null : $customer['country'],
+            ]))->save();
+            $clientId = $client->id;
+        }
+
+        $paymentStatus = in_array($paymentMethod, ['credit_card', 'razorpay', 'xpay', 'wallet'], true) || $waafipayTransactionId !== null
             ? 'paid'
             : 'pending';
 
-        $order = DB::transaction(function () use ($clientId, $warehouseId, $grand, $normalizedItems, $todayDate, $nowTime, $ref, $paymentMethod, $paymentStatus, $data, $hasPreorderItems, $waafipayTransactionId, $activeCurrency, $breakdown, $customer, $xpayVerify, $isPickup, $pickupBranch) {
+        try {
+        $order = DB::transaction(function () use ($clientId, $warehouseId, $grand, $normalizedItems, $todayDate, $nowTime, $ref, $paymentMethod, $paymentStatus, $data, $hasPreorderItems, $waafipayTransactionId, $activeCurrency, $breakdown, $customer, $xpayVerify, $isPickup, $pickupBranch, $isGuest, $customerWallets) {
             $order = \App\Models\OnlineOrder::create([
                 'date'                      => $todayDate,
                 'time'                      => $nowTime,
@@ -836,6 +965,8 @@ class CheckoutController extends Controller
                 'status'                    => 'pending',
                 'has_preorder_items'        => $hasPreorderItems,
                 'client_id'                 => $clientId,
+                'is_guest'                  => $isGuest,
+                'guest_token'               => $isGuest ? Str::random(40) : null,
                 'warehouse_id'              => $warehouseId,
                 'subtotal'                  => $breakdown['subtotal'],
                 'discount'                  => $breakdown['discount'] ?? 0,
@@ -844,7 +975,7 @@ class CheckoutController extends Controller
                 'tax_rate'                  => $breakdown['tax_rate'],
                 'shipping_cost'             => $breakdown['shipping_cost'],
                 'shipping_method_id'        => $breakdown['shipping_method']->id ?? null,
-                'shipping_method_name'      => $breakdown['shipping_method']->name ?? null,
+                'shipping_method_name'      => $breakdown['shipping_method_name'] ?? ($breakdown['shipping_method']->name ?? null),
                 'delivery_method'           => $isPickup ? 'pickup' : 'ship',
                 'pickup_branch_id'          => $isPickup ? (int) $pickupBranch->warehouse_id : null,
                 'total'                     => $grand,
@@ -868,7 +999,10 @@ class CheckoutController extends Controller
                 // (NULL/NULL when base). Totals stay in the base currency.
                 'currency_id'               => $activeCurrency['is_base'] ? null : $activeCurrency['id'],
                 'exchange_rate'             => $activeCurrency['is_base'] ? null : $activeCurrency['rate'],
-            ]);
+            ] + (! empty($breakdown['shipping_quote']) && \Illuminate\Support\Facades\Schema::hasColumn('online_orders', 'shipping_quote')
+                // Live carrier rate the customer paid: the label is booked for this service.
+                ? ['shipping_quote' => $breakdown['shipping_quote']]
+                : []));
 
             $order->items()->createMany($normalizedItems);
 
@@ -883,8 +1017,33 @@ class CheckoutController extends Controller
                 StoreCoupon::whereKey($breakdown['coupon']->id)->increment('used_count');
             }
 
+            // Customer Wallet: take the order total out of the wallet in the
+            // same transaction, so an order never exists unpaid-but-"paid".
+            if ($paymentMethod === 'wallet') {
+                $customerWallets->chargeOrder($order, (int) $clientId, (float) $grand);
+            }
+
             return $order;
         });
+        } catch (\App\Services\SupplierWallet\WalletException $e) {
+            return response()->json([
+                'error' => $e->slug() === 'wallet_insufficient_balance' ? __('messages.WalletInsufficientBalance') : $e->getMessage(),
+                'code' => $e->slug(),
+            ] + $e->context(), 422);
+        }
+
+        // Restaurant: straight to the kitchen display when the owner chose
+        // "when the order is placed" (paid, or paid on delivery / pickup).
+        app(\App\Services\Restaurant\OnlineKitchenService::class)->placed($order);
+
+        // Printful: an order paid at checkout (Stripe, Razorpay…) never fires
+        // the "paid" model hook, so queue it here when that is the trigger.
+        if ($order->payment_status === 'paid') {
+            \App\Services\Printful\OrderService::orderChanged($order->load('items'), 'paid');
+            // Paid at checkout (Stripe, Razorpay, XPay, WaafiPay): auto-confirm
+            // when switched on for the gateway (Store > Payment Gateway).
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         // Multi-Currency note: the redirect gateways below each charge a
         // FIXED currency (PayFast → ZAR, LigdiCash → XOF, Dodo → the product's
@@ -896,6 +1055,15 @@ class CheckoutController extends Controller
         // above, so invoices/history display in their currency.
 
         $paymentRedirect = null;
+
+        // The payer the hosted gateways see: the signed-in account, or for a
+        // guest the details typed at checkout (never the matched customer's).
+        $guestPayer = $isGuest ? (object) [
+            'name' => $customer['name'],
+            'phone' => $customer['phone'] !== '' ? $customer['phone'] : null,
+            'adresse' => $customer['address'],
+        ] : null;
+        $payerEmail = $isGuest ? $customer['email'] : ($user->email ?? null);
 
         // Shared by the three hosted gateways below: the buyer-facing name and
         // the SERVER-computed total converted into the charge currency.
@@ -1015,7 +1183,7 @@ class CheckoutController extends Controller
                 $session = $dodo->createCheckoutSession(
                     (float) $order->total,
                     $order->ref,
-                    $user->email ?? null,
+                    $payerEmail,
                     store_base_url('thank-you')
                 );
 
@@ -1051,11 +1219,11 @@ class CheckoutController extends Controller
         // stack — see routes/tenant_api.php for why.
         if ($paymentMethod === 'bkash') {
             try {
-                $client = $user->client_id ? \App\Models\Client::find($user->client_id) : null;
+                $client = $guestPayer ?? ($user->client_id ? \App\Models\Client::find($user->client_id) : null);
 
                 $bk = $bkash->createPayment(
                     (float) $order->total,
-                    (string) ($client->phone ?? $user->email ?? $order->ref),
+                    (string) ($client->phone ?? $payerEmail ?? $order->ref),
                     $order->ref,
                     url('/api/store/bkash/return')
                 );
@@ -1073,14 +1241,14 @@ class CheckoutController extends Controller
         // validation API cross-checks it), and hand back the GatewayPageURL.
         if ($paymentMethod === 'sslcommerz') {
             try {
-                $client = $user->client_id ? \App\Models\Client::find($user->client_id) : null;
+                $client = $guestPayer ?? ($user->client_id ? \App\Models\Client::find($user->client_id) : null);
 
                 $ssl = $sslcommerz->initializeSession(
                     (float) $order->total,
                     $order->ref,
                     [
                         'name'    => (string) ($client->name ?? ''),
-                        'email'   => (string) ($user->email ?? ''),
+                        'email'   => (string) ($payerEmail ?? ''),
                         'phone'   => (string) ($client->phone ?? ''),
                         'address' => (string) ($client->adresse ?? ''),
                     ],
@@ -1104,14 +1272,14 @@ class CheckoutController extends Controller
         // the hosted checkout URL. Charges in the configured paymob_currency.
         if ($paymentMethod === 'paymob') {
             try {
-                $client = $user->client_id ? \App\Models\Client::find($user->client_id) : null;
+                $client = $guestPayer ?? ($user->client_id ? \App\Models\Client::find($user->client_id) : null);
 
                 $intention = $paymob->createIntention(
                     (float) $order->total,
                     $order->ref,
                     [
                         'name'  => (string) ($client->name ?? ''),
-                        'email' => (string) ($user->email ?? ''),
+                        'email' => (string) ($payerEmail ?? ''),
                         'phone' => (string) ($client->phone ?? ''),
                     ],
                     url('/api/store/paymob/return'),
@@ -1131,14 +1299,14 @@ class CheckoutController extends Controller
         // the InvoiceURL. Charges in the configured myfatoorah_currency.
         if ($paymentMethod === 'myfatoorah') {
             try {
-                $client = $user->client_id ? \App\Models\Client::find($user->client_id) : null;
+                $client = $guestPayer ?? ($user->client_id ? \App\Models\Client::find($user->client_id) : null);
 
                 $invoice = $myfatoorah->createInvoice(
                     (float) $order->total,
                     $order->ref,
                     [
                         'name'  => (string) ($client->name ?? ''),
-                        'email' => (string) ($user->email ?? ''),
+                        'email' => (string) ($payerEmail ?? ''),
                         'phone' => (string) ($client->phone ?? ''),
                     ],
                     url('/api/store/myfatoorah/return'),
@@ -1173,6 +1341,10 @@ class CheckoutController extends Controller
             }
         }
 
+        if ($isGuest) {
+            RateLimiter::hit($limiterKey, 600);
+        }
+
         return response()->json([
             'id'               => $order->id,
             'ref'              => $order->ref,
@@ -1188,6 +1360,8 @@ class CheckoutController extends Controller
             'payment_method'   => $order->payment_method,
             'payment_status'   => $order->payment_status,
             'payment_redirect' => $paymentRedirect,
+            // Guests have no My Orders page: this secret link is their way back.
+            'guest_url'        => $order->is_guest ? route('store.guest.order', ['token' => $order->guest_token]) : null,
         ], 201);
     }
 
@@ -1245,13 +1419,19 @@ class CheckoutController extends Controller
         }
 
         // Guarded update: only one concurrent ITN delivery wins.
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status'     => 'paid',
                 'payfast_payment_id' => $pfPaymentId ?: null,
                 'updated_at'         => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return response('OK', 200);
     }
@@ -1319,12 +1499,18 @@ class CheckoutController extends Controller
         }
 
         // Guarded update: only one concurrent callback delivery wins.
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status' => 'paid',
                 'updated_at'     => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return response('OK', 200);
     }
@@ -1411,13 +1597,19 @@ class CheckoutController extends Controller
         }
 
         // Guarded update: only one concurrent delivery wins.
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status'  => 'paid',
                 'dodo_payment_id' => $dodoPaymentId ?: null,
                 'updated_at'      => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return response()->json(['status' => 'ok']);
     }
@@ -1494,13 +1686,19 @@ class CheckoutController extends Controller
         }
 
         // Guarded update: only one concurrent delivery wins.
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status'          => 'paid',
                 'waafipay_transaction_id' => $transactionId ?: null,
                 'updated_at'              => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return response()->json(['status' => 'ok']);
     }
@@ -1568,13 +1766,19 @@ class CheckoutController extends Controller
         }
 
         // Guarded update: only one concurrent callback hit wins.
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status' => 'paid',
                 'bkash_trx_id'   => $trxId ?: null,
                 'updated_at'     => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return redirect($thankYou);
     }
@@ -1621,13 +1825,19 @@ class CheckoutController extends Controller
         }
 
         // Guarded update: only one of the callback/IPN deliveries wins.
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status'     => 'paid',
                 'sslcommerz_val_id'  => $verify['val_id'] ?: null,
                 'updated_at'         => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return redirect($thankYou);
     }
@@ -1702,13 +1912,19 @@ class CheckoutController extends Controller
         }
 
         // Guarded update: only one of the callback/IPN deliveries wins.
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status'    => 'paid',
                 'sslcommerz_val_id' => $verify['val_id'] ?: null,
                 'updated_at'        => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return response('OK', 200);
     }
@@ -1751,13 +1967,19 @@ class CheckoutController extends Controller
         }
 
         // Guarded update: only one of the return/webhook deliveries wins.
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status'        => 'paid',
                 'paymob_transaction_id' => $verify['transaction_id'] ?: null,
                 'updated_at'            => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return redirect($thankYou);
     }
@@ -1808,13 +2030,19 @@ class CheckoutController extends Controller
         }
 
         // Guarded update: only one of the return/webhook deliveries wins.
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status'        => 'paid',
                 'paymob_transaction_id' => $verify['transaction_id'] ?: null,
                 'updated_at'            => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return response('OK', 200);
     }
@@ -1870,13 +2098,19 @@ class CheckoutController extends Controller
             return redirect($checkout);
         }
 
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status'            => 'paid',
                 'myfatoorah_transaction_id' => $verify['transaction_id'] ?: null,
                 'updated_at'                => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return redirect($thankYou);
     }
@@ -1921,13 +2155,19 @@ class CheckoutController extends Controller
             return redirect($checkout);
         }
 
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status'    => 'paid',
                 'moyasar_payment_id' => $verify['payment_id'] ?: null,
                 'updated_at'        => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return redirect($thankYou);
     }
@@ -1980,13 +2220,19 @@ class CheckoutController extends Controller
             return response('Not paid', 200);
         }
 
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status'      => 'paid',
                 'xpay_transaction_id' => $intent['transaction_id'] ?: null,
                 'updated_at'          => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return response('OK', 200);
     }
@@ -2043,13 +2289,19 @@ class CheckoutController extends Controller
             return redirect($checkout);
         }
 
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status' => 'paid',
                 'paypal_capture_id' => $capture['capture_id'] ?: null,
                 'updated_at' => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return redirect($thankYou);
     }
@@ -2101,13 +2353,19 @@ class CheckoutController extends Controller
             return redirect($checkout);
         }
 
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status' => 'paid',
                 'paystack_transaction_id' => $verify['transaction_id'] ?: null,
                 'updated_at' => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return redirect($thankYou);
     }
@@ -2149,15 +2407,38 @@ class CheckoutController extends Controller
             return redirect($checkout);
         }
 
-        \App\Models\OnlineOrder::whereKey($order->id)
+        $paidNow = \App\Models\OnlineOrder::whereKey($order->id)
             ->where('payment_status', '!=', 'paid')
             ->update([
                 'payment_status' => 'paid',
                 'flutterwave_transaction_id' => $verify['transaction_id'] ?: null,
                 'updated_at' => now(),
             ]);
+        // Restaurant: a now-paid online order can go to the kitchen ("when placed").
+        if ($paidNow) {
+            app(\App\Services\Restaurant\OnlineKitchenService::class)->placedById((int) $order->id);
+            // Auto-confirm (Store > Payment Gateway switch): Sale + stock now.
+            app(\App\Services\OnlineOrderConfirmer::class)->autoConfirmById((int) $order->id);
+        }
 
         return redirect($thankYou);
+    }
+
+    /** Guest checkout: the existing customer record for this email, if any. */
+    private function findClientByEmail(string $email): ?Client
+    {
+        return Client::whereNull('deleted_at')
+            ->whereRaw('LOWER(email) = ?', [strtolower($email)])
+            ->orderBy('id')
+            ->first();
+    }
+
+    /** Next customer code (same numbering as store registration). */
+    private function nextClientCode(): int
+    {
+        $last = DB::table('clients')->latest('id')->first();
+
+        return $last ? ((int) $last->code + 1) : 1;
     }
 
     private function storeCurrencyCode(): string

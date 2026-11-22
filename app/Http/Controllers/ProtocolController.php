@@ -108,14 +108,23 @@ class ProtocolController extends BaseController
             mkdir($dir, 0755, true);
         }
         $n = 0;
-        foreach ($files as $file) {
+        // Allow-listed extension for every file BEFORE anything is written:
+        // this folder is served from public/, so a client-chosen ".php" or
+        // ".html" would run as code or as a page on the app's origin.
+        $extensions = [];
+        foreach ($files as $i => $file) {
+            if ($file && $file->isValid()) {
+                $extensions[$i] = \App\Support\SafeUpload::documentExtension($file, $field);
+            }
+        }
+        foreach ($files as $i => $file) {
             if (! $file || ! $file->isValid()) {
                 continue;
             }
-            $ext = strtolower($file->getClientOriginalExtension() ?: 'bin');
-            $name = Str::random(24).'.'.$ext;
+            $ext = $extensions[$i];
+            $name = \App\Support\SafeUpload::name($ext);
             // Capture metadata BEFORE move() — the temp file is gone afterwards.
-            $originalName = $file->getClientOriginalName();
+            $originalName = \App\Support\SafeUpload::displayName($file);
             $size = $file->getSize();
             $file->move($dir, $name);
             ProtocolRequestAttachment::create([
@@ -275,6 +284,8 @@ class ProtocolController extends BaseController
             ->when($request->filled('priority'), fn ($x) => $x->where('priority', $request->priority))
             ->when($request->filled('desk_id'), fn ($x) => $x->where('current_desk_id', $request->desk_id))
             ->when($request->filled('client_id'), fn ($x) => $x->where('client_id', $request->client_id))
+            // Client Portal → Customer Requests: submissions made from the portal.
+            ->when($request->filled('channel'), fn ($x) => $x->where('channel', $request->channel))
             ->when($request->scope === 'inbox' && $s['user'], function ($x) use ($s) {
                 $x->whereIn('status', ProtocolRequest::ACTIVE_STATUSES)->where(function ($w) use ($s) {
                     $w->whereIn('current_desk_id', $s['deskIds'] ?: [0])->orWhere('assigned_to_user_id', $s['user']->id);

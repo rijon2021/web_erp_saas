@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\Store\PagesApiController;
 use App\Http\Controllers\Api\Store\PendingCustomersController;
 use App\Http\Controllers\Api\Store\ProductReviewsController;
 use App\Http\Controllers\Api\Store\QuoteRequestsController;
+use App\Http\Controllers\Api\Store\VehicleLeadsController;
 use App\Http\Controllers\Api\Store\ReturnsController;
 use App\Http\Controllers\Api\Store\SettingsApiController;
 use App\Http\Controllers\Api\Store\ShippingMethodsController;
@@ -51,17 +52,20 @@ Route::get('/ping', function () {
 });
 
 // --------------------------- Reset Password  ---------------------------
+// Legacy API reset (PasswordResetController) is disabled: nothing calls it,
+// its e-mailed link opens a form that posts to Laravel's broker
+// (password.update), which cannot accept these tokens, and every request
+// overwrote the broker's real reset token for that e-mail. Staff resets use
+// the web flow: password/reset → password/email → password/reset/{token}.
+// Route::group([
+//     'prefix' => 'password',
+//     'middleware' => 'throttle:5,10,legacy-password-reset',
+// ], function () {
+//     Route::post('create', 'PasswordResetController@create');
+//     Route::post('reset', 'PasswordResetController@reset');
+// });
 
-Route::group([
-    'prefix' => 'password',
-], function () {
-    Route::post('create', 'PasswordResetController@create');
-    Route::post('reset', 'PasswordResetController@reset');
-});
-
-Route::get('/products_clean_names', 'ProductsController@cleanNames');
-
-Route::post('getAccessToken', 'AuthController@getAccessToken');
+Route::post('getAccessToken', 'AuthController@getAccessToken')->middleware('throttle:10,1');
 
 Route::get('/get-logo-setting', function () {
     $setting = \App\Models\Setting::first();
@@ -71,22 +75,33 @@ Route::get('/get-logo-setting', function () {
     ]);
 });
 
-Route::get('/translations/{locale}', function ($locale) {
+Route::get('/translations/{locale}', function (\Illuminate\Http\Request $request, $locale) {
     $translations = \DB::table('translations')
         ->where('locale', $locale)
         ->pluck('value', 'key');
 
-    return response()->json($translations);
+    // ETag over the body: a reload whose copy is current gets an empty 304
+    // instead of the whole locale again. "no-cache" makes the browser always
+    // revalidate, so an edited translation still shows on the next load, and
+    // "private" keeps one tenant's strings out of any shared cache.
+    $response = response()->json($translations);
+    $response->setEtag(md5($response->getContent()));
+    $response->headers->set('Cache-Control', 'private, no-cache');
+    $response->isNotModified($request);
+
+    return $response;
 });
 
 Route::get('/languages', 'LanguageController@load_language');
 
 // Incoming webhooks (public, HMAC-signature verified per source).
 // Namespaced under /webhooks/incoming/{source} — never collides with existing routes.
-Route::post('/webhooks/incoming/{source}', [\App\Http\Controllers\Webhooks\IncomingWebhooksController::class, 'handle']);
+Route::post('/webhooks/incoming/{source}', [\App\Http\Controllers\Webhooks\IncomingWebhooksController::class, 'handle'])
+    ->where('source', '[A-Za-z0-9_-]{1,64}')
+    ->middleware('throttle:120,1,incoming-webhooks'); // own counter, not shared with login
 
 // Zapier integration (server-to-server; authenticated by the tenant's Zapier API key)
-Route::prefix('zapier')->middleware(['zapier.auth', 'tenant.feature:zapier'])->group(function () {
+Route::prefix('zapier')->middleware(['zapier.auth', 'tenant.entitled', 'tenant.feature:zapier'])->group(function () {
     Route::get('me', [\App\Http\Controllers\Zapier\ZapierController::class, 'me']);
     Route::post('hooks', [\App\Http\Controllers\Zapier\ZapierController::class, 'subscribe']);
     Route::delete('hooks/{id}', [\App\Http\Controllers\Zapier\ZapierController::class, 'unsubscribe']);
@@ -95,6 +110,30 @@ Route::prefix('zapier')->middleware(['zapier.auth', 'tenant.feature:zapier'])->g
     Route::post('actions/products', [\App\Http\Controllers\Zapier\ZapierController::class, 'createProduct']);
     Route::get('search/customers', [\App\Http\Controllers\Zapier\ZapierController::class, 'findCustomer']);
     Route::get('search/products', [\App\Http\Controllers\Zapier\ZapierController::class, 'findProduct']);
+});
+// Public licensing API for the tenant's own software (generated license keys).
+// No login: the license key authenticates the call; answers are Ed25519-signed.
+Route::prefix('licensing/v1')->middleware(['tenant.entitled', 'tenant.feature:license_keys', 'throttle:60,1,licensing-api'])->group(function () {
+    Route::post('activate', [\App\Http\Controllers\Api\LicensingApiController::class, 'activate']);
+    Route::post('validate', [\App\Http\Controllers\Api\LicensingApiController::class, 'validateLicense']);
+    Route::post('deactivate', [\App\Http\Controllers\Api\LicensingApiController::class, 'deactivate']);
+    Route::post('status', [\App\Http\Controllers\Api\LicensingApiController::class, 'status']);
+});
+// Public REST API v1 (Settings > API keys; plan feature `api`). Write calls may
+// send Idempotency-Key; 120 calls / minute per key user.
+Route::prefix('v1')->middleware(['apikey.auth', 'tenant.entitled', 'tenant.feature:api', 'throttle:120,1', 'api.idempotent'])->group(function () {
+    Route::get('me', [\App\Http\Controllers\Api\V1\MetaApiController::class, 'me']);
+    Route::get('warehouses', [\App\Http\Controllers\Api\V1\MetaApiController::class, 'warehouses']);
+    Route::get('suppliers', [\App\Http\Controllers\Api\V1\MetaApiController::class, 'suppliers']);
+    Route::get('products', [\App\Http\Controllers\Api\V1\ProductsApiController::class, 'index']);
+    Route::get('products/{code}', [\App\Http\Controllers\Api\V1\ProductsApiController::class, 'show'])->where('code', '.+');
+    Route::put('products/{code}', [\App\Http\Controllers\Api\V1\ProductsApiController::class, 'upsert'])->where('code', '.+');
+    Route::get('stock', [\App\Http\Controllers\Api\V1\StockApiController::class, 'index']);
+    Route::post('stock/adjustments', [\App\Http\Controllers\Api\V1\StockApiController::class, 'adjust']);
+    Route::post('purchases', [\App\Http\Controllers\Api\V1\PurchasesApiController::class, 'store']);
+    Route::get('sales/lines', [\App\Http\Controllers\Api\V1\SalesApiController::class, 'lines']);
+    // Anything else under v1: a JSON 404, not the HTML error page.
+    Route::any('{any}', fn () => \App\Http\Middleware\ApiKeyAuth::error('not_found', 'No such API endpoint.', 404))->where('any', '.*');
 });
 
 // ---------------- Shopify webhooks (public) ----------------
@@ -110,6 +149,12 @@ Route::post('shopify/webhook', [\App\Http\Controllers\ShopifyWebhookController::
 
 // Salla webhooks (public endpoint; authenticated by the X-Salla-Signature HMAC)
 Route::post('/salla/webhook', [\App\Http\Controllers\Integrations\SallaWebhookController::class, 'handle']);
+// Courier status pushes (AfterShip, 17TRACK, courier APIs); the token identifies the account.
+Route::post('/couriers/webhook/{token}', [\App\Http\Controllers\Couriers\CourierWebhookController::class, 'handle']);
+// Printful webhooks (public endpoint; the secret token in the path authenticates it)
+Route::post('/printful/webhook/{token}', [\App\Http\Controllers\Integrations\PrintfulWebhookController::class, 'handle']);
+// OpenCart order notices (public endpoint; token in the path + HMAC signature)
+Route::post('/opencart/webhook/{token}', [\App\Http\Controllers\Integrations\OpencartWebhookController::class, 'handle']);
 
 // bKash / SSLCommerz storefront callbacks. These live on the SESSIONLESS api
 // stack on purpose: SSLCommerz POSTs the shopper's browser back cross-site,
@@ -151,6 +196,31 @@ Route::get('/store/flutterwave/return', [\App\Http\Controllers\Api\Store\Checkou
 Route::post('/store/webhooks/paypal', [\App\Http\Controllers\Api\Store\WebhookController::class, 'paypal']);
 Route::post('/store/webhooks/paystack', [\App\Http\Controllers\Api\Store\WebhookController::class, 'paystack']);
 Route::post('/store/webhooks/flutterwave', [\App\Http\Controllers\Api\Store\WebhookController::class, 'flutterwave']);
+
+// ---------------- Mobile app (Flutter) ----------------
+// The app authenticates with a Passport personal access token issued by
+// mobile/login and sent as a Bearer header — no cookies involved. ping and
+// login are public: ping validates a workspace address typed into the app
+// before any credentials exist, and login is throttled per IP. Like
+// get_user_auth, none of this is behind tenant.subscribed: a lapsed workspace
+// must still reach it to be told why the app is locked.
+Route::prefix('mobile')->group(function () {
+    Route::get('ping', [\App\Http\Controllers\Api\Mobile\MobileAuthController::class, 'ping']);
+    Route::post('login', [\App\Http\Controllers\Api\Mobile\MobileAuthController::class, 'login'])
+        ->middleware('throttle:10,1');
+
+    Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', 'tenant.activity'])->group(function () {
+        Route::get('me', [\App\Http\Controllers\Api\Mobile\MobileAuthController::class, 'me']);
+        Route::post('logout', [\App\Http\Controllers\Api\Mobile\MobileAuthController::class, 'logout']);
+    });
+});
+
+// The signed-in user's profile/permissions — the SPA router loads it before
+// every page, including the /subscription billing pages a lapsed workspace
+// must still reach to renew. So it is NOT behind tenant.subscribed.
+Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', 'tenant.activity'])->group(function () {
+    Route::get('get_user_auth', 'UserController@GetUserAuth');
+});
 
 Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', 'tenant.subscribed', 'tenant.activity'])->group(function () {
 
@@ -265,6 +335,11 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::get('/store/quote-requests', [QuoteRequestsController::class, 'index']);
         Route::post('/store/quote-requests/{id}/status', [QuoteRequestsController::class, 'setStatus']);
         Route::delete('/store/quote-requests/{id}', [QuoteRequestsController::class, 'destroy']);
+        // Vehicle leads (Car Dealership theme)
+        Route::get('/store/vehicle-leads', [VehicleLeadsController::class, 'index']);
+        Route::post('/store/vehicle-leads/{id}', [VehicleLeadsController::class, 'update'])->whereNumber('id');
+        Route::post('/store/vehicle-leads/{id}/crm', [VehicleLeadsController::class, 'toCrm'])->whereNumber('id');
+        Route::delete('/store/vehicle-leads/{id}', [VehicleLeadsController::class, 'destroy'])->whereNumber('id');
 
         // Popup Messages
         Route::get('/store/popups', [StorePopupsController::class, 'index']);
@@ -373,8 +448,6 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::get('report/sales', 'ReportController@Report_Sales');
     Route::get('report/purchases', 'ReportController@Report_Purchases');
     Route::get('report/get_last_sales', 'ReportController@Get_last_Sales');
-    Route::get('report/stock_alert', 'ReportController@Products_Alert');
-    Route::get('report/payment_chart', 'ReportController@Payment_chart');
     Route::get('report/warehouse_report', 'ReportController@Warehouse_Report');
     Route::get('report/internal_location_report', 'ReportController@Internal_Location_Report');
     Route::get('report/sales_warehouse', 'ReportController@Sales_Warehouse');
@@ -384,12 +457,10 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::get('report/returns_purchase_warehouse', 'ReportController@Returns_Purchase_Warehouse');
     Route::get('report/expenses_warehouse', 'ReportController@Expenses_Warehouse');
     Route::get('report/warhouse_count_stock', 'ReportController@Warhouse_Count_Stock');
-    Route::get('report/report_today', 'ReportController@report_today');
     Route::get('report/count_quantity_alert', 'ReportController@count_quantity_alert');
     Route::get('report/profit_and_loss', 'ReportController@ProfitAndLoss');
     // Profit analysis by dimension: product|category|unit|customer|date|warehouse
     Route::get('report/profit/{dimension}', 'ProfitReportController@index');
-    Route::get('report/report_dashboard', 'ReportController@report_dashboard');
     Route::get('report/top_products', 'ReportController@report_top_products');
     Route::get('report/top_customers', 'ReportController@report_top_customers');
     Route::get('report/product_report', 'ReportController@product_report');
@@ -452,6 +523,8 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
 
     Route::get('report/draft_invoices', 'ReportController@draftInvoices');
     Route::get('report/discount_summary', 'ReportController@discountSummary');
+    Route::get('report/due_collection', 'ReportController@dueCollection');
+    Route::get('report/pos_sales', 'ReportController@posSales');
     Route::get('report/tax_summary', 'ReportController@taxSummary');
     Route::get('report/stock_aging', 'ReportController@stockAging');
     Route::get('report/stock_aging/filters', 'ReportController@stockAgingFilters');
@@ -470,6 +543,24 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::middleware('tenant.feature:ai_reports')->group(function () {
         Route::get('report-questions', 'ReportQuestionController@index');
         Route::post('report-questions/run', 'ReportQuestionController@run');
+    });
+
+    // AI Assistant — Claude chat, dashboard insights, product writer, invoice scanner (feature-gated)
+    Route::middleware('tenant.feature:ai_assistant')->group(function () {
+        Route::get('ai/status', 'AiAssistantController@status');
+        Route::get('ai/conversations', 'AiAssistantController@conversations');
+        Route::get('ai/conversations/{id}', 'AiAssistantController@show');
+        Route::delete('ai/conversations/{id}', 'AiAssistantController@destroy');
+        Route::post('ai/ask', 'AiAssistantController@ask');
+        Route::get('ai/insights', 'AiAssistantController@insights');
+        Route::post('ai/insights', 'AiAssistantController@generateInsights');
+        Route::get('ai/settings', 'AiAssistantController@settings');
+        Route::put('ai/settings', 'AiAssistantController@updateSettings');
+        Route::post('ai/settings/test', 'AiAssistantController@test');
+        Route::get('ai/product-writer/options', 'AiProductWriterController@options');
+        Route::post('ai/product-writer/generate', 'AiProductWriterController@generate');
+        Route::post('ai/product-writer/apply', 'AiProductWriterController@apply');
+        Route::post('ai/invoice-scan', 'AiInvoiceScanController@scan');
     });
 
     // ------------------------------- Service & Maintenance (feature-gated) ------------------------\\
@@ -514,6 +605,7 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     // ------------------------------- payment_methods ------------------------\\
     // ------------------------------------------------------------------\\
     Route::put('payment_methods/{id}/active', 'PaymentMethodController@setActive');
+    Route::put('payment_methods/{id}/cash', 'PaymentMethodController@setCash');
     Route::resource('payment_methods', 'PaymentMethodController');
 
     // ---------------------- HR Management (feature-gated) ----------------------\\
@@ -600,10 +692,38 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     // Basic client info for header (optional but recommended)
     Route::get('clients/{id}/brief', 'ClientController@clientBrief');
 
-    // Client Portal admin controls (enable/disable)
-    Route::get('clients/{id}/portal-status', [\App\Http\Controllers\Api\Portal\PortalAdminController::class, 'getStatus']);
-    Route::post('clients/{id}/portal-enable', [\App\Http\Controllers\Api\Portal\PortalAdminController::class, 'enable']);
-    Route::post('clients/{id}/portal-disable', [\App\Http\Controllers\Api\Portal\PortalAdminController::class, 'disable']);
+    // Client Portal is a plan feature: every admin endpoint below needs it.
+    Route::middleware('tenant.feature:client_portal')->group(function () {
+        // Client Portal admin controls (enable/disable)
+        Route::get('clients/{id}/portal-status', [\App\Http\Controllers\Api\Portal\PortalAdminController::class, 'getStatus']);
+        Route::post('clients/{id}/portal-enable', [\App\Http\Controllers\Api\Portal\PortalAdminController::class, 'enable']);
+        Route::post('clients/{id}/portal-disable', [\App\Http\Controllers\Api\Portal\PortalAdminController::class, 'disable']);
+        // Client Portal sidebar section (dashboard, accounts, deletion log, settings)
+        Route::get('client-portal/dashboard', 'ClientPortalController@dashboard');
+        Route::get('client-portal/accounts', 'ClientPortalController@accounts');
+        Route::get('client-portal/accounts/available-clients', 'ClientPortalController@availableClients');
+        Route::post('client-portal/accounts', 'ClientPortalController@store');
+        Route::post('client-portal/accounts/status', 'ClientPortalController@setStatus');
+        Route::post('client-portal/accounts/invite', 'ClientPortalController@invite');
+        Route::post('client-portal/accounts/{id}/two-factor/reset', 'ClientPortalController@resetTwoFactor')->whereNumber('id');
+        Route::put('client-portal/accounts/{id}', 'ClientPortalController@update')->whereNumber('id');
+        Route::get('client-portal/deletions', 'ClientPortalController@deletions');
+        Route::get('client-portal/settings', 'ClientPortalController@getSettings');
+        Route::put('client-portal/settings', 'ClientPortalController@updateSettings');
+
+        // Client Portal → Portal Languages / Translations (the tenant's portal_languages / portal_translations)
+        Route::get('/admin/portal/languages', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'index']);
+        Route::get('/admin/portal/languages/available', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'available']);
+        Route::post('/admin/portal/languages/install/{locale}', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'install']);
+        Route::put('/admin/portal/languages/{id}', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'update'])->whereNumber('id');
+        Route::post('/admin/portal/languages/{id}/toggle-active', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'toggleActive'])->whereNumber('id');
+        Route::post('/admin/portal/languages/{id}/set-default', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'setDefault'])->whereNumber('id');
+        Route::delete('/admin/portal/languages/{id}', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'destroy'])->whereNumber('id');
+        Route::get('/admin/portal/translations/{locale}', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'translations']);
+        Route::put('/admin/portal/translations/{locale}', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'saveTranslation']);
+        Route::post('/admin/portal/translations/{locale}/reset', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'resetTranslation']);
+        Route::post('/admin/portal/translations/{locale}/delete', [\App\Http\Controllers\Api\Portal\PortalLanguagesController::class, 'deleteTranslation']);
+    });
     Route::get('/client_ledger_pdf', 'ClientController@export');
 
     // ------------------------------- CLIENTS Ecommerce--------------------------\\
@@ -620,8 +740,77 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::post('suppliers/import', 'ProvidersController@import');
 
     Route::post('providers/delete/by_selection', 'ProvidersController@delete_by_selection');
+    Route::post('providers/{id}/adjust-opening-balance', 'ProvidersController@adjustOpeningBalance');
     Route::post('pay_supplier_due', 'ProvidersController@pay_supplier_due');
     Route::post('pay_purchase_return_due', 'ProvidersController@pay_purchase_return_due');
+
+    // Supplier Wallet (plan feature `supplier_wallet` + Settings > Features switch).
+    // `summary` stays outside the feature gate: payment forms ask it whether to
+    // offer the wallet tender at all, and must get {enabled:false} not a 403.
+    Route::get('supplier_wallets/{id}/summary', 'SupplierWalletController@summary')->whereNumber('id');
+    Route::middleware('tenant.feature:supplier_wallet')->group(function () {
+        Route::get('supplier_wallets', 'SupplierWalletController@index');
+        Route::get('supplier_wallets/transactions', 'SupplierWalletController@transactions');
+        Route::get('supplier_wallets/{id}', 'SupplierWalletController@show')->whereNumber('id');
+        Route::get('supplier_wallets/{id}/transactions', 'SupplierWalletController@providerTransactions')->whereNumber('id');
+        Route::post('supplier_wallets/{id}/top-up', 'SupplierWalletController@topUp')->whereNumber('id');
+        Route::post('supplier_wallets/{id}/refund', 'SupplierWalletController@refund')->whereNumber('id');
+        Route::post('supplier_wallets/{id}/adjust', 'SupplierWalletController@adjust')->whereNumber('id');
+        Route::post('supplier_wallets/{id}/status', 'SupplierWalletController@setStatus')->whereNumber('id');
+    });
+
+    // Customer Wallet (plan feature `customer_wallet` + Settings > Features switch).
+    // `summary` stays outside the feature gate: payment forms ask it whether to
+    // offer the wallet tender at all, and must get {enabled:false} not a 403.
+    Route::get('customer_wallets/{id}/summary', 'CustomerWalletController@summary')->whereNumber('id');
+    Route::middleware('tenant.feature:customer_wallet')->group(function () {
+        Route::get('customer_wallets', 'CustomerWalletController@index');
+        Route::get('customer_wallets/dashboard', 'CustomerWalletController@dashboard');
+        Route::get('customer_wallets/transactions', 'CustomerWalletController@transactions');
+        Route::get('customer_wallets/settings', 'CustomerWalletController@settings');
+        Route::post('customer_wallets/settings', 'CustomerWalletController@updateSettings');
+        Route::get('customer_wallets/{id}', 'CustomerWalletController@show')->whereNumber('id');
+        Route::get('customer_wallets/{id}/transactions', 'CustomerWalletController@clientTransactions')->whereNumber('id');
+        Route::post('customer_wallets/{id}/top-up', 'CustomerWalletController@topUp')->whereNumber('id');
+        Route::post('customer_wallets/{id}/refund', 'CustomerWalletController@refund')->whereNumber('id');
+        Route::post('customer_wallets/{id}/adjust', 'CustomerWalletController@adjust')->whereNumber('id');
+        Route::post('customer_wallets/{id}/status', 'CustomerWalletController@setStatus')->whereNumber('id');
+        Route::post('customer_wallets/{id}/redeem', 'CustomerWalletController@redeem')->whereNumber('id');
+        Route::get('customer_wallet_withdrawals', 'CustomerWalletController@withdrawals');
+        Route::post('customer_wallet_withdrawals/{id}/approve', 'CustomerWalletController@approveWithdrawal')->whereNumber('id');
+        Route::post('customer_wallet_withdrawals/{id}/reject', 'CustomerWalletController@rejectWithdrawal')->whereNumber('id');
+        Route::post('customer_wallet_withdrawals/{id}/paid', 'CustomerWalletController@markWithdrawalPaid')->whereNumber('id');
+        Route::get('gift_cards', 'CustomerWalletController@giftCards');
+        Route::post('gift_cards', 'CustomerWalletController@storeGiftCard');
+        Route::put('gift_cards/{id}', 'CustomerWalletController@updateGiftCard')->whereNumber('id');
+        Route::delete('gift_cards/{id}', 'CustomerWalletController@destroyGiftCard')->whereNumber('id');
+    });
+
+    // Software License Keys (plan feature `license_keys`): uploaded key stock,
+    // generated licenses, delivery + licensing API settings.
+    Route::middleware('tenant.feature:license_keys')->group(function () {
+        Route::get('license-keys/dashboard', 'LicenseKeysController@dashboard');
+        Route::get('license-keys/products', 'LicenseKeysController@products');
+        Route::get('license-keys/backorders', 'LicenseKeysController@backorders');
+        Route::post('license-keys/sales/{id}/sync', 'LicenseKeysController@syncSale')->whereNumber('id');
+        Route::get('license-keys/settings', 'LicenseKeysController@settings');
+        Route::post('license-keys/settings', 'LicenseKeysController@updateSettings');
+        Route::post('license-keys/settings/rotate-key', 'LicenseKeysController@rotateSigningKey');
+        Route::get('license-keys/export', 'LicenseKeysController@export');
+        Route::post('license-keys/preview', 'LicenseKeysController@preview');
+        Route::post('license-keys/import', 'LicenseKeysController@import');
+        Route::post('license-keys/issue', 'LicenseKeysController@issue');
+        Route::get('license-keys', 'LicenseKeysController@index');
+        Route::get('license-keys/{id}', 'LicenseKeysController@show')->whereNumber('id');
+        Route::post('license-keys/{id}/reveal', 'LicenseKeysController@reveal')->whereNumber('id');
+        Route::post('license-keys/{id}/restock', 'LicenseKeysController@restock')->whereNumber('id');
+        Route::post('license-keys/{id}/void', 'LicenseKeysController@void')->whereNumber('id');
+        Route::delete('license-keys/{id}', 'LicenseKeysController@destroy')->whereNumber('id');
+        Route::post('license-keys/{id}/extend', 'LicenseKeysController@extend')->whereNumber('id');
+        Route::post('license-keys/{id}/state', 'LicenseKeysController@state')->whereNumber('id');
+        Route::post('license-keys/{id}/reset-activations', 'LicenseKeysController@resetActivations')->whereNumber('id');
+        Route::post('license-keys/{id}/resend', 'LicenseKeysController@resend')->whereNumber('id');
+    });
 
     // ------------------------------- Custom Fields --------------------------\\
     // --------------------------------------------------------------------\\
@@ -631,13 +820,48 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::post('custom-field-values', 'CustomFieldController@saveValues');
     Route::resource('custom-fields', 'CustomFieldController');
 
+    // ---------------------- POS Devices (card terminals) ----------------------\\
+    Route::middleware('tenant.feature:pos_terminals')->group(function () {
+        Route::get('pos-terminals', 'PosTerminalsController@index');
+        Route::post('pos-terminals', 'PosTerminalsController@store');
+        Route::get('pos-terminals/available', 'PosTerminalsController@available');
+        Route::get('pos-terminals/transactions', 'PosTerminalsController@transactions');
+        Route::get('pos-terminals/transactions/{id}', 'PosTerminalsController@show')->whereNumber('id');
+        Route::post('pos-terminals/transactions/{id}/bridge-result', 'PosTerminalsController@bridgeResult')->whereNumber('id');
+        Route::post('pos-terminals/transactions/{id}/cancel', 'PosTerminalsController@cancel')->whereNumber('id');
+        Route::post('pos-terminals/transactions/{id}/dispatch', 'PosTerminalsController@send')->whereNumber('id');
+        Route::post('pos-terminals/transactions/{id}/void', 'PosTerminalsController@void')->whereNumber('id');
+        Route::post('pos-terminals/transactions/{id}/refund', 'PosTerminalsController@refund')->whereNumber('id');
+        Route::put('pos-terminals/{id}', 'PosTerminalsController@update')->whereNumber('id');
+        Route::delete('pos-terminals/{id}', 'PosTerminalsController@destroy')->whereNumber('id');
+        Route::post('pos-terminals/{id}/test', 'PosTerminalsController@test')->whereNumber('id');
+        Route::post('pos-terminals/{id}/test-result', 'PosTerminalsController@testResult')->whereNumber('id');
+        Route::post('pos-terminals/{id}/charge', 'PosTerminalsController@charge')->whereNumber('id');
+    });
+
     // ---------------------- POS (point of sales) ----------------------\\
     // ------------------------------------------------------------------\\
 
     Route::middleware('tenant.feature:pos')->group(function () {
         Route::post('pos/create_pos', 'PosController@CreatePOS');
+        // Customer Wallet balance hint for the POS payment modal ({enabled:false} when off)
+        Route::get('pos/wallet-balance/{client}', 'PosController@walletBalance')->whereNumber('client');
+        // Sales > Offline Sales (sales replayed from tills' offline queues)
+        Route::get('pos/offline_sales', 'PosOfflineSalesController@index');
+        Route::post('pos/offline_sales/statuses', 'PosOfflineSalesController@statuses');
+        Route::get('pos/offline_sales/{id}', 'PosOfflineSalesController@show')->whereNumber('id');
+        Route::post('pos/offline_sales/{id}/retry', 'PosOfflineSalesController@retry')->whereNumber('id');
+        Route::post('pos/offline_sales/{id}/discard', 'PosOfflineSalesController@discard')->whereNumber('id');
+        // POS manager approval for removing items + Reports > POS Voided Items
+        Route::get('pos/voids/approvers', 'PosVoidsController@approvers');
+        Route::post('pos/voids/approve', 'PosVoidsController@approve');
+        Route::post('pos/voids/log', 'PosVoidsController@log');
+        Route::get('pos/voids', 'PosVoidsController@index');
+        Route::get('pos/approval-pin', 'PosVoidsController@myPin');
+        Route::post('pos/approval-pin', 'PosVoidsController@setMyPin');
         Route::get('pos/get_products_pos', 'PosController@GetProductsByParametre');
         Route::get('pos/get_products_pos_changes', 'PosController@GetProductsChanges');
+        Route::post('pos/favorites/toggle', 'PosController@toggleFavorite');
         Route::get('pos/data_create_pos', 'PosController@GetELementPos');
 
         // ----------------------Draft -------------------------------------\\
@@ -655,6 +879,8 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::get('report/cash_registers', 'CashRegisterController@report');
     });
     Route::get('report/warranty_guarantee', 'ReportController@warrantyGuaranteeReport');
+    // Mobile app: the quantity-alerts report lives with the products.
+    Route::get('report/stock_alert', 'ProductsController@Products_Alert');
 
     // ------------------------------- Contracts (feature-gated) -----------------------\\
     Route::middleware('tenant.feature:contracts')->group(function () {
@@ -746,6 +972,55 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     // ------------------------------- Bookings (feature-gated) -----------------------\\
     // ------------------------------------------------------------------------\\
     Route::middleware('tenant.feature:bookings')->group(function () {
+    // Booking Management settings + business types (before bookings/{id})
+    Route::get('bookings/settings', 'BookingSettingsController@show');
+    Route::put('bookings/settings', 'BookingSettingsController@update');
+    Route::get('bookings/types', 'BookingSettingsController@types');
+    // Booking Management › Services (booking details of service products)
+    Route::get('bookings/services', 'BookingServicesController@index');
+    Route::post('bookings/services/bulk', 'BookingServicesController@bulk');
+    Route::get('bookings/services/suggested-categories', 'BookingServicesController@suggestions');
+    Route::post('bookings/services/suggested-categories', 'BookingServicesController@createSuggested');
+    Route::put('bookings/services/{id}', 'BookingServicesController@update')->where('id', '[0-9]+');
+    Route::delete('bookings/services/{id}', 'BookingServicesController@destroy')->where('id', '[0-9]+');
+    // Booking Management › Staff & working hours + free times
+    Route::get('bookings/staff', 'BookingStaffController@index');
+    Route::post('bookings/staff', 'BookingStaffController@store');
+    Route::post('bookings/staff/{id}/update', 'BookingStaffController@update')->where('id', '[0-9]+');
+    Route::delete('bookings/staff/{id}', 'BookingStaffController@destroy')->where('id', '[0-9]+');
+    Route::put('bookings/staff/{id}/hours', 'BookingStaffController@hours')->where('id', '[0-9]+');
+    Route::get('bookings/staff/{id}/shift-hours', 'BookingStaffController@shiftHours')->where('id', '[0-9]+');
+    Route::post('bookings/staff/{id}/time-off', 'BookingStaffController@storeTimeOff')->where('id', '[0-9]+');
+    Route::delete('bookings/staff/{id}/time-off/{offId}', 'BookingStaffController@destroyTimeOff')->where(['id' => '[0-9]+', 'offId' => '[0-9]+']);
+    Route::put('bookings/staff/{id}/services', 'BookingStaffController@services')->where('id', '[0-9]+');
+    Route::get('bookings/availability', 'BookingAvailabilityController@slots');
+    Route::get('bookings/availability/days', 'BookingAvailabilityController@days');
+    Route::get('bookings/availability/check', 'BookingAvailabilityController@check');
+    // Booking Management workflow: Requests inbox, staff day view, status steps, charge
+    Route::get('bookings/requests', 'BookingWorkflowController@requests');
+    Route::get('bookings/day', 'BookingWorkflowController@day');
+    // Dashboard & reports
+    Route::get('bookings/dashboard', 'BookingReportController@dashboard');
+    // Set-up guide (phase 8)
+    Route::get('bookings/guide', 'BookingGuideController@index');
+    Route::get('bookings/reports/{type}', 'BookingReportController@report')
+        ->whereIn('type', ['bookings', 'services', 'staff', 'times', 'website', 'lost', 'customers']);
+    Route::get('bookings/{id}/details', 'BookingWorkflowController@details')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/confirm', 'BookingWorkflowController@confirm')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/decline', 'BookingWorkflowController@decline')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/cancel', 'BookingWorkflowController@cancel')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/reschedule', 'BookingWorkflowController@reschedule')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/arrive', 'BookingWorkflowController@arrive')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/no-show', 'BookingWorkflowController@noShow')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/complete', 'BookingWorkflowController@complete')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/restore', 'BookingWorkflowController@restore')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/propose', 'BookingWorkflowController@propose')->where('id', '[0-9]+');
+    // Deposit (phase 8)
+    Route::post('bookings/{id}/deposit/waive', 'BookingWorkflowController@depositWaive')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/deposit/refunded', 'BookingWorkflowController@depositRefunded')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/deposit/request', 'BookingWorkflowController@depositRequest')->where('id', '[0-9]+');
+    Route::get('bookings/{id}/charge', 'BookingWorkflowController@chargeQuote')->where('id', '[0-9]+');
+    Route::post('bookings/{id}/charge', 'BookingWorkflowController@charge')->where('id', '[0-9]+');
     Route::get('bookings', 'BookingController@index');
     Route::post('bookings', 'BookingController@store');
     Route::get('bookings/create', 'BookingController@create');
@@ -771,6 +1046,35 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::post('assets/delete/by_selection', 'AssetController@delete_by_selection');
     Route::get('assets_warehouses', 'AssetController@warehouses');
 
+    // ------------------------------- Asset Management --------------------------\\
+
+    Route::get('assets/workspace/dashboard', 'AssetWorkspaceController@dashboard');
+    Route::get('assets/workspace/meta', 'AssetWorkspaceController@meta');
+    Route::get('assets/workspace/details/{id}', 'AssetWorkspaceController@details');
+    Route::post('assets/workspace/dispose/{id}', 'AssetWorkspaceController@dispose');
+    Route::get('assets/workspace/report/register', 'AssetWorkspaceController@registerReport');
+    Route::get('assets/workspace/report/maintenance', 'AssetWorkspaceController@maintenanceReport');
+    Route::get('assets/workspace/report/custody', 'AssetWorkspaceController@custodyReport');
+
+    Route::post('asset_assignments/delete/by_selection', 'AssetAssignmentController@deleteBySelection');
+    Route::post('asset_assignments/{id}/checkin', 'AssetAssignmentController@checkin');
+    Route::get('asset_assignments', 'AssetAssignmentController@index');
+    Route::post('asset_assignments', 'AssetAssignmentController@store');
+    Route::put('asset_assignments/{id}', 'AssetAssignmentController@update');
+    Route::delete('asset_assignments/{id}', 'AssetAssignmentController@destroy');
+
+    Route::post('asset_maintenances/delete/by_selection', 'AssetMaintenanceController@deleteBySelection');
+    Route::post('asset_maintenances/{id}/status', 'AssetMaintenanceController@setStatus');
+    Route::get('asset_maintenances', 'AssetMaintenanceController@index');
+    Route::post('asset_maintenances', 'AssetMaintenanceController@store');
+    Route::put('asset_maintenances/{id}', 'AssetMaintenanceController@update');
+    Route::delete('asset_maintenances/{id}', 'AssetMaintenanceController@destroy');
+
+    Route::post('asset_transfers/delete/by_selection', 'AssetTransferController@deleteBySelection');
+    Route::get('asset_transfers', 'AssetTransferController@index');
+    Route::post('asset_transfers', 'AssetTransferController@store');
+    Route::delete('asset_transfers/{id}', 'AssetTransferController@destroy');
+
     // ------------------------------- Assets Category --------------------------\\
     // ------------------------------------------------------------------\\
     Route::resource('assets_category', 'CategoryAssetController');
@@ -779,6 +1083,13 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     // ------------------------------- PRODUCTS --------------------------\\
     // ------------------------------------------------------------------\\
 
+    // Typeahead for product pickers (any visible product). Before the resource,
+    // or its products/{product} route would answer instead.
+    Route::get('products/search-basic', 'ProductsController@search_products_basic');
+    // Before the resource: GET products/{product} would swallow it.
+    Route::get('products/generate-code', 'ProductsController@generate_code')->middleware('auth:api');
+    // Customer price-check tablet: name + price only, any signed-in user.
+    Route::get('price-check', 'ProductsController@price_check')->middleware('auth:api');
     Route::resource('products', 'ProductsController')->middleware('tenant.limit:max_products');
     Route::post('products/{id}/duplicate', 'ProductsController@duplicate')->middleware('tenant.limit:max_products');
     Route::post('products/warehouse_locations', 'ProductsController@storeWarehouseLocation');
@@ -786,6 +1097,11 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::post('products/import/variants', 'ProductsController@import_variant_products')->middleware('auth:api');
     Route::post('products/import/service', 'ProductsController@import_service_products')->middleware('auth:api');
     Route::post('products/import/update-only', 'ProductsController@import_update_only')->middleware('auth:api');
+    Route::post('products/import/barcodes', 'ProductsController@import_barcodes')->middleware('auth:api');
+    // Different prices per store: spreadsheet export / import
+    Route::get('products/warehouse-prices/meta', 'WarehousePricesController@meta')->middleware('auth:api');
+    Route::get('products/warehouse-prices/export', 'WarehousePricesController@export')->middleware('auth:api');
+    Route::post('products/import/warehouse-prices', 'WarehousePricesController@import')->middleware('auth:api');
 
     Route::get('get_Products_by_warehouse/{id}', 'ProductsController@Products_by_Warehouse');
     Route::get('get_product_detail_api/{id}', 'ProductsController@Get_Products_Details');
@@ -803,6 +1119,8 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     // ---- count stock ----------
     Route::get('count_stock', 'ProductsController@count_stock_list');
     Route::post('store_count_stock', 'ProductsController@store_count_stock');
+    Route::post('count_stock/upload', 'ProductsController@upload_counted_stock');
+    Route::get('count_stock/{id}/download', 'ProductsController@download_count_stock');
 
     // ------------------------------- Category --------------------------\\
     // ------------------------------------------------------------------\\
@@ -821,11 +1139,17 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::resource('units', 'UnitsController');
     Route::get('get_sub_units_by_base', 'UnitsController@Get_Units_SubBase');
     Route::get('get_units', 'UnitsController@Get_sales_units');
+    Route::get('unit_factors', 'UnitsController@factors');
 
     // ------------------------------- Brands--------------------------\\
     // ------------------------------------------------------------------\\
     Route::resource('brands', 'BrandsController');
     Route::post('brands/delete/by_selection', 'BrandsController@delete_by_selection');
+
+    //------------------------------- Size guides (size charts) ------------------
+    Route::get('size_guides/list', 'SizeGuideController@list');
+    Route::post('size_guides/delete/by_selection', 'SizeGuideController@delete_by_selection');
+    Route::resource('size_guides', 'SizeGuideController')->only(['index', 'store', 'update', 'destroy']);
 
     // ------------------------------- Currencies --------------------------\\
     // ------------------------------------------------------------------\\
@@ -978,6 +1302,7 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::post('mrp/production-orders/{id}/release', 'MrpProductionController@release');
         Route::post('mrp/production-orders/{id}/complete', 'MrpProductionController@complete');
         Route::post('mrp/production-orders/{id}/cancel', 'MrpProductionController@cancel');
+        Route::get('mrp/production-orders/{id}/barcodes', 'MrpProductionController@barcodes');
         Route::get('mrp/production-orders', 'MrpProductionController@index');
         Route::post('mrp/production-orders', 'MrpProductionController@store');
         Route::get('mrp/production-orders/{id}', 'MrpProductionController@show');
@@ -1118,6 +1443,7 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::delete('hospital/invoices/{invoiceId}/payments/{paymentId}', 'HospitalBillingController@destroyPayment');
         Route::get('hospital/invoices', 'HospitalBillingController@index');
         Route::post('hospital/invoices', 'HospitalBillingController@store');
+        Route::get('hospital/invoices/{id}/pdf', 'HospitalBillingController@invoicePdf');
         Route::get('hospital/invoices/{id}', 'HospitalBillingController@show');
         Route::put('hospital/invoices/{id}', 'HospitalBillingController@update');
         Route::delete('hospital/invoices/{id}', 'HospitalBillingController@destroy');
@@ -1215,6 +1541,314 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::delete('school/fee-invoices/{id}', 'SchoolFeeController@destroyInvoice');
     });
 
+    // Restaurant Management — every endpoint under one plan feature.
+    Route::middleware('tenant.feature:restaurant')->group(function () {
+        Route::get('restaurant/settings', 'RestaurantSettingsController@show');
+        Route::put('restaurant/settings', 'RestaurantSettingsController@update');
+        // Floor setup (areas + tables)
+        Route::get('restaurant/setup/floor', 'RestaurantFloorSetupController@index');
+        Route::post('restaurant/setup/areas/reorder', 'RestaurantFloorSetupController@reorderAreas');
+        Route::post('restaurant/setup/areas', 'RestaurantFloorSetupController@storeArea');
+        Route::put('restaurant/setup/areas/{id}', 'RestaurantFloorSetupController@updateArea')->whereNumber('id');
+        Route::delete('restaurant/setup/areas/{id}', 'RestaurantFloorSetupController@destroyArea')->whereNumber('id');
+        Route::post('restaurant/setup/tables/bulk', 'RestaurantFloorSetupController@bulkTables');
+        Route::post('restaurant/setup/tables/reorder', 'RestaurantFloorSetupController@reorderTables');
+        Route::post('restaurant/setup/tables', 'RestaurantFloorSetupController@storeTable');
+        Route::put('restaurant/setup/tables/{id}', 'RestaurantFloorSetupController@updateTable')->whereNumber('id');
+        Route::delete('restaurant/setup/tables/{id}', 'RestaurantFloorSetupController@destroyTable')->whereNumber('id');
+        Route::get('restaurant/setup/qr-codes', 'RestaurantFloorSetupController@qrCodes');
+        Route::post('restaurant/setup/tables/{id}/qr/renew', 'RestaurantFloorSetupController@renewQr')->whereNumber('id');
+        // Menu: dishes, add-on groups, kitchen stations, meal times
+        Route::get('restaurant/menu/setup', 'RestaurantMenuController@setup');
+        Route::get('restaurant/menu/dishes', 'RestaurantMenuController@dishes');
+        Route::put('restaurant/menu/dishes/{productId}', 'RestaurantMenuController@saveDish')->whereNumber('productId');
+        Route::post('restaurant/menu/dishes/{productId}/sold-out', 'RestaurantMenuController@soldOut')->whereNumber('productId');
+        Route::post('restaurant/menu/stations/defaults', 'RestaurantMenuController@defaultStations');
+        Route::post('restaurant/menu/stations/reorder', 'RestaurantMenuController@reorderStations');
+        Route::post('restaurant/menu/stations', 'RestaurantMenuController@storeStation');
+        Route::put('restaurant/menu/stations/{id}', 'RestaurantMenuController@updateStation')->whereNumber('id');
+        Route::delete('restaurant/menu/stations/{id}', 'RestaurantMenuController@destroyStation')->whereNumber('id');
+        Route::post('restaurant/menu/addon-groups', 'RestaurantMenuController@storeGroup');
+        Route::put('restaurant/menu/addon-groups/{id}', 'RestaurantMenuController@updateGroup')->whereNumber('id');
+        Route::delete('restaurant/menu/addon-groups/{id}', 'RestaurantMenuController@destroyGroup')->whereNumber('id');
+        Route::post('restaurant/menu/options/{id}/availability', 'RestaurantMenuController@optionAvailability')->whereNumber('id');
+        Route::put('restaurant/menu/times', 'RestaurantMenuController@saveTimes');
+        // Waiter order screen
+        Route::get('restaurant/pos/menu', 'RestaurantOrderController@menu');
+        Route::get('restaurant/orders', 'RestaurantOrderController@index');
+        Route::post('restaurant/orders', 'RestaurantOrderController@store');
+        Route::get('restaurant/orders/{id}', 'RestaurantOrderController@show')->whereNumber('id');
+        Route::put('restaurant/orders/{id}', 'RestaurantOrderController@update')->whereNumber('id');
+        Route::post('restaurant/orders/{id}/items', 'RestaurantOrderController@addItems')->whereNumber('id');
+        Route::put('restaurant/orders/{id}/items/{itemId}', 'RestaurantOrderController@updateItem')->whereNumber('id')->whereNumber('itemId');
+        Route::delete('restaurant/orders/{id}/items/{itemId}', 'RestaurantOrderController@removeItem')->whereNumber('id')->whereNumber('itemId');
+        Route::post('restaurant/orders/{id}/items/{itemId}/void', 'RestaurantOrderController@voidItem')->whereNumber('id')->whereNumber('itemId');
+        Route::post('restaurant/orders/{id}/send', 'RestaurantOrderController@send')->whereNumber('id');
+        Route::post('restaurant/orders/{id}/cancel', 'RestaurantOrderController@cancel')->whereNumber('id');
+        Route::post('restaurant/tables/{tableId}/order', 'RestaurantOrderController@openTable')->whereNumber('tableId');
+        Route::post('restaurant/orders/{id}/served', 'RestaurantOrderController@served')->whereNumber('id');
+        // Kitchen display
+        Route::get('restaurant/kitchen', 'RestaurantKitchenController@index');
+        Route::post('restaurant/kitchen/tickets/{id}/{action}', 'RestaurantKitchenController@ticketAction')
+            ->whereNumber('id')->whereIn('action', ['start', 'bump', 'served', 'recall']);
+        Route::post('restaurant/kitchen/items/{id}/toggle', 'RestaurantKitchenController@toggleItem')->whereNumber('id');
+        // Bill & payment (each payment is a POS sale)
+        // Guide (set-up checklist)
+        Route::get('restaurant/guide', 'RestaurantGuideController@show');
+        // Dashboard & reports
+        Route::get('restaurant/dashboard', 'RestaurantReportController@dashboard');
+        Route::get('restaurant/reports/{type}', 'RestaurantReportController@report')
+            ->whereIn('type', ['sales', 'dishes', 'voids', 'staff', 'kitchen', 'reservations']);
+        Route::get('restaurant/billing/meta', 'RestaurantBillingController@meta');
+        Route::get('restaurant/billing/clients', 'RestaurantBillingController@clients');
+        Route::get('restaurant/orders/{id}/bill', 'RestaurantBillingController@show')->whereNumber('id');
+        Route::post('restaurant/orders/{id}/bill/quote', 'RestaurantBillingController@quote')->whereNumber('id');
+        Route::post('restaurant/orders/{id}/bill/pay', 'RestaurantBillingController@pay')->whereNumber('id');
+        // Reservations & waitlist
+        Route::get('restaurant/reservations', 'RestaurantReservationController@index');
+        Route::get('restaurant/reservations/search', 'RestaurantReservationController@search');
+        Route::get('restaurant/reservations/availability', 'RestaurantReservationController@availability');
+        Route::post('restaurant/reservations', 'RestaurantReservationController@store');
+        Route::put('restaurant/reservations/{id}', 'RestaurantReservationController@update')->whereNumber('id');
+        Route::post('restaurant/reservations/{id}/{action}', 'RestaurantReservationController@action')
+            ->whereNumber('id')->whereIn('action', ['confirm', 'cancel', 'no_show', 'restore', 'seat']);
+        Route::post('restaurant/waitlist', 'RestaurantReservationController@waitStore');
+        Route::put('restaurant/waitlist/{id}', 'RestaurantReservationController@waitUpdate')->whereNumber('id');
+        Route::post('restaurant/waitlist/{id}/{action}', 'RestaurantReservationController@waitAction')
+            ->whereNumber('id')->whereIn('action', ['notify', 'seat', 'left', 'back']);
+        // Floor plan (live tables)
+        Route::get('restaurant/floor', 'RestaurantFloorController@index');
+        Route::post('restaurant/floor/tables/{id}/{action}', 'RestaurantFloorController@action')
+            ->whereNumber('id')->whereIn('action', \App\Http\Controllers\RestaurantFloorController::ACTIONS);
+    });
+
+    // Rental Management — every endpoint under one plan feature.
+    Route::middleware('tenant.feature:rental')->group(function () {
+        // Literal segments first — the {id} routes would otherwise swallow them.
+        Route::get('rental/dashboard', 'RentalDashboardController@dashboard');
+        Route::get('rental/settings', 'RentalDashboardController@settings');
+        Route::put('rental/settings', 'RentalDashboardController@updateSettings');
+        // Business types registry (item form fields, category / filter lists).
+        Route::get('rental/types', 'RentalDashboardController@types');
+
+        Route::post('rental/categories/delete/by_selection', 'RentalCategoryController@deleteBySelection');
+        Route::get('rental/categories', 'RentalCategoryController@index');
+        Route::post('rental/categories', 'RentalCategoryController@store');
+        Route::post('rental/categories/suggested', 'RentalCategoryController@suggested');
+        // Multipart (photo) saves POST here; PUT stays for JSON saves.
+        Route::post('rental/categories/{id}/update', 'RentalCategoryController@update');
+        Route::put('rental/categories/{id}', 'RentalCategoryController@update');
+        Route::delete('rental/categories/{id}', 'RentalCategoryController@destroy');
+
+        // Photos arrive as multipart, which PHP cannot parse from a PUT body — the
+        // edit form therefore POSTs to /update.
+        Route::get('rental/contracts/{id}/handover-meta', 'RentalHandoverController@meta');
+        Route::get('rental/contracts/{id}/handovers', 'RentalHandoverController@contractHandovers');
+        Route::post('rental/contracts/{id}/checkout', 'RentalHandoverController@checkout');
+        Route::post('rental/contracts/{id}/checkin', 'RentalHandoverController@checkin');
+        Route::post('rental/contracts/{id}/deposits', 'RentalHandoverController@deposit');
+        Route::delete('rental/deposits/{id}', 'RentalHandoverController@destroyDeposit');
+
+        Route::get('rental/maintenance/meta', 'RentalMaintenanceController@meta');
+        Route::get('rental/maintenance/schedules', 'RentalMaintenanceController@schedules');
+        Route::post('rental/maintenance/schedules', 'RentalMaintenanceController@storeSchedule');
+        Route::put('rental/maintenance/schedules/{id}', 'RentalMaintenanceController@updateSchedule');
+        Route::delete('rental/maintenance/schedules/{id}', 'RentalMaintenanceController@destroySchedule');
+        Route::post('rental/maintenance/{id}/start', 'RentalMaintenanceController@start');
+        Route::post('rental/maintenance/{id}/complete', 'RentalMaintenanceController@complete');
+        Route::post('rental/maintenance/{id}/cancel', 'RentalMaintenanceController@cancel');
+        Route::post('rental/maintenance/{id}/update', 'RentalMaintenanceController@update');
+        Route::get('rental/maintenance', 'RentalMaintenanceController@index');
+        Route::post('rental/maintenance', 'RentalMaintenanceController@store');
+        Route::get('rental/maintenance/{id}', 'RentalMaintenanceController@show');
+        Route::delete('rental/maintenance/{id}', 'RentalMaintenanceController@destroy');
+
+        Route::get('rental/expenses/meta', 'RentalExpenseController@meta');
+        Route::get('rental/expenses', 'RentalExpenseController@index');
+        Route::post('rental/expenses', 'RentalExpenseController@store');
+        Route::post('rental/expenses/{id}/update', 'RentalExpenseController@update');
+        Route::delete('rental/expenses/{id}', 'RentalExpenseController@destroy');
+        Route::get('rental/items/{id}/financials', 'RentalExpenseController@itemFinancials');
+
+        Route::get('rental/reports/occupancy', 'RentalReportController@occupancy');
+        Route::get('rental/reports/profit', 'RentalReportController@profit');
+        Route::get('rental/reports/aging', 'RentalReportController@aging');
+        Route::get('rental/reports/deposits', 'RentalReportController@deposits');
+        Route::get('rental/reports/expenses', 'RentalReportController@expenses');
+        Route::get('rental/reports/expiring', 'RentalReportController@expiring');
+        Route::get('rental/reports/reminders', 'RentalReportController@reminders');
+        Route::post('rental/reminders/send', 'RentalReportController@sendReminder');
+        Route::get('rental/customers/{id}/statement', 'RentalReportController@statement');
+        Route::get('rental/customers/{id}/statement/pdf', 'RentalReportController@statementPdf');
+
+        Route::get('rental/invoices', 'RentalBillingController@invoices');
+        Route::post('rental/invoices/charge', 'RentalBillingController@charge');
+        Route::get('rental/invoices/{id}', 'RentalBillingController@invoice');
+        Route::post('rental/invoices/{id}/void', 'RentalBillingController@void');
+        Route::post('rental/invoices/{id}/waive-late-fee', 'RentalBillingController@waiveLateFee');
+        Route::get('rental/invoices/{id}/pdf', 'RentalBillingController@invoicePdf');
+        Route::get('rental/payments/meta', 'RentalBillingController@paymentMeta');
+        Route::get('rental/payments', 'RentalBillingController@payments');
+        Route::post('rental/payments', 'RentalBillingController@storePayment');
+        Route::delete('rental/payments/{id}', 'RentalBillingController@destroyPayment');
+        Route::get('rental/contracts/{id}/billing', 'RentalBillingController@contractBilling');
+
+        Route::get('rental/availability/timeline', 'RentalAvailabilityController@timeline');
+        Route::get('rental/availability/calendar', 'RentalAvailabilityController@calendar');
+
+        Route::post('rental/reservations/{id}/cancel', 'RentalReservationController@cancel');
+        Route::post('rental/reservations/{id}/extend-hold', 'RentalReservationController@extendHold');
+        Route::post('rental/reservations/{id}/convert', 'RentalReservationController@convert');
+        Route::post('rental/reservations/{id}/confirm', 'RentalReservationController@confirm');
+        Route::get('rental/reservations', 'RentalReservationController@index');
+        Route::post('rental/reservations', 'RentalReservationController@store');
+        Route::get('rental/reservations/{id}', 'RentalReservationController@show');
+        Route::put('rental/reservations/{id}', 'RentalReservationController@update');
+        Route::delete('rental/reservations/{id}', 'RentalReservationController@destroy');
+
+        Route::get('rental/contracts/meta', 'RentalContractController@meta');
+        Route::get('rental/contracts/customer-search', 'RentalContractController@customerSearch');
+        Route::post('rental/contracts/calculate', 'RentalContractController@calculate');
+        Route::post('rental/contracts/{id}/activate', 'RentalContractController@activate');
+        Route::post('rental/contracts/{id}/extend', 'RentalContractController@extend');
+        Route::post('rental/contracts/{id}/renew', 'RentalContractController@renew');
+        Route::post('rental/contracts/{id}/terminate', 'RentalContractController@terminate');
+        Route::post('rental/contracts/{id}/end', 'RentalContractController@end');
+        Route::post('rental/contracts/{id}/cancel', 'RentalContractController@cancel');
+        Route::post('rental/contracts/{id}/sign', 'RentalContractController@sign');
+        Route::delete('rental/contracts/{id}/sign', 'RentalContractController@unsign');
+        Route::post('rental/contracts/{id}/attachments', 'RentalContractController@storeAttachment');
+        Route::delete('rental/contracts/{id}/attachments/{attachmentId}', 'RentalContractController@destroyAttachment');
+        Route::get('rental/contracts/{id}/pdf', 'RentalContractController@pdf');
+        Route::get('rental/contracts', 'RentalContractController@index');
+        Route::post('rental/contracts', 'RentalContractController@store');
+        Route::get('rental/contracts/{id}', 'RentalContractController@show');
+        Route::put('rental/contracts/{id}', 'RentalContractController@update');
+        Route::delete('rental/contracts/{id}', 'RentalContractController@destroy');
+
+        Route::get('rental/agreement-templates', 'RentalAgreementTemplateController@index');
+        Route::post('rental/agreement-templates', 'RentalAgreementTemplateController@store');
+        Route::put('rental/agreement-templates/{id}', 'RentalAgreementTemplateController@update');
+        Route::delete('rental/agreement-templates/{id}', 'RentalAgreementTemplateController@destroy');
+
+        Route::get('rental/customers/client-search', 'RentalCustomerController@clientSearch');
+        Route::post('rental/customers/delete/by_selection', 'RentalCustomerController@deleteBySelection');
+        Route::post('rental/customers/{id}/update', 'RentalCustomerController@update');
+        Route::post('rental/customers/{id}/blacklist', 'RentalCustomerController@blacklist');
+        Route::post('rental/customers/{id}/documents', 'RentalCustomerController@storeDocument');
+        Route::delete('rental/customers/{id}/documents/{documentId}', 'RentalCustomerController@destroyDocument');
+        Route::get('rental/customers', 'RentalCustomerController@index');
+        Route::post('rental/customers', 'RentalCustomerController@store');
+        Route::get('rental/customers/{id}', 'RentalCustomerController@show');
+        Route::delete('rental/customers/{id}', 'RentalCustomerController@destroy');
+
+        Route::get('rental/items/meta', 'RentalItemController@meta');
+        Route::post('rental/items/delete/by_selection', 'RentalItemController@deleteBySelection');
+        Route::get('rental/items/{id}/edit', 'RentalItemController@edit');
+        Route::post('rental/items/{id}/update', 'RentalItemController@update');
+        Route::get('rental/items', 'RentalItemController@index');
+        Route::post('rental/items', 'RentalItemController@store');
+        Route::get('rental/items/{id}', 'RentalItemController@show');
+        Route::delete('rental/items/{id}', 'RentalItemController@destroy');
+    });
+
+    // CRM: Leads & Sales Pipeline — every endpoint under one plan feature.
+    Route::middleware('tenant.feature:crm')->group(function () {
+        // Literal segments are declared before every {id} route.
+        Route::get('crm/dashboard', 'CrmDashboardController@index');
+        Route::get('crm/settings', 'CrmSettingsController@show');
+        Route::put('crm/settings', 'CrmSettingsController@update');
+        Route::post('crm/settings/{type}/reorder', 'CrmSettingsController@reorder')->where('type', 'sources|statuses|lost-reasons|tags');
+        Route::post('crm/settings/{type}', 'CrmSettingsController@storeLookup')->where('type', 'sources|statuses|lost-reasons|tags');
+        Route::put('crm/settings/{type}/{id}', 'CrmSettingsController@updateLookup')->where('type', 'sources|statuses|lost-reasons|tags')->whereNumber('id');
+        Route::delete('crm/settings/{type}/{id}', 'CrmSettingsController@destroyLookup')->where('type', 'sources|statuses|lost-reasons|tags')->whereNumber('id');
+        Route::get('crm/pipelines', 'CrmPipelineController@index');
+        Route::post('crm/pipelines', 'CrmPipelineController@store');
+        Route::put('crm/pipelines/{id}', 'CrmPipelineController@update')->whereNumber('id');
+        Route::delete('crm/pipelines/{id}', 'CrmPipelineController@destroy')->whereNumber('id');
+        Route::post('crm/pipelines/{id}/stages', 'CrmPipelineController@storeStage')->whereNumber('id');
+        Route::post('crm/pipelines/{id}/stages/reorder', 'CrmPipelineController@reorderStages')->whereNumber('id');
+        Route::put('crm/pipeline-stages/{id}', 'CrmPipelineController@updateStage')->whereNumber('id');
+        Route::delete('crm/pipeline-stages/{id}', 'CrmPipelineController@destroyStage')->whereNumber('id');
+        Route::get('crm/reports/meta', 'CrmReportController@meta');
+        Route::get('crm/reports/{section}', 'CrmReportController@show')->where('section', 'overview|winloss|forecast|reps|activities|sources');
+        Route::get('crm/targets', 'CrmReportController@targets');
+        Route::put('crm/targets', 'CrmReportController@saveTargets');
+        Route::post('crm/targets/copy', 'CrmReportController@copyTargets');
+        Route::get('crm/automation', 'CrmAutomationController@show');
+        Route::put('crm/automation', 'CrmSettingsController@updateAutomation');
+        Route::post('crm/assignment-rules/reorder', 'CrmAutomationController@reorderRules');
+        Route::post('crm/assignment-rules', 'CrmAutomationController@storeRule');
+        Route::put('crm/assignment-rules/{id}', 'CrmAutomationController@updateRule');
+        Route::delete('crm/assignment-rules/{id}', 'CrmAutomationController@destroyRule');
+        Route::post('crm/scoring-rules/recalculate', 'CrmAutomationController@recalculate');
+        Route::post('crm/scoring-rules', 'CrmAutomationController@storeScoring');
+        Route::put('crm/scoring-rules/{id}', 'CrmAutomationController@updateScoring');
+        Route::delete('crm/scoring-rules/{id}', 'CrmAutomationController@destroyScoring');
+        Route::get('crm/web-forms', 'CrmWebFormController@index');
+        Route::post('crm/web-forms', 'CrmWebFormController@store');
+        Route::put('crm/web-forms/{id}', 'CrmWebFormController@update');
+        Route::delete('crm/web-forms/{id}', 'CrmWebFormController@destroy');
+        Route::post('crm/web-forms/{id}/regenerate', 'CrmWebFormController@regenerate');
+        Route::get('crm/messages/meta', 'CrmMessageController@meta');
+        Route::get('crm/messages/inbox', 'CrmMessageController@inbox');
+        Route::post('crm/messages/read', 'CrmMessageController@markRead');
+        Route::post('crm/messages/render', 'CrmMessageController@render');
+        Route::get('crm/messages', 'CrmMessageController@thread');
+        Route::post('crm/messages', 'CrmMessageController@send');
+        Route::get('crm/customers', 'CrmCustomerController@index');
+        Route::get('crm/customers/{id}', 'CrmCustomerController@show')->whereNumber('id');
+        Route::post('crm/customers/{id}/contacts', 'CrmCustomerController@storeContact')->whereNumber('id');
+        Route::put('crm/contacts/{id}', 'CrmCustomerController@updateContact')->whereNumber('id');
+        Route::delete('crm/contacts/{id}', 'CrmCustomerController@destroyContact')->whereNumber('id');
+        Route::get('crm/leads/{id}/convert', 'CrmConversionController@convertMeta')->whereNumber('id');
+        Route::post('crm/leads/{id}/convert', 'CrmConversionController@convert')->whereNumber('id');
+        Route::get('crm/deals/{id}/quotation', 'CrmConversionController@quotationMeta')->whereNumber('id');
+        Route::post('crm/deals/{id}/quotation', 'CrmConversionController@quotation')->whereNumber('id');
+        Route::get('crm/activities/meta', 'CrmActivityController@meta');
+        Route::get('crm/activities/calendar', 'CrmActivityController@calendar');
+        Route::get('crm/activities/my-day', 'CrmActivityController@myDay');
+        Route::get('crm/activities', 'CrmActivityController@index');
+        Route::post('crm/activities', 'CrmActivityController@store');
+        Route::get('crm/activities/{id}', 'CrmActivityController@show')->whereNumber('id');
+        Route::put('crm/activities/{id}', 'CrmActivityController@update')->whereNumber('id');
+        Route::delete('crm/activities/{id}', 'CrmActivityController@destroy')->whereNumber('id');
+        Route::post('crm/activities/{id}/complete', 'CrmActivityController@complete')->whereNumber('id');
+        Route::post('crm/activities/{id}/reopen', 'CrmActivityController@reopen')->whereNumber('id');
+        Route::get('crm/deals/meta', 'CrmDealController@meta');
+        Route::get('crm/deals/board', 'CrmDealController@board');
+        Route::get('crm/deals/products', 'CrmDealController@products');
+        Route::get('crm/deals/clients', 'CrmDealController@clients');
+        Route::post('crm/deals/delete/by_selection', 'CrmDealController@deleteBySelection');
+        Route::get('crm/deals', 'CrmDealController@index');
+        Route::post('crm/deals', 'CrmDealController@store');
+        Route::get('crm/deals/{id}', 'CrmDealController@show')->whereNumber('id');
+        Route::put('crm/deals/{id}', 'CrmDealController@update')->whereNumber('id');
+        Route::delete('crm/deals/{id}', 'CrmDealController@destroy')->whereNumber('id');
+        Route::post('crm/deals/{id}/move', 'CrmDealController@move')->whereNumber('id');
+        Route::post('crm/deals/{id}/won', 'CrmDealController@won')->whereNumber('id');
+        Route::post('crm/deals/{id}/lost', 'CrmDealController@lost')->whereNumber('id');
+        Route::post('crm/deals/{id}/reopen', 'CrmDealController@reopen')->whereNumber('id');
+        Route::post('crm/deals/{id}/portal', 'CrmDealController@portal')->whereNumber('id');
+        Route::get('crm/leads/meta', 'CrmLeadController@meta');
+        Route::get('crm/leads/duplicates', 'CrmLeadController@duplicates');
+        Route::get('crm/leads/export', 'CrmLeadController@export');
+        Route::get('crm/leads/import/template', 'CrmLeadImportController@template');
+        Route::post('crm/leads/import/preview', 'CrmLeadImportController@preview');
+        Route::post('crm/leads/import', 'CrmLeadImportController@import');
+        Route::post('crm/leads/bulk', 'CrmLeadController@bulk');
+        Route::post('crm/leads/delete/by_selection', 'CrmLeadController@deleteBySelection');
+        Route::get('crm/leads', 'CrmLeadController@index');
+        Route::post('crm/leads', 'CrmLeadController@store');
+        Route::get('crm/leads/{id}', 'CrmLeadController@show')->whereNumber('id');
+        Route::put('crm/leads/{id}', 'CrmLeadController@update')->whereNumber('id');
+        Route::delete('crm/leads/{id}', 'CrmLeadController@destroy')->whereNumber('id');
+        Route::post('crm/leads/{id}/status', 'CrmLeadController@changeStatus')->whereNumber('id');
+        Route::post('crm/leads/{id}/lost', 'CrmLeadController@markLost')->whereNumber('id');
+        Route::post('crm/leads/{id}/reopen', 'CrmLeadController@reopen')->whereNumber('id');
+        Route::post('crm/leads/{id}/marketing', 'CrmLeadController@marketing')->whereNumber('id');
+    });
+
     // -------------------------------  Sales --------------------------\\
     // ------------------------------------------------------------------\\
 
@@ -1229,6 +1863,7 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::post('sales_send_sms', 'SalesController@Send_SMS');
     Route::post('sales_delete_by_selection', 'SalesController@delete_by_selection');
     Route::get('get_Products_by_sale/{id}', 'SalesController@get_Products_by_sale');
+    Route::post('sales/{id}/serials', 'SalesController@assignSerials')->whereNumber('id');
 
     // ------------------------------- Sales Documents --------------------------\\
     Route::get('sales/{id}/documents', 'SalesController@getDocuments');
@@ -1260,6 +1895,7 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::get('commission_receipts', 'Commission\CommissionReceiptController@index');
     Route::post('commission_receipts', 'Commission\CommissionReceiptController@store');
     Route::get('commission_receipts/new_ref', 'Commission\CommissionReceiptController@getNewRef');
+    Route::get('commission_receipts/accounts', 'Commission\CommissionReceiptController@accounts');
     Route::get('commission_receipts/{id}', 'Commission\CommissionReceiptController@show');
     Route::get('commission_report', 'Commission\CommissionReportController@index');
     Route::get('commission_report/summary', 'Commission\CommissionReportController@summary');
@@ -1267,6 +1903,7 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::post('commissions/calculate_for_sale/{saleId}', 'Commission\CommissionController@calculateForSale');
     Route::post('commissions/approve', 'Commission\CommissionController@approve');
     Route::post('commissions/cancel', 'Commission\CommissionController@cancel');
+    Route::post('commissions/recalculate', 'Commission\CommissionController@recalculate');
     });
 
     // ------------------------------- Expenses --------------------------\\
@@ -1368,6 +2005,8 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
 
     Route::resource('adjustments', 'AdjustmentController');
     Route::get('adjustments/detail/{id}', 'AdjustmentController@Adjustment_detail');
+    // Line-item exports (one row per product line, with code + category) for the document lists.
+    Route::post('document-lines/{type}', 'DocumentLinesExportController@lines');
     Route::post('adjustments/delete/by_selection', 'AdjustmentController@delete_by_selection');
     Route::get('batches_for_adjustment/{product_id}/{warehouse_id}/{variant_id?}', 'AdjustmentController@batches_for_adjustment');
 
@@ -1386,12 +2025,13 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::post('transfers/{id}/approve', 'TransferController@approve');
         Route::post('transfers/{id}/reject', 'TransferController@reject');
         Route::get('batches_for_transfer/{product_id}/{warehouse_id}/{variant_id?}', 'TransferController@batches_for_transfer');
+        Route::get('serials_for_transfer', 'TransferController@serials_for_transfer');
     });
 
     // ------------------------------- Users --------------------------\\
     // ------------------------------------------------------------------\\
 
-    Route::get('get_user_auth', 'UserController@GetUserAuth');
+    // get_user_auth is registered above, outside tenant.subscribed.
     Route::get('users_list_for_select', 'UserController@listForSelect');
     Route::resource('users', 'UserController')->middleware('tenant.limit:max_users');
     Route::put('users_switch_activated/{id}', 'UserController@IsActivated');
@@ -1414,6 +2054,8 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::get('module_flags', 'SettingsController@getModuleFlags');
     Route::put('module_flags', 'SettingsController@updateModuleFlags');
     Route::delete('module_flags', 'SettingsController@resetModuleFlags');
+    Route::get('get_mobile_settings', 'SettingsController@get_mobile_settings');
+    Route::post('update_mobile_settings', 'SettingsController@update_mobile_settings');
     Route::get('feature_settings', 'SettingsController@getFeatureSettings');
     Route::put('feature_settings', 'SettingsController@updateFeatureSettings');
     Route::resource('settings', 'SettingsController');
@@ -1431,12 +2073,22 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::delete('security/sessions/{tokenId}', 'SecuritySettingsController@logoutSession');
     Route::post('security/sessions/logout-other', 'SecuritySettingsController@logoutAllOtherDevices');
     Route::get('security/login-activity-report', 'SecuritySettingsController@loginActivityReport');
+    Route::get('security/login-security', 'SecuritySettingsController@getLoginSecurity');
+    Route::put('security/login-security', 'SecuritySettingsController@updateLoginSecurity');
+    Route::get('security/login-attempts', 'SecuritySettingsController@loginAttempts');
+    Route::post('security/login-attempts/unlock', 'SecuritySettingsController@unlockLogin');
+    Route::delete('security/login-attempts', 'SecuritySettingsController@clearLoginAttempts');
 
     // ------------------------------- appearance_settings ------------------------\\
     // ------------------------------------------------------------------\\
 
     Route::get('get_appearance_settings', 'SettingsController@get_appearance_settings');
     Route::put('update_appearance_settings/{id}', 'SettingsController@update_appearance_settings');
+    Route::put('update_login_page_settings/{id}', 'SettingsController@update_login_page_settings');
+
+    // ------------------------------- Invoice PDF templates ------------------------\\
+    Route::get('pdf_templates/{type}', 'PdfTemplateController@show');
+    Route::post('pdf_templates/{type}', 'PdfTemplateController@update');
 
     // ------------------------------- PWA Settings ------------------------\\
 
@@ -1478,11 +2130,10 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::get('get_payment_gateway_ws', 'Payment_gateway_SettingsController@get_payment_gateway_ws');
 
     // ------------------------------- Update Settings ------------------------\\
-
-    Route::get('get_version_info', 'UpdateController@get_version_info');
-    Route::post('one_click_update', 'AutoUpdateController@oneClickUpdate');
-    Route::get('update/preflight', 'AutoUpdateController@preflight');
-    Route::get('update/progress', 'AutoUpdateController@progress');
+    // No tenant-facing update endpoints: an update replaces the shared
+    // codebase and takes every tenant into maintenance mode. Platform updates
+    // run from the super-admin panel only (routes/central.php: System Update,
+    // and the migration-only /update page).
 
     // ------------------------------- Backup --------------------------\\
     // ------------------------------------------------------------------\\
@@ -1490,10 +2141,14 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::get('get_backup', 'BackupController@Get_Backup');
     Route::get('generate_new_backup', 'BackupController@Generate_Backup');
     Route::delete('delete_backup/{name}', 'BackupController@Delete_Backup');
+    Route::get('download_backup/{name}', 'BackupController@Download_Backup');
 
     // ------------------------------- System Health --------------------------\\
     Route::get('system_health', 'SystemHealthController@index');
     Route::get('system_health/pdf', 'SystemHealthController@pdf');
+
+    // ------------------------------- Audit Log ------------------------------\\
+    Route::get('audit_logs', 'AuditLogController@index')->middleware('tenant.feature:audit_log');
 
     // ------------------------------- Module Settings ------------------------\\
 
@@ -1566,6 +2221,12 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::get('shopify/sync/status/{id}', 'ShopifySyncController@status');
         Route::post('shopify/sync/cancel/{id}', 'ShopifySyncController@cancel');
 
+        // Pair a product with a listing that already exists in a shop.
+        Route::get('shopify/product-links', 'ShopifyProductLinkController@stores');
+        Route::get('shopify/product-links/search', 'ShopifyProductLinkController@search');
+        Route::post('shopify/product-links', 'ShopifyProductLinkController@link');
+        Route::delete('shopify/product-links', 'ShopifyProductLinkController@unlink');
+
         Route::get('shopify/mappings', 'ShopifySyncController@mappings');
         Route::post('shopify/mappings', 'ShopifySyncController@link');
         Route::delete('shopify/mappings/{id}', 'ShopifySyncController@unlink');
@@ -1591,6 +2252,8 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
 
     // Customer Display: secure token generation
     Route::post('customer-display/generate', [CustomerDisplayController::class, 'generate']);
+    // Cart push from the logged-in POS to the customer display
+    Route::post('pos/customer-display/broadcast', [CustomerDisplayController::class, 'broadcastCart']);
 
     // ------------------------------- QuickBooks Integration (feature-gated) ------------------------\\
     // ------------------------------------------------------------------\\
@@ -1629,6 +2292,46 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
     Route::get('fbr/reference/{type}', 'FbrController@reference');
     });
 
+    // ------------------------------- AGT E-Invoicing (Angola, feature-gated) ------------------------\\
+    Route::middleware('tenant.feature:agt')->group(function () {
+    Route::get('agt/settings', 'AgtController@settings');
+    Route::post('agt/settings', 'AgtController@saveSettings');
+    Route::post('agt/test-connection', 'AgtController@testConnection');
+    Route::get('agt/series', 'AgtController@series');
+    Route::post('agt/series', 'AgtController@storeSeries');
+    Route::post('agt/series/request', 'AgtController@requestSeries');
+    Route::put('agt/series/{id}', 'AgtController@updateSeries');
+    Route::get('agt/documents', 'AgtController@documents');
+    Route::get('agt/documents/{id}', 'AgtController@document');
+    Route::post('agt/documents/{id}/retry', 'AgtController@retry');
+    Route::post('agt/documents/{id}/check', 'AgtController@check');
+    Route::post('agt/sales/{id}/submit', 'AgtController@submitSale');
+    Route::post('agt/returns/{id}/submit', 'AgtController@submitReturn');
+    Route::get('agt/logs', 'AgtController@logs');
+    });
+
+    // ------------------------------- DGI Facture Normalisée (DR Congo, feature-gated) ------------------------\\
+    Route::middleware('tenant.feature:dgi')->group(function () {
+    Route::get('dgi/settings', 'DgiController@settings');
+    Route::post('dgi/settings', 'DgiController@saveSettings');
+    Route::get('dgi/documents', 'DgiController@documents');
+    });
+
+    // ------------------------------- REST API keys (Settings > API) ------------------------\\
+    Route::middleware('tenant.feature:api')->group(function () {
+        Route::get('api-keys', 'ApiKeysController@index');
+        Route::post('api-keys', 'ApiKeysController@store');
+        Route::delete('api-keys/{id}', 'ApiKeysController@destroy');
+    });
+    // ------------------------------- Custom domains (Settings > Custom Domain, feature-gated) ------------------------\\
+    Route::middleware('tenant.feature:custom_domains')->group(function () {
+        Route::get('custom-domains', 'CustomDomainsController@index');
+        Route::post('custom-domains', 'CustomDomainsController@store');
+        // DNS lookups are slow and external — cap re-checks per user.
+        Route::post('custom-domains/{id}/verify', 'CustomDomainsController@verify')->middleware('throttle:10,1');
+        Route::post('custom-domains/{id}/primary', 'CustomDomainsController@makePrimary');
+        Route::delete('custom-domains/{id}', 'CustomDomainsController@destroy');
+    });
     // ------------------------------- Zapier (settings, feature-gated) ------------------------\\
     Route::middleware('tenant.feature:zapier')->group(function () {
         Route::get('zapier/settings', [\App\Http\Controllers\Zapier\ZapierSettingsController::class, 'show']);
@@ -1694,6 +2397,23 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::delete('prestashop/logs', [\App\Http\Controllers\Integrations\PrestashopSyncController::class, 'clearLogs']);
     });
 
+    // ------------------------------- OpenCart (ecommerce sync, feature-gated) ------------------------\\
+    Route::middleware('tenant.feature:opencart')->group(function () {
+        Route::get('opencart/settings', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'settings']);
+        Route::post('opencart/settings', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'saveSettings']);
+        Route::post('opencart/test-connection', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'testConnection']);
+        Route::get('opencart/connector', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'downloadConnector']);
+        Route::get('opencart/stats', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'stats']);
+        Route::post('opencart/reset-mappings', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'resetMappings']);
+        Route::post('opencart/sync/products', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'syncProducts']);
+        Route::post('opencart/sync/inventory', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'syncInventory']);
+        Route::post('opencart/sync/orders', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'syncOrders']);
+        Route::get('opencart/logs', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'logs']);
+        Route::get('opencart/logs/summary', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'logsSummary']);
+        Route::get('opencart/logs/export', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'exportLogs']);
+        Route::delete('opencart/logs', [\App\Http\Controllers\Integrations\OpencartSyncController::class, 'clearLogs']);
+    });
+
     // ------------------------------- Google Sheets (exports, feature-gated) ------------------------\\
     Route::middleware('tenant.feature:google_sheets')->group(function () {
         Route::get('google-sheets/settings', [\App\Http\Controllers\Integrations\GoogleSheetsSyncController::class, 'settings']);
@@ -1731,6 +2451,62 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', '
         Route::post('jumia/sync/orders', [\App\Http\Controllers\Integrations\JumiaSyncController::class, 'syncOrders']);
         Route::get('jumia/logs', [\App\Http\Controllers\Integrations\JumiaSyncController::class, 'logs']);
         Route::delete('jumia/logs', [\App\Http\Controllers\Integrations\JumiaSyncController::class, 'clearLogs']);
+    });
+
+    // ------------------------------- Printful (print-on-demand, feature-gated) ------------------\\
+    Route::middleware('tenant.feature:printful')->group(function () {
+        Route::get('printful/settings', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'settings']);
+        Route::post('printful/settings', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'saveSettings']);
+        Route::post('printful/test-connection', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'testConnection']);
+        Route::get('printful/webhooks', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'webhookStatus']);
+        Route::post('printful/webhooks', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'registerWebhooks']);
+        Route::get('printful/stats', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'stats']);
+        Route::post('printful/sync/products', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'syncProducts']);
+        Route::get('printful/orders', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'orders']);
+        Route::post('printful/orders/send/{onlineOrderId}', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'sendOrder']);
+        Route::post('printful/orders/{id}/confirm', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'confirmOrder']);
+        Route::post('printful/orders/{id}/cancel', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'cancelOrder']);
+        Route::post('printful/orders/{id}/refresh', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'refreshOrder']);
+        Route::get('printful/logs', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'logs']);
+        Route::delete('printful/logs', [\App\Http\Controllers\Integrations\PrintfulSyncController::class, 'clearLogs']);
+    });
+
+    // ------------------------------- Courier integration (feature-gated) ------------------------\\
+    // Courier accounts + settings (phase 1). Booking, tracking and webhooks join this group later.
+    Route::middleware('tenant.feature:couriers')->prefix('couriers')->group(function () {
+        Route::get('catalog', [\App\Http\Controllers\Couriers\CourierAccountsController::class, 'catalog']);
+        Route::get('accounts', [\App\Http\Controllers\Couriers\CourierAccountsController::class, 'index']);
+        Route::post('accounts', [\App\Http\Controllers\Couriers\CourierAccountsController::class, 'store'])->middleware('tenant.limit:max_courier_accounts');
+        Route::put('accounts/{id}', [\App\Http\Controllers\Couriers\CourierAccountsController::class, 'update']);
+        Route::delete('accounts/{id}', [\App\Http\Controllers\Couriers\CourierAccountsController::class, 'destroy']);
+        Route::post('accounts/{id}/test', [\App\Http\Controllers\Couriers\CourierAccountsController::class, 'test']);
+        Route::post('accounts/{id}/default', [\App\Http\Controllers\Couriers\CourierAccountsController::class, 'makeDefault']);
+        Route::get('settings', [\App\Http\Controllers\Couriers\CourierSettingsController::class, 'show']);
+        Route::put('settings', [\App\Http\Controllers\Couriers\CourierSettingsController::class, 'update']);
+        Route::get('reports', [\App\Http\Controllers\Couriers\CourierReportsController::class, 'index']);
+        Route::get('logs', [\App\Http\Controllers\Couriers\CourierLogsController::class, 'index']);
+        Route::get('logs/{id}', [\App\Http\Controllers\Couriers\CourierLogsController::class, 'show'])->whereNumber('id');
+        Route::delete('logs', [\App\Http\Controllers\Couriers\CourierLogsController::class, 'destroy']);
+        Route::get('guide', [\App\Http\Controllers\Couriers\CourierGuideController::class, 'show']);
+        // Booking from sales
+        Route::get('sales/{saleId}', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'saleShipment']);
+        Route::get('sales/{saleId}/booking', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'bookingForm']);
+        Route::post('sales/{saleId}/book', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'book']);
+        Route::post('sales/{saleId}/rates', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'rates']);
+        Route::post('bulk/prepare', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'bulkPrepare']);
+        Route::post('bulk/book', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'bulkBook']);
+        Route::get('accounts/{id}/cities', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'cities']);
+        // Shipments, timeline, labels, returns queue
+        Route::get('shipments', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'index']);
+        Route::post('shipments/labels', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'labelData']);
+        Route::get('shipments/{id}', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'show']);
+        Route::get('shipments/{id}/label', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'label']);
+        Route::post('shipments/{id}/refresh', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'refresh']);
+        Route::post('shipments/{id}/cancel', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'cancel']);
+        Route::post('shipments/{id}/status', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'updateStatus']);
+        Route::post('shipments/{id}/cod', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'updateCod']);
+        Route::post('shipments/{id}/return/restock', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'restockReturn']);
+        Route::post('shipments/{id}/return/dismiss', [\App\Http\Controllers\Couriers\CourierShipmentsController::class, 'dismissReturn']);
     });
 
     // ------------------------------- Webhooks (outgoing, feature-gated) ------------------------\\
@@ -1775,18 +2551,26 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'tenant.subscribed
         Route::get('reports/trial-balance', 'AccountingV2\\ReportsController@trialBalance');
         Route::get('reports/profit-loss', 'AccountingV2\\ReportsController@profitAndLoss');
         Route::get('reports/balance-sheet', 'AccountingV2\\ReportsController@balanceSheet');
+        Route::post('reports/inventory-true-up', 'AccountingV2\\ReportsController@inventoryTrueUp');
+        Route::get('reports/account-ledger', 'AccountingV2\\ReportsController@accountLedger');
         Route::get('reports/tax-summary', 'AccountingV2\\ReportsController@taxSummary');
+        Route::get('reports/reconciliation', 'AccountingV2\\ReportsController@reconciliation');
+        Route::get('reports/reconciliation/{accountId}', 'AccountingV2\\ReportsController@reconciliationDetail')->where('accountId', '[0-9]+');
     });
 });
 
 // Subscription billing (tenant-side, reads/writes central DB)
-// Uses auth:api only — no Is_Active so tenants without subscription can still access billing
-Route::middleware(['auth:api'])->prefix('billing')->group(function () {
+// No tenant.subscribed here, so tenants without a subscription can still reach
+// billing. Is_Active only refuses deactivated/deleted staff users (statut) — it
+// has nothing to do with the subscription, and a disabled user must not be
+// able to buy or cancel plans for the workspace.
+Route::middleware(['auth:api', 'Is_Active'])->prefix('billing')->group(function () {
     Route::get('/current-plan', [\App\Http\Controllers\Api\BillingApiController::class, 'currentPlan']);
     Route::get('/plans', [\App\Http\Controllers\Api\BillingApiController::class, 'plans']);
     Route::get('/checkout-data/{plan}', [\App\Http\Controllers\Api\BillingApiController::class, 'checkoutData']);
     Route::post('/checkout', [\App\Http\Controllers\Api\BillingApiController::class, 'checkout']);
     Route::post('/offline-payment', [\App\Http\Controllers\Api\BillingApiController::class, 'offlinePayment']);
+    Route::post('/request-free-plan', [\App\Http\Controllers\Api\BillingApiController::class, 'requestFreePlan']);
     Route::get('/history', [\App\Http\Controllers\Api\BillingApiController::class, 'history']);
     Route::get('/payment/{id}', [\App\Http\Controllers\Api\BillingApiController::class, 'paymentDetail']);
     Route::post('/retry/{id}', [\App\Http\Controllers\Api\BillingApiController::class, 'retryPayment']);
@@ -1797,35 +2581,56 @@ Route::middleware(['auth:api'])->prefix('billing')->group(function () {
     Route::get('/invoices', [\App\Http\Controllers\Api\BillingApiController::class, 'invoices']);
     Route::get('/invoices/{id}/download', [\App\Http\Controllers\Api\BillingApiController::class, 'downloadInvoice']);
     Route::get('/plan-usage', [\App\Http\Controllers\Api\BillingApiController::class, 'planUsage']);
+
+    // Add-ons: modules / premium themes bought on top of the plan.
+    Route::get('/addons', [\App\Http\Controllers\Api\BillingAddonsController::class, 'index']);
+    Route::post('/addons/purchase', [\App\Http\Controllers\Api\BillingAddonsController::class, 'purchase'])->middleware('throttle:20,1');
+    Route::post('/addons/{id}/renew', [\App\Http\Controllers\Api\BillingAddonsController::class, 'renew'])->whereNumber('id')->middleware('throttle:20,1');
+    Route::post('/addons/trial', [\App\Http\Controllers\Api\BillingAddonsController::class, 'trial'])->middleware('throttle:10,1');
 });
 
-// Public minimal endpoints for customer display (no auth)
-Route::post('pos/customer-display/broadcast', [CustomerDisplayController::class, 'broadcastCart']);
+// Customer display polling: no login (unattended screen); lastCart() requires
+// the display access token issued by customer-display/generate.
 Route::get('pos/customer-display/last-cart', [CustomerDisplayController::class, 'lastCart']);
 
 // -------------------------------  Print & PDF ------------------------\\
 // ------------------------------------------------------------------\\
+// These render full documents (invoices, quotations, payment receipts) that
+// carry customer names, addresses, tax numbers and line items, so they run
+// behind the same stack as every other authenticated endpoint in this file.
+// The SPA fetches them over XHR (lib/http.js `download`/`raw`), which sends
+// the Passport `laravel_token` cookie plus the `X-XSRF-TOKEN` header, so the
+// token guard authenticates them exactly like the JSON endpoints.
+Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'token.timeout', 'tenant.subscribed', 'tenant.activity'])->group(function () {
 
-Route::get('sale_pdf/{id}', 'SalesController@Sale_PDF');
-Route::get('sale_print_html/{id}', 'SalesController@Sale_PDF_Inline');
-Route::get('quote_pdf/{id}', 'QuotationsController@Quotation_pdf');
-Route::get('quote_print_html/{id}', 'QuotationsController@Quotation_PDF_Inline');
-Route::get('booking_pdf/{id}', 'BookingController@booking_pdf');
-Route::get('service_job_pdf/{id}', 'ServiceJobController@service_job_pdf');
-Route::get('service_quote_pdf/{id}', 'ServiceJobController@service_quote_pdf');
-Route::get('purchase_pdf/{id}', 'PurchasesController@Purchase_pdf');
-Route::get('purchase_print_html/{id}', 'PurchasesController@Purchase_PDF_Inline');
-Route::get('return_sale_pdf/{id}', 'SalesReturnController@Return_pdf');
-Route::get('return_purchase_pdf/{id}', 'PurchasesReturnController@Return_pdf');
-Route::get('payment_purchase_pdf/{id}', 'PaymentPurchasesController@Payment_purchase_pdf');
-Route::get('payment_return_sale_pdf/{id}', 'PaymentSaleReturnsController@payment_return');
-Route::get('payment_return_purchase_pdf/{id}', 'PaymentPurchaseReturnsController@payment_return');
-Route::get('payment_sale_pdf/{id}', 'PaymentSalesController@payment_sale');
-Route::get('sales_print_invoice/{id}', 'SalesController@Print_Invoice_POS');
-Route::post('direct_network_print/{id}', 'SalesController@Direct_Network_Print_POS');
-Route::get('transfer_pdf/{id}', 'TransferController@transfer_pdf');
-Route::get('adjustment_pdf/{id}', 'AdjustmentController@adjustment_pdf');
-Route::get('damage_pdf/{id}', 'DamageController@damage_pdf');
+    Route::get('sale_pdf/{id}', 'SalesController@Sale_PDF');
+    Route::get('sale_print_html/{id}', 'SalesController@Sale_PDF_Inline');
+    Route::get('quote_pdf/{id}', 'QuotationsController@Quotation_pdf');
+    Route::get('quote_print_html/{id}', 'QuotationsController@Quotation_PDF_Inline');
+    Route::get('booking_pdf/{id}', 'BookingController@booking_pdf');
+    Route::get('service_job_pdf/{id}', 'ServiceJobController@service_job_pdf');
+    Route::get('service_quote_pdf/{id}', 'ServiceJobController@service_quote_pdf');
+    Route::get('purchase_pdf/{id}', 'PurchasesController@Purchase_pdf');
+    Route::get('purchase_print_html/{id}', 'PurchasesController@Purchase_PDF_Inline');
+    Route::get('return_sale_pdf/{id}', 'SalesReturnController@Return_pdf');
+    Route::get('return_purchase_pdf/{id}', 'PurchasesReturnController@Return_pdf');
+    Route::get('payment_purchase_pdf/{id}', 'PaymentPurchasesController@Payment_purchase_pdf');
+    Route::get('payment_return_sale_pdf/{id}', 'PaymentSaleReturnsController@payment_return');
+    Route::get('payment_return_purchase_pdf/{id}', 'PaymentPurchaseReturnsController@payment_return');
+    Route::get('payment_sale_pdf/{id}', 'PaymentSalesController@payment_sale');
+    Route::get('sales_print_invoice/{id}', 'SalesController@Print_Invoice_POS');
+    Route::post('direct_network_print/{id}', 'SalesController@Direct_Network_Print_POS');
+    Route::get('transfer_pdf/{id}', 'TransferController@transfer_pdf');
+    Route::get('adjustment_pdf/{id}', 'AdjustmentController@adjustment_pdf');
+    Route::get('damage_pdf/{id}', 'DamageController@damage_pdf');
+
+});
+
+// Links sent to customers/suppliers by email, SMS and WhatsApp. No login: the
+// random per-document token is the only key (see DocumentShareController).
+Route::get('share/{type}/{token}', 'DocumentShareController@show')
+    ->where(['type' => '[a-z_]+', 'token' => '[A-Za-z0-9]{48}'])
+    ->middleware('throttle:30,1');
 
 // Route::get('/available-modules', 'ModuleSettingsController@get_modules_enabled');
 
@@ -1974,6 +2779,7 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'tenant.subscribed
     Route::get('dashboard', 'MarketingController@dashboard');
     Route::get('reports', 'MarketingController@reports');
     Route::get('activity_logs', 'MarketingController@activity_logs');
+    Route::get('guide', 'MarketingController@guide');
 
     // Campaigns
     Route::get('campaigns', 'MarketingController@campaigns_index');
@@ -1993,6 +2799,8 @@ Route::middleware(['auth:api', 'Is_Active', 'request.safety', 'tenant.subscribed
     Route::put('segments/{id}', 'MarketingController@segments_update');
     Route::delete('segments/{id}', 'MarketingController@segments_destroy');
     Route::post('segments/preview', 'MarketingController@segments_preview');
+    // CRM lead audience lookups (answers available=false without the CRM)
+    Route::get('segments/lead-meta', 'MarketingController@segments_lead_meta');
 
     // Templates
     Route::get('templates', 'MarketingController@templates_index');

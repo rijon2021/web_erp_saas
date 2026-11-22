@@ -11,6 +11,12 @@
             <template #icon><FileExcelOutlined /></template>
             EXCEL
           </a-button>
+          <a-tooltip :title="$t('Export_Items_Help')">
+            <a-button :loading="exporting === 'lines'" @click="exportList('lines')">
+              <template #icon><FileExcelOutlined /></template>
+              {{ $t('Export_Items') }}
+            </a-button>
+          </a-tooltip>
           <a-button v-if="auth.can('Purchases_add')" type="primary" @click="$router.push('/purchases/create')">
             <template #icon><PlusOutlined /></template>
             {{ $t('AddPurchase') }}
@@ -140,7 +146,7 @@
                   <BarcodeOutlined /> {{ $t('Printbarcode') }}
                 </a-menu-item>
                 <a-menu-item key="whatsapp">
-                  <WhatsAppOutlined /> WhatsApp Notification
+                  <WhatsAppOutlined /> {{ $t('WhatsApp_Notification') }}
                 </a-menu-item>
                 <a-menu-item key="email">
                   <MailOutlined /> {{ $t('email_notification') }}
@@ -167,7 +173,9 @@
       <a-table :columns="paymentColumns" :data-source="payments" :pagination="false" row-key="id" size="small" :scroll="{ x: 'max-content' }">
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'montant'">{{ money(record.montant) }}</template>
-          <template v-else-if="column.key === 'method'">{{ record.payment_method?.name || '---' }}</template>
+          <template v-else-if="column.key === 'method'">
+            {{ record.wallet_transaction_id ? $t('Supplier_Wallet') : (record.payment_method?.name || '---') }}
+          </template>
           <template v-else-if="column.key === 'actions'">
             <a-space>
               <a-tooltip :title="$t('DownloadPdf')">
@@ -234,29 +242,50 @@
               </a-typography-text>
             </a-form-item>
           </a-col>
-          <a-col :span="12">
-            <a-form-item :label="$t('Received_Amount')">
-              <a-input-number v-model:value="payForm.received_amount" style="width: 100%" :min="0" />
-              <a-typography-text type="secondary" style="font-size: 12px; display: block">
-                {{ $t('Received_Amount_Help') }}
-              </a-typography-text>
+          <!-- Supplier Wallet tender: spend the prepaid balance held with this supplier. -->
+          <!-- Also shown when editing a wallet-funded payment while the feature is
+               off/unknown, so the user can see (and consciously switch off) the tender. -->
+          <a-col v-if="(walletInfo && walletInfo.enabled) || payForm.from_wallet" :span="24">
+            <a-form-item>
+              <a-space align="start">
+                <a-switch v-model:checked="payForm.from_wallet" :disabled="walletInfo?.status === 'frozen'" />
+                <div>
+                  <div>{{ $t('SW_Pay_From_Wallet') }}</div>
+                  <a-typography-text type="secondary" style="font-size: 12px; display: block">
+                    {{ $t('SW_Pay_From_Wallet_Help') }} — {{ $t('SW_Wallet_Balance') }}:
+                    <strong :style="{ color: Number(walletInfo?.balance) < 0 ? '#ff4d4f' : '#52c41a' }">{{ money(walletInfo?.balance || 0) }}</strong>
+                    <span v-if="walletInfo?.status === 'frozen'"> ({{ $t('SW_Frozen') }})</span>
+                    <span v-if="walletInfo && !walletInfo.enabled"> ({{ $t('SW_Err_wallet_disabled') }})</span>
+                  </a-typography-text>
+                </div>
+              </a-space>
             </a-form-item>
           </a-col>
-          <a-col :span="12">
-            <a-form-item :label="$t('Paymentchoice')">
-              <a-select v-model:value="payForm.payment_method_id" :options="paymentMethodOptions" />
-            </a-form-item>
-          </a-col>
-          <a-col :span="12">
-            <a-form-item :label="$t('Account')">
-              <a-select v-model:value="payForm.account_id" allow-clear :placeholder="$t('Choose_Account')" :options="accountOptions" />
-            </a-form-item>
-          </a-col>
-          <a-col :span="12">
-            <a-form-item :label="$t('Change')">
-              <a-input :value="money(payChange)" disabled />
-            </a-form-item>
-          </a-col>
+          <template v-if="!payForm.from_wallet">
+            <a-col :span="12">
+              <a-form-item :label="$t('Received_Amount')">
+                <a-input-number v-model:value="payForm.received_amount" style="width: 100%" :min="0" />
+                <a-typography-text type="secondary" style="font-size: 12px; display: block">
+                  {{ $t('Received_Amount_Help') }}
+                </a-typography-text>
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item :label="$t('Paymentchoice')">
+                <a-select v-model:value="payForm.payment_method_id" :options="paymentMethodOptions" />
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item :label="$t('Account')">
+                <a-select v-model:value="payForm.account_id" allow-clear :placeholder="$t('Choose_Account')" :options="accountOptions" />
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item :label="$t('Change')">
+                <a-input :value="money(payChange)" disabled />
+              </a-form-item>
+            </a-col>
+          </template>
           <a-col :span="12">
             <a-form-item :label="$t('Due')">
               <a-input :value="money(activePurchase?.due)" disabled />
@@ -347,6 +376,7 @@ import { useFormat } from '../../composables/useFormat';
 import { useAuthStore } from '../../stores/auth';
 import { docStatusColor, payStatusColor } from '../../lib/statusColors';
 import { exportExcel, exportPdf } from '../../lib/exporters';
+import { exportDocumentLines } from '../../lib/documentLinesExport';
 import { PAYMENT_STATUSES, statusKey } from '../sales/saleVocab';
 import { PURCHASE_STATUSES } from './purchaseVocab';
 import http from '../../lib/http';
@@ -444,7 +474,8 @@ async function exportList(kind) {
       ...filterParams(),
     });
     const rows = data.purchases || [];
-    if (kind === 'xlsx') await exportExcel('purchases', columns.value, rows);
+    if (kind === 'lines') await exportDocumentLines('purchases', rows, 'purchases_items');
+    else if (kind === 'xlsx') await exportExcel('purchases', columns.value, rows);
     else await exportPdf(t('ListPurchases'), columns.value, rows);
   } catch (e) {
     message.error(t('InvalidData'));
@@ -585,6 +616,20 @@ const payMaxDue = computed(() => roundMoney(
     : activePurchase.value?.due
 ));
 
+// Supplier Wallet: GET supplier_wallets/{provider}/summary → { enabled,
+// balance, status, allow_negative }. Fetched when a payment form opens so the
+// "pay from wallet" switch only shows when the feature is on for this tenant.
+const walletInfo = ref(null);
+async function loadWalletInfo(providerId) {
+  walletInfo.value = null;
+  if (!providerId) return;
+  try {
+    walletInfo.value = await http.get(`supplier_wallets/${providerId}/summary`);
+  } catch (e) {
+    walletInfo.value = null;
+  }
+}
+
 function openAddPayment(record) {
   if (record.payment_status === 'paid') {
     message.warning(t('PaymentComplete'));
@@ -598,7 +643,9 @@ function openAddPayment(record) {
     payment_method_id: 2,
     account_id: undefined,
     notes: '',
+    from_wallet: false,
   };
+  loadWalletInfo(record.provider_id);
   payFormOpen.value = true;
 }
 
@@ -608,10 +655,12 @@ function openEditPayment(payment) {
     date: payment.date,
     montant: Number(payment.montant) || 0,
     received_amount: +((Number(payment.montant) || 0) + (Number(payment.change) || 0)).toFixed(2),
-    payment_method_id: payment.payment_method_id,
+    payment_method_id: payment.payment_method_id || 2,
     account_id: payment.account_id || undefined,
     notes: payment.notes || '',
+    from_wallet: !!payment.wallet_transaction_id,
   };
+  loadWalletInfo(activePurchase.value?.provider_id);
   payFormOpen.value = true;
 }
 
@@ -619,11 +668,18 @@ async function submitPayment() {
   const f = payForm.value;
   // Same guards as the pre-migration admin (Verified_paidAmount / Submit_Payment).
   const montant = Number(f.montant) || 0;
-  if (montant <= 0 || !f.payment_method_id) {
+  // Wallet tender: no method/account/received amount — the whole amount comes
+  // from the supplier's prepaid balance (the server checks it).
+  // The switch is the truth: editing a wallet-funded payment keeps it on the
+  // wallet even when the summary failed or the feature was turned off since
+  // (the server answers 422 wallet_disabled rather than silently converting
+  // it to a cash payment).
+  const fromWallet = !!f.from_wallet;
+  if (montant <= 0 || (!fromWallet && !f.payment_method_id)) {
     message.warning(t('Please_fill_the_form_correctly'));
     return;
   }
-  if (montant > (Number(f.received_amount) || 0)) {
+  if (!fromWallet && montant > (Number(f.received_amount) || 0)) {
     message.warning(t('Paying_amount_is_greater_than_Received_amount'));
     return;
   }
@@ -636,11 +692,12 @@ async function submitPayment() {
     purchase_id: activePurchase.value.id,
     date: f.date,
     montant: (Number(f.montant) || 0).toFixed(2),
-    received_amount: (Number(f.received_amount) || 0).toFixed(2),
-    change: payChange.value.toFixed(2),
-    payment_method_id: f.payment_method_id,
-    account_id: f.account_id || null,
+    received_amount: fromWallet ? montant.toFixed(2) : (Number(f.received_amount) || 0).toFixed(2),
+    change: fromWallet ? '0.00' : payChange.value.toFixed(2),
+    payment_method_id: fromWallet ? null : f.payment_method_id,
+    account_id: fromWallet ? null : (f.account_id || null),
     notes: f.notes,
+    from_wallet: fromWallet ? 1 : 0,
   };
   try {
     if (payEditing.value) {
@@ -654,7 +711,9 @@ async function submitPayment() {
     crud.fetchRows();
     if (paymentsOpen.value) await loadPayments(activePurchase.value.id);
   } catch (e) {
-    message.error(e?.data?.message || t('InvalidData'));
+    const code = e?.data?.code;
+    const key = code ? 'SW_Err_' + code : '';
+    message.error((key && t(key) !== key) ? t(key) : (e?.data?.message || t('InvalidData')));
   } finally {
     paySaving.value = false;
   }

@@ -67,7 +67,6 @@
 (function(){
   // Base symbol, NOT the session display currency — the amounts are base.
   const cur = @json($currency);
-  const PRICE_DECIMALS = 2;
   const loading = document.getElementById('ret-loading');
   const empty   = document.getElementById('ret-empty');
   const wrap    = document.getElementById('ret-table-wrap');
@@ -82,7 +81,7 @@
   };
   const orderBase = '{{ url('/'.store_path_to('account/orders')) }}';
 
-  function money(n){ return cur + Number(n||0).toLocaleString('en-US', { minimumFractionDigits: PRICE_DECIMALS, maximumFractionDigits: PRICE_DECIMALS }); }
+  function money(n){ return storeWithCurrency(cur, storeFmtNumber(n)); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
   function statusChip(st){
     const cls = st==='refunded' ? 'chip-success' : st==='approved' ? 'chip-info' : st==='rejected' ? 'chip-danger' : 'chip-warning';

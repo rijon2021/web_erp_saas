@@ -8,7 +8,7 @@
     </PageHeader>
 
     <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
-      <a-col v-for="card in cards" :key="card.label" :xs="12" :sm="12" :md="8" :xl="8">
+      <a-col v-for="card in cards" :key="card.label" :xs="12" :sm="12" :md="8" :xl="6">
         <a-card :bordered="false" class="kpi-card" :loading="loading">
           <div class="kpi-inner">
             <div class="kpi-icon" :style="{ background: card.tint, color: card.color }">
@@ -119,7 +119,7 @@ const id = route.params.id;
 
 const tab = ref('purchases');
 const loading = ref(true);
-const provider = ref({ total_purchase: 0, total_amount: 0, total_paid: 0, due: 0, opening_balance: 0, credit_limit: 0 });
+const provider = ref({ total_purchase: 0, total_amount: 0, total_paid: 0, due: 0, opening_balance: 0, total_due: 0, credit_limit: 0 });
 
 // Accent colours + matching soft tints for the KPI icon chips (same set as the
 // customer ledger).
@@ -141,6 +141,8 @@ const cards = computed(() => {
     tile(t('TotalPaid'), money(n('total_paid')), C.green, CheckCircleOutlined),
     tile(t('Due'), money(n('due')), C.red, ExclamationCircleOutlined, n('due') > 0 ? { color: '#ff4d4f' } : { color: '#52c41a' }),
     tile(t('Opening_Balance'), money(n('opening_balance')), C.purple, CalculatorOutlined, n('opening_balance') > 0 ? { color: '#ff4d4f' } : { color: '#52c41a' }),
+    // Opening balance + unpaid purchases.
+    tile(t('Total_Due'), money(n('total_due')), C.red, ExclamationCircleOutlined, n('total_due') > 0 ? { color: '#ff4d4f' } : { color: '#52c41a' }),
     tile(t('Credit_Limit'), n('credit_limit') > 0 ? money(n('credit_limit')) : t('No_limit'), C.blue, CreditCardOutlined, { color: '#1677ff' }),
   ];
 });

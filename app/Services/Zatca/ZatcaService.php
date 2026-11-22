@@ -2,6 +2,7 @@
 
 namespace App\Services\Zatca;
 
+use App\Models\Central\EInvoicingProviderSetting;
 use App\Models\Setting;
 use App\Models\ZatcaDocument;
 use App\Models\ZatcaLog;
@@ -170,6 +171,9 @@ class ZatcaService
         $zatca = ZatcaSetting::current();
         if (! $zatca || ! $zatca->isReady()) {
             throw new RuntimeException('ZATCA Phase 2 is not enabled or onboarding is not complete.');
+        }
+        if (! EInvoicingProviderSetting::platformEnabled('zatca')) {
+            throw new RuntimeException('ZATCA e-invoicing is temporarily disabled by the platform administrator.');
         }
 
         $existing = ZatcaDocument::forSource($source);
@@ -344,7 +348,7 @@ class ZatcaService
     {
         try {
             $zatca = ZatcaSetting::current();
-            if (! $zatca || ! $zatca->enabled || ! $zatca->auto_submit || ! $zatca->isReady()) {
+            if (! $zatca || ! $zatca->enabled || ! $zatca->auto_submit || ! $zatca->isReady() || ! EInvoicingProviderSetting::platformEnabled('zatca')) {
                 return null;
             }
 
@@ -369,7 +373,7 @@ class ZatcaService
         $vat = 15.00;
 
         $supplier = [
-            'name' => $setting->CompanyName ?? 'Company',
+            'name' => $zatca->organization_name ?: ($setting->CompanyName ?? 'Company'),
             'vat' => (string) ($setting->vat_number ?? ''),
             'other_id' => $zatca->crn ?: '1010010000',
             'other_id_scheme' => 'CRN',
@@ -395,11 +399,17 @@ class ZatcaService
             ];
         }
 
+        // One timestamp for the whole document so the QR (tag 3) matches
+        // IssueDate + "T" + IssueTime exactly.
+        $now = now();
+        $issueDate = $now->format('Y-m-d');
+        $issueTime = $now->format('H:i:s');
+
         return [
             'id' => 'COMP-'.$icv,
             'uuid' => (string) Str::uuid(),
-            'issue_date' => now()->format('Y-m-d'),
-            'issue_time' => now()->format('H:i:s'),
+            'issue_date' => $issueDate,
+            'issue_time' => $issueTime,
             'type_code' => $typeCode,
             'subtype' => $subtype,
             'icv' => $icv,
@@ -410,7 +420,7 @@ class ZatcaService
             'payment_means_code' => '10',
             'supplier' => $supplier,
             'customer' => $customer,
-            'delivery_date' => $subtype === 'standard' ? now()->format('Y-m-d') : null,
+            'delivery_date' => $subtype === 'standard' ? $issueDate : null,
             'allowances' => [],
             'charges' => [],
             'lines' => [[
@@ -441,9 +451,11 @@ class ZatcaService
                 'payable' => $lineNet + $vat,
                 'tax_total' => $vat,
             ],
-            'seller_name' => $setting->company_name_ar ?? ($setting->CompanyName ?? 'Company'),
+            // QR tag 1 must equal the supplier RegistrationName, tag 3 must
+            // equal IssueDate + "T" + IssueTime (no "Z") — see SaleInvoiceMapper.
+            'seller_name' => $supplier['name'],
             'vat_number' => (string) ($setting->vat_number ?? ''),
-            'issue_datetime' => now()->format('Y-m-d\TH:i:s').'Z',
+            'issue_datetime' => $issueDate.'T'.$issueTime,
             'total_with_vat' => $lineNet + $vat,
             'vat_amount' => $vat,
         ];

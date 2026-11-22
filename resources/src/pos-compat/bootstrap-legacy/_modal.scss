@@ -107,8 +107,10 @@
 
   .close {
     padding: $modal-header-padding;
-    // auto on the left force icon to the right even when there is no .modal-title
-    margin: (-$modal-header-padding) (-$modal-header-padding) (-$modal-header-padding) auto;
+    // auto on the inline start forces the icon to the far end even when there
+    // is no .modal-title — the right in LTR, the left in RTL.
+    margin: (-$modal-header-padding);
+    margin-inline-start: auto;
   }
 }
 

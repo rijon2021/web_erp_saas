@@ -2,6 +2,10 @@
   <div class="page">
     <PageHeader :title="$t('Assets_List')" :breadcrumb="[$t('Assets'), $t('Assets_List')]">
       <template #actions>
+        <a-button @click="$router.push('/assets/dashboard')">
+          <template #icon><DashboardOutlined /></template>
+          {{ $t('Dashboard') }}
+        </a-button>
         <a-button type="primary" @click="$router.push('/assets/create')">
           <template #icon><PlusOutlined /></template>
           {{ $t('Add_Asset') }}
@@ -12,7 +16,7 @@
     <DataTable :crud="crud" :columns="columns">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'name'">
-          <a class="link" @click="$router.push(`/assets/${record.id}/edit`)">{{ record.name }}</a>
+          <a class="link" @click="$router.push(`/assets/${record.id}`)">{{ record.name }}</a>
         </template>
         <template v-else-if="column.key === 'book_value'">
           {{ record.book_value === null || record.book_value === undefined ? '—' : money(record.book_value) }}
@@ -28,6 +32,11 @@
         </template>
         <template v-else-if="column.key === 'actions'">
           <a-space>
+            <a-tooltip :title="$t('Details')">
+              <a-button type="text" size="small" @click="$router.push(`/assets/${record.id}`)">
+                <template #icon><EyeOutlined style="color: var(--app-primary, #6d28d9)" /></template>
+              </a-button>
+            </a-tooltip>
             <a-tooltip :title="$t('Edit')">
               <a-button type="text" size="small" @click="$router.push(`/assets/${record.id}/edit`)">
                 <template #icon><EditOutlined style="color: #52c41a" /></template>
@@ -90,7 +99,7 @@ onMounted(crud.fetchRows);
 
 <style scoped>
 .link {
-  color: #6d28d9;
+  color: var(--app-primary, #6d28d9);
   cursor: pointer;
 }
 </style>

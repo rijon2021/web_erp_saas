@@ -17,7 +17,7 @@ class ReturnsController extends Controller
 
     public function index(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_returns', StoreSetting::class);
 
         $query = OnlineOrderReturn::with(['order:id,ref,total,payment_method,payment_status', 'items'])
             ->orderByDesc('created_at');
@@ -62,7 +62,7 @@ class ReturnsController extends Controller
 
     public function approve(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_returns', StoreSetting::class);
 
         $data = $request->validate([
             'admin_note' => ['nullable', 'string', 'max:1000'],
@@ -92,7 +92,7 @@ class ReturnsController extends Controller
 
     public function reject(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_returns', StoreSetting::class);
 
         $data = $request->validate(['admin_note' => ['nullable', 'string', 'max:1000']]);
 

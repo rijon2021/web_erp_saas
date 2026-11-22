@@ -87,7 +87,7 @@ class PortalStatementController extends Controller
                 'date' => $sale->date,
                 'type' => 'invoice',
                 'ref' => $sale->Ref,
-                'description' => 'Invoice',
+                'description' => __('portal.stmt_invoice'),
                 'debit' => (float) $sale->GrandTotal,
                 'credit' => 0,
             ];
@@ -97,7 +97,7 @@ class PortalStatementController extends Controller
                 'date' => $pmt->date,
                 'type' => 'payment',
                 'ref' => $pmt->Ref,
-                'description' => 'Payment for ' . ($pmt->sale_ref ?? ''),
+                'description' => __('portal.stmt_payment_for', ['ref' => $pmt->sale_ref ?? '']),
                 'debit' => 0,
                 'credit' => (float) $pmt->montant,
             ];
@@ -107,7 +107,7 @@ class PortalStatementController extends Controller
                 'date' => $opPmt->date,
                 'type' => 'opening_payment',
                 'ref' => $opPmt->Ref,
-                'description' => 'Opening Balance Payment',
+                'description' => __('portal.stmt_opening_payment'),
                 'debit' => 0,
                 'credit' => (float) $opPmt->montant,
             ];
@@ -117,7 +117,7 @@ class PortalStatementController extends Controller
                 'date' => $ret->date,
                 'type' => 'return',
                 'ref' => $ret->Ref,
-                'description' => 'Sale Return',
+                'description' => __('portal.stmt_sale_return'),
                 'debit' => 0,
                 'credit' => (float) $ret->GrandTotal,
             ];
@@ -127,7 +127,7 @@ class PortalStatementController extends Controller
                 'date' => $ref->date,
                 'type' => 'refund',
                 'ref' => $ref->Ref,
-                'description' => 'Refund for ' . ($ref->return_ref ?? ''),
+                'description' => __('portal.stmt_refund_for', ['ref' => $ref->return_ref ?? '']),
                 'debit' => (float) $ref->montant,
                 'credit' => 0,
             ];
@@ -154,7 +154,7 @@ class PortalStatementController extends Controller
                 'date' => $fromDate ?: '',
                 'type' => 'opening',
                 'ref' => '',
-                'description' => 'Opening Balance',
+                'description' => __('portal.stmt_opening'),
                 'debit' => $originalOpeningBalance > 0 ? round($originalOpeningBalance, 2) : 0,
                 'credit' => $originalOpeningBalance < 0 ? round(abs($originalOpeningBalance), 2) : 0,
             ]);
@@ -182,7 +182,7 @@ class PortalStatementController extends Controller
     private function assertPortalActive($portalClient): void
     {
         if ((int) $portalClient->status !== 1) {
-            abort(403, 'Portal access is disabled');
+            abort(403, __('portal.portal_disabled'));
         }
     }
 }

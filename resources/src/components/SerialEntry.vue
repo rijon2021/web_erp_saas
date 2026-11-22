@@ -55,6 +55,7 @@
  */
 import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { lineSerialUnits, loadUnitFactors } from '../lib/serialUnits';
 
 const { t } = useI18n();
 
@@ -70,7 +71,9 @@ const fileInput = ref(null);
 
 const serials = computed(() =>
   Array.isArray(props.line.serial_numbers) ? props.line.serial_numbers : []);
-const requiredCount = computed(() => Math.round(Number(props.line.quantity) || 0));
+// One serial per base unit (quantity × unit factor, see lib/serialUnits).
+loadUnitFactors();
+const requiredCount = computed(() => lineSerialUnits(props.line));
 const isComplete = computed(() => serials.value.length === requiredCount.value && requiredCount.value > 0);
 
 /** Legacy tokenize: split on newline, comma, semicolon or tab; drop blanks. */
@@ -133,7 +136,7 @@ async function onFileChange(e) {
     });
     addSerials(tokens);
   } catch (err) {
-    error.value = 'Import failed';
+    error.value = t('Import_Failed');
   } finally {
     e.target.value = '';
   }

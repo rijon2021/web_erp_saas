@@ -42,7 +42,7 @@ class RealEstateController extends Controller
         if (! is_dir($destination)) {
             mkdir($destination, 0755, true);
         }
-        $filename = Str::random(24).'.'.$file->getClientOriginalExtension();
+        $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::imageExtension($file));
         $file->move($destination, $filename);
 
         return $relative.'/'.$filename;

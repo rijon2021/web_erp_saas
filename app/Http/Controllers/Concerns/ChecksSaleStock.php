@@ -8,6 +8,7 @@ use App\Models\Sale;
 use App\Models\SaleDetail;
 use App\Models\Setting;
 use App\Models\Unit;
+use App\Services\ComboStockService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
@@ -30,6 +31,8 @@ use Illuminate\Validation\ValidationException;
  *  - When editing a completed sale, the units that sale already took from the
  *    same warehouse are added back before comparing, so re-saving an unchanged
  *    sale never fails.
+ *  - Virtual combo stock on: a combo line is checked as the component units
+ *    it consumes (see ComboStockService), not against the combo's own row.
  */
 trait ChecksSaleStock
 {
@@ -49,9 +52,14 @@ trait ChecksSaleStock
             return;
         }
 
+        // Virtual combo stock: a combo line is checked as the component units
+        // it consumes, merged with any line selling those components directly.
+        $comboStock = ComboStockService::enabled() ? app(ComboStockService::class) : null;
+
         // Base units required per product/variant across all lines.
         $required = [];
         $names = [];
+        $componentKeys = [];
         foreach ($details as $value) {
             if (empty($value['product_id']) || ! isset($value['quantity'])) {
                 continue;
@@ -68,8 +76,22 @@ trait ChecksSaleStock
             $mult = isset($value['pack_multiplier']) && (float) $value['pack_multiplier'] > 0
                 ? (float) $value['pack_multiplier'] : 1;
             $unitId = ! empty($value['sale_unit_id']) ? $value['sale_unit_id'] : $product->unit_sale_id;
+            $baseQty = $this->toBaseUnits((float) $value['quantity'] * $mult, $unitId);
 
-            $required[$key] = ($required[$key] ?? 0) + $this->toBaseUnits((float) $value['quantity'] * $mult, $unitId);
+            $componentNeeds = $comboStock && $product->type === 'is_combo'
+                ? $this->comboComponentNeeds($comboStock, $product, $baseQty)
+                : null;
+            if ($componentNeeds !== null) {
+                foreach ($componentNeeds as $componentId => [$need, $name]) {
+                    $required[$componentId.':0'] = ($required[$componentId.':0'] ?? 0) + $need;
+                    $names[$componentId.':0'] ??= $name;
+                    $componentKeys[$componentId.':0'] = true;
+                }
+
+                continue;
+            }
+
+            $required[$key] = ($required[$key] ?? 0) + $baseQty;
             $names[$key] = $product->name.(($variantId && ! empty($value['name'])) ? ' ['.$value['name'].']' : '');
         }
 
@@ -84,8 +106,21 @@ trait ChecksSaleStock
             foreach ($oldDetails as $old) {
                 $key = $old->product_id.':'.($old->product_variant_id ?: 0);
                 $mult = (float) ($old->pack_multiplier ?? 1) ?: 1;
-                $alreadyDeducted[$key] = ($alreadyDeducted[$key] ?? 0)
-                    + $this->toBaseUnits((float) $old->quantity * $mult, $old->sale_unit_id);
+                $baseQty = $this->toBaseUnits((float) $old->quantity * $mult, $old->sale_unit_id);
+
+                $oldProduct = $comboStock ? Product::find($old->product_id) : null;
+                $oldNeeds = $oldProduct && $oldProduct->type === 'is_combo'
+                    ? $comboStock->componentNeeds($oldProduct->id, $baseQty)
+                    : [];
+                if ($oldNeeds) {
+                    foreach ($oldNeeds as $componentId => $units) {
+                        $alreadyDeducted[$componentId.':0'] = ($alreadyDeducted[$componentId.':0'] ?? 0) + $units;
+                    }
+
+                    continue;
+                }
+
+                $alreadyDeducted[$key] = ($alreadyDeducted[$key] ?? 0) + $baseQty;
             }
         }
 
@@ -106,11 +141,14 @@ trait ChecksSaleStock
             $pw = $pwQuery->first();
 
             // manage_stock lives on the product_warehouse row, not on products.
-            if (! $pw || ! $pw->manage_stock) {
+            // A combo component with no row here has nothing to give (as the
+            // availability shown for the combo says); other products keep the
+            // old skip.
+            if ((! $pw && ! isset($componentKeys[$key])) || ($pw && ! $pw->manage_stock)) {
                 continue;
             }
 
-            $available = (float) $pw->qte + ($alreadyDeducted[$key] ?? 0);
+            $available = ($pw ? (float) $pw->qte : 0.0) + ($alreadyDeducted[$key] ?? 0);
             if ($need > $available + 1e-9) {
                 $errors[] = $names[$key].': needs '.$fmt($need).' but only '.$fmt(max($available, 0)).' in stock.';
             }
@@ -119,6 +157,33 @@ trait ChecksSaleStock
         if (! empty($errors)) {
             throw ValidationException::withMessages(['stock' => $errors]);
         }
+    }
+
+    /**
+     * Component units a combo line consumes, minus components that never
+     * limit stock ("Always in stock"; non-managed rows are skipped by the
+     * caller's manage_stock check).
+     *
+     * @return array<int, array{0: float, 1: string}>|null component id => [base units, label];
+     *                                                     null when the combo has no components
+     */
+    private function comboComponentNeeds(ComboStockService $comboStock, Product $combo, float $baseQty): ?array
+    {
+        $needs = $comboStock->componentNeeds($combo->id, $baseQty);
+        if (! $needs) {
+            // A combo without components can't be filled; check its own row.
+            return null;
+        }
+
+        $out = [];
+        foreach (Product::whereIn('id', array_keys($needs))->get() as $component) {
+            if ($component->always_in_stock || $component->type === 'is_service') {
+                continue;
+            }
+            $out[$component->id] = [$needs[$component->id], $component->name.' ('.$combo->name.')'];
+        }
+
+        return $out;
     }
 
     /**

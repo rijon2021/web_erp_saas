@@ -58,7 +58,7 @@
                 {{ $t('Pack') }}: {{ record.pack_name }} (×{{ record.pack_multiplier }})
               </a-tag>
               <a-tooltip v-if="record.is_batch_tracked" :title="tf('Auto_Batch_Mirror_Hint', 'Original sale batches will be auto-credited proportionally when this return is received.')">
-                <a-tag color="purple">{{ tf('Batches', 'Batches') }} · Auto</a-tag>
+                <a-tag color="purple">{{ tf('Batches', 'Batches') }} · {{ $t('Batch_Auto') }}</a-tag>
               </a-tooltip>
             </template>
             <template v-else-if="column.key === 'Net_price'">{{ money(record.Net_price) }}</template>
@@ -80,11 +80,21 @@
           <template #expandedRowRender="{ record }">
             <!-- Create only, and only for serialized lines: pick from the serials
                  sold on THIS sale, not from general stock. -->
+            <!-- A combo returns serials of its tracked components, narrowed to
+                 the ones sold on this combo line. -->
+            <ComboSerialPicker
+              v-if="hasComboSerials(record)"
+              :line="record"
+              fetch-url="serial_numbers/for_sale"
+              :base-params="{ sale_id: form.sale_id, sale_detail_id: record.id }"
+            />
             <SerialPicker
+              v-else
               :line="record"
               fetch-url="serial_numbers/for_sale"
               :fetch-params="{
                 sale_id: form.sale_id,
+                sale_detail_id: record.id,
                 product_id: record.product_id,
                 product_variant_id: record.product_variant_id || null,
               }"
@@ -115,6 +125,25 @@
                   <a-input-number v-model:value="form.shipping" style="width: 100%" :min="0" @change="recalc" />
                 </a-form-item>
               </a-col>
+              <!-- Create only: record the refund with the return, instead of a later Add Payment. -->
+              <!-- Only for received returns: goods not back yet are not refunded yet. -->
+              <template v-if="!isEdit && auth.can('payment_returns_add') && form.statut === 'received'">
+                <a-col :span="24">
+                  <a-checkbox v-model:checked="refund.now">{{ $t('Return_Refund_Now') }}</a-checkbox>
+                </a-col>
+                <template v-if="refund.now">
+                  <a-col :xs="24" :md="12">
+                    <a-form-item :label="$t('Paymentchoice')" required style="margin-top: 8px">
+                      <a-select v-model:value="refund.payment_method_id" :options="paymentMethodOptions" />
+                    </a-form-item>
+                  </a-col>
+                  <a-col :xs="24" :md="12">
+                    <a-form-item :label="$t('Account')" :required="requireAccount" style="margin-top: 8px">
+                      <a-select v-model:value="refund.account_id" allow-clear :options="accountOptions" />
+                    </a-form-item>
+                  </a-col>
+                </template>
+              </template>
               <a-col :span="24">
                 <a-form-item :label="$t('Please_provide_any_details')">
                   <a-textarea v-model:value="form.notes" :rows="4" :placeholder="$t('Afewwords')" />
@@ -165,7 +194,8 @@
  *
  * Totals follow legacy Calcul_Total exactly, including that the per-line
  * discount is DISPLAY ONLY — it is already baked into Net_price server-side,
- * so subtracting it again here would double-count.
+ * so subtracting it again here would double-count. The order Discount field is
+ * prefilled with the returned lines' share of the sale's order discount.
  */
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -173,6 +203,11 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
 import SerialPicker from '../../components/SerialPicker.vue';
+import ComboSerialPicker from '../../components/ComboSerialPicker.vue';
+import { hasComboSerials, comboSerialMismatch } from '../../lib/comboSerials';
+import { lineSerialUnits, loadUnitFactors } from '../../lib/serialUnits';
+import { returnDiscountShare } from '../../lib/returnDiscountShare';
+import { useAuthStore } from '../../stores/auth';
 import { useFormat } from '../../composables/useFormat';
 import { t as tf } from '../../i18n';
 import http from '../../lib/http';
@@ -197,6 +232,18 @@ const form = ref({
   statut: 'received', tax_rate: 0, TaxNet: 0, discount: 0, shipping: 0, notes: '',
 });
 
+// "Refund now" (create only): after saving, the full return total is paid out
+// through payment/returns_sale — the same endpoint, rules and accounting as
+// Add Payment on the returns list.
+const auth = useAuthStore();
+const refund = ref({ now: false, payment_method_id: undefined, account_id: undefined });
+const paymentMethods = ref([]);
+const accounts = ref([]);
+// Settings > Features > Require payment account (the payment endpoint enforces it).
+const requireAccount = ref(false);
+const paymentMethodOptions = computed(() => paymentMethods.value.map(m => ({ value: m.id, label: m.name })));
+const accountOptions = computed(() => accounts.value.map(a => ({ value: a.id, label: a.account_name })));
+
 const columns = computed(() => [
   { title: '#', dataIndex: 'detail_id', key: 'detail_id', width: 50 },
   { title: t('ProductName'), key: 'product' },
@@ -215,8 +262,8 @@ const columns = computed(() => [
  */
 // Ant Design Vue has no `expandable` object prop (that is the React API), so
 // these must be passed as flat props or they are silently ignored.
-const serialRowExpandable = r => !isEdit && !!r.is_imei;
-const showSerialColumn = computed(() => !isEdit && details.value.some(d => d.is_imei));
+const serialRowExpandable = r => !isEdit && (!!r.is_imei || hasComboSerials(r));
+const showSerialColumn = computed(() => !isEdit && details.value.some(serialRowExpandable));
 
 /**
  * Legacy locked a row when the product is gone from the warehouse (`del`) or
@@ -237,7 +284,17 @@ function setQty(line, value) {
     qty = Number(line.sale_quantity);
   }
   line.quantity = qty;
+  applyDiscountShare();
   recalc();
+}
+
+/**
+ * The returned lines' share of the sale's order discount. Applied on create
+ * and whenever a quantity changes; the field stays editable, and edit keeps
+ * the stored discount until a quantity is touched.
+ */
+function applyDiscountShare() {
+  form.value.discount = returnDiscountShare(details.value, form.value, decimals.value);
 }
 
 /** Legacy Calcul_Total, formula for formula. */
@@ -256,10 +313,13 @@ function recalc() {
 }
 
 function serialCountMismatch(d) {
+  if (hasComboSerials(d)) return comboSerialMismatch(d);
   if (!d?.is_imei) return false;
   const count = Array.isArray(d.serial_numbers) ? d.serial_numbers.length : 0;
-  return count !== Math.round(Number(d.quantity) || 0);
+  return count !== lineSerialUnits(d);
 }
+// One serial per base unit: quantity × pack × the sale unit's factor.
+loadUnitFactors();
 
 function validate() {
   // Create only, and only once received — legacy skips this while pending.
@@ -286,8 +346,38 @@ function validate() {
   return true;
 }
 
+/**
+ * Pays the new return out in full. The return is already saved, so a failure
+ * here only warns — the refund can still be added from the returns list.
+ */
+async function recordRefund(saleReturnId) {
+  try {
+    await http.post('payment/returns_sale', {
+      sale_return_id: saleReturnId,
+      date: form.value.date,
+      montant: grandTotal.value,
+      received_amount: grandTotal.value,
+      change: 0,
+      payment_method_id: refund.value.payment_method_id,
+      account_id: refund.value.account_id || null,
+      notes: '',
+    });
+  } catch (e) {
+    message.warning(`${t('Return_Refund_Not_Recorded')} ${e?.data?.message || ''}`.trim(), 8);
+  }
+}
+
 async function submit() {
   if (!validate()) return;
+  const refunding = !isEdit && refund.value.now && form.value.statut === 'received';
+  if (refunding && !refund.value.payment_method_id) {
+    message.error(t('Return_Refund_Choose_Method'));
+    return;
+  }
+  if (refunding && requireAccount.value && !refund.value.account_id) {
+    message.error(t('Return_Refund_Choose_Account'));
+    return;
+  }
   submitting.value = true;
   const body = {
     date: form.value.date,
@@ -308,8 +398,11 @@ async function submit() {
       await http.put(`returns/sale/${returnId}`, body);
       message.success(t('Successfully_Updated'));
     } else {
-      await http.post('returns/sale', body);
+      const created = await http.post('returns/sale', body);
       message.success(t('Successfully_Created'));
+      if (refund.value.now && form.value.statut === 'received' && created?.id && grandTotal.value > 0) {
+        await recordRefund(created.id);
+      }
     }
     router.push('/sale-returns');
   } catch (e) {
@@ -326,17 +419,30 @@ onMounted(async () => {
       : `returns/sale/create_sell_return/${saleId}`;
     const data = await http.get(url);
     if (data?.sale_return) form.value = { ...form.value, ...data.sale_return };
+    paymentMethods.value = data?.payment_methods || [];
+    accounts.value = data?.accounts || [];
+    requireAccount.value = data?.require_payment_account === true;
+    // Cash first, as the POS orders methods.
+    const cash = paymentMethods.value.find(m => /cash/i.test(m.name || ''));
+    refund.value.payment_method_id = (cash || paymentMethods.value[0] || {}).id;
     details.value = (data?.details || []).map(d => ({
       ...d,
       // Create's payload carries the pack snapshot and serials; the create
       // endpoint omits them, so they are defaulted here as legacy did.
       serial_numbers: Array.isArray(d.serial_numbers) ? d.serial_numbers : [],
+      serial_groups: {},
+      // Serialized lines name only the units actually returned (the pickers
+      // fill it), not every unit the sale line sold.
+      ...(!isEdit && (d.is_imei || hasComboSerials(d)) ? { imei_number: '' } : {}),
       product_pack_id: d.product_pack_id ?? null,
       pack_multiplier: d.pack_multiplier ?? 1,
       pack_name: d.pack_name ?? null,
     }));
     // Create stamps today; edit keeps the stored date.
-    if (!isEdit) form.value.date = new Date().toISOString().slice(0, 10);
+    if (!isEdit) {
+      form.value.date = new Date().toISOString().slice(0, 10);
+      applyDiscountShare();
+    }
     recalc();
   } catch (e) {
     message.error(e?.data?.message || t('InvalidData'));

@@ -34,7 +34,7 @@
         :message="tf('Pending_Upgrade', 'Pending Upgrade Request')"
       >
         <template #description>
-          {{ tf('Pending_upgrade_message', 'You have a pending upgrade to') }} <strong>{{ pendingUpgrade.plan_name }}</strong>
+          {{ tf('Billing_Pending_Upgrade_To', 'You have a pending upgrade to') }} <strong>{{ pendingUpgrade.plan_name }}</strong>
           ({{ cycleLabel(pendingUpgrade.billing_cycle) }} — {{ money(pendingUpgrade.amount, pendingUpgrade.currency) }}).
           {{ tf('Pending_upgrade_wait', 'Please wait for admin approval before submitting another request.') }}
         </template>
@@ -108,7 +108,7 @@
     </a-modal>
     <a-modal v-model:open="cancelUpgradeOpen" :title="tf('Cancel_Pending_Upgrade', 'Cancel Pending Upgrade')" :ok-text="tf('Confirm_Cancel_Upgrade', 'Yes, Cancel Upgrade')" :cancel-text="tf('Keep_Upgrade', 'Keep Upgrade')" ok-type="danger" :confirm-loading="cancelUpgradeLoading" @ok="cancelPendingUpgrade">
       <p>
-        {{ tf('Cancel_upgrade_confirm', 'Are you sure you want to cancel your pending upgrade to') }} <strong>{{ pendingUpgrade ? pendingUpgrade.plan_name : '' }}</strong>?
+        {{ tf('Billing_Cancel_Upgrade_Confirm_To', 'Are you sure you want to cancel your pending upgrade to') }} <strong>{{ pendingUpgrade ? pendingUpgrade.plan_name : '' }}</strong>?
         {{ tf('Cancel_upgrade_note', 'Your current plan will remain unchanged.') }}
       </p>
     </a-modal>
@@ -162,7 +162,7 @@ async function fetchCurrentPlan() {
     pendingUpgrade.value = data.pending_upgrade || null;
     currencySymbol.value = data.currency_symbol || '$';
   } catch (e) {
-    message.error(e?.data?.message || 'Failed to load plan data.');
+    message.error(e?.data?.message || tf('Billing_Failed_Load_Plan_Data', 'Failed to load plan data.'));
   } finally {
     loading.value = false;
   }
@@ -182,11 +182,11 @@ async function cancelSubscription() {
   cancelLoading.value = true;
   try {
     const data = await http.post('billing/cancel', {});
-    message.success(data?.message || 'Subscription cancelled.');
+    message.success(data?.message || tf('Billing_Subscription_Cancelled', 'Subscription cancelled.'));
     cancelOpen.value = false;
     await fetchCurrentPlan();
   } catch (e) {
-    message.error(e?.data?.message || 'Failed to cancel subscription.');
+    message.error(e?.data?.message || tf('Billing_Failed_Cancel_Subscription', 'Failed to cancel subscription.'));
   } finally {
     cancelLoading.value = false;
   }
@@ -195,10 +195,10 @@ async function resumeSubscription() {
   resumeLoading.value = true;
   try {
     const data = await http.post('billing/resume', {});
-    message.success(data?.message || 'Subscription resumed.');
+    message.success(data?.message || tf('Billing_Subscription_Resumed', 'Subscription resumed.'));
     await fetchCurrentPlan();
   } catch (e) {
-    message.error(e?.data?.message || 'Failed to resume subscription.');
+    message.error(e?.data?.message || tf('Billing_Failed_Resume_Subscription', 'Failed to resume subscription.'));
   } finally {
     resumeLoading.value = false;
   }
@@ -207,11 +207,11 @@ async function cancelPendingUpgrade() {
   cancelUpgradeLoading.value = true;
   try {
     const data = await http.post('billing/cancel-upgrade', {});
-    message.success(data?.message || 'Pending upgrade cancelled.');
+    message.success(data?.message || tf('Billing_Pending_Upgrade_Cancelled', 'Pending upgrade cancelled.'));
     cancelUpgradeOpen.value = false;
     await fetchCurrentPlan();
   } catch (e) {
-    message.error(e?.data?.message || 'Failed to cancel upgrade.');
+    message.error(e?.data?.message || tf('Billing_Failed_Cancel_Upgrade', 'Failed to cancel upgrade.'));
   } finally {
     cancelUpgradeLoading.value = false;
   }

@@ -416,7 +416,7 @@ class ElectronicsDemoSeeder extends Seeder
         $s->forceFill([
             'theme' => 'electronics',
             'theme_options' => $opts,
-            'store_name' => in_array($s->store_name, [null, '', 'StoreX', 'TechNova', 'LittleJoy', 'HavenHomes', 'FreshMart'], true) ? 'TechNova' : $s->store_name,
+            'store_name' => in_array($s->store_name, [null, '', 'StoreX', 'TechNova', 'LittleJoy', 'HavenHomes', 'FreshMart', 'Atelier'], true) ? 'TechNova' : $s->store_name,
             'primary_color' => '#2563eb',
             'secondary_color' => '#1d4ed8',
             'topbar_text_left' => '🔥 Summer Tech Sale – Up to 40% Off on Laptops, Headphones & More!',
@@ -444,7 +444,7 @@ class ElectronicsDemoSeeder extends Seeder
         // in the database but hidden from the storefront.
         if (Schema::hasColumn('products', 'hide_from_online_store')) {
             Product::where('code', 'like', 'EL-%')->update(['hide_from_online_store' => 0]);
-            Product::where('code', 'like', 'TY-%')->orWhere('code', 'like', 'GR-%')->update(['hide_from_online_store' => 1]);
+            Product::where('code', 'like', 'TY-%')->orWhere('code', 'like', 'GR-%')->orWhere('code', 'like', 'FA-%')->update(['hide_from_online_store' => 1]);
         }
 
         if (function_exists('store_url_config_clear')) {

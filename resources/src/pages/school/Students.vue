@@ -1,14 +1,14 @@
 <template>
   <div class="page">
-    <PageHeader title="Students" :breadcrumb="['School', 'Students']">
+    <PageHeader :title="$t('Sc_Students')" :breadcrumb="[$t('Sc_School'), $t('Sc_Students')]">
       <template #actions>
         <a-button @click="$router.push('/school/enrollments')">
           <template #icon><SwapOutlined /></template>
-          Enrolment
+          {{ $t('Sc_Enrolment') }}
         </a-button>
         <a-button v-if="canAdd" type="primary" @click="$router.push('/school/students/create')">
           <template #icon><UserAddOutlined /></template>
-          Admit student
+          {{ $t('Sc_Admit_Student') }}
         </a-button>
       </template>
     </PageHeader>
@@ -17,30 +17,30 @@
       <div class="toolbar">
         <a-input-search
           v-model:value="crud.search.value"
-          placeholder="Search name, admission no., guardian…"
+          :placeholder="$t('Sc_Search_Student_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.class_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All classes"
+          option-filter-prop="label" :placeholder="$t('Sc_All_Classes')"
           :options="classOptions" @change="onClassChange"
         />
         <a-select
           v-model:value="filters.section_id" class="tb-item-sm" allow-clear show-search
-          option-filter-prop="label" placeholder="Section"
+          option-filter-prop="label" :placeholder="$t('Sc_Section')"
           :options="sectionOptions" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item-sm" allow-clear
-          placeholder="Status" :options="STUDENT_STATUSES" @change="crud.reload"
+          :placeholder="$t('Status')" :options="STUDENT_STATUSES" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.gender" class="tb-item-sm" allow-clear
-          placeholder="Gender" :options="GENDERS" @change="crud.reload"
+          :placeholder="$t('Sc_Gender')" :options="GENDERS" @change="crud.reload"
         />
-        <a-tooltip title="Students with no class for the current year">
+        <a-tooltip :title="$t('Sc_Not_Placed_Hint')">
           <a-checkbox v-model:checked="filters.unassigned" class="tb-check" @change="crud.reload">
-            Not placed
+            {{ $t('Sc_Not_Placed') }}
           </a-checkbox>
         </a-tooltip>
       </div>
@@ -65,7 +65,7 @@
             <a-tag color="purple">{{ record.class_name }}</a-tag>
             <a-tag v-if="record.section_name">{{ record.section_name }}</a-tag>
           </template>
-          <a-tag v-else color="warning">Not placed</a-tag>
+          <a-tag v-else color="warning">{{ $t('Sc_Not_Placed') }}</a-tag>
         </template>
 
         <template v-else-if="column.key === 'age'">
@@ -89,7 +89,7 @@
 
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
-            <a-tooltip title="Open record">
+            <a-tooltip :title="$t('Sc_Open_Record')">
               <a-button type="text" size="small" @click="open(record)">
                 <template #icon><EyeOutlined /></template>
               </a-button>
@@ -128,7 +128,9 @@ import { useCrudTable } from '../../composables/useCrudTable';
 import { useAuthStore } from '../../stores/auth';
 import { GENDERS, STUDENT_STATUSES, labelOf, optionOf } from './schoolOptions';
 import http from '../../lib/http';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const auth = useAuthStore();
 const router = useRouter();
 
@@ -168,13 +170,13 @@ function onClassChange() {
 }
 
 const columns = computed(() => [
-  { title: 'Student', key: 'name', dataIndex: 'name', sorter: true },
-  { title: 'Class', key: 'class', width: 170 },
-  { title: 'Roll', dataIndex: 'roll_number', key: 'roll_number', width: 90 },
-  { title: 'Age', key: 'age', dataIndex: 'age', width: 80 },
-  { title: 'Gender', key: 'gender', dataIndex: 'gender', sorter: true, width: 110 },
-  { title: 'Guardian', key: 'guardian', width: 180 },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 130 },
+  { title: t('Sc_Student'), key: 'name', dataIndex: 'name', sorter: true },
+  { title: t('Sc_Class'), key: 'class', width: 170 },
+  { title: t('Sc_Roll'), dataIndex: 'roll_number', key: 'roll_number', width: 90 },
+  { title: t('Sc_Age'), key: 'age', dataIndex: 'age', width: 80 },
+  { title: t('Sc_Gender'), key: 'gender', dataIndex: 'gender', sorter: true, width: 110 },
+  { title: t('Sc_Guardian'), key: 'guardian', width: 180 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 130 },
   { title: '', key: 'actions', width: 120 },
 ]);
 

@@ -48,7 +48,8 @@
     <a-tabs>
       <a-tab-pane key="sales" :tab="$t('Sales')">
         <DataTable :crud="crud" :columns="columns" :row-key="(r, i) => `${r.sale_id}-${i}`">
-          <template #toolbar>
+          <!-- Product data: hidden for roles with disable_product_export -->
+          <template v-if="auth.canExportProducts" #toolbar>
             <a-button size="small" @click="print">
               <template #icon><PrinterOutlined /></template>
               {{ $t('print') }}
@@ -114,6 +115,7 @@ import { exportExcel, exportPdf, printRows } from '../../lib/exporters';
 import http from '../../lib/http';
 import DateRangePicker from '../../components/DateRangePicker.vue';
 import ViewCurrencySelect from '../../components/ViewCurrencySelect.vue';
+import { useAuthStore } from '../../stores/auth';
 
 // Imported rather than relying on the global registration for these two
 // nested sub-components.
@@ -122,6 +124,7 @@ const SummaryCell = Table.Summary.Cell;
 
 const { t } = useI18n();
 const { money } = useFormat();
+const auth = useAuthStore();
 const route = useRoute();
 const id = route.params.id;
 
@@ -192,9 +195,9 @@ const pageTotal = computed(() =>
 
 const title = computed(() => `${t('Reports')} / ${t('product_report')}`);
 
-function print() { printRows(title.value, columns.value, crud.rows.value); }
-function pdf() { exportPdf(title.value, columns.value, crud.rows.value); }
-function excel() { exportExcel('product_report', columns.value, crud.rows.value); }
+function print() { if (auth.canExportProducts) printRows(title.value, columns.value, crud.rows.value); }
+function pdf() { if (auth.canExportProducts) exportPdf(title.value, columns.value, crud.rows.value); }
+function excel() { if (auth.canExportProducts) exportExcel('product_report', columns.value, crud.rows.value); }
 
 onMounted(async () => {
   await reload();

@@ -14,6 +14,7 @@ use App\Models\User;
 use App\Models\UserWarehouse;
 use App\Models\Warehouse;
 use App\Services\BatchService;
+use App\Services\SerialNumberService;
 use App\utils\helpers;
 use ArPHP\I18N\Arabic;
 use Carbon\Carbon;
@@ -88,12 +89,25 @@ class AdjustmentController extends BaseController
             ->orderBy($order, $dir)
             ->get();
 
+        // What each log moved, so the list (and the delete confirmation) shows
+        // which upload is which and what deleting it would reverse.
+        $moves = AdjustmentDetail::whereIn('adjustment_id', $Adjustments->pluck('id'))
+            ->selectRaw("adjustment_id, COUNT(DISTINCT product_id) as products, SUM(CASE WHEN type = 'sub' THEN 0 ELSE quantity END) as qty_in, SUM(CASE WHEN type = 'sub' THEN quantity ELSE 0 END) as qty_out")
+            ->groupBy('adjustment_id')
+            ->get()
+            ->keyBy('adjustment_id');
+
         foreach ($Adjustments as $Adjustment) {
+            $move = $moves->get($Adjustment->id);
             $item['id'] = $Adjustment->id;
             $item['date'] = $Adjustment['date'].' '.$Adjustment['time'];
             $item['Ref'] = $Adjustment->Ref;
+            $item['notes'] = $Adjustment->notes;
             $item['warehouse_name'] = $Adjustment['warehouse']->name;
             $item['items'] = $Adjustment->items;
+            $item['products'] = $move ? (int) $move->products : 0;
+            $item['qty_in'] = $move ? (float) $move->qty_in : 0;
+            $item['qty_out'] = $move ? (float) $move->qty_out : 0;
             $data[] = $item;
         }
 
@@ -120,6 +134,9 @@ class AdjustmentController extends BaseController
     {
 
         $this->authorizeForUser($request->user('api'), 'create', Adjustment::class);
+
+        // Virtual combo stock: combos have no stock of their own to move.
+        app(\App\Services\ComboStockService::class)->assertNoVirtualCombos((array) $request->input('details', []));
 
         // define validation rules
         $productionRules = [
@@ -201,7 +218,7 @@ class AdjustmentController extends BaseController
                             ->where('warehouse_id', $order->warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte += $value['quantity'];
@@ -218,7 +235,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $order->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte += $value['quantity'];
@@ -235,7 +252,7 @@ class AdjustmentController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $order->warehouse_id)
                                     ->where('product_id', $combined_product->combined_product_id)
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse) {
                                     $product_warehouse->qte -= $qty_combined;
@@ -247,7 +264,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $order->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte += $value['quantity'];
@@ -263,7 +280,7 @@ class AdjustmentController extends BaseController
                             ->where('warehouse_id', $order->warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte -= $value['quantity'];
@@ -281,7 +298,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $order->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte -= $value['quantity'];
@@ -298,7 +315,7 @@ class AdjustmentController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $order->warehouse_id)
                                     ->where('product_id', $combined_product->combined_product_id)
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse) {
                                     $product_warehouse->qte += $qty_combined;
@@ -310,7 +327,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $order->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte -= $value['quantity'];
@@ -332,6 +349,12 @@ class AdjustmentController extends BaseController
                     $persistedDetails
                 );
             }
+
+            // Serial / IMEI: units found, written off, or moved into / out of kits.
+            app(SerialNumberService::class)->applyForAdjustment($order, array_values($data), array_values($persistedDetails));
+
+            // Accounting: book the stock gained or lost against Inventory.
+            \App\Services\AccountingV2\StockJournal::adjustment($order, created: true);
         }, 10);
 
         return response()->json(['success' => true]);
@@ -351,6 +374,9 @@ class AdjustmentController extends BaseController
     {
 
         $this->authorizeForUser($request->user('api'), 'update', Adjustment::class);
+
+        // Virtual combo stock: combos have no stock of their own to move.
+        app(\App\Services\ComboStockService::class)->assertNoVirtualCombos((array) $request->input('details', []));
         $user = Auth::user();
         // New way: Check user's record_view field (user-level boolean)
         // Backward compatibility: If record_view is null, fall back to role permission check
@@ -411,6 +437,31 @@ class AdjustmentController extends BaseController
                 $batchService->reverseForAdjustmentDetails($old_adjustment_details);
             }
 
+            // Serial / IMEI: only re-sync when the client sends serials (any line
+            // carries the key), so a form that doesn't collect them can't wipe
+            // the ones already recorded.
+            $serialService = app(SerialNumberService::class);
+            $serialsSent = collect($new_adjustment_details)
+                ->contains(fn ($row) => is_array($row) && array_key_exists('serial_numbers', $row));
+            if ($serialsSent) {
+                // Units re-submitted unchanged stay as they are (same ids).
+                $serialService->reverseForAdjustment(
+                    $current_adjustment,
+                    $serialService->adjustmentRowsToKeep($current_adjustment, $new_adjustment_details, (int) $request['warehouse_id'])
+                );
+            } else {
+                if ((int) $request['warehouse_id'] !== (int) $current_adjustment->warehouse_id
+                    && $serialService->adjustmentHasSerials($current_adjustment)) {
+                    throw \Illuminate\Validation\ValidationException::withMessages([
+                        'serial_numbers' => ['This adjustment moved serial-numbered units: pick them again to change its warehouse.'],
+                    ]);
+                }
+                // Lines removed from the document always give their units back.
+                $keptIds = collect($new_adjustment_details)->pluck('id')->filter()->map(fn ($v) => (int) $v)->all();
+                $serialService->reverseForAdjustment($current_adjustment, [], $old_adjustment_details
+                    ->pluck('id')->map(fn ($v) => (int) $v)->reject(fn ($v) => in_array($v, $keptIds, true))->values()->all());
+            }
+
             $old_products_id = [];
             // Init Data with old Parametre
             foreach ($old_adjustment_details as $key => $value) {
@@ -422,7 +473,7 @@ class AdjustmentController extends BaseController
                             ->where('warehouse_id', $current_adjustment->warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte -= $value['quantity'];
@@ -440,7 +491,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_adjustment->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte -= $value['quantity'];
@@ -457,7 +508,7 @@ class AdjustmentController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $current_adjustment->warehouse_id)
                                     ->where('product_id', $combined_product->combined_product_id)
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse) {
                                     $product_warehouse->qte += $qty_combined;
@@ -469,7 +520,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_adjustment->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte -= $value['quantity'];
@@ -485,7 +536,7 @@ class AdjustmentController extends BaseController
                             ->where('warehouse_id', $current_adjustment->warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte += $value['quantity'];
@@ -503,7 +554,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_adjustment->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte += $value['quantity'];
@@ -520,7 +571,7 @@ class AdjustmentController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $current_adjustment->warehouse_id)
                                     ->where('product_id', $combined_product->combined_product_id)
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse) {
                                     $product_warehouse->qte -= $qty_combined;
@@ -532,7 +583,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_adjustment->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte += $value['quantity'];
@@ -561,7 +612,7 @@ class AdjustmentController extends BaseController
                             ->where('warehouse_id', $request->warehouse_id)
                             ->where('product_id', $product_detail['product_id'])
                             ->where('product_variant_id', $product_detail['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte += $product_detail['quantity'];
@@ -579,7 +630,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $request->warehouse_id)
                                 ->where('product_id', $product_detail['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte += $product_detail['quantity'];
@@ -596,7 +647,7 @@ class AdjustmentController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $request->warehouse_id)
                                     ->where('product_id', $combined_product->combined_product_id)
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse) {
                                     $product_warehouse->qte -= $qty_combined;
@@ -608,7 +659,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $request->warehouse_id)
                                 ->where('product_id', $product_detail['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte += $product_detail['quantity'];
@@ -618,12 +669,13 @@ class AdjustmentController extends BaseController
                         }
                     }
                 } else {
-                    if ($value['product_variant_id'] !== null) {
+                    // The NEW line's variant (was the last old line's $value).
+                    if ($product_detail['product_variant_id'] !== null) {
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $request->warehouse_id)
                             ->where('product_id', $product_detail['product_id'])
                             ->where('product_variant_id', $product_detail['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte -= $product_detail['quantity'];
@@ -641,7 +693,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $request->warehouse_id)
                                 ->where('product_id', $product_detail['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte -= $product_detail['quantity'];
@@ -658,7 +710,7 @@ class AdjustmentController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $request->warehouse_id)
                                     ->where('product_id', $combined_product->combined_product_id)
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse) {
                                     $product_warehouse->qte += $qty_combined;
@@ -670,7 +722,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $request->warehouse_id)
                                 ->where('product_id', $product_detail['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte -= $product_detail['quantity'];
@@ -715,6 +767,19 @@ class AdjustmentController extends BaseController
                 );
             }
 
+            if ($serialsSent) {
+                $alignedInput = [];
+                $alignedPersisted = [];
+                foreach ($new_adjustment_details as $key => $product_detail) {
+                    if (isset($newPersistedDetails[$key])) {
+                        $alignedInput[] = $product_detail;
+                        $alignedPersisted[] = $newPersistedDetails[$key];
+                    }
+                }
+                $current_adjustment->warehouse_id = (int) $request['warehouse_id'];
+                $serialService->applyForAdjustment($current_adjustment, $alignedInput, $alignedPersisted);
+            }
+
             $current_adjustment->update([
                 'warehouse_id' => $request['warehouse_id'],
                 'notes' => $request['notes'],
@@ -722,6 +787,7 @@ class AdjustmentController extends BaseController
                 'items' => $length,
             ]);
 
+            \App\Services\AccountingV2\StockJournal::adjustment($current_adjustment);
         }, 10);
 
         return response()->json(['success' => true]);
@@ -780,6 +846,9 @@ class AdjustmentController extends BaseController
                 $batchService->reverseForAdjustmentDetails($old_adjustment_details);
             }
 
+            // Serial / IMEI: undo the units this adjustment moved.
+            app(SerialNumberService::class)->reverseForAdjustment($current_adjustment);
+
             // Init Data with old Parametre
             foreach ($old_adjustment_details as $key => $value) {
                 if ($value['type'] == 'add') {
@@ -789,7 +858,7 @@ class AdjustmentController extends BaseController
                             ->where('warehouse_id', $current_adjustment->warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte -= $value['quantity'];
@@ -807,7 +876,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_adjustment->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte -= $value['quantity'];
@@ -824,7 +893,7 @@ class AdjustmentController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $current_adjustment->warehouse_id)
                                     ->where('product_id', $combined_product->combined_product_id)
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse) {
                                     $product_warehouse->qte += $qty_combined;
@@ -836,7 +905,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_adjustment->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte -= $value['quantity'];
@@ -851,7 +920,7 @@ class AdjustmentController extends BaseController
                             ->where('warehouse_id', $current_adjustment->warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($product_warehouse) {
                             $product_warehouse->qte += $value['quantity'];
@@ -869,7 +938,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_adjustment->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte += $value['quantity'];
@@ -886,7 +955,7 @@ class AdjustmentController extends BaseController
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $current_adjustment->warehouse_id)
                                     ->where('product_id', $combined_product->combined_product_id)
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse) {
                                     $product_warehouse->qte -= $qty_combined;
@@ -898,7 +967,7 @@ class AdjustmentController extends BaseController
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_adjustment->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse) {
                                 $product_warehouse->qte += $value['quantity'];
@@ -915,6 +984,8 @@ class AdjustmentController extends BaseController
             $current_adjustment->update([
                 'deleted_at' => Carbon::now(),
             ]);
+
+            \App\Services\AccountingV2\StockJournal::adjustment($current_adjustment);
 
         }, 10);
 
@@ -971,10 +1042,12 @@ class AdjustmentController extends BaseController
             : null;
 
         $batchService = app(BatchService::class);
+        // include_empty=1: "add" adjustments may restock a batch that is at zero.
+        $includeEmpty = filter_var($request->query('include_empty', false), FILTER_VALIDATE_BOOLEAN);
 
         return response()->json([
             'supported' => $batchService->isSupported(),
-            'batches' => $batchService->availableBatchesForSale($productId, $variantId, $warehouseId),
+            'batches' => $batchService->availableBatchesForSale($productId, $variantId, $warehouseId, $includeEmpty),
         ]);
     }
 
@@ -993,7 +1066,11 @@ class AdjustmentController extends BaseController
             $warehouses = Warehouse::where('deleted_at', '=', null)->whereIn('id', $warehouses_id)->get(['id', 'name']);
         }
 
-        return response()->json(['warehouses' => $warehouses]);
+        return response()->json([
+            'warehouses' => $warehouses,
+            // Serial pickers on adjustment lines (needs the adjustment_detail_serials migration).
+            'serial_adjustments' => app(SerialNumberService::class)->adjustmentsSupported(),
+        ]);
     }
 
     // -------------Show Form Edit Adjustment-----------\\
@@ -1059,6 +1136,16 @@ class AdjustmentController extends BaseController
 
         $batchesByDetail = app(BatchService::class)->batchesForAdjustmentDetails($Adjustment_data['details']);
 
+        // Serial / IMEI: what each line tracks and the units it moved, so the
+        // form can reopen its pickers.
+        $serialService = app(SerialNumberService::class);
+        $serialComponentsByCombo = $serialService->comboSerialComponents(
+            collect($Adjustment_data['details'])->pluck('product_id')->all()
+        );
+        $serialGroupsByDetail = $serialService->serialGroupsByAdjustmentDetail(
+            collect($Adjustment_data['details'])->pluck('id')->all()
+        );
+
         $detail_id = 0;
         foreach ($Adjustment_data['details'] as $detail) {
 
@@ -1106,6 +1193,13 @@ class AdjustmentController extends BaseController
 
             $data['is_batch_tracked'] = (bool) ($detail['product']['is_batch_tracked'] ?? false);
             $data['batches'] = $batchesByDetail[(int) $detail->id] ?? [];
+            $groups = $serialGroupsByDetail[(int) $detail->id] ?? [];
+            $data['is_imei'] = (bool) $detail['product']['is_imei'];
+            $data['serial_components'] = $serialComponentsByCombo[(int) $detail->product_id] ?? [];
+            $data['serial_groups'] = (object) ($data['serial_components'] ? $groups : []);
+            $data['serial_numbers'] = $data['serial_components']
+                ? array_merge([], ...array_values($groups))
+                : ($groups[(int) $detail->product_id] ?? []);
 
             $details[] = $data;
         }
@@ -1123,6 +1217,7 @@ class AdjustmentController extends BaseController
             'details' => $details,
             'adjustment' => $adjustment,
             'warehouses' => $warehouses,
+            'serial_adjustments' => $serialService->adjustmentsSupported(),
         ]);
     }
 
@@ -1151,6 +1246,9 @@ class AdjustmentController extends BaseController
         }
 
         $batchesByDetail = app(BatchService::class)->batchesForAdjustmentDetails($Adjustment_data['details']);
+        $serialGroupsByDetail = app(SerialNumberService::class)->serialGroupsByAdjustmentDetail(
+            collect($Adjustment_data['details'])->pluck('id')->all()
+        );
 
         $createdBy = User::where('id', $Adjustment_data->user_id)->value('username');
 
@@ -1186,6 +1284,8 @@ class AdjustmentController extends BaseController
 
             $data['is_batch_tracked'] = (bool) ($detail['product']['is_batch_tracked'] ?? false);
             $data['batches'] = $batchesByDetail[(int) $detail->id] ?? [];
+            // Serial / IMEI units this line moved (a combo's: its components').
+            $data['serial_numbers'] = array_merge([], ...array_values($serialGroupsByDetail[(int) $detail->id] ?? []));
 
             $details[] = $data;
         }
@@ -1205,6 +1305,8 @@ class AdjustmentController extends BaseController
         $adjustment_data = Adjustment::with('details.product.unit')
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
+
+        $this->authorizeDocumentView($request, $adjustment_data);
 
         $batchesByDetail = app(BatchService::class)->batchesForAdjustmentDetails($adjustment_data['details']);
 
@@ -1261,6 +1363,8 @@ class AdjustmentController extends BaseController
         $Html = view('pdf.adjustment_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($adjustment_data->warehouse_id, $settings),
             'adjustment' => $adjustment,
             'details' => $details,
         ])->render();

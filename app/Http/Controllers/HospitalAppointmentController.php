@@ -83,7 +83,7 @@ class HospitalAppointmentController extends Controller
 
         $request->validate($this->rules());
 
-        if ($clash = $this->findClash($request)) {
+        if ($clash = $this->findClashFor($request)) {
             return response()->json([
                 'message' => 'This doctor already has an appointment at that time (' . $clash->reference . ').',
             ], 422);
@@ -111,7 +111,7 @@ class HospitalAppointmentController extends Controller
         $appointment = Appointment::whereNull('deleted_at')->findOrFail($id);
         $request->validate($this->rules());
 
-        if ($clash = $this->findClash($request, $appointment->id)) {
+        if ($clash = $this->findClashFor($request, $appointment->id)) {
             return response()->json([
                 'message' => 'This doctor already has an appointment at that time (' . $clash->reference . ').',
             ], 422);
@@ -130,6 +130,18 @@ class HospitalAppointmentController extends Controller
         $request->validate(['status' => 'required|in:scheduled,confirmed,arrived,completed,cancelled,no_show']);
 
         $appointment = Appointment::whereNull('deleted_at')->findOrFail($id);
+
+        // Re-activating a cancelled/no-show slot must not double-book the doctor.
+        $clash = $this->findClash(
+            $appointment->doctor_id, $appointment->scheduled_at, $appointment->duration_minutes,
+            $request->status, $appointment->id
+        );
+        if ($clash) {
+            return response()->json([
+                'message' => 'This doctor already has an appointment at that time (' . $clash->reference . ').',
+            ], 422);
+        }
+
         $appointment->update(['status' => $request->status]);
 
         return response()->json(['success' => true, 'status' => $appointment->status]);
@@ -198,23 +210,33 @@ class HospitalAppointmentController extends Controller
      * Overlap is [start, start+duration) on both sides, so back-to-back slots
      * are fine but a one-minute overlap is not.
      */
-    private function findClash(Request $request, $exceptId = null)
+    private function findClashFor(Request $request, $exceptId = null)
     {
-        $start = Carbon::parse($request->scheduled_at);
-        $end = $start->copy()->addMinutes((int) ($request->duration_minutes ?: 15));
+        return $this->findClash(
+            $request->doctor_id, $request->scheduled_at, $request->duration_minutes,
+            $request->status, $exceptId
+        );
+    }
+
+    private function findClash($doctorId, $scheduledAt, $duration, $status, $exceptId = null)
+    {
+        $start = Carbon::parse($scheduledAt);
+        $end = $start->copy()->addMinutes((int) ($duration ?: 15));
 
         // Cancelled / completed / no-show slots have released their time.
-        $status = $request->status ?: 'scheduled';
+        $status = $status ?: 'scheduled';
         if (! in_array($status, Appointment::blockingStatuses(), true)) {
             return null;
         }
 
         return Appointment::whereNull('deleted_at')
-            ->where('doctor_id', $request->doctor_id)
+            ->where('doctor_id', $doctorId)
             ->whereIn('status', Appointment::blockingStatuses())
             ->when($exceptId, fn ($q) => $q->where('id', '!=', $exceptId))
-            // Same day first so the scan uses the scheduled_at index.
-            ->whereDate('scheduled_at', $start->toDateString())
+            // Narrow on the scheduled_at index. The window reaches back by the
+            // longest allowed duration (480 min) so a late-evening slot running
+            // past midnight still clashes with an early next-day booking.
+            ->whereBetween('scheduled_at', [$start->copy()->subMinutes(480), $end])
             ->get()
             ->first(function ($other) use ($start, $end) {
                 $otherStart = Carbon::parse($other->scheduled_at);
@@ -237,7 +259,7 @@ class HospitalAppointmentController extends Controller
             'doctor_name' => $a->doctor ? $a->doctor->name : '',
             'department_id' => $a->department_id,
             'department_name' => $a->department ? $a->department->name : null,
-            'scheduled_at' => optional($a->scheduled_at)->toIso8601String(),
+            'scheduled_at' => optional($a->scheduled_at)->toDateTimeLocalString(),
             'duration_minutes' => (int) $a->duration_minutes,
             'type' => $a->type,
             'status' => $a->status,

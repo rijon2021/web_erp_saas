@@ -31,11 +31,53 @@ class OnlineOrder extends Model
         return in_array($to, self::TRANSITIONS[$from] ?? [], true);
     }
 
+    /** The order's payment_status for a Sale's payment_statut. */
+    public static function paymentStatusFromSale(?string $salePaymentStatut): string
+    {
+        return ['paid' => 'paid', 'partial' => 'partial'][$salePaymentStatut] ?? 'pending';
+    }
+
+    /**
+     * Restaurant module (phase 8): accepted, paid-online and cancelled orders
+     * reach / leave the kitchen display. Runs after the surrounding
+     * transaction commits so the sale and stock work is never undone by it.
+     */
+    protected static function booted(): void
+    {
+        static::updated(function (self $o) {
+            $statusChanged = $o->wasChanged('status');
+            $paidNow = $o->wasChanged('payment_status') && $o->payment_status === 'paid';
+            if (! $statusChanged && ! $paidNow) {
+                return;
+            }
+            // Printful: queue the order when its trigger (confirmed / paid) fires.
+            if ($statusChanged && $o->status === 'confirmed') {
+                \App\Services\Printful\OrderService::orderChanged($o, 'confirmed');
+            }
+            if ($paidNow) {
+                \App\Services\Printful\OrderService::orderChanged($o, 'paid');
+            }
+            if ($statusChanged && $o->status === 'cancelled') {
+                \App\Services\Printful\OrderService::orderCancelled($o);
+            }
+            \Illuminate\Support\Facades\DB::afterCommit(function () use ($o, $statusChanged, $paidNow) {
+                $kitchen = app(\App\Services\Restaurant\OnlineKitchenService::class);
+                if ($statusChanged && $o->status === 'cancelled') {
+                    $kitchen->cancelled($o);
+                } elseif ($statusChanged && $o->status === 'confirmed') {
+                    $kitchen->confirmed($o);
+                } elseif ($paidNow && $o->status === 'pending') {
+                    $kitchen->placed($o); // a card redirect finished paying
+                }
+            });
+        });
+    }
+
     protected $fillable = [
         'date', 'time', 'ref',
-        'client_id', 'warehouse_id',
+        'client_id', 'is_guest', 'guest_token', 'warehouse_id', 'sale_id',
         'total', 'subtotal', 'discount', 'coupon_code',
-        'shipping_method_id', 'shipping_method_name',
+        'shipping_method_id', 'shipping_method_name', 'shipping_quote',
         'delivery_method', 'pickup_branch_id',
         'tax', 'tax_rate', 'shipping_cost',
         'customer_name', 'customer_email', 'customer_phone',
@@ -56,14 +98,21 @@ class OnlineOrder extends Model
         'flutterwave_tx_ref', 'flutterwave_transaction_id',
         'status', 'delivered_at',
         'has_preorder_items',
+        // Why a paid order could not confirm itself (auto-confirm); NULL once confirmed
+        'auto_confirm_error',
         // Multi-Currency snapshot; NULL = base currency, rate 1
         'currency_id', 'exchange_rate',
     ];
 
+    /** The guest order-page secret is never serialized into responses. */
+    protected $hidden = ['guest_token'];
+
     protected $casts = [
         'date' => 'date',
         'client_id' => 'integer',
+        'is_guest' => 'boolean',
         'warehouse_id' => 'integer',
+        'sale_id' => 'integer',
         'total' => 'decimal:2',
         'subtotal' => 'decimal:2',
         'discount' => 'decimal:2',
@@ -71,6 +120,7 @@ class OnlineOrder extends Model
         'tax_rate' => 'decimal:3',
         'shipping_cost' => 'decimal:2',
         'shipping_method_id' => 'integer',
+        'shipping_quote' => 'array',
         'pickup_branch_id' => 'integer',
         'delivered_at' => 'datetime',
         'has_preorder_items' => 'boolean',

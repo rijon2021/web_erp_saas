@@ -2,14 +2,19 @@
 
 namespace App\Models;
 
+use App\Traits\HasShareToken;
 use Illuminate\Database\Eloquent\Model;
 
 class Sale extends Model
 {
+    use HasShareToken;
+
+    const SHARE_TYPE = 'sale';
+
     protected $dates = ['deleted_at'];
 
     protected $fillable = [
-        'date', 'Ref', 'is_pos', 'client_id', 'GrandTotal', 'qte_retturn', 'TaxNet', 'tax_rate', 'notes',
+        'date', 'Ref', 'order_reference', 'is_pos', 'client_id', 'GrandTotal', 'qte_retturn', 'TaxNet', 'tax_rate', 'notes',
         'total_retturn', 'warehouse_id', 'user_id', 'seller_id', 'statut', 'discount', 'discount_Method', 'shipping', 'time', 'used_points', 'earned_points', 'discount_from_points',
         'promotion_discount', 'promotion_code',
         'paid_amount', 'payment_statut', 'created_at', 'updated_at', 'deleted_at', 'shipping_status', 'subscription_id', 'sales_agent_id',
@@ -51,6 +56,36 @@ class Sale extends Model
         'currency_id' => 'integer',
         'exchange_rate' => 'float',
     ];
+
+    /**
+     * Payment status for an amount paid against a total. Compared at cents
+     * (both columns are decimal(15,2)): summed floats such as 100.10 + 200.20
+     * leave a tiny balance that would otherwise keep a settled sale "partial".
+     */
+    public static function paymentStatusFor($grandTotal, $paidAmount): string
+    {
+        $paid = round((float) $paidAmount, 2);
+
+        if (round((float) $grandTotal - $paid, 2) <= 0) {
+            return 'paid';
+        }
+
+        return $paid > 0 ? 'partial' : 'unpaid';
+    }
+
+    /**
+     * SQL for the order-level discount as a money amount. `discount` holds a
+     * percentage when discount_Method is '1' (applied to the sum of the line
+     * totals, as the sale form does), so it can never be summed as-is.
+     */
+    public static function discountAmountSql(string $table = 'sales'): string
+    {
+        return "(CASE WHEN {$table}.discount_Method = '1'
+            THEN ROUND(COALESCE({$table}.discount, 0) / 100 * (
+                SELECT COALESCE(SUM(sale_details.total), 0) FROM sale_details WHERE sale_details.sale_id = {$table}.id
+            ), 2)
+            ELSE COALESCE({$table}.discount, 0) END)";
+    }
 
     public function currency()
     {

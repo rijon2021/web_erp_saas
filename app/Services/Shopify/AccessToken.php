@@ -111,7 +111,7 @@ class AccessToken
             CURLOPT_HTTPHEADER => [
                 'Accept: application/json',
                 'Content-Type: application/x-www-form-urlencoded',
-                'User-Agent: Stocky-ERP-Shopify-Integration',
+                'User-Agent: POS-Shopify-Integration',
             ],
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT_MS => 20000,

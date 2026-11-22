@@ -93,6 +93,10 @@ class ServiceJobController extends BaseController
             ->when($request->filled('job_type'), function ($q) use ($request) {
                 $q->where('service_jobs.job_type', $request->job_type);
             })
+            // Booked by the customer in the client portal (numbered APPT_… by PortalAppointmentsController).
+            ->when($request->get('source') === 'portal', function ($q) {
+                $q->where('service_jobs.Ref', 'like', 'APPT\_%');
+            })
             ->when($request->filled('from'), function ($q) use ($request) {
                 $q->whereDate('service_jobs.scheduled_date', '>=', $request->from);
             })
@@ -160,7 +164,7 @@ class ServiceJobController extends BaseController
             ->orderBy('name')
             ->get(['id', 'name']);
 
-        $payment_methods = PaymentMethod::active()->where('deleted_at', '=', null)
+        $payment_methods = PaymentMethod::active()->exceptCustomerWallet()->where('deleted_at', '=', null)
             ->get(['id', 'name']);
 
         return response()->json([
@@ -972,10 +976,25 @@ class ServiceJobController extends BaseController
         $last = DB::table('service_jobs')->latest('id')->first();
 
         if ($last && $last->Ref) {
-            $item = $last->Ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = isset($nwMsg[1]) ? ($nwMsg[1] + 1) : 1112;
-            $code = 'SJ_'.$inMsg;
+            $item = (string) ($last->Ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $code = 'SJ_'.($nwMsg[1] + 1);
+            } else {
+                $code = 'SJ_1112';
+            }
         } else {
             $code = 'SJ_1111';
         }
@@ -1106,15 +1125,20 @@ class ServiceJobController extends BaseController
      */
     public function service_job_pdf(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', ServiceJob::class);
         $helpers = new helpers;
         $job = ServiceJob::with(['client', 'technician'])
             ->whereNull('deleted_at')
             ->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $job);
+
+        $jobSetting = Setting::whereNull('deleted_at')->first();
+
         return $this->renderPdf('pdf.service_job_pdf', [
             'symbol' => $helpers->Get_Currency_Code(),
-            'setting' => Setting::whereNull('deleted_at')->first(),
+            'setting' => $jobSetting,
+            // Branch letterhead: the warehouse the job was booked against.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($job->warehouse_id, $jobSetting),
             'job' => $this->buildPdfJobData($job),
         ], 'Service_Job_'.$job->id.'.pdf');
     }
@@ -1124,15 +1148,20 @@ class ServiceJobController extends BaseController
      */
     public function service_quote_pdf(Request $request, $id)
     {
-        $this->authorizeForUser($request->user('api'), 'view', ServiceJob::class);
         $helpers = new helpers;
         $job = ServiceJob::with(['client', 'technician'])
             ->whereNull('deleted_at')
             ->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $job);
+
+        $jobSetting = Setting::whereNull('deleted_at')->first();
+
         return $this->renderPdf('pdf.service_quote_pdf', [
             'symbol' => $helpers->Get_Currency_Code(),
-            'setting' => Setting::whereNull('deleted_at')->first(),
+            'setting' => $jobSetting,
+            // Branch letterhead: the warehouse the job was booked against.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($job->warehouse_id, $jobSetting),
             'job' => $this->buildPdfJobData($job),
         ], 'Service_Quote_'.$job->id.'.pdf');
     }

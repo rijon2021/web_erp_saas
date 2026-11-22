@@ -11,15 +11,21 @@
             <template #icon><FileExcelOutlined /></template>
             EXCEL
           </a-button>
+          <a-tooltip :title="$t('Export_Items_Help')">
+            <a-button :loading="exporting === 'lines'" @click="exportList('lines')">
+              <template #icon><FileExcelOutlined /></template>
+              {{ $t('Export_Items') }}
+            </a-button>
+          </a-tooltip>
         </a-space>
       </template>
     </PageHeader>
 
     <a-card size="small" style="margin-bottom: 16px">
       <a-row :gutter="[16, 8]">
-        <a-col :xs="12" :md="8" :xl="4">
+        <a-col :xs="24" :md="16" :xl="8">
           <div class="filter-label">{{ $t('date') }}</div>
-          <a-date-picker v-model:value="filters.date" value-format="YYYY-MM-DD" style="width: 100%" @change="crud.reload()" />
+          <DateRangePicker v-model:value="range" allow-clear style="width: 100%" @change="crud.reload()" />
         </a-col>
         <a-col :xs="12" :md="8" :xl="5">
           <div class="filter-label">{{ $t('Supplier') }}</div>
@@ -55,6 +61,16 @@
       </a-row>
     </a-card>
 
+    <!-- Totals for the whole filtered set, not just the page on screen. -->
+    <a-card v-if="summary" size="small" style="margin-bottom: 16px">
+      <a-row :gutter="[16, 12]">
+        <a-col v-for="s in summaryTiles" :key="s.label" :xs="12" :md="6">
+          <div class="filter-label">{{ s.label }}</div>
+          <div class="summary-value" :style="s.style">{{ s.value }}</div>
+        </a-col>
+      </a-row>
+    </a-card>
+
     <DataTable :crud="crud" :columns="columns" :selectable="auth.can('Purchase_Returns_delete')">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'date'">{{ dateTime(record.date) }}</template>
@@ -66,8 +82,10 @@
           <span v-else>—</span>
         </template>
         <template v-else-if="column.key === 'statut'">
-          <a-tag :color="record.statut === 'received' ? 'success' : 'processing'">
-            {{ record.statut === 'received' ? $t('Received') : $t('Pending') }}
+          <!-- Purchase returns are 'completed' | 'pending' (the form's options
+               and PurchasesReturnController), unlike sale returns' 'received'. -->
+          <a-tag :color="record.statut === 'completed' ? 'success' : 'processing'">
+            {{ record.statut === 'completed' ? $t('complete') : $t('Pending') }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'GrandTotal'">{{ money(record.GrandTotal) }}</template>
@@ -136,6 +154,7 @@
       :account-options="accountOptions"
       :saving="paySaving"
       :max-due="payMaxDue"
+      :wallet="walletInfo"
       @submit="submitPayment"
     />
   </div>
@@ -162,6 +181,7 @@ import {
 import dayjs from 'dayjs';
 import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
+import DateRangePicker from '../../components/DateRangePicker.vue';
 import ReturnPaymentsModal from '../../components/ReturnPaymentsModal.vue';
 import ReturnPaymentFormModal from '../../components/ReturnPaymentFormModal.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
@@ -169,6 +189,7 @@ import { useFormat } from '../../composables/useFormat';
 import { useAuthStore } from '../../stores/auth';
 import { payStatusColor } from '../../lib/statusColors';
 import { exportExcel, exportPdf } from '../../lib/exporters';
+import { exportDocumentLines } from '../../lib/documentLinesExport';
 import { PAYMENT_STATUSES, statusKey } from '../sales/saleVocab';
 import http from '../../lib/http';
 
@@ -178,13 +199,17 @@ const auth = useAuthStore();
 const router = useRouter();
 
 const filters = ref({
-  date: null, provider_id: undefined, purchase_id: undefined,
+  provider_id: undefined, purchase_id: undefined,
   warehouse_id: undefined, payment_statut: undefined,
 });
+// [start, end] dayjs pair; either bound may be empty and the backend then
+// leaves that side open.
+const range = ref(null);
 
 const filterParams = () => ({
   Ref: '',
-  date: filters.value.date || '',
+  ...(range.value?.[0] ? { from: range.value[0].format('YYYY-MM-DD') } : {}),
+  ...(range.value?.[1] ? { to: range.value[1].format('YYYY-MM-DD') } : {}),
   purchase_id: filters.value.purchase_id || '',
   provider_id: filters.value.provider_id || '',
   statut: '',
@@ -197,6 +222,20 @@ const crud = useCrudTable('returns/purchase', {
   params: filterParams,
 });
 crud.fetchRows();
+
+// Backend aggregates over the filtered set. Absent on an older backend, in
+// which case the tile row simply does not render.
+const summary = computed(() => crud.payload.value?.summary || null);
+const summaryTiles = computed(() => {
+  const s = summary.value;
+  if (!s) return [];
+  return [
+    { label: t('Returns'), value: s.count },
+    { label: t('Total'), value: money(s.total) },
+    { label: t('Paid'), value: money(s.paid) },
+    { label: t('Due'), value: money(s.due), style: Number(s.due) > 0 ? { color: '#ff4d4f' } : undefined },
+  ];
+});
 
 const supplierOptions = computed(() =>
   (crud.payload.value?.suppliers || []).map(s => ({ value: s.id, label: s.name }))
@@ -243,7 +282,8 @@ async function exportList(kind) {
       ...filterParams(),
     });
     const rows = data.purchase_returns || [];
-    if (kind === 'xlsx') await exportExcel('purchase_returns', columns.value, rows);
+    if (kind === 'lines') await exportDocumentLines('purchase_returns', rows, 'purchase_returns_items');
+    else if (kind === 'xlsx') await exportExcel('purchase_returns', columns.value, rows);
     else await exportPdf(t('PurchasesReturn'), columns.value, rows);
   } catch (e) {
     message.error(t('InvalidData'));
@@ -300,6 +340,20 @@ const payEditing = ref(null);
 const paySaving = ref(false);
 const payForm = ref({});
 
+// Supplier Wallet: GET supplier_wallets/{provider}/summary → { enabled,
+// balance, status }. Lets the payment form offer "credit to supplier wallet"
+// (the supplier settles the return as wallet credit instead of cash).
+const walletInfo = ref(null);
+async function loadWalletInfo(providerId) {
+  walletInfo.value = null;
+  if (!providerId) return;
+  try {
+    walletInfo.value = await http.get(`supplier_wallets/${providerId}/summary`);
+  } catch (e) {
+    walletInfo.value = null;
+  }
+}
+
 function openAddPayment(record) {
   if (record.payment_status === 'paid') {
     message.warning(t('PaymentComplete'));
@@ -313,7 +367,9 @@ function openAddPayment(record) {
     payment_method_id: 2,
     account_id: undefined,
     notes: '',
+    to_wallet: false,
   };
+  loadWalletInfo(record.provider_id);
   payFormOpen.value = true;
 }
 
@@ -323,10 +379,12 @@ function openEditPayment(payment) {
     date: payment.date,
     montant: Number(payment.montant) || 0,
     received_amount: +((Number(payment.montant) || 0) + (Number(payment.change) || 0)).toFixed(2),
-    payment_method_id: payment.payment_method_id,
+    payment_method_id: payment.payment_method_id || 2,
     account_id: payment.account_id || undefined,
     notes: payment.notes || '',
+    to_wallet: !!payment.wallet_transaction_id,
   };
+  loadWalletInfo(activeReturn.value?.provider_id);
   payFormOpen.value = true;
 }
 
@@ -343,11 +401,16 @@ async function submitPayment() {
   const f = payForm.value;
   // Same guards as the pre-migration admin (Verified_paidAmount / Submit_Payment).
   const montant = Number(f.montant) || 0;
-  if (montant <= 0 || !f.payment_method_id) {
+  // Wallet credit: no method/account/received amount; the supplier's wallet
+  // is credited with the whole amount instead of cash coming in.
+  // The switch is the truth (see Purchases.vue): an existing wallet credit
+  // stays a wallet credit unless the user turns the switch off.
+  const toWallet = !!f.to_wallet;
+  if (montant <= 0 || (!toWallet && !f.payment_method_id)) {
     message.warning(t('Please_fill_the_form_correctly'));
     return;
   }
-  if (montant > (Number(f.received_amount) || 0)) {
+  if (!toWallet && montant > (Number(f.received_amount) || 0)) {
     message.warning(t('Paying_amount_is_greater_than_Received_amount'));
     return;
   }
@@ -356,16 +419,17 @@ async function submitPayment() {
     return;
   }
   paySaving.value = true;
-  const change = Math.max(0, (Number(f.received_amount) || 0) - (Number(f.montant) || 0));
+  const change = toWallet ? 0 : Math.max(0, (Number(f.received_amount) || 0) - (Number(f.montant) || 0));
   const body = {
     purchase_return_id: activeReturn.value.id,
     date: f.date,
     montant: (Number(f.montant) || 0).toFixed(2),
-    received_amount: (Number(f.received_amount) || 0).toFixed(2),
+    received_amount: toWallet ? montant.toFixed(2) : (Number(f.received_amount) || 0).toFixed(2),
     change: change.toFixed(2),
-    payment_method_id: f.payment_method_id,
-    account_id: f.account_id || null,
+    payment_method_id: toWallet ? null : f.payment_method_id,
+    account_id: toWallet ? null : (f.account_id || null),
     notes: f.notes,
+    to_wallet: toWallet ? 1 : 0,
   };
   try {
     if (payEditing.value) {
@@ -391,5 +455,10 @@ async function submitPayment() {
   margin-bottom: 4px;
   color: rgba(var(--ink-rgb), 0.55);
   font-size: 13px;
+}
+.summary-value {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 </style>

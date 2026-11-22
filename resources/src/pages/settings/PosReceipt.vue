@@ -16,6 +16,12 @@
           </a-button>
         </template>
 
+        <a-alert
+          v-if="setting.enable_warehouse_letterhead"
+          type="info" show-icon style="margin-bottom: 16px"
+          :message="$t('Warehouse_Letterhead_Receipt_Notice')"
+        />
+
         <div style="display: flex; justify-content: center; margin-bottom: 20px">
           <a-segmented
             v-model:value="pos_settings.receipt_layout"
@@ -25,6 +31,7 @@
               { value: 3, label: $t('Layout_3_Detailed') },
               { value: 4, label: $t('Layout_4_Bilingual') },
               { value: 5, label: $t('Layout_5_Minimal') },
+              { value: 6, label: $t('Layout_6_Tabular') },
             ]"
           />
         </div>
@@ -37,18 +44,18 @@
                         <div v-if="currentReceiptLayout === 1" class="receipt-layout-1">
                           <div class="info text-center mb-2">
                             <div class="invoice_logo mb-1" v-show="pos_settings.show_logo !== 0">
-                              <div class="demo-logo-circle">LOGO</div>
+                              <div class="demo-logo-circle">{{ $t('Rcpt_Logo') }}</div>
                             </div>
                             <div v-show="pos_settings.show_store_name !== 0">Demo Store</div>
-                            <small v-show="pos_settings.show_reference !== 0">Ref: REF-12345</small><br v-show="pos_settings.show_reference !== 0">
+                            <small v-show="pos_settings.show_reference !== 0">{{ $t('Rcpt_Ref') }}: REF-12345</small><br v-show="pos_settings.show_reference !== 0">
                             <small v-show="pos_settings.show_address">123 Demo Street</small><br v-show="pos_settings.show_address">
                             <small v-show="pos_settings.show_phone">+123 456 789</small><br v-show="pos_settings.show_phone">
                             <small v-show="pos_settings.show_email">demo@example.com</small>
                             <div class="mt-2">
-                              <small v-show="pos_settings.show_date !== 0">Date: 2025-12-10 12:34</small><br>
-                              <small v-show="pos_settings.show_seller !== 0">Seller: John Doe</small><br>
-                              <small v-show="pos_settings.show_customer">Customer: Jane Smith</small><br>
-                              <small v-show="pos_settings.show_Warehouse">Warehouse: Main Store</small>
+                              <small v-show="pos_settings.show_date !== 0">{{ $t('Date') }}: 2025-12-10 12:34</small><br>
+                              <small v-show="pos_settings.show_seller !== 0">{{ $t('Seller') }}: John Doe</small><br>
+                              <small v-show="pos_settings.show_customer">{{ $t('Customer') }}: Jane Smith</small><br>
+                              <small v-show="pos_settings.show_Warehouse">{{ $t('Warehouse') }}: Main Store</small>
                             </div>
                           </div>
                           <table class="table_data w-100 mb-2" style="font-size:11px;">
@@ -58,7 +65,7 @@
                                   Demo Product A<br>
                                   <small>2 x 10.00</small>
                                   <br v-show="pos_settings.show_product_discount !== 0">
-                                  <small v-show="pos_settings.show_product_discount !== 0" style="color: rgba(var(--ink-rgb), 0.45);font-style:italic;">Discount: -2.00</small>
+                                  <small v-show="pos_settings.show_product_discount !== 0" style="color: rgba(var(--ink-rgb), 0.45);font-style:italic;">{{ $t('Discount') }}: -2.00</small>
                                 </td>
                                 <td style="text-align:right;">20.00</td>
                               </tr>
@@ -74,15 +81,15 @@
                           <table class="table_data w-100" style="font-size:11px;">
                             <tbody>
                               <tr>
-                                <td class="total">Total</td>
+                                <td class="total">{{ $t('Total') }}</td>
                                 <td style="text-align:right;" class="total">25.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_paid !== 0">
-                                <td class="total">Paid</td>
+                                <td class="total">{{ $t('Paid') }}</td>
                                 <td style="text-align:right;" class="total">20.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_due !== 0">
-                                <td class="total">Due</td>
+                                <td class="total">{{ $t('Due') }}</td>
                                 <td style="text-align:right;" class="total">5.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_previous_dues !== 0">
@@ -102,9 +109,9 @@
                           >
                             <thead>
                               <tr>
-                                <th style="text-align:left;">Pay By</th>
-                                <th style="text-align:right;">Amount</th>
-                                <th style="text-align:right;">Change</th>
+                                <th style="text-align:left;">{{ $t('PayeBy') }}</th>
+                                <th style="text-align:right;">{{ $t('Amount') }}</th>
+                                <th style="text-align:right;">{{ $t('Change') }}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -116,7 +123,10 @@
                             </tbody>
                           </table>
                           <p class="mt-2 mb-0 text-center" v-show="pos_settings.show_note" style="white-space:pre-line;">
-                            <small><strong>{{ pos_settings.note_customer || 'Thank you for your purchase!' }}</strong></small>
+                            <small><strong>{{ pos_settings.note_customer || $t('Thank_you_for_your_purchase') }}</strong></small>
+                          </p>
+                          <p v-if="setting.enable_warehouse_letterhead" class="mt-1 mb-0 text-center receipt-branch-note" style="white-space:pre-line;">
+                            <small>{{ branchNoteDemo }}</small>
                           </p>
                           <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
                             <div class="zatca-qr">
@@ -141,27 +151,27 @@
                         <div v-else-if="currentReceiptLayout === 2" class="receipt-layout-2">
                           <div class="info text-center mb-2">
                             <div class="demo-logo-circle small mb-1" v-show="pos_settings.show_logo !== 0">
-                              LOGO
+                              {{ $t('Rcpt_Logo') }}
                             </div>
                             <div v-show="pos_settings.show_store_name !== 0">Demo Store</div>
-                            <small v-show="pos_settings.show_reference !== 0">Ref: REF-12345</small><br v-show="pos_settings.show_reference !== 0">
+                            <small v-show="pos_settings.show_reference !== 0">{{ $t('Rcpt_Ref') }}: REF-12345</small><br v-show="pos_settings.show_reference !== 0">
                             <small v-show="pos_settings.show_address">123 Demo Street</small><br v-show="pos_settings.show_address">
                             <small v-show="pos_settings.show_phone">+123 456 789</small><br v-show="pos_settings.show_phone">
                             <small v-show="pos_settings.show_email">demo@example.com</small>
                             <div class="mt-1">
-                              <small v-show="pos_settings.show_date !== 0">Date: 2025-12-10 12:34</small><br>
-                              <small v-show="pos_settings.show_seller !== 0">Seller: John Doe</small><br>
-                              <small v-show="pos_settings.show_customer">Customer: Jane Smith</small><br>
-                              <small v-show="pos_settings.show_Warehouse">Warehouse: Main Store</small>
+                              <small v-show="pos_settings.show_date !== 0">{{ $t('Date') }}: 2025-12-10 12:34</small><br>
+                              <small v-show="pos_settings.show_seller !== 0">{{ $t('Seller') }}: John Doe</small><br>
+                              <small v-show="pos_settings.show_customer">{{ $t('Customer') }}: Jane Smith</small><br>
+                              <small v-show="pos_settings.show_Warehouse">{{ $t('Warehouse') }}: Main Store</small>
                             </div>
                           </div>
                           <table class="table_data w-100 mb-2" style="font-size:11px;">
                             <thead>
                               <tr>
-                                <th style="text-align:left;">Item</th>
-                                <th style="text-align:center;">Qty</th>
-                                <th style="text-align:right;">Price</th>
-                                <th style="text-align:right;">Total</th>
+                                <th style="text-align:left;">{{ $t('Rcpt_Item') }}</th>
+                                <th style="text-align:center;">{{ $t('Qty') }}</th>
+                                <th style="text-align:right;">{{ $t('Price') }}</th>
+                                <th style="text-align:right;">{{ $t('Total') }}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -172,7 +182,7 @@
                                 <td style="text-align:right;">20.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_product_discount !== 0">
-                                <td colspan="4" style="color: rgba(var(--ink-rgb), 0.45);font-style:italic;font-size:10px;padding-left:8px;">Discount: -2.00</td>
+                                <td colspan="4" style="color: rgba(var(--ink-rgb), 0.45);font-style:italic;font-size:10px;padding-left:8px;">{{ $t('Discount') }}: -2.00</td>
                               </tr>
                               <tr>
                                 <td>Demo B</td>
@@ -185,27 +195,27 @@
                           <table class="table_data w-100" style="font-size:11px;">
                             <tbody>
                               <tr v-show="pos_settings.show_tax">
-                                <td class="total">Tax</td>
+                                <td class="total">{{ $t('Rcpt_Tax') }}</td>
                                 <td style="text-align:right;" class="total">1.25</td>
                               </tr>
                               <tr v-show="pos_settings.show_discount">
-                                <td class="total">Discount</td>
+                                <td class="total">{{ $t('Discount') }}</td>
                                 <td style="text-align:right;" class="total">0.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_shipping">
-                                <td class="total">Shipping</td>
+                                <td class="total">{{ $t('Shipping') }}</td>
                                 <td style="text-align:right;" class="total">1.25</td>
                               </tr>
                               <tr>
-                                <td class="total">Total</td>
+                                <td class="total">{{ $t('Total') }}</td>
                                 <td style="text-align:right;" class="total">25.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_paid !== 0">
-                                <td class="total">Paid</td>
+                                <td class="total">{{ $t('Paid') }}</td>
                                 <td style="text-align:right;" class="total">20.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_due !== 0">
-                                <td class="total">Due</td>
+                                <td class="total">{{ $t('Due') }}</td>
                                 <td style="text-align:right;" class="total">5.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_previous_dues !== 0">
@@ -225,9 +235,9 @@
                           >
                             <thead>
                               <tr>
-                                <th style="text-align:left;">Pay By</th>
-                                <th style="text-align:right;">Amount</th>
-                                <th style="text-align:right;">Change</th>
+                                <th style="text-align:left;">{{ $t('PayeBy') }}</th>
+                                <th style="text-align:right;">{{ $t('Amount') }}</th>
+                                <th style="text-align:right;">{{ $t('Change') }}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -239,7 +249,10 @@
                             </tbody>
                           </table>
                           <p class="mt-2 mb-0 text-center" v-show="pos_settings.show_note" style="white-space:pre-line;">
-                            <small><strong>{{ pos_settings.note_customer || 'Thank you for your purchase!' }}</strong></small>
+                            <small><strong>{{ pos_settings.note_customer || $t('Thank_you_for_your_purchase') }}</strong></small>
+                          </p>
+                          <p v-if="setting.enable_warehouse_letterhead" class="mt-1 mb-0 text-center receipt-branch-note" style="white-space:pre-line;">
+                            <small>{{ branchNoteDemo }}</small>
                           </p>
                           <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
                             <div class="zatca-qr">
@@ -266,17 +279,17 @@
                             <div class="d-flex justify-content-between">
                               <div>
                                 <strong v-show="pos_settings.show_store_name !== 0">Demo Store</strong><br>
-                                <small v-show="pos_settings.show_reference !== 0">Ref: REF-12345</small><br v-show="pos_settings.show_reference !== 0">
+                                <small v-show="pos_settings.show_reference !== 0">{{ $t('Rcpt_Ref') }}: REF-12345</small><br v-show="pos_settings.show_reference !== 0">
                                 <small v-show="pos_settings.show_address">123 Demo Street</small><br>
                                 <small v-show="pos_settings.show_phone">+123 456 789</small>
                               </div>
-                              <div class="demo-logo-rect" v-show="pos_settings.show_logo !== 0">LOGO</div>
+                              <div class="demo-logo-rect" v-show="pos_settings.show_logo !== 0">{{ $t('Rcpt_Logo') }}</div>
                             </div>
                             <div class="mt-2" style="font-size:11px;">
-                              <div v-show="pos_settings.show_date !== 0">Date: 2025-12-10 12:34</div>
-                              <div v-show="pos_settings.show_seller !== 0">Seller: John Doe</div>
-                              <div v-show="pos_settings.show_customer">Customer: Jane Smith</div>
-                              <div v-show="pos_settings.show_Warehouse">Warehouse: Main Store</div>
+                              <div v-show="pos_settings.show_date !== 0">{{ $t('Date') }}: 2025-12-10 12:34</div>
+                              <div v-show="pos_settings.show_seller !== 0">{{ $t('Seller') }}: John Doe</div>
+                              <div v-show="pos_settings.show_customer">{{ $t('Customer') }}: Jane Smith</div>
+                              <div v-show="pos_settings.show_Warehouse">{{ $t('Warehouse') }}: Main Store</div>
                             </div>
                           </div>
                           <table class="table_data w-100 mb-2" style="font-size:11px;">
@@ -286,7 +299,7 @@
                                   <strong>Demo Product A</strong><br>
                                   <small>2 x 10.00</small>
                                   <br v-show="pos_settings.show_product_discount !== 0">
-                                  <small v-show="pos_settings.show_product_discount !== 0" style="color: rgba(var(--ink-rgb), 0.45);font-style:italic;">Discount: -2.00</small>
+                                  <small v-show="pos_settings.show_product_discount !== 0" style="color: rgba(var(--ink-rgb), 0.45);font-style:italic;">{{ $t('Discount') }}: -2.00</small>
                                 </td>
                                 <td style="text-align:right;">20.00</td>
                               </tr>
@@ -302,27 +315,27 @@
                           <table class="table_data w-100" style="font-size:11px;">
                             <tbody>
                               <tr v-show="pos_settings.show_tax">
-                                <td class="total">Tax</td>
+                                <td class="total">{{ $t('Rcpt_Tax') }}</td>
                                 <td style="text-align:right;" class="total">1.25</td>
                               </tr>
                               <tr v-show="pos_settings.show_discount">
-                                <td class="total">Discount</td>
+                                <td class="total">{{ $t('Discount') }}</td>
                                 <td style="text-align:right;" class="total">0.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_shipping">
-                                <td class="total">Shipping</td>
+                                <td class="total">{{ $t('Shipping') }}</td>
                                 <td style="text-align:right;" class="total">1.25</td>
                               </tr>
                               <tr>
-                                <td class="total">Total</td>
+                                <td class="total">{{ $t('Total') }}</td>
                                 <td style="text-align:right;" class="total">26.25</td>
                               </tr>
                               <tr v-show="pos_settings.show_paid !== 0">
-                                <td class="total">Paid</td>
+                                <td class="total">{{ $t('Paid') }}</td>
                                 <td style="text-align:right;" class="total">25.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_due !== 0">
-                                <td class="total">Due</td>
+                                <td class="total">{{ $t('Due') }}</td>
                                 <td style="text-align:right;" class="total">1.25</td>
                               </tr>
                               <tr v-show="pos_settings.show_previous_dues !== 0">
@@ -342,9 +355,9 @@
                           >
                             <thead>
                               <tr>
-                                <th style="text-align:left;">Pay By</th>
-                                <th style="text-align:right;">Amount</th>
-                                <th style="text-align:right;">Change</th>
+                                <th style="text-align:left;">{{ $t('PayeBy') }}</th>
+                                <th style="text-align:right;">{{ $t('Amount') }}</th>
+                                <th style="text-align:right;">{{ $t('Change') }}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -356,7 +369,10 @@
                             </tbody>
                           </table>
                           <p class="mt-2 mb-0 text-center" v-show="pos_settings.show_note" style="white-space:pre-line;">
-                            <small><strong>{{ pos_settings.note_customer || 'Thank you for your purchase!' }}</strong></small>
+                            <small><strong>{{ pos_settings.note_customer || $t('Thank_you_for_your_purchase') }}</strong></small>
+                          </p>
+                          <p v-if="setting.enable_warehouse_letterhead" class="mt-1 mb-0 text-center receipt-branch-note" style="white-space:pre-line;">
+                            <small>{{ branchNoteDemo }}</small>
                           </p>
                           <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
                             <div class="zatca-qr">
@@ -381,7 +397,7 @@
                         <div v-else-if="currentReceiptLayout === 4" class="receipt-layout-4">
                           <div class="info text-center bl4-header">
                             <div class="invoice_logo mb-1" v-show="pos_settings.show_logo !== 0">
-                              <div class="demo-logo-circle">LOGO</div>
+                              <div class="demo-logo-circle">{{ $t('Rcpt_Logo') }}</div>
                             </div>
                             <div class="bl4-company-ar">متجر تجريبي</div>
                             <div class="bl4-company-en">Demo Store</div>
@@ -532,7 +548,8 @@
                               <div class="bl4-thanks-ar">شكراً لتسوقكم معنا</div>
                               <div class="bl4-thanks-en">Thank You For Shopping With Us!</div>
                             </div>
-                            <div v-show="pos_settings.show_note" class="bl4-policy">{{ pos_settings.note_customer || 'Thank you for your purchase!' }}</div>
+                            <div v-show="pos_settings.show_note" class="bl4-policy">{{ pos_settings.note_customer || $t('Thank_you_for_your_purchase') }}</div>
+                            <div v-if="setting.enable_warehouse_letterhead" class="bl4-policy receipt-branch-note">{{ branchNoteDemo }}</div>
                             <div class="bl4-footer-contact">+123 456 789 &middot; demo@example.com</div>
                           </div>
                           <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
@@ -554,10 +571,10 @@
                         </div>
 
                         <!-- Layout 5 demo (Minimal) -->
-                        <div v-else class="receipt-layout-5">
+                        <div v-else-if="currentReceiptLayout === 5" class="receipt-layout-5">
                           <div class="info text-center mb-3">
                             <div class="invoice_logo mb-2" v-show="pos_settings.show_logo !== 0">
-                              <div class="demo-logo-circle small">LOGO</div>
+                              <div class="demo-logo-circle small">{{ $t('Rcpt_Logo') }}</div>
                             </div>
                             <div class="minimal-store-name" v-show="pos_settings.show_store_name !== 0">DEMO STORE</div>
                             <div class="minimal-contact" v-show="pos_settings.show_address || pos_settings.show_phone">
@@ -572,19 +589,19 @@
 
                           <div class="minimal-meta">
                             <div v-show="pos_settings.show_reference !== 0" class="minimal-meta-row">
-                              <span>Ref</span><span>REF-12345</span>
+                              <span>{{ $t('Rcpt_Ref') }}</span><span>REF-12345</span>
                             </div>
                             <div v-show="pos_settings.show_date !== 0" class="minimal-meta-row">
-                              <span>Date</span><span>2025-12-10 12:34</span>
+                              <span>{{ $t('Date') }}</span><span>2025-12-10 12:34</span>
                             </div>
                             <div v-show="pos_settings.show_seller !== 0" class="minimal-meta-row">
-                              <span>Seller</span><span>John Doe</span>
+                              <span>{{ $t('Seller') }}</span><span>John Doe</span>
                             </div>
                             <div v-show="pos_settings.show_customer" class="minimal-meta-row">
-                              <span>Customer</span><span>Jane Smith</span>
+                              <span>{{ $t('Customer') }}</span><span>Jane Smith</span>
                             </div>
                             <div v-show="pos_settings.show_Warehouse" class="minimal-meta-row">
-                              <span>Warehouse</span><span>Main Store</span>
+                              <span>{{ $t('Warehouse') }}</span><span>Main Store</span>
                             </div>
                           </div>
 
@@ -596,7 +613,7 @@
                                 <td>
                                   <div class="minimal-item-name">Demo Product A</div>
                                   <div class="minimal-item-qty">2 &times; 10.00</div>
-                                  <div class="minimal-item-discount" v-show="pos_settings.show_product_discount !== 0">Discount &minus;2.00</div>
+                                  <div class="minimal-item-discount" v-show="pos_settings.show_product_discount !== 0">{{ $t('Discount') }} &minus;2.00</div>
                                 </td>
                                 <td class="minimal-item-total">20.00</td>
                               </tr>
@@ -615,27 +632,27 @@
                           <table class="minimal-totals">
                             <tbody>
                               <tr v-show="pos_settings.show_tax">
-                                <td>Tax</td>
+                                <td>{{ $t('Rcpt_Tax') }}</td>
                                 <td>1.25</td>
                               </tr>
                               <tr v-show="pos_settings.show_discount">
-                                <td>Discount</td>
+                                <td>{{ $t('Discount') }}</td>
                                 <td>0.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_shipping">
-                                <td>Shipping</td>
+                                <td>{{ $t('Shipping') }}</td>
                                 <td>1.25</td>
                               </tr>
                               <tr class="minimal-grand">
-                                <td>Total</td>
+                                <td>{{ $t('Total') }}</td>
                                 <td>25.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_paid !== 0">
-                                <td>Paid</td>
+                                <td>{{ $t('Paid') }}</td>
                                 <td>20.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_due !== 0">
-                                <td>Due</td>
+                                <td>{{ $t('Due') }}</td>
                                 <td>5.00</td>
                               </tr>
                               <tr v-show="pos_settings.show_previous_dues !== 0">
@@ -652,9 +669,9 @@
                           <table class="minimal-payments" v-show="pos_settings.show_payments !== 0">
                             <thead>
                               <tr>
-                                <th>Pay By</th>
-                                <th>Amount</th>
-                                <th>Change</th>
+                                <th>{{ $t('PayeBy') }}</th>
+                                <th>{{ $t('Amount') }}</th>
+                                <th>{{ $t('Change') }}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -667,7 +684,11 @@
                           </table>
 
                           <p class="minimal-note" v-show="pos_settings.show_note" style="white-space:pre-line;">
-                            {{ pos_settings.note_customer || 'Thank you for your purchase!' }}
+                            {{ pos_settings.note_customer || $t('Thank_you_for_your_purchase') }}
+                          </p>
+
+                          <p v-if="setting.enable_warehouse_letterhead" class="minimal-note receipt-branch-note" style="white-space:pre-line;">
+                            {{ branchNoteDemo }}
                           </p>
 
                           <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
@@ -687,6 +708,95 @@
                               width="1"
                              />
                           </div>
+                        </div>
+
+                        <!-- Layout 6 demo (Tabular) — mirrors PosPage.vue / lib/posReceiptHtml.js -->
+                        <div v-else-if="currentReceiptLayout === 6" class="receipt-layout-6">
+                          <div class="r6-head">
+                            <div class="r6-logo" v-if="pos_settings.show_logo !== 0"><div class="demo-logo-rect">{{ $t('Rcpt_Logo') }}</div></div>
+                            <div class="r6-store" v-if="pos_settings.show_store_name !== 0">Demo Store</div>
+                            <div class="r6-contact">
+                              <div v-if="pos_settings.show_address">123 Demo Street</div>
+                              <div v-if="pos_settings.show_phone">+123 456 789</div>
+                              <div v-if="pos_settings.show_email">store@example.com</div>
+                            </div>
+                          </div>
+                          <div class="r6-title">{{ $t('Rcpt_Cash_Credit_Invoice') }}</div>
+                          <table class="r6-meta">
+                            <tbody>
+                              <tr v-if="pos_settings.show_reference !== 0"><td>{{ $t('Rcpt_Invoice_No') }}:</td><td>INV-12345</td></tr>
+                              <tr v-if="pos_settings.show_date !== 0"><td>{{ $t('Rcpt_Date_Time') }}:</td><td>2025-12-10 12:34</td></tr>
+                              <tr v-if="pos_settings.show_Warehouse"><td>{{ $t('Rcpt_Outlet') }}:</td><td>Main Store</td></tr>
+                              <tr v-if="pos_settings.show_seller !== 0"><td>{{ $t('Cashier') }}:</td><td>John Doe</td></tr>
+                              <tr v-if="pos_settings.show_customer"><td>{{ $t('Customer') }}:</td><td>Jane Smith</td></tr>
+                            </tbody>
+                          </table>
+                          <table class="r6-items">
+                            <thead>
+                              <tr>
+                                <th class="r6-desc">{{ $t('Description') }}</th>
+                                <th class="r6-c-qty">{{ $t('Qty') }}</th>
+                                <th class="r6-c-rate">{{ $t('Rate') }} $</th>
+                                <th class="r6-c-tot">{{ $t('Total') }} $</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr>
+                                <td class="r6-desc">
+                                  <div>Demo Product A</div>
+                                  <div class="r6-sub" style="font-style:italic;" v-if="pos_settings.show_product_discount !== 0">{{ $t('Discount') }}: -2.00</div>
+                                </td>
+                                <td class="r6-c-qty">2</td>
+                                <td class="r6-c-rate">10.00</td>
+                                <td class="r6-c-tot">20.00</td>
+                              </tr>
+                              <tr>
+                                <td class="r6-desc"><div>Demo Product B</div></td>
+                                <td class="r6-c-qty">1</td>
+                                <td class="r6-c-rate">5.00</td>
+                                <td class="r6-c-tot">5.00</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          <table class="r6-totals">
+                            <tbody>
+                              <tr><td>{{ $t('Total_Items') }}</td><td>3</td></tr>
+                              <tr><td>{{ $t('Subtotal') }}</td><td>$ 25.00</td></tr>
+                              <tr v-if="pos_settings.show_tax"><td>{{ $t('Rcpt_Tax') }}</td><td>$ 1.25</td></tr>
+                              <tr v-if="pos_settings.show_discount"><td>{{ $t('Discount') }}</td><td>$ 0.00</td></tr>
+                              <tr v-if="pos_settings.show_shipping"><td>{{ $t('Shipping') }}</td><td>$ 1.25</td></tr>
+                              <tr class="r6-grand"><td>{{ $t('Total') }}</td><td>$ 27.50</td></tr>
+                              <tr class="r6-gap" v-if="pos_settings.show_paid !== 0"><td>{{ $t('Amount_Paid') }}</td><td>$ 27.50</td></tr>
+                              <tr v-if="pos_settings.show_due !== 0"><td>{{ $t('Balance') }}</td><td>$ 0.00</td></tr>
+                            </tbody>
+                          </table>
+                          <div class="r6-pay" v-if="pos_settings.show_payments !== 0">
+                            <div class="r6-pay-title">{{ $t('Payment') }}:</div>
+                            <div>Cash — 30.00 ({{ $t('Change') }}: 2.50)</div>
+                          </div>
+                          <table class="r6-sigs" v-if="pos_settings.show_signature_line">
+                            <tbody><tr><td>{{ $t('Customer_Signature') }}</td><td>{{ $t('Rcpt_Management') }}</td></tr></tbody>
+                          </table>
+                          <div class="r6-barcode" v-if="pos_settings.show_barcode !== 0 && demoRefBarcode">
+                            <div v-html="demoRefBarcode"></div>
+                            <div class="r6-ref">INV-12345</div>
+                          </div>
+                          <div id="legalcopy" class="r6-legal">
+                            <p class="legal" v-show="pos_settings.show_note" style="white-space:pre-line;"><strong>{{ pos_settings.note_customer }}</strong></p>
+                            <p v-if="setting.enable_warehouse_letterhead" class="legal receipt-branch-note" style="white-space:pre-line;">{{ branchNoteDemo }}</p>
+                            <div class="mt-2 text-center" v-show="pos_settings.show_zatca_qr !== 0">
+                              <div class="zatca-qr">
+                                <div class="zatca-qr-title">ZATCA</div>
+                                <div class="demo-qr-box"></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <!-- Show Signature Line: printed under every layout -->
+                        <div v-if="pos_settings.show_signature_line && currentReceiptLayout !== 6" class="receipt-signature">
+                          <div class="receipt-signature-line"></div>
+                          <div class="receipt-signature-label">{{ $t('Customer_Signature') }}</div>
                         </div>
                       </div>
       </a-card>
@@ -805,15 +915,26 @@ import { useI18n } from 'vue-i18n';
 import { PrinterOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import BarcodeSvg from '../../components/BarcodeSvg.vue';
+import { refBarcodeSvg } from '../../lib/receiptBarcode';
 import http from '../../lib/http';
-import { receiptFontHeadTags, whenPrintFontsReady } from '../../lib/receiptFont';
+import { receiptFontHeadTags, receiptPageHeadTag, whenPrintReady } from '../../lib/receiptFont';
 
 const { t } = useI18n();
 
 const isLoading = ref(true);
 const logoSizeType = ref('medium');
 const noteTouched = ref(false);
-const setting = ref({ vat_number: '' });
+const setting = ref({ vat_number: '', enable_warehouse_letterhead: false });
+
+/**
+ * Warehouse Letterhead preview. The real receipt prints the issuing warehouse's
+ * own name/address/phone and its invoice footer note; the demo receipts below
+ * stand in for it with sample text so the admin can see where it lands. Shown
+ * only while the module is on (System Settings -> Features).
+ */
+const branchNoteDemo = computed(() => t('Warehouse_Letterhead_Receipt_Demo'));
+// Layout 6 demo: CODE128 barcode of a sample invoice ref.
+const demoRefBarcode = refBarcodeSvg('INV-12345');
 
 const pos_settings = ref({
   note_customer: '',
@@ -847,6 +968,7 @@ const pos_settings = ref({
   show_net_balance: '',
   show_payments: '',
   show_zatca_qr: '',
+  show_signature_line: 0,
   cash_drawer_auto_open: false,
   cash_drawer_printer_name: '',
 });
@@ -877,11 +999,12 @@ const toggles = [
   { field: 'show_net_balance', label: 'Show_Net_Balance_Line', desc: 'Show_Net_Balance_Line_Desc' },
   { field: 'show_payments', label: 'Show_Payments_Table' },
   { field: 'show_zatca_qr', label: 'Show_ZATCA_QR' },
+  { field: 'show_signature_line', label: 'Show_Signature_Line', desc: 'Show_Signature_Line_Desc' },
 ];
 
 const currentReceiptLayout = computed(() => {
   const n = Number(pos_settings.value.receipt_layout) || 1;
-  return [1, 2, 3, 4, 5].includes(n) ? n : 1;
+  return [1, 2, 3, 4, 5, 6].includes(n) ? n : 1;
 });
 
 // Curated print-safe font stacks, including every font the legacy app used:
@@ -961,6 +1084,7 @@ async function submit() {
       show_net_balance: s.show_net_balance,
       show_payments: s.show_payments,
       show_zatca_qr: s.show_zatca_qr,
+      show_signature_line: s.show_signature_line ? 1 : 0,
       receipt_layout: s.receipt_layout,
       receipt_font_family: s.receipt_font_family || '',
       receipt_font_size: s.receipt_font_size,
@@ -979,6 +1103,7 @@ function printPosDemo() {
     const w = window.open('', '', 'height=600,width=400');
     w.document.write('<html><head>');
     w.document.write('<link rel="stylesheet" href="/css/pos_print.css">');
+    w.document.write(receiptPageHeadTag(pos_settings.value));
     w.document.write(receiptFontHeadTags(pos_settings.value, 'body'));
     w.document.write('</head><body>');
     // Same wrapper as the real POS print path (PosPage._writePrintWindow):
@@ -987,7 +1112,7 @@ function printPosDemo() {
     w.document.write(el.innerHTML);
     w.document.write('</div></body></html>');
     w.document.close();
-    whenPrintFontsReady(w, () => { try { w.print(); } catch (e) {} });
+    whenPrintReady(w, () => { try { w.print(); } catch (e) {} });
   } catch (e) { /* preview print errors are non-fatal, like legacy */ }
 }
 
@@ -1004,6 +1129,7 @@ async function loadSettings() {
   try {
     const data = await http.get('get_Settings_data_api');
     setting.value.vat_number = data?.settings?.vat_number || '';
+    setting.value.enable_warehouse_letterhead = !!data?.settings?.enable_warehouse_letterhead;
   } catch (e) { /* display-only */ }
   isLoading.value = false;
 }
@@ -1455,6 +1581,188 @@ onMounted(loadSettings);
   color: rgba(var(--ink-rgb), 0.65);
   margin: 8px 0 0;
   font-style: italic;
+}
+
+/* Layout 6 specific styles (Tabular) — mirrors /css/pos_print.css
+   ====================================================================
+   Layout 6 - Tabular (cash/credit invoice: centred header, ruled title,
+   label/value info rows, fully boxed Description | Qty | Rate | Total
+   grid, TOTAL band, payment lines, signature boxes, ref barcode)
+   ==================================================================== */
+.receipt-layout-6 {
+  font-size: 11px;
+  color: rgb(var(--ink-rgb));
+}
+.receipt-layout-6 .r6-head {
+  text-align: center;
+}
+.receipt-layout-6 .r6-logo .demo-logo-rect {
+  margin: 0 auto;
+}
+.receipt-layout-6 .r6-logo {
+  margin-bottom: 4px;
+}
+.receipt-layout-6 .r6-store {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1.25;
+}
+.receipt-layout-6 .r6-contact div {
+  font-size: 10px;
+  line-height: 1.3;
+}
+.receipt-layout-6 .r6-title {
+  margin: 6px 0;
+  padding: 2px 0;
+  border-top: 1px solid rgb(var(--ink-rgb));
+  border-bottom: 1px solid rgb(var(--ink-rgb));
+  text-align: center;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.receipt-layout-6 table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.receipt-layout-6 table tr {
+  border-bottom: none;
+}
+.receipt-layout-6 .r6-meta {
+  margin-bottom: 6px;
+}
+.receipt-layout-6 .r6-meta td {
+  font-size: 10px;
+  line-height: 1.35;
+  padding: 0;
+  vertical-align: top;
+}
+.receipt-layout-6 .r6-meta td:first-child {
+  font-weight: 700;
+  white-space: nowrap;
+  padding-right: 8px;
+}
+.receipt-layout-6 .r6-meta td:last-child {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.receipt-layout-6 .r6-items {
+  border: 1px solid rgb(var(--ink-rgb));
+}
+.receipt-layout-6 .r6-items th,
+.receipt-layout-6 .r6-items td {
+  border: 1px solid rgb(var(--ink-rgb));
+  padding: 2px 3px;
+  vertical-align: top;
+  font-size: 10px;
+  line-height: 1.3;
+}
+.receipt-layout-6 .r6-items th {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 9px;
+  text-align: left;
+}
+.receipt-layout-6 .r6-desc { overflow-wrap: anywhere; }
+/* Number columns shrink to their content; Description takes the rest
+   and may break inside a long word on 58 mm paper. */
+.receipt-layout-6 .r6-c-qty { width: 1%; white-space: nowrap; text-align: center; }
+.receipt-layout-6 .r6-c-rate { width: 1%; white-space: nowrap; text-align: right; }
+.receipt-layout-6 .r6-c-tot { width: 1%; white-space: nowrap; text-align: right; }
+.receipt-layout-6 .r6-items th.r6-c-qty { text-align: center; }
+.receipt-layout-6 .r6-items th.r6-c-rate,
+.receipt-layout-6 .r6-items th.r6-c-tot { text-align: right; }
+.receipt-layout-6 .r6-sub {
+  font-size: 9px;
+  color: rgba(var(--ink-rgb), 0.6);
+}
+.receipt-layout-6 .r6-totals {
+  margin-top: 6px;
+}
+.receipt-layout-6 .r6-totals td {
+  padding: 1px 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.receipt-layout-6 .r6-totals td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+.receipt-layout-6 .r6-totals .r6-grand td {
+  font-weight: 800;
+  font-size: 13px;
+  border-top: 1px solid rgb(var(--ink-rgb));
+  border-bottom: 1px solid rgb(var(--ink-rgb));
+  padding: 3px 0;
+}
+.receipt-layout-6 .r6-totals .r6-gap td {
+  padding-top: 4px;
+}
+.receipt-layout-6 .r6-pay {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed rgb(var(--ink-rgb));
+}
+.receipt-layout-6 .r6-pay div {
+  font-size: 10px;
+  line-height: 1.35;
+}
+.receipt-layout-6 .r6-pay .r6-pay-title {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.receipt-layout-6 .r6-sigs {
+  margin-top: 10px;
+  border: 1px solid rgb(var(--ink-rgb));
+  table-layout: fixed;
+}
+.receipt-layout-6 .r6-sigs td {
+  width: 50%;
+  height: 44px;
+  border: 1px solid rgb(var(--ink-rgb));
+  vertical-align: bottom;
+  text-align: center;
+  font-size: 9px;
+  padding: 0 2px 2px;
+}
+.receipt-layout-6 .r6-barcode {
+  margin-top: 10px;
+  text-align: center;
+}
+.receipt-layout-6 :deep(.r6-barcode-svg) {
+  display: block;
+  width: 100%;
+  height: 44px;
+}
+.receipt-layout-6 .r6-ref {
+  font-family: monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+.receipt-layout-6 .r6-legal {
+  text-align: center;
+  margin-top: 6px;
+}
+
+/* Signature line (any layout) */
+.receipt-signature {
+  margin-top: 18px;
+}
+.receipt-signature-line {
+  border-bottom: 1px solid #111;
+  height: 28px;
+  width: 70%;
+  margin: 0 auto;
+}
+.receipt-signature-label {
+  text-align: center;
+  font-size: 9px;
+  color: rgba(var(--ink-rgb), 0.6);
+  margin-top: 3px;
 }
 
 /* Responsive styles for mobile */

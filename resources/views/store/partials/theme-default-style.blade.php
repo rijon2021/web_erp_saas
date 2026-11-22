@@ -65,11 +65,11 @@
   .df-cat small { font-size: 11.5px; color: rgb(var(--color-fg-muted)); }
   .df-trust { display: grid; grid-template-columns: repeat(2, 1fr); background: rgb(var(--color-bg-surface)); border: 1px solid rgb(var(--color-border-subtle)); border-radius: var(--df-radius); overflow: hidden; }
   @media (min-width: 1024px) { .df-trust { grid-template-columns: repeat(4, 1fr); } }
-  .df-trust-item { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-inline-end: 1px solid rgb(var(--color-border-subtle)); border-bottom: 1px solid rgb(var(--color-border-subtle)); }
+  .df-trust-item { display: flex; align-items: center; gap: 12px; padding: 16px 18px; min-width: 0; margin-inline-end: -1px; margin-bottom: -1px; border-inline-end: 1px solid rgb(var(--color-border-subtle)); border-bottom: 1px solid rgb(var(--color-border-subtle)); }
   .df-trust-icon { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: rgb(var(--color-accent-500) / .1); color: rgb(var(--color-accent-500)); flex-shrink: 0; }
   .df-trust-icon svg { width: 20px; height: 20px; }
-  .df-trust-item strong { display: block; font-size: 13.5px; font-weight: 700; color: rgb(var(--color-fg-primary)); }
-  .df-trust-item span { display: block; font-size: 12px; color: rgb(var(--color-fg-muted)); }
+  .df-trust-item > div > strong { display: block; font-size: 13.5px; font-weight: 700; color: rgb(var(--color-fg-primary)); }
+  .df-trust-item > div > span { display: block; font-size: 12px; color: rgb(var(--color-fg-muted)); }
   .df-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
   @media (min-width: 768px) { .df-grid { grid-template-columns: repeat(3, 1fr); gap: 16px; } }
   @media (min-width: 1024px) { .df-grid { grid-template-columns: repeat(4, 1fr); gap: 20px; } }

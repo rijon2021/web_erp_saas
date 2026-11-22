@@ -118,12 +118,13 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="detail in details" :key="detail.detail_id">
+                  <template v-for="detail in details" :key="detail.detail_id">
+                  <tr>
                     <td>
                       <div style="font-weight: 600; color: #1f1f2c;">{{ detail.name }}</div>
                       <div style="font-size: 11px; color: #8d8da0; font-family: 'JetBrains Mono', monospace;">{{ detail.code }}</div>
                       <span v-if="detail.is_batch_tracked" style="display: inline-block; margin-top: 3px; font-size: 10px; font-weight: 600; color: #4f46e5; background: #eef2ff; padding: 1px 7px; border-radius: 99px;">
-                        {{ $t('Batches') || 'Batches' }} · Auto
+                        {{ $t('Batches') || 'Batches' }} · {{ $t('Batch_Auto') }}
                       </span>
                     </td>
                     <td style="text-align: right; font-family: 'JetBrains Mono', monospace; color: #54546a;">{{ money(detail.Net_price) }}</td>
@@ -140,6 +141,32 @@
                     </td>
                     <td style="text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 600; color: #1f1f2c;">{{ money(detail.subtotal) }}</td>
                   </tr>
+                  <!-- Serial / IMEI: pick the returned units from those sold on this sale -->
+                  <tr v-if="(detail.is_imei || hasComboSerials(detail)) && (parseFloat(detail.quantity) || 0) > 0">
+                    <td colspan="5" style="background: #f7f7fb;">
+                      <serial-numbers-field
+                        v-if="detail.is_imei"
+                        mode="select"
+                        :model-value="detail.serial_numbers"
+                        @update:model-value="v => { detail.serial_numbers = v; detail.imei_number = v.join(','); }"
+                        :required-count="lineSerialUnits(detail)"
+                        fetch-url="serial_numbers/for_sale"
+                        :fetch-params="{ sale_id: sale_return.sale_id, sale_detail_id: detail.id, product_id: detail.product_id, product_variant_id: detail.product_variant_id || null }"
+                      />
+                      <div v-else v-for="c in detail.serial_components" :key="c.product_id" style="margin-bottom: 6px;">
+                        <div style="font-size: 12px; font-weight: 600; color: #1e293b; margin-bottom: 4px;">{{ c.name }}</div>
+                        <serial-numbers-field
+                          mode="select"
+                          :model-value="(detail.serial_groups || {})[c.product_id] || []"
+                          @update:model-value="v => setComboSerialGroup(detail, c.product_id, v)"
+                          :required-count="comboSerialRequired(c, lineSerialUnits(detail))"
+                          fetch-url="serial_numbers/for_sale"
+                          :fetch-params="{ sale_id: sale_return.sale_id, sale_detail_id: detail.id, product_id: c.product_id }"
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                  </template>
                 </tbody>
               </table>
             </div>
@@ -184,6 +211,25 @@
               </div>
             </div>
 
+            <!-- Refund now: pay the customer back with the return (on by default at the counter). -->
+            <div v-if="canRefund" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 14px; padding: 10px 12px; background: #f7f7fb; border-radius: 10px;">
+              <label style="display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #1f1f2c; cursor: pointer; margin: 0;">
+                <input type="checkbox" v-model="refund.now" />
+                {{ $t('Return_Refund_Now') }}
+              </label>
+              <template v-if="refund.now">
+                <select v-model="refund.payment_method_id"
+                  style="height: 32px; padding: 0 8px; border: 1px solid #e6e6ec; border-radius: 6px; font-size: 12px; background: #fff;">
+                  <option v-for="m in paymentMethods" :key="m.id" :value="m.id">{{ m.name }}</option>
+                </select>
+                <select v-model="refund.account_id"
+                  style="height: 32px; padding: 0 8px; border: 1px solid #e6e6ec; border-radius: 6px; font-size: 12px; background: #fff;">
+                  <option :value="null">{{ $t('Account') }}: —</option>
+                  <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.account_name }}</option>
+                </select>
+              </template>
+            </div>
+
             <div style="margin-top: 14px;">
               <div style="font-size: 9px; font-weight: 700; letter-spacing: 0.08em; color: #8d8da0; margin-bottom: 4px; text-transform: uppercase;">{{ $t('Note') || 'Note' }}</div>
               <textarea v-model="sale_return.notes" rows="2" :placeholder="$t('Afewwords') || 'A few words...'"
@@ -215,11 +261,15 @@ import { useAuthStore } from "../stores/auth";
 import axios from "./axios";
 import { bvToast } from "./bv";
 import { posCompatComponents } from "./components";
-import { getPriceDecimals } from "./priceFormat";
+import { getPriceDecimals, withCurrency } from "./priceFormat";
 import NProgress from "./nprogress";
+import SerialNumbersField from "./SerialNumbersField.vue";
+import { hasComboSerials, comboSerialMismatch, comboSerialRequired, setComboSerialGroup } from "../lib/comboSerials";
+import { lineSerialUnits, loadUnitFactors } from "../lib/serialUnits";
+import { returnDiscountShare } from "../lib/returnDiscountShare";
 
 export default {
-  components: { ...posCompatComponents },
+  components: { ...posCompatComponents, SerialNumbersField },
   name: "PosReturnModal",
 
   props: {
@@ -251,11 +301,17 @@ export default {
       },
       total: 0,
       GrandTotal: 0,
+      // "Refund now": recorded through payment/returns_sale right after the return.
+      refund: { now: true, payment_method_id: null, account_id: null },
+      paymentMethods: [],
+      accounts: [],
+      requireAccount: false,
     };
   },
 
   computed: {
     currentUser() { return useAuthStore().user || {}; },
+    canRefund() { return useAuthStore().can('payment_returns_add') && this.paymentMethods.length > 0; },
     priceDecimals() {
       return getPriceDecimals({ store: this.$store });
     },
@@ -264,6 +320,7 @@ export default {
   methods: {
     // Open the modal (called by the POS parent).
     open() {
+      loadUnitFactors();
       this.resetForm();
       this.$refs.returnModal.show();
       this.$nextTick(() => {
@@ -299,7 +356,7 @@ export default {
     money(value) {
       const n = parseFloat(value) || 0;
       const cur = this.currency || (this.currentUser && this.currentUser.currency) || "";
-      return cur + " " + n.toFixed(this.priceDecimals);
+      return withCurrency(cur, n.toFixed(this.priceDecimals), useAuthStore().user?.currency_position);
     },
 
     makeToast(variant, msg, title) {
@@ -336,11 +393,24 @@ export default {
       axios
         .get(`returns/sale/create_sell_return/${sale.id}`)
         .then((response) => {
-          this.details = response.data.details;
+          // Serialized lines start empty: imei_number then names only the units
+          // actually returned, not every unit the sale line sold.
+          this.details = (response.data.details || []).map((d) => ({
+            ...d,
+            serial_numbers: [],
+            serial_groups: {},
+            imei_number: d.is_imei || hasComboSerials(d) ? "" : d.imei_number,
+          }));
           this.sale_return = response.data.sale_return;
+          this.paymentMethods = response.data.payment_methods || [];
+          this.accounts = response.data.accounts || [];
+          this.requireAccount = response.data.require_payment_account === true;
+          const cash = this.paymentMethods.find((m) => /cash/i.test(m.name || ""));
+          this.refund = { now: true, payment_method_id: (cash || this.paymentMethods[0] || {}).id || null, account_id: null };
           this.sale_return.date = new Date().toISOString().slice(0, 10);
           this.sale_return.notes = "";
           this.sale_return.statut = "received";
+          this.applyDiscountShare();
           this.calculTotal();
           this.step = 2;
           NProgress.done();
@@ -365,6 +435,7 @@ export default {
       } else if (detail.quantity < 0) {
         detail.quantity = 0;
       }
+      this.applyDiscountShare();
       this.calculTotal();
       this.$forceUpdate();
     },
@@ -376,6 +447,7 @@ export default {
         detail.quantity = (parseFloat(detail.quantity) || 0) + 1;
       }
       this.$forceUpdate();
+      this.applyDiscountShare();
       this.calculTotal();
     },
 
@@ -384,7 +456,14 @@ export default {
         detail.quantity = (parseFloat(detail.quantity) || 0) - 1;
       }
       this.$forceUpdate();
+      this.applyDiscountShare();
       this.calculTotal();
+    },
+
+    // The returned lines' share of the sale's order discount, refreshed when
+    // quantities change; the Discount field stays editable.
+    applyDiscountShare() {
+      this.sale_return.discount = returnDiscountShare(this.details, this.sale_return, this.priceDecimals);
     },
 
     // ---- Totals (identical maths to create_sale_return.vue) ----------------
@@ -438,12 +517,62 @@ export default {
         this.makeToast("warning", this.$t("Please_add_return_quantity") || "Please add a return quantity", this.$t("Warning") || "Warning");
         return false;
       }
+      // Serialized and combo lines: one returned serial per returned unit.
+      const bad = returned.find((d) => this.serialCountMismatch(d));
+      if (bad) {
+        this.makeToast("warning", `${bad.name}: ${this.$t("Serials_Count_Mismatch")}`, this.$t("Warning") || "Warning");
+        return false;
+      }
       return true;
+    },
+
+    hasComboSerials,
+    // One serial per base unit: quantity × pack × sale-unit factor.
+    lineSerialUnits,
+    comboSerialRequired,
+    setComboSerialGroup(detail, productId, serials) {
+      setComboSerialGroup(detail, productId, serials);
+    },
+
+    serialCountMismatch(detail) {
+      if (hasComboSerials(detail)) return comboSerialMismatch(detail);
+      if (!detail.is_imei) return false;
+      const count = Array.isArray(detail.serial_numbers) ? detail.serial_numbers.length : 0;
+      return count !== lineSerialUnits(detail);
+    },
+
+    // Pays the saved return out in full; a failure only warns (the return
+    // stands and the refund can still be added from Sales Returns).
+    async recordRefund(saleReturnId) {
+      try {
+        await axios.post("payment/returns_sale", {
+          sale_return_id: saleReturnId,
+          date: this.sale_return.date,
+          montant: this.GrandTotal,
+          received_amount: this.GrandTotal,
+          change: 0,
+          payment_method_id: this.refund.payment_method_id,
+          account_id: this.refund.account_id || null,
+          notes: "",
+        });
+      } catch (error) {
+        const msg = (error && error.response && error.response.data && error.response.data.message) || "";
+        this.makeToast("warning", `${this.$t("Return_Refund_Not_Recorded")} ${msg}`.trim(), this.$t("Warning") || "Warning");
+      }
     },
 
     // ---- Submit -------------------------------------------------------------
     submitReturn() {
       if (!this.verifiedForm()) return;
+      if (this.canRefund && this.refund.now && !this.refund.payment_method_id) {
+        this.makeToast("warning", this.$t("Return_Refund_Choose_Method"), this.$t("Warning") || "Warning");
+        return;
+      }
+      // Settings > Features > Require payment account would refuse the refund.
+      if (this.canRefund && this.refund.now && this.requireAccount && !this.refund.account_id) {
+        this.makeToast("warning", this.$t("Return_Refund_Choose_Account"), this.$t("Warning") || "Warning");
+        return;
+      }
 
       this.SubmitProcessing = true;
       NProgress.start();
@@ -467,17 +596,23 @@ export default {
           GrandTotal: this.GrandTotal,
           details: details,
         })
-        .then(() => {
+        .then(async (response) => {
+          const returnId = response && response.data ? response.data.id : null;
+          if (this.canRefund && this.refund.now && returnId && this.GrandTotal > 0) {
+            await this.recordRefund(returnId);
+          }
           NProgress.done();
           this.SubmitProcessing = false;
           this.makeToast("success", this.$t("Successfully_Created") || "Successfully created", this.$t("Success") || "Success");
           this.$emit("return-success");
           this.$refs.returnModal.hide();
         })
-        .catch(() => {
+        .catch((error) => {
           NProgress.done();
           this.SubmitProcessing = false;
-          this.makeToast("danger", this.$t("InvalidData") || "Invalid data", this.$t("Failed") || "Failed");
+          // Surface the server's reason (e.g. a serial that wasn't sold on this sale).
+          const msg = (error && error.response && error.response.data && error.response.data.message) || this.$t("InvalidData") || "Invalid data";
+          this.makeToast("danger", msg, this.$t("Failed") || "Failed");
         });
     },
   },

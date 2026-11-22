@@ -129,7 +129,8 @@ return [
         | you can implement your own default value binder.
         |
         */
-        'default' => Maatwebsite\Excel\DefaultValueBinder::class,
+        // Writes "=..." strings as text, never as formulas (formula injection).
+        'default' => App\Support\Excel\SafeValueBinder::class,
     ],
 
     'transactions' => [

@@ -11,8 +11,9 @@ function swalAction(btn, opts) {
     if (!form) return;
 
     var isApprove = form.id === 'approveForm';
-    var isHeavy = form.id === 'form-reprovision' || form.id === 'form-reset-db' || form.id === 'form-rerun-migrations' || form.id === 'form-reseed' || isApprove;
-    var isAsync = form.id === 'form-reprovision' || isApprove;
+    var isRetry = form.id === 'form-retry-provision';
+    var isHeavy = isRetry || form.id === 'form-reprovision' || form.id === 'form-reset-db' || form.id === 'form-rerun-migrations' || form.id === 'form-reseed' || isApprove;
+    var isAsync = isRetry || form.id === 'form-reprovision' || isApprove;
 
     Swal.fire({
         title: opts.title || '',
@@ -41,13 +42,28 @@ function swalAction(btn, opts) {
 
             if (isAsync) {
                 var formData = new FormData(form);
+                // JSON answer (TenantController::asyncResult): an early refusal
+                // shows its own message instead of polling for a status change
+                // that will never come (or a previous attempt's error).
                 fetch(form.action, {
                     method: 'POST',
-                    headers: { 'X-CSRF-TOKEN': csrfToken },
+                    headers: { 'X-CSRF-TOKEN': csrfToken, 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                     body: formData,
-                    redirect: 'manual',
-                }).then(function() {
-                    pollProvisioningStatus();
+                }).then(function(r) {
+                    return r.json().catch(function() { return {}; }).then(function(data) {
+                        return { ok: r.ok, data: data };
+                    });
+                }).then(function(res) {
+                    if (res.ok) {
+                        pollProvisioningStatus();
+                        return;
+                    }
+                    Swal.fire({
+                        title: trans.provisioningFailedTitle,
+                        text: (res.data && res.data.message) || trans.requestFailed,
+                        icon: 'error',
+                        confirmButtonColor: '#ef4444',
+                    });
                 }).catch(function() {
                     pollProvisioningStatus();
                 });
@@ -74,7 +90,7 @@ function pollProvisioningStatus() {
         if (stepEl) {
             var mins = Math.floor(seconds / 60);
             var secs = seconds % 60;
-            stepEl.textContent = 'Elapsed: ' + (mins > 0 ? mins + 'm ' : '') + secs + 's';
+            stepEl.textContent = __s('elapsed') + ' ' + (mins > 0 ? mins + 'm ' : '') + secs + 's';
         }
 
         if (seconds >= POLL_MAX_SECONDS) {
@@ -101,7 +117,7 @@ function pollProvisioningStatus() {
                     icon: 'success',
                     confirmButtonColor: '#6366f1',
                 }).then(function() { location.reload(); });
-            } else if (data.status === 'failed') {
+            } else if (data.status === 'failed' || (data.status === 'pending' && data.error)) {
                 clearInterval(pollTimer);
                 Swal.fire({
                     title: trans.provisioningFailedTitle,
@@ -149,7 +165,7 @@ function testTenantConnection() {
     })
     .catch(function(err) {
         btn.disabled = false;
-        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>Request failed: ' + err.message + '</div>';
+        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>' + __s('request_failed_prefix') + ' ' + err.message + '</div>';
     });
 }
 
@@ -178,7 +194,7 @@ function createTenantEffectiveDb() {
         }
     })
     .catch(function(err) {
-        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>Request failed: ' + err.message + '</div>';
+        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>' + __s('request_failed_prefix') + ' ' + err.message + '</div>';
     });
 }
 
@@ -224,7 +240,7 @@ function testFormConnection() {
     .catch(function(err) {
         editDbVerified = false;
         if (btnSave) btnSave.classList.add('approve-locked');
-        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>Request failed: ' + err.message + '</div>';
+        resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>' + __s('request_failed_prefix') + ' ' + err.message + '</div>';
     });
 }
 
@@ -529,7 +545,7 @@ document.addEventListener('DOMContentLoaded', function() {
             .catch(function(err) {
                 approveDbVerified = false;
                 if (btnApprove) btnApprove.classList.add('approve-locked');
-                resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>Request failed: ' + err.message + '</div>';
+                resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>' + __s('request_failed_prefix') + ' ' + err.message + '</div>';
             });
         });
 
@@ -562,7 +578,7 @@ document.addEventListener('DOMContentLoaded', function() {
             db_port: form.querySelector('[name=db_port]').value.trim(),
         };
 
-        resultDiv.innerHTML = '<div class="ajax-result-info"><i class="bi bi-hourglass-split me-1"></i>Creating database...</div>';
+        resultDiv.innerHTML = '<div class="ajax-result-info"><i class="bi bi-hourglass-split me-1"></i>' + __s('creating_database') + '</div>';
 
         fetch(createDatabasePreUrl, {
             method: 'POST',
@@ -589,7 +605,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .catch(function(err) {
             approveDbVerified = false;
             if (btnApprove) btnApprove.classList.add('approve-locked');
-            resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>Request failed: ' + err.message + '</div>';
+            resultDiv.innerHTML = '<div class="ajax-result-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>' + __s('request_failed_prefix') + ' ' + err.message + '</div>';
         });
     });
 
@@ -634,7 +650,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     Swal.fire({
                         icon: 'warning',
                         title: trans.customDomainFailedTitle || 'Verification failed',
-                        text: (res.data && res.data.message) || 'DNS check failed.',
+                        text: (res.data && res.data.message) || __s('dns_check_failed'),
                         confirmButtonColor: '#f59e0b',
                     });
                 }
@@ -651,4 +667,132 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     });
+});
+
+// ── Setup banner (pending / provisioning / failed tenants) ──
+document.addEventListener('DOMContentLoaded', function() {
+    // Step 2/3 follow the approve button: it is unlocked only after a
+    // successful connection test, and re-locked whenever a DB field changes.
+    var btnApprove = document.getElementById('btnApprove');
+    var stepDb = document.querySelector('[data-setup-step="database"]');
+    var stepProvision = document.querySelector('[data-setup-step="provision"]');
+    if (btnApprove && stepDb && stepProvision) {
+        var syncSteps = function() {
+            var verified = !btnApprove.classList.contains('approve-locked');
+            stepDb.classList.toggle('is-done', verified);
+            stepDb.classList.toggle('is-current', !verified);
+            stepProvision.classList.toggle('is-current', verified);
+            stepProvision.classList.toggle('is-ready', verified);
+            stepProvision.classList.toggle('is-blocked', !verified);
+        };
+        new MutationObserver(syncSteps).observe(btnApprove, { attributes: true, attributeFilter: ['class'] });
+        syncSteps();
+    }
+
+    // Reject needs a reason — it is emailed to the customer.
+    var btnReject = document.getElementById('btnRejectTenant');
+    if (btnReject) {
+        btnReject.addEventListener('click', function() {
+            var form = document.getElementById('form-reject-tenant');
+            Swal.fire({
+                title: trans.rejectTitle,
+                text: trans.rejectText,
+                icon: 'warning',
+                input: 'textarea',
+                inputPlaceholder: trans.rejectReasonPlaceholder,
+                inputValidator: function(value) {
+                    if (!value || !value.trim()) return trans.rejectReasonRequired;
+                },
+                showCancelButton: true,
+                confirmButtonText: trans.rejectTitle,
+                confirmButtonColor: '#ef4444',
+                cancelButtonText: trans.cancelText,
+                cancelButtonColor: '#64748b',
+                reverseButtons: true,
+            }).then(function(result) {
+                if (!result.isConfirmed) return;
+                form.querySelector('[name=reason]').value = result.value.trim();
+                form.submit();
+            });
+        });
+    }
+
+    // Provisioning: keep the banner live and reload once the job settles.
+    // Past the time limit the "taking longer" panel offers a retry.
+    if (window.TenantShowData.status === 'provisioning') {
+        var elapsedEl = document.getElementById('setupElapsed');
+        var slowEl = document.getElementById('setupSlow');
+        var started = Date.now();
+        var tick = setInterval(function() {
+            var seconds = Math.floor((Date.now() - started) / 1000);
+            if (elapsedEl) {
+                var mins = Math.floor(seconds / 60);
+                elapsedEl.textContent = '· ' + trans.elapsed + ' ' + (mins > 0 ? mins + 'm ' : '') + (seconds % 60) + 's';
+            }
+            if (seconds >= POLL_MAX_SECONDS && slowEl) {
+                slowEl.classList.add('is-visible');
+            }
+        }, 1000);
+
+        var check = setInterval(function() {
+            // The retry modal owns polling once the admin starts a new attempt.
+            if (pollTimer) {
+                clearInterval(check);
+                clearInterval(tick);
+                return;
+            }
+            fetch(statusUrl, { headers: { 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken } })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.status !== 'provisioning') {
+                        clearInterval(check);
+                        clearInterval(tick);
+                        location.reload();
+                    }
+                })
+                .catch(function() { /* keep polling */ });
+        }, 4000);
+    }
+});
+
+// ── Subscription panel (extend / change plan forms) ──
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('[data-sub-toggle]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var target = document.getElementById(btn.getAttribute('data-sub-toggle'));
+            if (!target) return;
+            var opening = target.hidden;
+            document.querySelectorAll('.sub-action-form').forEach(function(f) { f.hidden = true; });
+            target.hidden = !opening;
+            if (opening) {
+                var first = target.querySelector('input:not([type=hidden]), select');
+                if (first) first.focus();
+            }
+        });
+    });
+
+    var daysInput = document.getElementById('sub-extend-days');
+    document.querySelectorAll('.sub-days-preset').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            if (daysInput) daysInput.value = btn.getAttribute('data-days');
+        });
+    });
+
+    // Price follows the selected plan / cycle until the admin types a custom one.
+    var planSelect = document.getElementById('sub-plan-select');
+    var cycleSelect = document.getElementById('sub-cycle-select');
+    var amountInput = document.getElementById('sub-amount-input');
+    if (planSelect && cycleSelect && amountInput) {
+        var amountEdited = false;
+        amountInput.addEventListener('input', function() { amountEdited = true; });
+        var syncAmount = function() {
+            if (amountEdited) return;
+            var opt = planSelect.options[planSelect.selectedIndex];
+            if (!opt) return;
+            var price = opt.getAttribute(cycleSelect.value === 'yearly' ? 'data-yearly' : 'data-monthly');
+            if (price !== null) amountInput.value = price;
+        };
+        planSelect.addEventListener('change', syncAmount);
+        cycleSelect.addEventListener('change', syncAmount);
+    }
 });

@@ -51,7 +51,7 @@
           </a-col>
 
           <a-col :xs="24" :md="12" :lg="8">
-            <a-form-item :label="$t('Product')" :help="isEdit ? undefined : 'Only products type service'">
+            <a-form-item :label="$t('Product')" :help="isEdit ? undefined : $t('Bk_Only_Service_Products')">
               <a-select
                 v-model:value="booking.product_id" show-search option-filter-prop="label"
                 :placeholder="$t('Choose_Product')" allow-clear
@@ -104,14 +104,16 @@
             <a-form-item :label="$t('Start_Time') + ' *'" name="booking_time">
               <a-time-picker
                 v-model:value="booking.booking_time" value-format="HH:mm" format="HH:mm" style="width: 100%"
+                @change="autoEndTime"
               />
             </a-form-item>
           </a-col>
 
           <a-col :xs="24" :md="12" :lg="8">
-            <a-form-item :label="$t('End_Time')">
+            <a-form-item :label="$t('End_Time')" :extra="endTimeAuto ? $t('Bkm_End_From_Duration') : ''">
               <a-time-picker
                 v-model:value="booking.booking_end_time" value-format="HH:mm" format="HH:mm" style="width: 100%"
+                @change="endTimeAuto = false"
               />
             </a-form-item>
           </a-col>
@@ -135,6 +137,19 @@
               <a-select
                 v-model:value="booking.status" :placeholder="$t('Choose_Status')" :options="statusOptions"
               />
+            </a-form-item>
+          </a-col>
+
+          <!-- Booking Management: who does it, checked against their free time -->
+          <a-col v-if="staffList.length" :xs="24" :md="12" :lg="8">
+            <a-form-item :label="$t('Bkm_Staff')">
+              <a-select
+                v-model:value="booking.staff_id" allow-clear :placeholder="$t('Bkm_Not_Assigned')"
+                :options="staffList.map(s => ({ value: s.id, label: s.removed ? `${s.name} (${t('Bkm_Staff_Removed', 'removed')})` : s.name }))" @change="runCheck"
+              />
+              <div v-if="check" :class="['staff-check', check.ok ? 'ok' : 'bad']" role="status">
+                {{ check.ok ? $t('Bkm_Time_Free') : reasonText(check.reason, check) }}
+              </div>
             </a-form-item>
           </a-col>
 
@@ -208,13 +223,14 @@
  * surfaced. Times still round-trip as HH:mm, truncating the HH:mm:ss the API
  * returns, or the pickers render blank and a save would wipe existing times.
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { message } from 'ant-design-vue';
+import { message, Modal } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
 import { t as tf } from '../../i18n';
 import http from '../../lib/http';
+import { statusLabel as bookingStatusLabel, reasonText } from './bookingStatus';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -245,17 +261,34 @@ const booking = ref({
   booking_date: isEdit ? '' : todayLocal(),
   booking_time: '', booking_end_time: '',
   delivery_date: '', delivery_time: '', delivery_address: '',
-  status: 'pending', notes: '',
+  status: 'pending', notes: '', staff_id: undefined,
 });
 
-const statusOptions = computed(() => [
-  { value: 'pending', label: t('Pending') },
-  // `Confirmed` is referenced in legacy but missing from the translation
-  // seeder, so it needs an explicit fallback or it renders as the raw key.
-  { value: 'confirmed', label: tf('Confirmed', 'Confirmed') },
-  { value: 'cancelled', label: t('Cancelled') },
-  { value: 'completed', label: t('complete') },
-]);
+// Statuses come from the API (Booking Management adds arrived / declined / no-show).
+const apiStatuses = ref(['pending', 'confirmed', 'cancelled', 'completed']);
+const statusOptions = computed(() => apiStatuses.value.map(s => ({ value: s, label: bookingStatusLabel(s) })));
+
+// ---------------- Booking Management: staff + free-time check ----------------
+const staffList = ref([]);
+const check = ref(null);
+let checkSeq = 0;
+async function runCheck() {
+  check.value = null;
+  const b = booking.value;
+  if (!staffList.value.length || !b.staff_id || !b.booking_date || !b.booking_time) return;
+  if (!['pending', 'confirmed', 'arrived'].includes(b.status)) return;
+  const seq = ++checkSeq;
+  try {
+    const data = await http.get('bookings/availability/check', {
+      product_id: b.product_id || undefined, staff_id: b.staff_id, date: b.booking_date, time: b.booking_time,
+      end_time: b.booking_end_time || undefined, ignore_id: isEdit ? Number(id) : undefined,
+    });
+    if (seq === checkSeq && data?.ready !== false) check.value = data;
+  } catch (e) {
+    /* the save runs the same check */
+  }
+}
+watch(() => [booking.value.booking_date, booking.value.booking_time, booking.value.booking_end_time, booking.value.product_id, booking.value.status], runCheck);
 
 const rules = computed(() => ({
   customer_id: [{ required: true, message: t('Field_is_required') }],
@@ -273,8 +306,27 @@ function normalizeTime(value) {
   return String(value).length > 5 ? String(value).substring(0, 5) : String(value);
 }
 
+/**
+ * Booking Management › Services: a service with a booking length fills the
+ * end time from the start time — only while the end time is empty or was
+ * filled this way (a typed end time is never replaced).
+ */
+const endTimeAuto = ref(false);
+function autoEndTime() {
+  const product = products.value.find(p => p.id === booking.value.product_id);
+  const minutes = product?.duration_minutes;
+  const start = booking.value.booking_time;
+  if (!minutes || !start || (booking.value.booking_end_time && !endTimeAuto.value)) return;
+  const [h, m] = String(start).split(':').map(Number);
+  const total = h * 60 + m + minutes;
+  if (total >= 24 * 60) return; // runs past midnight: leave it to the user
+  booking.value.booking_end_time = `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  endTimeAuto.value = true;
+}
+
 function onProductChange(productId) {
   const product = products.value.find(p => p.id === productId);
+  autoEndTime();
   if (isEdit) {
     // Edit never clobbers a price already on the booking.
     if (product?.price && !booking.value.price) booking.value.price = product.price;
@@ -308,7 +360,21 @@ function payload() {
     delivery_address: b.delivery_address,
     status: b.status,
     notes: b.notes,
+    // Only once Booking Management is set up; absent = the server keeps the current staff.
+    ...(staffList.value.length ? { staff_id: b.staff_id || null } : {}),
   };
+}
+
+async function save(force = false) {
+  const body = { ...payload(), ...(force ? { force: 1 } : {}) };
+  if (isEdit) {
+    await http.put(`bookings/${id}`, body);
+    message.success(t('Successfully_Updated'));
+  } else {
+    await http.post('bookings', body);
+    message.success(t('Successfully_Created'));
+  }
+  router.push('/bookings');
 }
 
 async function submit() {
@@ -320,17 +386,28 @@ async function submit() {
   }
   submitting.value = true;
   try {
-    if (isEdit) {
-      await http.put(`bookings/${id}`, payload());
-      message.success(t('Successfully_Updated'));
-    } else {
-      await http.post('bookings', payload());
-      message.success(t('Successfully_Created'));
-    }
-    router.push('/bookings');
+    await save();
   } catch (e) {
-    const errors = e?.data?.errors;
-    message.error(e?.data?.message || (errors && Object.values(errors).flat()[0]) || t('InvalidData'));
+    const d = e?.data || {};
+    if (e?.status === 422 && d.can_force) {
+      // The staff member is not free: say why and let the user book it anyway.
+      Modal.confirm({
+        title: t('Bkm_Clash_Title', 'This time is not free'),
+        content: reasonText(d.reason, d),
+        okText: t('Bkm_Save_Anyway', 'Save anyway'),
+        cancelText: t('Cancel'),
+        async onOk() {
+          try {
+            await save(true);
+          } catch (e2) {
+            message.error(e2?.data?.message || t('InvalidData'));
+          }
+        },
+      });
+      return;
+    }
+    const errors = d.errors;
+    message.error(d.message || (errors && Object.values(errors).flat()[0]) || t('InvalidData'));
   } finally {
     submitting.value = false;
   }
@@ -388,6 +465,8 @@ onMounted(async () => {
     products.value = data?.products || [];
     trays.value = data?.trays || [];
     salesPersons.value = data?.sales_persons || [];
+    staffList.value = data?.staff || [];
+    if (Array.isArray(data?.statuses) && data.statuses.length) apiStatuses.value = data.statuses;
 
     if (isEdit) {
       const b = data?.booking || {};
@@ -398,8 +477,9 @@ onMounted(async () => {
         product_id: b.product_id,
         product_name: b.product_name || '',
         product_description: b.product_description || '',
-        price: b.price,
-        amount: b.amount,
+        // decimal:2 casts arrive as strings ("150.00"); the number rules reject them.
+        price: b.price === null || b.price === undefined || b.price === '' ? null : Number(b.price),
+        amount: b.amount === null || b.amount === undefined || b.amount === '' ? null : Number(b.amount),
         // Defensive slice: the pickers need a bare date even if the API ever
         // starts returning a full timestamp.
         booking_date: String(b.booking_date || '').slice(0, 10),
@@ -410,7 +490,9 @@ onMounted(async () => {
         delivery_address: b.delivery_address || '',
         status: b.status,
         notes: b.notes || '',
+        staff_id: b.staff_id || undefined,
       };
+      runCheck();
     }
   } catch (e) {
     // Legacy failed silently here and left an empty form with empty selects.
@@ -429,4 +511,10 @@ onMounted(async () => {
   gap: 12px;
   width: 100%;
 }
+.staff-check {
+  margin-top: 4px;
+  font-size: 13px;
+}
+.staff-check.ok { color: #135200; }
+.staff-check.bad { color: #a8071a; }
 </style>

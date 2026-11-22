@@ -7,7 +7,7 @@
     </div>
 
     <template v-else>
-      <a-modal v-model:open="scanOpen" :title="'Barcode Scanner'" :footer="null" destroy-on-close>
+      <a-modal v-model:open="scanOpen" :title="$t('Scan_Barcode')" :footer="null" destroy-on-close>
         <QrcodeScanner :qrbox="250" :fps="10" style="width: 100%" @result="onScan" />
       </a-modal>
 
@@ -44,27 +44,27 @@
           </a-col>
 
           <a-col :span="24" v-if="paper_size === 'customstyle' || (paper_size && paper_size.startsWith('sticker_'))">
-            <a-form-item :label="paper_size === 'customstyle' ? 'Custom Sticker Dimensions' : 'Sticker Dimensions'" layout="vertical">
+            <a-form-item :label="paper_size === 'customstyle' ? $t('Bc_Custom_Sticker_Dimensions') : $t('Bc_Sticker_Dimensions')" layout="vertical">
               <a-row :gutter="12">
                 <a-col :span="12">
                   <a-input-number
                     v-model:value="custom_sticker_width" :min="1" style="width: 100%"
-                    placeholder="Width" :disabled="paper_size !== 'customstyle'"
+                    :placeholder="$t('Width')" :disabled="paper_size !== 'customstyle'"
                     @change="updateCustomStickerLabel"
                   />
-                  <small style="color: rgba(var(--ink-rgb), 0.45)">Width (mm)</small>
+                  <small style="color: rgba(var(--ink-rgb), 0.45)">{{ $t('Bc_Width_mm') }}</small>
                 </a-col>
                 <a-col :span="12">
                   <a-input-number
                     v-model:value="custom_sticker_height" :min="1" style="width: 100%"
-                    placeholder="Height" :disabled="paper_size !== 'customstyle'"
+                    :placeholder="$t('Height')" :disabled="paper_size !== 'customstyle'"
                     @change="updateCustomStickerLabel"
                   />
-                  <small style="color: rgba(var(--ink-rgb), 0.45)">Height (mm)</small>
+                  <small style="color: rgba(var(--ink-rgb), 0.45)">{{ $t('Bc_Height_mm') }}</small>
                 </a-col>
               </a-row>
               <small v-if="paper_size !== 'customstyle'" style="color: rgba(var(--ink-rgb), 0.45); display: block; margin-top: 6px">
-                Dimensions are preset. Select "Stickers - Custom" to enter custom dimensions.
+                {{ $t('Bc_Dimensions_Preset_Help') }}
               </small>
             </a-form-item>
           </a-col>
@@ -128,6 +128,16 @@
           <a-col :xs="12" :md="6">
             <a-checkbox v-model:checked="label_settings.show_price" @change="onLabelSettingChanged">
               {{ $t('Display_Price') || 'Display Price' }}
+            </a-checkbox>
+          </a-col>
+          <a-col :xs="12" :md="6">
+            <a-checkbox v-model:checked="label_settings.show_batch" @change="onLabelSettingChanged">
+              {{ $t('Batch_No') }}
+            </a-checkbox>
+          </a-col>
+          <a-col :xs="12" :md="6">
+            <a-checkbox v-model:checked="label_settings.show_expiry" @change="onLabelSettingChanged">
+              {{ $t('Expiry_Date') }}
             </a-checkbox>
           </a-col>
         </a-row>
@@ -225,7 +235,7 @@
         </template>
         <a-table
           :columns="selectedColumns" :data-source="products_added"
-          size="small" :pagination="false" row-key="code"
+          size="small" :pagination="false" :row-key="(r) => r.code + '|' + (r.batch_no || '')"
           :locale="{ emptyText: $t('NodataAvailable') }"
         >
           <template #bodyCell="{ column, record }">
@@ -272,7 +282,14 @@
                       width="1"
                     />
                     <div class="bc-footer" v-if="label_settings.show_price">
-                      <span class="bc-price">{{ auth.currency }} {{ sampleLabel.Net_price }}</span>
+                      <span class="bc-price">{{ labelPrice(sampleLabel.Net_price) }}</span>
+                    </div>
+                    <div
+                      class="bc-meta"
+                      v-if="(label_settings.show_batch && sampleLabel.batch_no) || (label_settings.show_expiry && sampleLabel.expiry_date)"
+                    >
+                      <span v-if="label_settings.show_batch && sampleLabel.batch_no">{{ $t('Bc_Label_Batch_Abbr') }} {{ sampleLabel.batch_no }}</span>
+                      <span v-if="label_settings.show_expiry && sampleLabel.expiry_date">{{ $t('Bc_Label_Exp_Abbr') }} {{ sampleLabel.expiry_date }}</span>
                     </div>
                   </div>
                 </div>
@@ -321,7 +338,14 @@
                   width="1"
                 />
                 <div class="bc-footer" v-if="label_settings.show_price">
-                  <span class="bc-price">{{ auth.currency }} {{ bc.Net_price }}</span>
+                  <span class="bc-price">{{ labelPrice(bc.Net_price) }}</span>
+                </div>
+                <div
+                  class="bc-meta"
+                  v-if="(label_settings.show_batch && bc.batch_no) || (label_settings.show_expiry && bc.expiry_date)"
+                >
+                  <span v-if="label_settings.show_batch && bc.batch_no">{{ $t('Bc_Label_Batch_Abbr') }} {{ bc.batch_no }}</span>
+                  <span v-if="label_settings.show_expiry && bc.expiry_date">{{ $t('Bc_Label_Exp_Abbr') }} {{ bc.expiry_date }}</span>
                 </div>
               </div>
             </div>
@@ -355,6 +379,7 @@ import QrcodeScanner from '../../pos-compat/QrcodeScanner';
 import { useAuthStore } from '../../stores/auth';
 import http from '../../lib/http';
 import { renderLabelRaster } from '../../lib/labelRaster';
+import { withCurrency } from '../../lib/priceFormat';
 import { start as startProgress, done as doneProgress } from '../../lib/progress';
 
 const { t } = useI18n();
@@ -392,6 +417,8 @@ const labelPrinterSize = ref({ width: null, height: null });
 const labelPrinterDpi = ref(203);
 const labelPrinterOffsets = ref({ x: 0, y: 0 });
 const currencyCode = ref('');
+// Label price with the symbol before or after it (System Settings → Currency Position).
+const labelPrice = v => withCurrency(auth.currency, v ?? '', auth.user?.currency_position);
 const printingDirect = ref(false);
 const label_settings = ref({
   template: 'template1',
@@ -399,6 +426,8 @@ const label_settings = ref({
   show_price: true,
   show_barcode: true,
   show_barcode_number: true,
+  show_batch: true,
+  show_expiry: true,
   barcode_height: 28,
   font_size: 10,
   number_font_size: 10,
@@ -426,15 +455,15 @@ const FONT_FAMILIES = [
 // controls; changing any control afterwards flips the selector to "custom".
 const LABEL_TEMPLATES = {
   // Product name + barcode + barcode number + price
-  template1: { show_name: true, show_barcode: true, show_barcode_number: true, show_price: true, barcode_height: 28, font_size: 10, number_font_size: 10, bold_font: true },
+  template1: { show_name: true, show_barcode: true, show_barcode_number: true, show_price: true, show_batch: true, show_expiry: true, barcode_height: 28, font_size: 10, number_font_size: 10, bold_font: true },
   // Product name + price only
-  template2: { show_name: true, show_barcode: false, show_barcode_number: false, show_price: true, barcode_height: 28, font_size: 14, number_font_size: 10, bold_font: true },
+  template2: { show_name: true, show_barcode: false, show_barcode_number: false, show_price: true, show_batch: true, show_expiry: true, barcode_height: 28, font_size: 14, number_font_size: 10, bold_font: true },
   // Barcode only
-  template3: { show_name: false, show_barcode: true, show_barcode_number: true, show_price: false, barcode_height: 42, font_size: 10, number_font_size: 10, bold_font: true },
+  template3: { show_name: false, show_barcode: true, show_barcode_number: true, show_price: false, show_batch: false, show_expiry: false, barcode_height: 42, font_size: 10, number_font_size: 10, bold_font: true },
   // Product name + barcode + price, larger fonts
-  template4: { show_name: true, show_barcode: true, show_barcode_number: false, show_price: true, barcode_height: 24, font_size: 13, number_font_size: 12, bold_font: true },
+  template4: { show_name: true, show_barcode: true, show_barcode_number: false, show_price: true, show_batch: true, show_expiry: true, barcode_height: 24, font_size: 13, number_font_size: 12, bold_font: true },
   // Compact label for small accessories
-  template5: { show_name: true, show_barcode: true, show_barcode_number: true, show_price: true, barcode_height: 16, font_size: 7, number_font_size: 7, bold_font: false },
+  template5: { show_name: true, show_barcode: true, show_barcode_number: true, show_price: true, show_batch: true, show_expiry: true, barcode_height: 16, font_size: 7, number_font_size: 7, bold_font: false },
 };
 
 // Template picker cards — `parts` drives the schematic thumbnail so each card
@@ -466,9 +495,15 @@ const zoomOptions = [
 const sampleLabel = computed(() => {
   const p = products_added.value[0];
   if (p) {
-    return { name: p.name, barcode: p.barcode, Type_barcode: p.Type_barcode, Net_price: p.Net_price };
+    return {
+      name: p.name, barcode: p.barcode, Type_barcode: p.Type_barcode, Net_price: p.Net_price,
+      batch_no: p.batch_no || null, expiry_date: p.expiry_date || null,
+    };
   }
-  return { name: t('Label_Sample_Product'), barcode: '628112345678', Type_barcode: 'CODE128', Net_price: '49.99' };
+  return {
+    name: t('Label_Sample_Product'), barcode: '628112345678', Type_barcode: 'CODE128', Net_price: '49.99',
+    batch_no: 'B-2409', expiry_date: '2027-09-30',
+  };
 });
 
 const SHEET_ITEM_SIZES = {
@@ -497,6 +532,7 @@ const autocompleteOptions = computed(() => product_filter.value.map((p) => ({
 const selectedColumns = computed(() => [
   { title: t('ProductName'), dataIndex: 'name', key: 'name' },
   { title: t('CodeProduct'), dataIndex: 'code', key: 'code' },
+  { title: t('Batch_No'), dataIndex: 'batch_no', key: 'batch_no', width: 150 },
   { title: t('Quantity'), key: 'qte', width: 130, align: 'center' },
   { title: t('Actions') || 'Actions', key: 'actions', width: 80, align: 'center' },
 ]);
@@ -526,36 +562,38 @@ function makeToast(variant, msg, title) {
 }
 
 function getPaperSizeOptions() {
+  const sheet = (n, dims, a4) => t(a4 ? 'Bc_Per_Sheet_A4' : 'Bc_Per_Sheet', { n, dims });
+  const stk = (size) => t('Bc_Stickers_Size', { size });
   const baseOptions = [
-    { label: '40 per sheet (a4) (1.799 * 1.003)', value: 'style40' },
-    { label: '30 per sheet (2.625 * 1)', value: 'style30' },
-    { label: '24 per sheet (a4) (2.48 * 1.334)', value: 'style24' },
-    { label: '20 per sheet (4 * 1)', value: 'style20' },
-    { label: '18 per sheet (a4) (2.5 * 1.835)', value: 'style18' },
-    { label: '14 per sheet (4 * 1.33)', value: 'style14' },
-    { label: '12 per sheet (a4) (2.5 * 2.834)', value: 'style12' },
-    { label: '10 per sheet (4 * 2)', value: 'style10' },
+    { label: sheet(40, '1.799 * 1.003', true), value: 'style40' },
+    { label: sheet(30, '2.625 * 1', false), value: 'style30' },
+    { label: sheet(24, '2.48 * 1.334', true), value: 'style24' },
+    { label: sheet(20, '4 * 1', false), value: 'style20' },
+    { label: sheet(18, '2.5 * 1.835', true), value: 'style18' },
+    { label: sheet(14, '4 * 1.33', false), value: 'style14' },
+    { label: sheet(12, '2.5 * 2.834', true), value: 'style12' },
+    { label: sheet(10, '4 * 2', false), value: 'style10' },
   ];
   const stickerOptions = [
-    { label: 'Stickers - 50mm x 25mm', value: 'sticker_50x25', width: 50, height: 25 },
-    { label: 'Stickers - 50mm x 30mm', value: 'sticker_50x30', width: 50, height: 30 },
-    { label: 'Stickers - 53mm x 32mm (Avery 22806)', value: 'sticker_53x32', width: 53, height: 32 },
-    { label: 'Stickers - 57mm x 32mm', value: 'sticker_57x32', width: 57, height: 32 },
-    { label: 'Stickers - 63mm x 29mm', value: 'sticker_63x29', width: 63, height: 29 },
-    { label: 'Stickers - 63mm x 38mm', value: 'sticker_63x38', width: 63, height: 38 },
-    { label: 'Stickers - 70mm x 36mm', value: 'sticker_70x36', width: 70, height: 36 },
-    { label: 'Stickers - 70mm x 37mm', value: 'sticker_70x37', width: 70, height: 37 },
-    { label: 'Stickers - 74mm x 52mm', value: 'sticker_74x52', width: 74, height: 52 },
-    { label: 'Stickers - 80mm x 50mm', value: 'sticker_80x50', width: 80, height: 50 },
-    { label: 'Stickers - 100mm x 50mm', value: 'sticker_100x50', width: 100, height: 50 },
-    { label: 'Stickers - 100mm x 70mm', value: 'sticker_100x70', width: 100, height: 70 },
-    { label: 'Stickers - 105mm x 37mm', value: 'sticker_105x37', width: 105, height: 37 },
-    { label: 'Stickers - 105mm x 48mm', value: 'sticker_105x48', width: 105, height: 48 },
-    { label: 'Stickers - 105mm x 74mm', value: 'sticker_105x74', width: 105, height: 74 },
-    { label: 'Stickers - 148mm x 105mm (A5)', value: 'sticker_148x105', width: 148, height: 105 },
+    { label: stk('50mm x 25mm'), value: 'sticker_50x25', width: 50, height: 25 },
+    { label: stk('50mm x 30mm'), value: 'sticker_50x30', width: 50, height: 30 },
+    { label: stk('53mm x 32mm (Avery 22806)'), value: 'sticker_53x32', width: 53, height: 32 },
+    { label: stk('57mm x 32mm'), value: 'sticker_57x32', width: 57, height: 32 },
+    { label: stk('63mm x 29mm'), value: 'sticker_63x29', width: 63, height: 29 },
+    { label: stk('63mm x 38mm'), value: 'sticker_63x38', width: 63, height: 38 },
+    { label: stk('70mm x 36mm'), value: 'sticker_70x36', width: 70, height: 36 },
+    { label: stk('70mm x 37mm'), value: 'sticker_70x37', width: 70, height: 37 },
+    { label: stk('74mm x 52mm'), value: 'sticker_74x52', width: 74, height: 52 },
+    { label: stk('80mm x 50mm'), value: 'sticker_80x50', width: 80, height: 50 },
+    { label: stk('100mm x 50mm'), value: 'sticker_100x50', width: 100, height: 50 },
+    { label: stk('100mm x 70mm'), value: 'sticker_100x70', width: 100, height: 70 },
+    { label: stk('105mm x 37mm'), value: 'sticker_105x37', width: 105, height: 37 },
+    { label: stk('105mm x 48mm'), value: 'sticker_105x48', width: 105, height: 48 },
+    { label: stk('105mm x 74mm'), value: 'sticker_105x74', width: 105, height: 74 },
+    { label: stk('148mm x 105mm (A5)'), value: 'sticker_148x105', width: 148, height: 105 },
   ];
   const out = baseOptions.concat(stickerOptions.map((o) => ({ ...o })));
-  out.push({ label: 'Stickers - Custom Value', value: 'customstyle' });
+  out.push({ label: t('Bc_Stickers_Custom_Value'), value: 'customstyle' });
   return out;
 }
 
@@ -606,6 +644,17 @@ function applyLabelSettingsStyle() {
       font-weight: ${weight};
       font-family: ${family};
     }
+    .barcode-item .bc-meta {
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+      font-size: ${Math.max(6, fontSize - 2)}px;
+      line-height: ${Math.max(8, fontSize)}px;
+      font-weight: ${weight};
+      font-family: ${family};
+      white-space: nowrap;
+      text-transform: none;
+    }
   `;
 }
 
@@ -621,7 +670,7 @@ function onLabelSettingChanged() {
 
 function applySavedLabelSettings(saved) {
   if (!saved || typeof saved !== 'object') return;
-  ['template', 'show_name', 'show_price', 'show_barcode', 'show_barcode_number', 'barcode_height', 'font_size', 'number_font_size', 'bold_font', 'font_family']
+  ['template', 'show_name', 'show_price', 'show_barcode', 'show_barcode_number', 'show_batch', 'show_expiry', 'barcode_height', 'font_size', 'number_font_size', 'bold_font', 'font_family']
     .forEach((key) => {
       if (saved[key] !== undefined && saved[key] !== null) label_settings.value[key] = saved[key];
     });
@@ -717,6 +766,9 @@ function generatePages() {
         barcode: product.barcode,
         Type_barcode: product.Type_barcode,
         Net_price: product.Net_price,
+        batch_no: product.batch_no || null,
+        expiry_date: product.expiry_date || null,
+        mfg_date: product.mfg_date || null,
       });
     }
   });
@@ -779,7 +831,7 @@ function search() {
             || (product.note && product.note.toLowerCase().includes(token)),
         ));
         if (product_filter.value.length <= 0) {
-          makeToast('warning', 'Product Not Found', 'Warning');
+          makeToast('warning', t('Product_Not_Found'), t('Warning'));
         }
       }
     }, 800);
@@ -804,6 +856,9 @@ function SearchProduct(result) {
       Type_barcode: result.Type_barcode,
       Net_price: result.Net_price,
       qte: 1,
+      batch_no: null,
+      expiry_date: null,
+      mfg_date: null,
     });
   }
   search_input.value = '';
@@ -851,7 +906,7 @@ function print_all_Barcode(isRetry = false) {
       nextTick(() => print_all_Barcode(true));
     } else {
       isPrinting = false;
-      makeToast('warning', t('Paper_size') || 'Please select a paper size', t('Warning'));
+      makeToast('warning', t('Bc_Select_Paper_Size'), t('Warning'));
     }
     return;
   }
@@ -878,8 +933,18 @@ function print_all_Barcode(isRetry = false) {
 }
 
 function loadPurchaseBarcodes(purchaseId) {
+  loadDocumentBarcodes('purchases/' + purchaseId + '/barcodes');
+}
+
+// Finished goods off a production order: one label per unit, each carrying
+// the batch number and expiry the order was completed with.
+function loadProductionOrderBarcodes(orderId) {
+  loadDocumentBarcodes('mrp/production-orders/' + orderId + '/barcodes');
+}
+
+function loadDocumentBarcodes(url) {
   startProgress();
-  http.get('purchases/' + purchaseId + '/barcodes')
+  http.get(url)
     .then((data) => {
       data = data || {};
       if (data.warehouse_id) barcode.value.warehouse_id = data.warehouse_id;
@@ -891,6 +956,9 @@ function loadPurchaseBarcodes(purchaseId) {
         Type_barcode: p.Type_barcode,
         Net_price: p.Net_price,
         qte: p.qte,
+        batch_no: p.batch_no || null,
+        expiry_date: p.expiry_date || null,
+        mfg_date: p.mfg_date || null,
       }));
       if (!paper_size.value) {
         paper_size.value = 'style40';
@@ -999,6 +1067,8 @@ onMounted(async () => {
 
   const purchaseId = route.query ? route.query.purchase_id : null;
   if (purchaseId) loadPurchaseBarcodes(purchaseId);
+  const productionOrderId = route.query ? route.query.production_order_id : null;
+  if (productionOrderId) loadProductionOrderBarcodes(productionOrderId);
 });
 
 onBeforeUnmount(() => {

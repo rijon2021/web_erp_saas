@@ -64,7 +64,10 @@ class SubscriptionLifecycleService
      */
     public function markPaid(TenantBillingPayment $payment, array $gatewayMeta = []): array
     {
-        if ($payment->isPaid()) {
+        // Refunded is final too — a replayed "paid" webhook must not re-activate
+        // the subscription or re-send the receipt. Reported as already settled
+        // so callers short-circuit.
+        if ($payment->isPaid() || $payment->isRefunded()) {
             return [
                 'already_paid'             => true,
                 'subscription_activated'   => false,
@@ -97,18 +100,24 @@ class SubscriptionLifecycleService
         $tenant = $payment->tenant;
         if ($tenant) {
             $settings = GeneralSetting::instance();
-            if ($tenant->status === Tenant::STATUS_PENDING && ! $settings->isSharedHosting()) {
+            // A payment-link charge is not a plan payment: it must not provision
+            // a pending workspace on its own — the admin still approves it.
+            if ($tenant->status === Tenant::STATUS_PENDING && ! $settings->isSharedHosting() && ! $payment->payment_link_id) {
                 ProvisionTenantWorkspace::dispatchAfterResponse($tenant->id);
                 Log::info("SubscriptionLifecycleService: provisioning dispatched for tenant {$tenant->id} after payment {$payment->id}.");
                 $provisioningDispatched = true;
             }
 
-            try {
-                EmailNotificationService::paymentSuccess($tenant, [
-                    '{{amount}}' => GeneralSetting::currencySymbol() . number_format((float) $payment->amount, 2),
-                ], $subscription);
-            } catch (\Throwable $e) {
-                Log::warning("SubscriptionLifecycleService: paymentSuccess email failed for tenant {$tenant->id}: {$e->getMessage()}");
+            // The payment_success template speaks about the plan and its expiry,
+            // which is wrong for a custom-amount payment link — skip it there.
+            if (! $payment->payment_link_id) {
+                try {
+                    EmailNotificationService::paymentSuccess($tenant, [
+                        '{{amount}}' => GeneralSetting::currencySymbol() . number_format((float) $payment->amount, 2),
+                    ], $subscription);
+                } catch (\Throwable $e) {
+                    Log::warning("SubscriptionLifecycleService: paymentSuccess email failed for tenant {$tenant->id}: {$e->getMessage()}");
+                }
             }
         }
 
@@ -126,14 +135,18 @@ class SubscriptionLifecycleService
      */
     public function markFailed(TenantBillingPayment $payment): void
     {
-        if ($payment->status === TenantBillingPayment::STATUS_FAILED) {
+        if (in_array($payment->status, [
+            TenantBillingPayment::STATUS_FAILED,
+            TenantBillingPayment::STATUS_PAID,
+            TenantBillingPayment::STATUS_REFUNDED,
+        ], true)) {
             return;
         }
 
         $payment->markFailed();
 
         $tenant = $payment->tenant;
-        if ($tenant) {
+        if ($tenant && ! $payment->payment_link_id) {
             try {
                 EmailNotificationService::paymentFailed($tenant, [
                     '{{amount}}' => GeneralSetting::currencySymbol() . number_format((float) $payment->amount, 2),

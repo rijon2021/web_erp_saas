@@ -90,7 +90,7 @@
             <template v-if="column.key === 'product'">
               <div style="font-weight: 500">{{ record.name }}</div>
               <div class="muted">{{ record.code }}</div>
-              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">Batch</a-tag>
+              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">{{ $t('Batch') }}</a-tag>
               <a-select
                 :value="record.price_type"
                 size="small"
@@ -224,7 +224,7 @@
               <!-- Loyalty points -> discount. Legacy gates this on the customer
                    being royalty-eligible AND the tax/discount edit permission. -->
               <a-col v-if="clientIsEligible && auth.can('edit_tax_discount_shipping_sale')" :span="24">
-                <a-form-item label="Points to convert">
+                <a-form-item :label="$t('Points_to_convert')">
                   <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
                     <a-input-number
                       :value="points_to_convert"
@@ -232,7 +232,7 @@
                       :max="selectedClientPoints"
                       :step="1"
                       :disabled="selectedClientPoints === 0 || pointsConverted"
-                      placeholder="e.g., 200"
+                      :placeholder="$t('Points_Example_Placeholder')"
                       style="width: 160px"
                       @update:value="onPointsToConvertInput"
                     />
@@ -241,15 +241,15 @@
                       :disabled="!pointsConverted && (selectedClientPoints === 0 || !pointsInputValid)"
                       @click="convertPointsToDiscount"
                     >
-                      {{ pointsConverted ? 'Unconverted' : 'Convert' }}
+                      {{ pointsConverted ? $t('Unconverted') : $t('Convert') }}
                     </a-button>
-                    <span class="muted">Total available: <strong>{{ selectedClientPoints }}</strong> pts</span>
+                    <span class="muted">{{ $t('Total_available') }}: <strong>{{ selectedClientPoints }}</strong> {{ $t('Points_Abbr') }}</span>
                   </div>
                   <div v-if="!pointsConverted && points_to_convert && !pointsInputValid" class="form-warn">
-                    Enter a value from 1 to your available points.
+                    {{ $t('Enter_Points_Value_Range') }}
                   </div>
                   <div v-if="pointsState.discount_from_points > 0" style="margin-top: 4px; color: #52c41a">
-                    Discount of <strong>{{ docMoney(pointsState.discount_from_points) }}</strong> will be applied
+                    {{ $t('Discount_of') }} <strong>{{ docMoney(pointsState.discount_from_points) }}</strong> {{ $t('pos.will_be_applied') }}
                   </div>
                 </a-form-item>
               </a-col>
@@ -271,6 +271,11 @@
                     {{ $t('Promotions') }}<span v-if="appliedPromotions.length"> ({{ appliedPromotions.map(p => p.name).join(', ') }})</span>:
                     − {{ docMoney(totals.promoDiscount) }}
                   </div>
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="12">
+                <a-form-item :label="$t('Order_Reference')" :extra="$t('Order_Reference_Help')">
+                  <a-input v-model:value="sale.order_reference" :maxlength="100" allow-clear />
                 </a-form-item>
               </a-col>
               <a-col :span="24">
@@ -315,7 +320,12 @@
                       style="flex: 1 1 140px"
                       @update:value="v => onPaymentLineInput(line, v)"
                     />
+                    <!-- Customer Wallet tender: no cash account. -->
+                    <a-tag v-if="saleWallet.isWalletMethod(line.payment_method_id)" color="green" style="flex: 1 1 160px; margin: 0; padding: 4px 8px">
+                      {{ $t('SW_Wallet_Balance') }}: {{ moneyBase(saleWallet.balance.value) }}
+                    </a-tag>
                     <a-select
+                      v-else
                       v-model:value="line.account_id"
                       allow-clear
                       :placeholder="$t('Choose_Account')"
@@ -335,6 +345,12 @@
                     <template #icon><PlusOutlined /></template>
                     {{ $t('Add_Payment_Method') }}
                   </a-button>
+
+                  <a-alert
+                    v-if="payment_lines.some(l => saleWallet.isWalletMethod(l.payment_method_id))"
+                    :type="saleWallet.frozen.value ? 'error' : 'info'" show-icon style="margin: 8px 0"
+                    :message="saleWallet.frozen.value ? $t('CW_Err_wallet_frozen') : `${$t('CW_Pay_From_Wallet_Help')} — ${$t('SW_Wallet_Balance')}: ${moneyBase(saleWallet.balance.value)}`"
+                  />
 
                   <div class="pay-summary">
                     <span><strong>{{ $t('Paying') }}:</strong> {{ docMoney(totalPaidLines) }}</span>
@@ -409,8 +425,8 @@
               <a-select
                 v-model:value="lineDraft.tax_method"
                 :options="[
-                  { value: '1', label: 'Exclusive' },
-                  { value: '2', label: 'Inclusive' },
+                  { value: '1', label: $t('Tax_Exclusive') },
+                  { value: '2', label: $t('Tax_Inclusive') },
                 ]"
               />
             </a-form-item>
@@ -444,6 +460,11 @@
           <a-col v-if="editingLine.is_imei" :span="24">
             <a-form-item :label="$t('IMEI_SN')">
               <SerialPicker :line="editingLine" :warehouse-id="sale.warehouse_id" />
+            </a-form-item>
+          </a-col>
+          <a-col v-else-if="hasComboSerials(editingLine)" :span="24">
+            <a-form-item :label="$t('IMEI_SN')">
+              <ComboSerialPicker :line="editingLine" :warehouse-id="sale.warehouse_id" :base-params="comboSerialParams" />
             </a-form-item>
           </a-col>
           <a-col v-if="editingLine.is_batch_tracked" :span="24">
@@ -497,15 +518,20 @@ import dayjs from 'dayjs';
 import PageHeader from '../../components/PageHeader.vue';
 import QuickAddParty from '../../components/QuickAddParty.vue';
 import SerialPicker from '../../components/SerialPicker.vue';
+import ComboSerialPicker from '../../components/ComboSerialPicker.vue';
+import { hasComboSerials, comboSerialMismatch } from '../../lib/comboSerials';
+import { lineSerialUnits, loadUnitFactors } from '../../lib/serialUnits';
 import BatchAllocator from '../../components/BatchAllocator.vue';
 import ProductScanModal from '../../components/ProductScanModal.vue';
 import { useFormat } from '../../composables/useFormat';
+import { useCustomerWalletTender, customerWalletError } from '../../composables/useCustomerWallet';
 import { useDocCurrency } from '../../composables/useDocCurrency';
 import { useAuthStore } from '../../stores/auth';
 import { usePlanStore } from '../../stores/plan';
 import { recomputeLine, computeTotals } from '../../lib/lineCalc';
 import { hasBatchSelectErrors, firstBatchSelectError } from '../../lib/batchValidation';
 import { resolveScan } from '../../lib/scanMatch';
+import { scaleConfig, unitPriceForTotal } from '../../lib/scaleBarcode';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -582,8 +608,20 @@ const serialsOf = line =>
     ? line.serial_numbers
     : String(line.imei_number || '').split(/[\r\n,;\t]+/).map(s => s.trim()).filter(Boolean);
 
+// Combo lines are checked per tracked component (lib/comboSerials).
 const serialCountMismatch = line =>
-  !!line.is_imei && serialsOf(line).length !== Math.round(Number(line.quantity) || 0);
+  line.serials_optional && !serialsOf(line).length
+    ? false
+    : hasComboSerials(line)
+      ? comboSerialMismatch(line)
+      : !!line.is_imei && serialsOf(line).length !== lineSerialUnits(line);
+// One serial per base unit: the line's quantity × pack × sale-unit factor.
+loadUnitFactors();
+
+// On edit the combo pickers also list the serials this sale already sold.
+const comboSerialParams = computed(() => (sale.value.warehouse_id
+  ? { warehouse_id: sale.value.warehouse_id, ...(isEdit.value ? { include_sale_id: id.value } : {}) }
+  : null));
 
 // Legacy disables submit on these two, in addition to blocking in verifiedForm.
 const hasMinPriceViolation = computed(() =>
@@ -601,6 +639,7 @@ const sale = ref({
   seller_id: undefined,
   statut: 'completed',
   notes: '',
+  order_reference: '',
   tax_rate: 0,
   discount: 0,
   discount_Method: '2',
@@ -723,6 +762,14 @@ watch(
   ],
   schedulePromotionRefresh
 );
+
+// Customer Wallet: which payment method is the wallet tender + the selected
+// customer's balance (GET customer_wallets/{id}/summary always answers).
+const saleWallet = useCustomerWalletTender();
+watch(() => sale.value.client_id, cid => {
+  if (isEdit.value) return;
+  saleWallet.load(cid);
+}, { immediate: true });
 
 // Loyalty points: `point_to_amount_rate` comes from sales/create and converts
 // points to currency. Available points drop as soon as a conversion is applied
@@ -948,19 +995,42 @@ function onWarehouseChange() {
 }
 
 // Camera / handheld scan: match the code exactly as legacy search() did
-// (weighing-scale 13-digit codes included) and add the product, applying the
-// embedded weight as the quantity when the scale barcode carries one.
+// (weighing-scale labels included, read with System Settings > Weighing
+// scale) and add the product, applying the label's weight as the quantity.
 async function onScan(code) {
-  const hit = resolveScan(products.value, code, { weighing: true });
+  const hit = resolveScan(products.value, code, {
+    weighing: true,
+    scale: scaleConfig(posSettings.value),
+    priceOf: p => Number(p.Net_price),
+  });
   if (!hit) {
     message.warning(t('Product_Not_Found'));
     return;
   }
   const p = products.value[hit.idx];
+  const lineOf = () => p && lines.value.find(
+    l => l.product_id === p.id && (l.product_variant_id ?? 0) === (p.product_variant_id ?? 0)
+  );
+  // A second weighed pack of the same product adds its weight to the line.
+  const before = hit.weight != null ? lineOf() : null;
+  const prevQty = before ? Number(before.quantity) || 0 : 0;
+  const prevTotal = before ? Number(before.subtotal) || 0 : 0;
   await onProductPicked(hit.idx);
   if (hit.weight != null && p) {
-    const line = lines.value.find(l => l.product_id === p.id);
-    if (line) setQty(line, hit.weight);
+    const line = lineOf();
+    if (!line) return;
+    const wanted = Math.round((prevQty + hit.weight) * 1000) / 1000;
+    setQty(line, wanted);
+    // Price label: charge exactly what the label(s) printed — unless the
+    // quantity was cut to the stock, or a pack fixes the price.
+    const pack = getSelectedPack(line);
+    if (hit.price != null && Number(line.quantity) === wanted && !(pack && !pack.is_default)) {
+      const unit = unitPriceForTotal(line, prevTotal + hit.price);
+      if (unit != null) {
+        line.Unit_price = unit;
+        recomputeLine(line);
+      }
+    }
   }
 }
 
@@ -1007,6 +1077,8 @@ async function onProductPicked(idx) {
       is_imei: d.is_imei,
       imei_number: '',
       serial_numbers: [],
+      serial_components: d.serial_components || [],
+      serial_groups: {},
       is_batch_tracked: !!d.is_batch_tracked,
       batches: [],
       etat: 'new',
@@ -1416,6 +1488,7 @@ async function submit() {
     seller_id: sale.value.seller_id || null,
     statut: sale.value.statut,
     notes: sale.value.notes,
+    order_reference: sale.value.order_reference || null,
     tax_rate: Number(sale.value.tax_rate) || 0,
     TaxNet: totals.value.TaxNet,
     discount: Number(sale.value.discount) || 0,
@@ -1443,7 +1516,7 @@ async function submit() {
             .map(l => ({
               amount: Number(l.amount) || 0,
               payment_method_id: l.payment_method_id,
-              account_id: l.account_id || null,
+              account_id: saleWallet.isWalletMethod(l.payment_method_id) ? null : (l.account_id || null),
             }))
         : [];
       const amount = effective === 'pending' ? 0 : totalPaidLines.value;
@@ -1473,7 +1546,7 @@ async function submit() {
   } catch (e) {
     const errors = e?.data?.errors;
     if (errors) Object.values(errors).flat().forEach(msg => message.error(String(msg)));
-    else message.error(e?.data?.message || t('InvalidData'));
+    else message.error(customerWalletError(e));
   } finally {
     submitting.value = false;
   }
@@ -1519,6 +1592,7 @@ onMounted(async () => {
         seller_id: undefined,
         statut: q.statut || 'completed',
         notes: q.notes || '',
+        order_reference: '',
         tax_rate: Number(q.tax_rate) || 0,
         discount: Number(q.discount) || 0,
         discount_Method: '2',
@@ -1535,7 +1609,12 @@ onMounted(async () => {
           tax_method: String(d.tax_method ?? '1'),
           is_batch_tracked: !!d.is_batch_tracked,
           batches: [],
-          serial_numbers: [],
+          // The quotation's serials carry over (re-checked when the sale saves).
+          serial_numbers: d.is_imei && d.imei_number
+            ? String(d.imei_number).split(/[\r\n,;\t]+/).map(s => s.trim()).filter(Boolean)
+            : [],
+          serial_components: d.serial_components || [],
+          serial_groups: d.serial_groups || {},
           price_type: d.price_type || 'retail',
           retail_unit_price: d.Unit_price,
           wholesale_unit_price: d.Unit_price_wholesale,
@@ -1544,6 +1623,11 @@ onMounted(async () => {
           pack_multiplier: d.pack_multiplier ?? 1,
           pack_name: d.pack_name ?? null,
         };
+        // Combo: keep only the quotation serials that resolved to a component.
+        if (hasComboSerials(line)) {
+          line.serial_numbers = line.serial_components.flatMap(c => line.serial_groups[c.product_id] || []);
+          line.imei_number = line.serial_numbers.join(',');
+        }
         recomputeLine(line);
         return line;
       });
@@ -1567,6 +1651,7 @@ onMounted(async () => {
         seller_id: s.seller_id || undefined,
         statut: s.statut,
         notes: s.notes || '',
+        order_reference: s.order_reference || '',
         tax_rate: Number(s.tax_rate) || 0,
         discount: Number(s.discount) || 0,
         discount_Method: dm === '1' || dm === 'percent' || dm === 'percentage' ? '1' : '2',
@@ -1589,9 +1674,11 @@ onMounted(async () => {
           // Legacy edit prefills the picker from the stored IMEI text.
           serial_numbers: Array.isArray(d.serial_numbers)
             ? d.serial_numbers
-            : (d.is_imei && d.imei_number
+            : ((d.is_imei || hasComboSerials(d)) && d.imei_number
                 ? String(d.imei_number).split(/[\r\n,;\t]+/).map(s => s.trim()).filter(Boolean)
                 : []),
+          serial_components: d.serial_components || [],
+          serial_groups: d.serial_groups || {},
           price_type: d.price_type || 'retail',
           retail_unit_price: d.retail_unit_price ?? d.Unit_price,
           wholesale_unit_price: d.wholesale_unit_price ?? d.Unit_price_wholesale,
@@ -1600,6 +1687,9 @@ onMounted(async () => {
           pack_multiplier: d.pack_multiplier ?? 1,
           pack_name: d.pack_name ?? null,
         };
+        // Saved without serials (before tracking, or a channel order): may stay
+        // empty on edit — "Assign serials" on the sale page can add them later.
+        line.serials_optional = !line.serial_numbers.length;
         recomputeLine(line);
         return line;
       });

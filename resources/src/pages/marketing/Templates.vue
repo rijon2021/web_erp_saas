@@ -57,7 +57,11 @@
         <a-form-item v-if="templateType === 'email'" :label="$t('Email_Subject')" name="subject">
           <a-input v-model:value="form.subject" />
         </a-form-item>
-        <a-form-item :label="$t('Message_Content')" name="content">
+        <WhatsAppTemplateFields v-if="templateType === 'whatsapp'" :model="form" />
+        <a-form-item
+          :label="$t('Message_Content')" name="content"
+          :extra="usesWaTemplate ? $t('Mk_WA_Content_With_Template') : ''"
+        >
           <a-textarea v-model:value="form.content" :rows="templateType === 'email' ? 8 : 4" />
         </a-form-item>
         <div style="color: rgba(var(--ink-rgb), 0.45); font-size: 12px">
@@ -85,6 +89,7 @@ import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { PERSONALIZATION_VARIABLES } from './marketingVocab';
+import WhatsAppTemplateFields from './WhatsAppTemplateFields.vue';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -116,16 +121,24 @@ const modalOpen = ref(false);
 const saving = ref(false);
 const editing = ref(null);
 const formRef = ref();
-const form = ref({ name: '', category: '', subject: '', content: '' });
+const blankForm = () => ({
+  name: '', category: '', subject: '', content: '',
+  wa_template_name: '', wa_template_language: '', wa_template_params: [],
+});
+const form = ref(blankForm());
+
+// A Meta template carries the message, so the free-text body becomes optional.
+const usesWaTemplate = computed(() =>
+  templateType === 'whatsapp' && !!String(form.value.wa_template_name || '').trim());
 
 const formRules = computed(() => ({
   name: [{ required: true, message: t('Field_is_required') }],
-  content: [{ required: true, message: t('Field_is_required') }],
+  content: [{ required: !usesWaTemplate.value, message: t('Field_is_required') }],
 }));
 
 function openCreate() {
   editing.value = null;
-  form.value = { name: '', category: '', subject: '', content: '' };
+  form.value = blankForm();
   modalOpen.value = true;
 }
 
@@ -136,6 +149,9 @@ function openEdit(record) {
     category: record.category || '',
     subject: record.subject || '',
     content: record.content || '',
+    wa_template_name: record.wa_template_name || '',
+    wa_template_language: record.wa_template_language || '',
+    wa_template_params: Array.isArray(record.wa_template_params) ? [...record.wa_template_params] : [],
   };
   modalOpen.value = true;
 }

@@ -9,6 +9,12 @@ import { uploadUrl } from '../lib/uploadUrl';
  */
 const AUTH_CACHE_KEY = 'stocky_auth_cache_v1';
 
+// Brand part of the workspace's app name ("Name | tagline"), set by
+// master.blade.php — the fallback where a branding field is empty.
+function brandName() {
+    return String((typeof window !== 'undefined' && window.__appName) || '').split('|')[0].trim();
+}
+
 function readAuthCache() {
     try {
         const raw = window.localStorage.getItem(AUTH_CACHE_KEY);
@@ -33,6 +39,12 @@ export const useAuthStore = defineStore('auth', {
         // Base currency id (settings.currency_id) — document pickers default to it.
         defaultCurrencyId: s => (s.user && s.user.default_currency_id) || null,
         username: s => (s.user && s.user.username) || '',
+        // Opt-in restrictions (role builder → Products): a role carrying
+        // hide_product_cost never sees cost prices or cost-derived figures
+        // (stock value at cost, COGS, profit, margin); disable_product_export
+        // removes the export/print buttons on product & stock data. UI-only.
+        canSeeCost: s => !s.permissions.includes('hide_product_cost'),
+        canExportProducts: s => !s.permissions.includes('disable_product_export'),
         // Tenant upload folder (uploadUrl) — legacy: $imgUrl('avatar', …) with
         // no_avatar.png when the user has none.
         avatarUrl: s => uploadUrl('avatar', (s.user && s.user.avatar) || 'no_avatar.png'),
@@ -41,7 +53,7 @@ export const useAuthStore = defineStore('auth', {
 
         // ---- Branding (settings) — the same fields the legacy layout reads ----
         // Company name, blank when the admin chose to hide the site name.
-        companyName: s => (s.user && !s.user.hide_site_name ? (s.user.company || 'Stocky') : ''),
+        companyName: s => (s.user && !s.user.hide_site_name ? (s.user.company || brandName()) : ''),
         // Uploaded logo under the tenant settings folder (legacy:
         // $imgUrl('settings', logo)), or null to fall back to an initial.
         logoUrl: s => (s.user && s.user.logo ? uploadUrl('settings', s.user.logo) : null),
@@ -53,10 +65,13 @@ export const useAuthStore = defineStore('auth', {
             height: ((s.user && s.user.sidebar_logo_height) || 32) + 'px',
         }),
         // First letter of the company, the legacy placeholder when there's no logo.
-        brandInitial: s => ((s.user && s.user.company && s.user.company[0]) || 'S').toUpperCase(),
+        brandInitial: s => ((s.user && s.user.company && s.user.company[0]) || brandName()[0] || 'S').toUpperCase(),
         // Custom footer line and the "developed by" credit.
         footerText: s => (s.user && s.user.footer) || '',
-        developedBy: s => (s.user && s.user.developed_by) || 'Stocky',
+        developedBy: s => (s.user && s.user.developed_by) || brandName(),
+        // Plan feature remove_branding: may the tenant edit the two above?
+        // (Server-enforced too; without it the payload carries the platform's.)
+        canRemoveBranding: s => !!(s.user && s.user.can_remove_branding),
         // Admin module toggles (System Settings → Modules). Null map or a
         // missing key = module enabled, so fresh installs show everything.
         moduleEnabled: s => key => isModuleEnabled(s.user && s.user.module_flags, key),

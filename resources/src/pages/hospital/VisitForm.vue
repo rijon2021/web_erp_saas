@@ -1,8 +1,8 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="isEdit ? 'Edit consultation' : 'New consultation'"
-      :breadcrumb="['Hospital', 'Consultations', isEdit ? $t('Edit') : $t('Add')]"
+      :title="isEdit ? $t('Hm_Edit_Consultation') : $t('Hm_New_Consultation')"
+      :breadcrumb="[$t('Hm_Hospital'), $t('Hm_Consultations'), isEdit ? $t('Edit') : $t('Add')]"
     >
       <template #actions>
         <a-button @click="$router.push('/hospital/visits')">{{ $t('Cancel') }}</a-button>
@@ -20,10 +20,10 @@
 
       <a-row :gutter="16">
         <a-col :xs="24" :xl="16">
-          <a-card size="small" title="Encounter" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Hm_Encounter')" style="margin-bottom: 16px">
             <a-row :gutter="16">
               <a-col :span="24">
-                <a-form-item label="Patient *" name="patient_id">
+                <a-form-item :label="$t('Hm_Patient') + ' *'" name="patient_id">
                   <PatientPicker
                     v-model="form.patient_id" :initial-option="initialPatient"
                     @select="onPatientSelect"
@@ -31,23 +31,23 @@
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
-                <a-form-item label="Doctor">
+                <a-form-item :label="$t('Hm_Doctor')">
                   <a-select
                     v-model:value="form.doctor_id" allow-clear show-search option-filter-prop="label"
-                    :options="doctorOptions" placeholder="Select" @change="onDoctorChange"
+                    :options="doctorOptions" :placeholder="$t('Hm_Select')" @change="onDoctorChange"
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
-                <a-form-item label="Department">
+                <a-form-item :label="$t('Hm_Department')">
                   <a-select
                     v-model:value="form.department_id" allow-clear show-search
-                    option-filter-prop="label" :options="departmentOptions" placeholder="None"
+                    option-filter-prop="label" :options="departmentOptions" :placeholder="$t('Hm_None')"
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="8">
-                <a-form-item label="Date & time *" name="visit_date">
+                <a-form-item :label="$t('Hm_Date_And_Time') + ' *'" name="visit_date">
                   <a-date-picker
                     v-model:value="form.visit_date" show-time style="width: 100%"
                     value-format="YYYY-MM-DD HH:mm:ss"
@@ -55,52 +55,52 @@
                 </a-form-item>
               </a-col>
               <a-col :xs="8" :md="8">
-                <a-form-item label="Type *" name="type">
+                <a-form-item :label="$t('Type') + ' *'" name="type">
                   <a-select v-model:value="form.type" :options="VISIT_TYPES" />
                 </a-form-item>
               </a-col>
               <a-col :xs="8" :md="8">
-                <a-form-item label="Status *" name="status">
+                <a-form-item :label="$t('Status') + ' *'" name="status">
                   <a-select v-model:value="form.status" :options="VISIT_STATUSES" />
                 </a-form-item>
               </a-col>
               <a-col :xs="8" :md="8">
-                <a-form-item label="Fee">
+                <a-form-item :label="$t('Hm_Fee')">
                   <a-input-number v-model:value="form.fee" :min="0" style="width: 100%" />
                 </a-form-item>
               </a-col>
             </a-row>
           </a-card>
 
-          <a-card size="small" title="Clinical notes" style="margin-bottom: 16px">
-            <a-form-item label="Presenting complaint">
-              <a-textarea v-model:value="form.complaint" :rows="2" placeholder="What the patient reports" />
+          <a-card size="small" :title="$t('Hm_Clinical_Notes')" style="margin-bottom: 16px">
+            <a-form-item :label="$t('Hm_Presenting_Complaint')">
+              <a-textarea v-model:value="form.complaint" :rows="2" :placeholder="$t('Hm_Complaint_Placeholder')" />
             </a-form-item>
-            <a-form-item label="Examination">
-              <a-textarea v-model:value="form.examination" :rows="3" placeholder="Findings on examination" />
+            <a-form-item :label="$t('Hm_Examination')">
+              <a-textarea v-model:value="form.examination" :rows="3" :placeholder="$t('Hm_Examination_Placeholder')" />
             </a-form-item>
-            <a-form-item label="Diagnosis">
+            <a-form-item :label="$t('Hm_Diagnosis')">
               <a-textarea v-model:value="form.diagnosis" :rows="2" />
             </a-form-item>
             <a-row :gutter="16">
               <a-col :xs="24" :md="16">
-                <a-form-item label="Treatment plan" style="margin-bottom: 0">
+                <a-form-item :label="$t('Hm_Treatment_Plan')" style="margin-bottom: 0">
                   <a-textarea v-model:value="form.treatment_plan" :rows="2" />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="8">
-                <a-form-item label="Follow-up date" style="margin-bottom: 0">
+                <a-form-item :label="$t('Hm_Follow_Up_Date')" style="margin-bottom: 0">
                   <a-date-picker v-model:value="form.follow_up_date" style="width: 100%" value-format="YYYY-MM-DD" />
                 </a-form-item>
               </a-col>
             </a-row>
           </a-card>
 
-          <a-card size="small" title="Prescription">
+          <a-card size="small" :title="$t('Hm_Prescription')">
             <template #extra>
               <a-button size="small" type="primary" ghost @click="addItem">
                 <template #icon><PlusOutlined /></template>
-                Add medicine
+                {{ $t('Hm_Add_Medicine') }}
               </a-button>
             </template>
 
@@ -108,97 +108,97 @@
               <div v-for="(item, i) in items" :key="i" class="rx-row">
                 <a-select
                   v-model:value="item.medicine" show-search :filter-option="false"
-                  :options="medicineOptions" class="rx-med" placeholder="Medicine"
-                  :not-found-content="medLoading ? undefined : 'Type to search the pharmacy, or enter any name'"
+                  :options="medicineOptions" class="rx-med" :placeholder="$t('Hm_Medicine')"
+                  :not-found-content="medLoading ? undefined : $t('Hm_Medicine_Search_Hint')"
                   @search="searchMedicines" @change="(v, o) => onMedicineChange(item, v, o)"
                 >
                   <template v-if="medLoading" #notFoundContent><a-spin size="small" /></template>
                 </a-select>
-                <a-input v-model:value="item.dosage" placeholder="Dose" class="rx-sm" />
-                <a-input v-model:value="item.frequency" placeholder="Frequency" class="rx-sm" />
-                <a-input v-model:value="item.duration" placeholder="Duration" class="rx-sm" />
-                <a-input-number v-model:value="item.quantity" :min="0" placeholder="Qty" class="rx-qty" />
-                <a-input v-model:value="item.instructions" placeholder="Instructions" class="rx-note" />
+                <a-input v-model:value="item.dosage" :placeholder="$t('Hm_Dose')" class="rx-sm" />
+                <a-input v-model:value="item.frequency" :placeholder="$t('Hm_Frequency')" class="rx-sm" />
+                <a-input v-model:value="item.duration" :placeholder="$t('Hm_Duration')" class="rx-sm" />
+                <a-input-number v-model:value="item.quantity" :min="0" :placeholder="$t('Hm_Qty')" class="rx-qty" />
+                <a-input v-model:value="item.instructions" :placeholder="$t('Hm_Instructions')" class="rx-note" />
                 <a-button type="text" danger @click="items.splice(i, 1)">
                   <template #icon><DeleteOutlined /></template>
                 </a-button>
               </div>
             </div>
-            <a-empty v-else :image="simpleEmptyImage" description="Nothing prescribed" style="padding: 16px 0" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Hm_Nothing_Prescribed')" style="padding: 16px 0" />
 
-            <a-form-item label="Prescription notes" style="margin: 12px 0 0">
+            <a-form-item :label="$t('Hm_Prescription_Notes')" style="margin: 12px 0 0">
               <a-textarea v-model:value="form.prescription_notes" :rows="2" />
             </a-form-item>
           </a-card>
         </a-col>
 
         <a-col :xs="24" :xl="8">
-          <a-card size="small" title="Vitals" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Hm_Vitals')" style="margin-bottom: 16px">
             <a-row :gutter="12">
               <a-col :span="12">
-                <a-form-item label="Temperature °C" name="temperature">
+                <a-form-item :label="$t('Hm_Temperature_C')" name="temperature">
                   <a-input-number v-model:value="form.temperature" :min="20" :max="50" :step="0.1" style="width: 100%" />
                   <VitalHint :tone="tone('temperature', form.temperature)" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="Pulse bpm" name="pulse">
+                <a-form-item :label="$t('Hm_Pulse_Bpm')" name="pulse">
                   <a-input-number v-model:value="form.pulse" :min="0" :max="300" style="width: 100%" />
                   <VitalHint :tone="tone('pulse', form.pulse)" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="BP systolic" name="bp_systolic">
+                <a-form-item :label="$t('Hm_BP_Systolic')" name="bp_systolic">
                   <a-input-number v-model:value="form.bp_systolic" :min="0" :max="300" style="width: 100%" />
                   <VitalHint :tone="tone('bp_systolic', form.bp_systolic)" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="BP diastolic" name="bp_diastolic">
+                <a-form-item :label="$t('Hm_BP_Diastolic')" name="bp_diastolic">
                   <a-input-number v-model:value="form.bp_diastolic" :min="0" :max="200" style="width: 100%" />
                   <VitalHint :tone="tone('bp_diastolic', form.bp_diastolic)" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="Resp. rate" name="respiratory_rate">
+                <a-form-item :label="$t('Hm_Resp_Rate')" name="respiratory_rate">
                   <a-input-number v-model:value="form.respiratory_rate" :min="0" :max="120" style="width: 100%" />
                   <VitalHint :tone="tone('respiratory_rate', form.respiratory_rate)" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="SpO₂ %" name="spo2">
+                <a-form-item :label="$t('Hm_SpO2')" name="spo2">
                   <a-input-number v-model:value="form.spo2" :min="0" :max="100" style="width: 100%" />
                   <VitalHint :tone="tone('spo2', form.spo2)" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="Weight kg" name="weight">
+                <a-form-item :label="$t('Hm_Weight_Kg')" name="weight">
                   <a-input-number v-model:value="form.weight" :min="0" :max="600" :step="0.1" style="width: 100%" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="Height cm" name="height">
+                <a-form-item :label="$t('Hm_Height_Cm')" name="height">
                   <a-input-number v-model:value="form.height" :min="0" :max="300" :step="0.5" style="width: 100%" />
                 </a-form-item>
               </a-col>
             </a-row>
 
             <div v-if="bmi" class="bmi">
-              <span class="bmi-label">BMI</span>
+              <span class="bmi-label">{{ $t('Hm_BMI') }}</span>
               <span class="bmi-value">{{ bmi }}</span>
               <a-tag v-if="band" :color="band.color">{{ band.label }}</a-tag>
             </div>
           </a-card>
 
-          <a-card v-if="patientSummary" size="small" title="Patient">
+          <a-card v-if="patientSummary" size="small" :title="$t('Hm_Patient')">
             <a-descriptions :column="1" size="small">
               <a-descriptions-item label="MRN">{{ patientSummary.mrn }}</a-descriptions-item>
-              <a-descriptions-item label="Age">{{ patientSummary.age ?? '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Gender">{{ patientSummary.gender || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Phone">{{ patientSummary.phone || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Age')">{{ patientSummary.age ?? '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Gender')">{{ patientSummary.gender ? labelOf(GENDERS, patientSummary.gender) : '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Phone')">{{ patientSummary.phone || '—' }}</a-descriptions-item>
             </a-descriptions>
             <a-button type="link" size="small" style="padding: 0" @click="$router.push(`/hospital/patients/${form.patient_id}`)">
-              Open full record
+              {{ $t('Hm_Open_Full_Record') }}
             </a-button>
           </a-card>
         </a-col>
@@ -232,7 +232,7 @@ import { message, Empty } from 'ant-design-vue';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import PatientPicker from './PatientPicker.vue';
-import { VISIT_TYPES, VISIT_STATUSES, vitalTone, bmiBand } from './hospitalOptions';
+import { VISIT_TYPES, VISIT_STATUSES, GENDERS, labelOf, vitalTone, bmiBand } from './hospitalOptions';
 import http from '../../lib/http';
 import { t } from '../../i18n';
 
@@ -303,7 +303,7 @@ const VitalHint = {
   setup(props) {
     return () => {
       if (!props.tone || props.tone === 'normal') return null;
-      return h('span', { class: `vital-flag ${props.tone}` }, props.tone === 'low' ? 'Below range' : 'Above range');
+      return h('span', { class: `vital-flag ${props.tone}` }, props.tone === 'low' ? t('Hm_Below_Range') : t('Hm_Above_Range'));
     };
   },
 };
@@ -355,8 +355,8 @@ function onPatientSelect(patient) {
   http.get(`hospital/patients/${patient.id}`).then(data => {
     const p = data?.patient;
     patientSummary.value = { ...patient, age: p?.age ?? patient.age };
-    const alerts = [p?.allergies ? `Allergies: ${p.allergies}` : null,
-      p?.chronic_conditions ? `Chronic: ${p.chronic_conditions}` : null].filter(Boolean);
+    const alerts = [p?.allergies ? `${t('Hm_Allergies')}: ${p.allergies}` : null,
+      p?.chronic_conditions ? `${t('Hm_Chronic')}: ${p.chronic_conditions}` : null].filter(Boolean);
     patientAlerts.value = alerts.join(' · ');
   }).catch(() => {});
 }

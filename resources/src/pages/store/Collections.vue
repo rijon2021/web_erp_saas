@@ -77,7 +77,7 @@ const collections = ref([]);
 const columns = computed(() => [
   { title: '#', key: 'order', width: 70 },
   { title: t('Title'), key: 'title' },
-  { title: 'Slug', key: 'slug' },
+  { title: t('Slug'), key: 'slug' },
   { title: t('Limit'), key: 'limit', width: 90, align: 'center' },
   { title: t('Products'), key: 'products_count', width: 110, align: 'center' },
   { title: t('Actions'), key: 'actions', width: 100 },

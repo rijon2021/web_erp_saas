@@ -48,6 +48,7 @@
           <li><a href="{{ route('store.contact') }}">{{ __('messages.AboutUs') }}</a></li>
           @foreach($pages as $pg)<li><a href="{{ store_route_or('store.page', $pg->slug) }}">{{ $pg->title }}</a></li>@endforeach
           <li></li>
+          @if($s->cookie_consent_enabled ?? true)<li><a href="#" onclick="window.openCookieSettings && window.openCookieSettings(); return false;">{{ __('messages.CookieSettings') }}</a></li>@endif
         </ul>
       </div>
       <div>

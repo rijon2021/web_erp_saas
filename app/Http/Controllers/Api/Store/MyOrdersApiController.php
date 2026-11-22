@@ -80,6 +80,17 @@ class MyOrdersApiController extends Controller
             ->where('client_id', $user->client_id) // assumes OnlineOrder.client_id references the same client as the ecommerce user
             ->firstOrFail();
 
+        return response()->json($this->present($order));
+    }
+
+    /**
+     * The order-page payload. Also served to guests by GuestOrderController
+     * (resolved by the order's secret link instead of the signed-in account).
+     */
+    public function present(OnlineOrder $order): array
+    {
+        $order->loadMissing(['items.product', 'items.productVariant', 'client', 'warehouse', 'pickupBranch', 'paymentProofs']);
+
         // Prefer the totals frozen on the order; fall back to line sum for legacy orders.
         $subtotal = (float) $order->subtotal > 0
             ? (float) $order->subtotal
@@ -94,7 +105,12 @@ class MyOrdersApiController extends Controller
 
         $timeStr = (string) $order->time;
 
-        return response()->json([
+        // Legacy orders fill blanks from the customer profile. A guest order
+        // never does: the matched customer may be someone else, and their
+        // saved details must not show on a page reached by a shared link.
+        $profile = $order->is_guest ? null : $order->client;
+
+        return [
             'id' => $order->id,
             'code' => $order->ref,
             'status' => $order->status,                 // pending|confirmed|cancelled
@@ -104,10 +120,10 @@ class MyOrdersApiController extends Controller
             'warehouse_id' => $order->warehouse_id,
             'warehouse_name' => optional($order->warehouse)->name,
 
-            'customer_name' => $order->customer_name ?: optional($order->client)->name,
-            'customer_email' => $order->customer_email ?: optional($order->client)->email,
-            'customer_phone' => $order->customer_phone ?: optional($order->client)->phone,
-            'shipping_address' => $order->shipping_address ?: optional($order->client)->adresse,
+            'customer_name' => $order->customer_name ?: optional($profile)->name,
+            'customer_email' => $order->customer_email ?: optional($profile)->email,
+            'customer_phone' => $order->customer_phone ?: optional($profile)->phone,
+            'shipping_address' => $order->shipping_address ?: optional($profile)->adresse,
             'shipping_city' => $order->shipping_city,
             'shipping_state' => $order->shipping_state,
             'shipping_zip' => $order->shipping_zip,
@@ -162,7 +178,7 @@ class MyOrdersApiController extends Controller
                     'line_total' => (float) $d->line_total,
                 ];
             })->values(),
-        ]);
+        ];
     }
 
     /** Branch address/hours the shopper needs in order to collect. */

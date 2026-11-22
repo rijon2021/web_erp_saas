@@ -88,11 +88,56 @@ class SettingsApiController extends Controller
             ->whereNull('deleted_at')
             ->count();
 
+        // Names for the product pickers that only store ids: the "You may also
+        // like" picks and the Car Dealership reservation-deposit product.
+        $pickedIds = collect(is_array($s->homepage_lineup) ? $s->homepage_lineup : [])
+            ->flatMap(fn ($row) => is_array($row) ? (array) ($row['product_ids'] ?? []) : [])
+            ->push(\App\Support\CarsTheme::options($s)['reserve_product_id'])
+            ->filter(fn ($id) => is_numeric($id) && (int) $id > 0)
+            ->map(fn ($id) => (int) $id)->unique()->take(100)->values()->all();
+        $curated = $pickedIds ? \App\Models\Product::whereIn('id', $pickedIds)->whereNull('deleted_at')->get(['id', 'name']) : collect();
+
+        // The form edits the stored theme: a premium theme the plan no longer
+        // covers must stay selected (and saved) rather than read as its fallback.
+        $settingsOut = $s->toArray();
+        $settingsOut['theme'] = $s->storedTheme() ?: 'default';
+
         return response()->json([
-            'settings' => $s,
+            'settings' => $settingsOut,
             'warehouses' => $warehouses,
             'currencies' => $currencies,
             'pending_customers_count' => $pendingCustomersCount,
+            'font_options' => \App\Models\Setting::fontOptions(),
+            'curated_products' => $curated,
+            // Car Dealership tab: show the effective texts (and trust strip) instead of blanks.
+            'theme_defaults' => [\App\Support\CarsTheme::KEY => \App\Support\CarsTheme::defaults(), \App\Support\RestaurantTheme::KEY => \App\Support\RestaurantTheme::defaults(), \App\Support\RentalTheme::KEY => \App\Support\RentalTheme::defaults(), \App\Support\BookingTheme::KEY => \App\Support\BookingTheme::defaults(), \App\Support\PremiumElectronicsTheme::KEY => \App\Support\PremiumElectronicsTheme::defaults()],
+            // Premium themes: which keys are premium and whether this plan unlocks them.
+            'premium_themes' => [
+                // Any premium theme usable (plan feature or a bought theme add-on);
+                // `allowed` lists which, `purchasable` the ones for sale as add-ons.
+                'available' => \App\Support\StoreThemes::allowedPremium() !== [],
+                'allowed' => \App\Support\StoreThemes::allowedPremium(),
+                'purchasable' => array_values(array_map(
+                    fn ($k) => substr($k, strlen(\App\Models\Central\Addon::THEME_PREFIX)),
+                    array_filter(
+                        \App\Models\Central\Addon::saleKeysForPlan(app(\App\Services\TenantLimitsService::class)->getBasePlan()),
+                        fn ($k) => str_starts_with($k, \App\Models\Central\Addon::THEME_PREFIX)
+                    )
+                )),
+                'keys' => array_keys(\App\Support\StoreThemes::PREMIUM),
+                'specs_ready' => \App\Support\StoreSpecs::ready(),
+                'spec_labels' => \App\Support\StoreSpecs::ready() ? \App\Support\StoreSpecs::filterLabels([]) : [],
+            ],
+            // Booking theme: needs Booking Management (plan + module + its migrations).
+            'booking_theme' => [
+                'available' => \App\Services\Booking\BookingWebsiteService::available(),
+                'types' => \App\Services\Booking\BookingWebsiteService::available() ? \App\Support\BookingTypes::enabled() : [],
+            ],
+            // Rental theme: available on this plan, and which business types it will show.
+            'rental_theme' => [
+                'available' => \App\Services\Rental\RentalWebsiteService::available(),
+                'types' => \App\Services\Rental\RentalWebsiteService::available() ? \App\Support\RentalTypes::enabled() : [],
+            ],
         ]);
     }
 
@@ -110,7 +155,7 @@ class SettingsApiController extends Controller
             ]);
         }
         $boolFields = array_merge(
-            ['registration_enabled', 'require_invite_code', 'require_admin_approval', 'allow_cancellations', 'auto_approve_reviews', 'store_use_root_domain'],
+            ['registration_enabled', 'require_invite_code', 'require_admin_approval', 'guest_checkout_enabled', 'allow_cancellations', 'auto_approve_reviews', 'cookie_consent_enabled', 'store_use_root_domain', 'store_all_warehouses'],
             // Every storefront payment switch (credit_card, cod, mobile money
             // and each online gateway) is stored as a 0/1 column.
             array_values(StoreSetting::PAYMENT_METHOD_COLUMNS),
@@ -158,9 +203,11 @@ class SettingsApiController extends Controller
             'registration_enabled' => 'nullable|in:0,1',
             'require_invite_code' => 'nullable|in:0,1',
             'require_admin_approval' => 'nullable|in:0,1',
+            'guest_checkout_enabled' => 'nullable|in:0,1',
             'allow_cancellations' => 'nullable|in:0,1',
             'return_window_days' => 'nullable|integer|min:0|max:365',
             'auto_approve_reviews' => 'nullable|in:0,1',
+            'cookie_consent_enabled' => 'nullable|in:0,1',
             'allow_overselling' => 'nullable|in:0,1',
             'hide_out_of_stock' => 'nullable|in:0,1',
             'hide_prices_for_guests' => 'nullable|in:0,1',
@@ -182,6 +229,9 @@ class SettingsApiController extends Controller
             'payment_ligdicash_enabled' => 'nullable|in:0,1',
             'payment_dodo_enabled' => 'nullable|in:0,1',
             'payment_waafipay_enabled' => 'nullable|in:0,1',
+            'payment_paypal_enabled' => 'nullable|in:0,1',
+            'payment_paystack_enabled' => 'nullable|in:0,1',
+            'payment_flutterwave_enabled' => 'nullable|in:0,1',
 
             // Manual / offline methods: the switch plus the account details
             // the shopper pays into (rendered on checkout and the order page).
@@ -217,6 +267,9 @@ class SettingsApiController extends Controller
             // currency set would otherwise fail every such save with a 422.
             'default_currency_id' => 'sometimes|nullable|integer',
             'default_warehouse_id' => 'sometimes|nullable|integer',
+            // Warehouses the store sells from; "all" is stored as NULL.
+            'warehouse_ids' => 'nullable',
+            'store_all_warehouses' => 'nullable|in:0,1',
 
             'contact_email' => 'nullable|email|max:190',
             'contact_phone' => 'nullable|string|max:50',
@@ -237,8 +290,23 @@ class SettingsApiController extends Controller
             'homepage_layout' => 'nullable|string|in:default',
             'home_collections' => 'nullable',
 
-            'custom_css' => 'nullable|string',
-            'custom_js' => 'nullable|string',
+            // Tracking & Analytics: comma-separated ID lists, never script.
+            'google_tag_id' => ['bail', 'nullable', 'string', 'max:255', function ($attr, $value, $fail) {
+                $bad = \App\Support\StoreTracking::invalidGoogle($value);
+                if ($bad) {
+                    $fail('Invalid Google tag ID: '.implode(', ', $bad).'. Use G-…, AW-…, GT-… or GTM-… IDs.');
+                } elseif (count(\App\Support\StoreTracking::tokens($value)) > \App\Support\StoreTracking::MAX_IDS) {
+                    $fail('Enter at most '.\App\Support\StoreTracking::MAX_IDS.' Google tag IDs.');
+                }
+            }],
+            'meta_pixel_id' => ['bail', 'nullable', 'string', 'max:255', function ($attr, $value, $fail) {
+                $bad = \App\Support\StoreTracking::invalidMeta($value);
+                if ($bad) {
+                    $fail('Invalid Meta Pixel ID: '.implode(', ', $bad).'. A Pixel ID is a number.');
+                } elseif (count(\App\Support\StoreTracking::tokens($value)) > \App\Support\StoreTracking::MAX_IDS) {
+                    $fail('Enter at most '.\App\Support\StoreTracking::MAX_IDS.' Meta Pixel IDs.');
+                }
+            }],
 
             // Laravel 12: image rule excludes SVG by default; using file + mimes
             'logo' => 'nullable|file|mimes:jpg,jpeg,png,webp|max:4096',
@@ -268,11 +336,74 @@ class SettingsApiController extends Controller
             }
         }
 
+        // --- The Rental theme lists Rental module items: it needs the module
+        // (plan + toggle) and its website columns. Only checked when switching
+        // to it, so a store already on it can still save other settings. ---
+        if (($data['theme'] ?? null) === \App\Support\RentalTheme::KEY
+            && StoreSetting::query()->value('theme') !== \App\Support\RentalTheme::KEY
+            && ! \App\Services\Rental\RentalWebsiteService::available()) {
+            return response()->json([
+                'message' => 'The Rental theme needs the Rental Management module on your plan (and the latest update installed).',
+                'errors' => ['theme' => ['The Rental theme needs the Rental Management module on your plan.']],
+            ], 422);
+        }
+
+        // --- Same for the Booking theme: it lists Booking Management services. ---
+        if (($data['theme'] ?? null) === \App\Support\BookingTheme::KEY
+            && StoreSetting::query()->value('theme') !== \App\Support\BookingTheme::KEY
+            && ! \App\Services\Booking\BookingWebsiteService::available()) {
+            return response()->json([
+                'message' => 'The Booking theme needs Booking Management on your plan (and the latest update installed).',
+                'errors' => ['theme' => ['The Booking theme needs Booking Management on your plan.']],
+            ], 422);
+        }
+
+        // --- Premium themes need the premium_themes plan feature. Only checked
+        // when switching to one, so a store already on it (kept after a
+        // downgrade, rendered as its free fallback) can still save. ---
+        if (\App\Support\StoreThemes::isPremium($data['theme'] ?? null)
+            && StoreSetting::query()->toBase()->value('theme') !== ($data['theme'] ?? null) // raw: the accessor would report the fallback
+            && ! \App\Support\StoreThemes::allowed($data['theme'] ?? null)) {
+            return response()->json([
+                'message' => 'This theme is a premium theme. Buy it under Billing → Add-ons, or upgrade to a plan that includes Premium Store Themes.',
+                'errors' => ['theme' => ['This theme is not included in your plan.']],
+            ], 422);
+        }
+
         // --- A blank id means "not being changed", never "clear it" ---
         foreach (['default_currency_id', 'default_warehouse_id'] as $idField) {
             if (array_key_exists($idField, $data) && ($data[$idField] === null || $data[$idField] === '')) {
                 unset($data[$idField]);
             }
+        }
+
+        // --- Online-store warehouses: "all" is stored as NULL, otherwise the
+        // validated id list; default_warehouse_id follows the first selected
+        // warehouse for code paths that book under a single one. ---
+        if ($request->has('warehouse_ids') || $request->has('store_all_warehouses')) {
+            $ids = $data['warehouse_ids'] ?? [];
+            if (is_string($ids)) {
+                $ids = json_decode($ids, true) ?: [];
+            }
+            $ids = array_values(array_unique(array_filter(array_map('intval', (array) $ids))));
+            $ids = empty($ids) ? [] : Warehouse::whereIn('id', $ids)
+                ->whereNull('deleted_at')
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+
+            if (! empty($data['store_all_warehouses']) || empty($ids)) {
+                $data['warehouse_ids'] = null;
+            } else {
+                $data['warehouse_ids'] = $ids;
+                $data['default_warehouse_id'] = $ids[0];
+            }
+        }
+        unset($data['store_all_warehouses']);
+        // Tenants that have not run the warehouse_ids migration yet.
+        if (array_key_exists('warehouse_ids', $data)
+            && ! \Illuminate\Support\Facades\Schema::hasColumn('store_settings', 'warehouse_ids')) {
+            unset($data['warehouse_ids']);
         }
 
         // --- Decode JSON fields ---
@@ -296,11 +427,50 @@ class SettingsApiController extends Controller
         }
         unset($data['home_collections']); // don't persist legacy field
 
+        // --- Tracking & Analytics IDs: canonical "ID,ID" form; skipped until
+        // the tracking migration has run on this tenant. ---
+        foreach (['google_tag_id' => true, 'meta_pixel_id' => false] as $trkField => $upper) {
+            if (! array_key_exists($trkField, $data)) {
+                continue;
+            }
+            if (\Illuminate\Support\Facades\Schema::hasColumn('store_settings', $trkField)) {
+                $data[$trkField] = \App\Support\StoreTracking::normalize($data[$trkField], $upper);
+            } else {
+                unset($data[$trkField]);
+            }
+        }
+
         // --- Ensure model exists ---
         $s = StoreSetting::first() ?: new StoreSetting;
 
+        // --- Auto-confirm paid orders: each gateway's switch (Payment Gateway
+        // page) saves on its own as a {gateway: 0|1} map, merged into the
+        // stored list. Anything else is ignored — notably the Store Settings
+        // page, which posts every loaded setting back as multipart, turning the
+        // stored list into a plain string. Unknown keys (COD, manual methods…)
+        // are ignored too. ---
+        $acInput = $request->input('auto_confirm_methods');
+        if (is_array($acInput) && $acInput && ! array_is_list($acInput)
+            && \Illuminate\Support\Facades\Schema::hasColumn('store_settings', 'auto_confirm_methods')) {
+            $on = array_values(array_intersect(
+                is_array($s->auto_confirm_methods) ? $s->auto_confirm_methods : [],
+                StoreSetting::AUTO_CONFIRM_METHODS
+            ));
+            foreach ($acInput as $method => $flag) {
+                if (! in_array($method, StoreSetting::AUTO_CONFIRM_METHODS, true) || ! is_scalar($flag)) {
+                    continue;
+                }
+                $on = array_values(array_diff($on, [$method]));
+                if (filter_var($flag, FILTER_VALIDATE_BOOLEAN)) {
+                    $on[] = $method;
+                }
+            }
+            $data['auto_confirm_methods'] = $on;
+        }
+
         // --- Ensure storage directory exists ---
-        $targetDir = public_path('images/store');
+        $targetDir = upload_public_path('store');
+        $storeRel  = upload_path('store');
         if (! File::exists($targetDir)) {
             File::makeDirectory($targetDir, 0755, true);
         }
@@ -326,7 +496,7 @@ class SettingsApiController extends Controller
                 ->encode($ext, 85)
                 ->save($targetDir.'/'.$filename);
 
-            $data['logo_path'] = 'images/store/'.$filename;
+            $data['logo_path'] = $storeRel.'/'.$filename;
         }
 
         // --- GCASH QR (600x600 max) ---
@@ -346,7 +516,7 @@ class SettingsApiController extends Controller
                 ->encode($ext, 88)
                 ->save($targetDir.'/'.$filename);
 
-            $data['gcash_qr_path'] = 'images/store/'.$filename;
+            $data['gcash_qr_path'] = $storeRel.'/'.$filename;
         }
 
         // --- FAVICON ---
@@ -370,7 +540,7 @@ class SettingsApiController extends Controller
                     ->save($targetDir.'/'.$filename);
             }
 
-            $data['favicon_path'] = 'images/store/'.$filename;
+            $data['favicon_path'] = $storeRel.'/'.$filename;
         }
 
         // --- HERO IMAGE (1600x800 max) ---
@@ -390,7 +560,7 @@ class SettingsApiController extends Controller
                 ->encode($ext, 82)
                 ->save($targetDir.'/'.$filename);
 
-            $data['hero_image_path'] = 'images/store/'.$filename;
+            $data['hero_image_path'] = $storeRel.'/'.$filename;
         }
 
         // --- THEME OPTIONS (skin themes: electronics, toys, …) ---
@@ -411,13 +581,24 @@ class SettingsApiController extends Controller
                 $incoming = [\App\Support\ElectronicsTheme::KEY => $incoming];
             }
 
-            $themeDir = public_path('images/store/theme');
+            $themeDir = upload_public_path('store/theme');
+            $themeRel = upload_path('store/theme');
             foreach (\App\Support\StoreThemes::SKINS as $themeKey) {
                 if (! array_key_exists($themeKey, $incoming)) {
                     continue;
                 }
-                $clean = \App\Support\StoreThemes::sanitize($themeKey, $incoming[$themeKey]);
+                $raw = $incoming[$themeKey];
+                if (is_string($raw)) {
+                    $raw = json_decode($raw, true);
+                }
+                if (! is_array($raw)) {
+                    $raw = [];
+                }
 
+                // Attach uploads to the raw rows before sanitizing: upload keys
+                // carry the form's row index, and sanitize() drops text-less
+                // rows — which would discard an image-only slide/tile and
+                // shift every later upload onto the wrong row.
                 foreach ($request->allFiles() as $fileKey => $file) {
                     if (! $file || ! preg_match('/^theme_image__(?:([a-z_]+)__)?(slides|banners|tiles)__(\d{1,2})$/', $fileKey, $m)) {
                         continue;
@@ -427,7 +608,7 @@ class SettingsApiController extends Controller
                         continue;
                     }
                     [$list, $idx] = [$m[2], (int) $m[3]];
-                    if (! isset($clean[$list][$idx])) {
+                    if (! isset($raw[$list][$idx]) || ! is_array($raw[$list][$idx])) {
                         continue;
                     }
                     if (! File::exists($themeDir)) {
@@ -435,22 +616,27 @@ class SettingsApiController extends Controller
                     }
                     $ext = strtolower($file->guessExtension() ?: 'jpg');
                     $filename = (string) Str::uuid().'.'.$ext;
+                    // Premium full-image slides fill the screen width: keep
+                    // them sharp (2560 px); everything else stays 1600 px.
+                    [$maxW, $maxH] = $themeKey === \App\Support\PremiumElectronicsTheme::KEY && $list === 'slides'
+                        ? [2560, 1440]
+                        : [1600, 1000];
                     Image::make($file->getRealPath())
-                        ->resize(1600, 1000, function ($c) {
+                        ->resize($maxW, $maxH, function ($c) {
                             $c->aspectRatio();
                             $c->upsize();
                         })
                         ->encode($ext, 82)
                         ->save($themeDir.'/'.$filename);
 
-                    $old = (string) ($clean[$list][$idx]['image'] ?? '');
-                    if ($old !== '' && Str::startsWith($old, 'images/store/theme/') && File::exists(public_path($old))) {
+                    $old = trim((string) (is_scalar($raw[$list][$idx]['image'] ?? null) ? $raw[$list][$idx]['image'] : ''));
+                    if ($old !== '' && Str::startsWith($old, [$themeRel.'/', 'images/store/theme/']) && File::exists(public_path($old))) {
                         File::delete(public_path($old));
                     }
-                    $clean[$list][$idx]['image'] = 'images/store/theme/'.$filename;
+                    $raw[$list][$idx]['image'] = $themeRel.'/'.$filename;
                 }
 
-                $existing[$themeKey] = $clean;
+                $existing[$themeKey] = \App\Support\StoreThemes::sanitize($themeKey, $raw);
             }
             $data['theme_options'] = $existing;
         } else {
@@ -478,6 +664,13 @@ class SettingsApiController extends Controller
         // SAVE CHANGES
         // ============================
 
+        // Tenants that have not run the cookie-consent migration yet would
+        // otherwise fail the whole save on the unknown column.
+        if (array_key_exists('cookie_consent_enabled', $data)
+            && ! \Illuminate\Support\Facades\Schema::hasColumn('store_settings', 'cookie_consent_enabled')) {
+            unset($data['cookie_consent_enabled']);
+        }
+
         $s->fill($data)->save();
 
         // The storefront routes are registered before tenancy is initialized,
@@ -500,8 +693,10 @@ class SettingsApiController extends Controller
         $fresh = $s->fresh();
         $fresh->store_effective_url = store_base_url();
         $fresh->app_origin = rtrim((string) url('/'), '/');
+        $freshOut = $fresh->toArray();
+        $freshOut['theme'] = $fresh->storedTheme() ?: 'default';
 
-        return response()->json($fresh);
+        return response()->json($freshOut);
     }
 
     /**
@@ -509,7 +704,7 @@ class SettingsApiController extends Controller
      */
     public function menus(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_menus', StoreSetting::class);
 
         $s = StoreSetting::first();
         $menus = $this->normalizeMenus(is_array($s?->menus) ? $s->menus : []);
@@ -533,7 +728,7 @@ class SettingsApiController extends Controller
      */
     public function updateMenus(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', StoreSetting::class);
+        $this->authorizeForUser($request->user('api'), 'store_menus', StoreSetting::class);
 
         $data = $request->validate(['menus' => 'nullable']);
         $menus = $this->normalizeMenus($data['menus'] ?? []);

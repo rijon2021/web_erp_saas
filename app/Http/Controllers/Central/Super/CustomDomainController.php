@@ -4,49 +4,37 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Central\Super;
 
+use App\Exceptions\CustomDomainException;
 use App\Http\Controllers\Controller;
-use App\Models\Central\CustomDomain;
-use App\Services\CustomDomainVerifier;
+use App\Services\CustomDomainManager;
 use App\Tenant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
-use Stancl\Tenancy\Database\Models\Domain;
 
+/**
+ * Super-admin side of custom domains (tenant page › Custom domain panel).
+ * The lifecycle itself lives in CustomDomainManager, shared with the
+ * tenant's own Settings › Custom Domain page; this controller only maps
+ * outcomes onto super.* flash messages. No plan limit applies here.
+ */
 class CustomDomainController extends Controller
 {
-    public function __construct(private readonly CustomDomainVerifier $verifier)
+    public function __construct(private readonly CustomDomainManager $domains)
     {
     }
 
     public function store(Request $request, Tenant $tenant): RedirectResponse
     {
         $validated = $request->validate([
-            'domain' => [
-                'required', 'string', 'max:253',
-                'regex:/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i',
-            ],
+            'domain' => ['required', 'string', 'max:253'],
         ]);
 
-        $domain = $this->normalize($validated['domain']);
-
-        if ($this->isCentralDomain($domain)) {
-            return back()->withErrors(['domain' => __('super.custom_domains.errors.is_central')]);
+        try {
+            $this->domains->add($tenant, $validated['domain']);
+        } catch (CustomDomainException $e) {
+            return back()->withErrors(['domain' => $this->message($e->getReason())]);
         }
-
-        if (Domain::where('domain', $domain)->exists()
-            || CustomDomain::where('domain', $domain)->exists()) {
-            return back()->withErrors(['domain' => __('super.custom_domains.errors.duplicate')]);
-        }
-
-        CustomDomain::create([
-            'tenant_id'          => $tenant->id,
-            'domain'             => $domain,
-            'verification_token' => $this->verifier->generateToken(),
-            'ssl_status'         => CustomDomain::SSL_PENDING,
-        ]);
 
         return back()->with('success', __('super.custom_domains.flash.added'));
     }
@@ -55,78 +43,54 @@ class CustomDomainController extends Controller
     {
         $record = $tenant->customDomains()->findOrFail($id);
 
-        $result = $this->verifier->verify($record->domain, $record->verification_token);
+        $result = $this->domains->verify($record);
 
         if ($result['ok']) {
-            DB::connection('central')->transaction(function () use ($record) {
-                $record->markVerified();
-
-                // Mirror into Stancl's domains table so existing resolution middleware works.
-                if (! Domain::where('domain', $record->domain)->exists()) {
-                    Domain::create([
-                        'domain'    => $record->domain,
-                        'tenant_id' => $record->tenant_id,
-                    ]);
-                }
-            });
+            $message = __('super.custom_domains.flash.verified');
+            if (isset($result['ssl']) && ! $result['ssl']['ok']) {
+                $message .= ' ' . __('super.custom_domains.flash.ssl_not_ready', ['reason' => $this->sslMessage($result['ssl'])]);
+            }
 
             if ($request->expectsJson()) {
-                return response()->json(['ok' => true, 'message' => __('super.custom_domains.flash.verified')]);
+                return response()->json(['ok' => true, 'message' => $message, 'ssl' => $result['ssl'] ?? null]);
             }
-            return back()->with('success', __('super.custom_domains.flash.verified'));
+            return back()->with('success', $message);
         }
-
-        $record->markFailed($this->reasonMessage($result['reason']));
-
-        // Capture DNS/verification failure for super admin monitoring
-        \App\Models\Central\SystemLog::capture([
-            'tenant_id'       => $tenant->id,
-            'type'            => \App\Models\Central\SystemLog::TYPE_DNS,
-            'severity'        => \App\Models\Central\SystemLog::SEVERITY_WARNING,
-            'message'         => 'Custom domain verification failed for ' . $record->domain . ': ' . $this->reasonMessage($result['reason']),
-            'context'         => [
-                'domain'  => $record->domain,
-                'reason'  => $result['reason'],
-                'records' => $result['records'] ?? [],
-            ],
-            'suggested_cause' => $this->dnsSuggestedCause($result['reason']),
-            'source'          => 'custom_domain_verify',
-        ]);
 
         if ($request->expectsJson()) {
             return response()->json([
                 'ok'      => false,
                 'reason'  => $result['reason'],
-                'message' => $this->reasonMessage($result['reason']),
+                'message' => $this->message($result['reason']),
                 'records' => $result['records'] ?? [],
             ], 422);
         }
 
-        return back()->withErrors(['domain' => $this->reasonMessage($result['reason'])]);
+        return back()->withErrors(['domain' => $this->message($result['reason'])]);
     }
 
-    private function dnsSuggestedCause(string $reason): string
+    /** Re-probe HTTPS on a verified domain and refresh its SSL badge. */
+    public function checkSsl(Tenant $tenant, int $id): RedirectResponse
     {
-        return match ($reason) {
-            'mismatch'      => 'The domain resolves, but not to this server. Update the CNAME/A record to point at the central host, or add the TXT verification record.',
-            'no_records'    => 'No DNS records found for this domain. Verify the domain is registered and DNS is configured.',
-            'lookup_failed' => 'DNS lookup failed. The resolver may be unreachable or the domain may be unregistered. Retry after DNS propagation (up to 48h).',
-            default         => 'See log context for record details.',
-        };
+        $record = $tenant->customDomains()->where('is_verified', true)->findOrFail($id);
+
+        $result = $this->domains->checkSsl($record);
+
+        if ($result['ok']) {
+            return back()->with('success', __('super.custom_domains.flash.ssl_active', ['domain' => $record->domain]));
+        }
+
+        return back()->withErrors(['domain' => __('super.custom_domains.flash.ssl_failed', [
+            'domain' => $record->domain,
+            'reason' => $this->sslMessage($result),
+        ])]);
     }
 
     public function destroy(Tenant $tenant, int $id): RedirectResponse
     {
         $record = $tenant->customDomains()->findOrFail($id);
 
-        DB::connection('central')->transaction(function () use ($record) {
-            // Only remove the mirrored Stancl domain row; never remove a subdomain
-            // that happens to share the same name (defensive — they'd differ anyway).
-            Domain::where('domain', $record->domain)
-                ->where('tenant_id', $record->tenant_id)
-                ->delete();
-            $record->delete();
-        });
+        $this->domains->remove($record);
 
         return back()->with('success', __('super.custom_domains.flash.removed'));
     }
@@ -135,37 +99,30 @@ class CustomDomainController extends Controller
     {
         $record = $tenant->customDomains()->findOrFail($id);
 
-        if (! $record->is_verified) {
-            return back()->withErrors(['domain' => __('super.custom_domains.errors.not_verified')]);
+        try {
+            $this->domains->makePrimary($record);
+        } catch (CustomDomainException $e) {
+            return back()->withErrors(['domain' => $this->message($e->getReason())]);
         }
-
-        DB::connection('central')->transaction(function () use ($tenant, $record) {
-            $tenant->customDomains()->update(['is_primary' => false]);
-            $record->forceFill(['is_primary' => true])->save();
-        });
 
         return back()->with('success', __('super.custom_domains.flash.primary_set'));
     }
 
-    private function normalize(string $domain): string
+    /** super.custom_domains.errors.<reason>, falling back to the manager's English text. */
+    private function message(string $reason): string
     {
-        $domain = strtolower(trim($domain));
-        return preg_replace('#^https?://#', '', $domain) ?: $domain;
+        $key = 'super.custom_domains.errors.' . $reason;
+        $translated = __($key);
+
+        return $translated === $key ? $this->domains->reasonMessage($reason) : $translated;
     }
 
-    private function isCentralDomain(string $domain): bool
+    /** super.custom_domains.ssl_errors.<reason>, falling back to the manager's English text. */
+    private function sslMessage(array $result): string
     {
-        $central = array_map('strtolower', (array) config('tenancy.central_domains', []));
-        return in_array($domain, $central, true);
-    }
+        $key = 'super.custom_domains.ssl_errors.' . ($result['reason'] ?? '');
+        $translated = __($key, ['names' => $result['detail'] ?? '']);
 
-    private function reasonMessage(string $reason): string
-    {
-        return match ($reason) {
-            CustomDomainVerifier::RESULT_NO_RECORDS  => __('super.custom_domains.errors.no_records'),
-            CustomDomainVerifier::RESULT_MISMATCH    => __('super.custom_domains.errors.mismatch'),
-            CustomDomainVerifier::RESULT_LOOKUP_FAIL => __('super.custom_domains.errors.lookup_failed'),
-            default                                  => __('super.custom_domains.errors.unknown'),
-        };
+        return $translated === $key ? $this->domains->sslReasonMessage($result) : $translated;
     }
 }

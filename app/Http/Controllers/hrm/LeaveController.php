@@ -91,14 +91,14 @@ class LeaveController extends Controller
             'start_date' => 'required',
             'end_date' => 'required|after_or_equal:start_date',
             'status' => 'required',
-            // Laravel 12: image rule excludes SVG by default; use file + mimes for SVG support
-            'attachment' => 'nullable|file|mimes:jpeg,png,jpg,bmp,gif,svg|max:2048',
+            // Raster only: SVG is an active document (scripts) when served from public/
+            'attachment' => 'nullable|file|mimes:jpeg,png,jpg,bmp,gif|max:2048',
         ]);
 
         if ($request->hasFile('attachment')) {
 
             $image = $request->file('attachment');
-            $filename = time().'.'.$image->extension();
+            $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::imageExtension($image, 'attachment'), time().'_');
             $image->move(upload_public_path('leaves'), $filename);
 
         } else {
@@ -175,8 +175,8 @@ class LeaveController extends Controller
             'start_date' => 'required',
             'end_date' => 'required',
             'status' => 'required',
-            // Laravel 12: image rule excludes SVG by default; use file + mimes for SVG support
-            'attachment' => 'nullable|file|mimes:jpeg,png,jpg,bmp,gif,svg|max:2048',
+            // Raster only: SVG is an active document (scripts) when served from public/
+            'attachment' => 'nullable|file|mimes:jpeg,png,jpg,bmp,gif|max:2048',
         ]);
 
         $leave = Leave::findOrFail($id);
@@ -185,7 +185,7 @@ class LeaveController extends Controller
             if ($request->attachment != $CurrentAttachement) {
 
                 $image = $request->file('attachment');
-                $filename = time().'.'.$image->extension();
+                $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::imageExtension($image, 'attachment'), time().'_');
                 $image->move(upload_public_path('leaves'), $filename);
                 $path = upload_public_path('leaves');
                 $LeavePhoto = $path.'/'.$CurrentAttachement;

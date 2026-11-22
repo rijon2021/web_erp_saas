@@ -57,6 +57,8 @@ function allowed(entry) {
   // SaaS: entries carrying a plan `feature` key hide when the tenant's plan
   // does not include it (legacy Sidebar.vue planFeature()); no plan data = shown.
   if (entry.feature && !usePlanStore().featureEnabled(entry.feature)) return false;
+  // Cost-derived pages (profit reports) hide for roles with hide_product_cost.
+  if (entry.costData && !auth.canSeeCost) return false;
   if (!entry.permissions || !entry.permissions.length) return true;
   return entry.permissions.some(p => auth.can(p));
 }
@@ -100,7 +102,9 @@ function labelNode(entry) {
  * — and disappears once the work is processed.
  */
 function badgeAttrs(entry) {
-  const count = entry.badge ? (pending.byKey[entry.badge] || 0) : 0;
+  // `badge` is one pending-work key or a list of them (summed).
+  const keys = entry.badge ? (Array.isArray(entry.badge) ? entry.badge : [entry.badge]) : [];
+  const count = keys.reduce((n, k) => n + (pending.byKey[k] || 0), 0);
   if (!count) return {};
   return { class: 'sb-has-badge', 'data-badge': count > 99 ? '99+' : String(count) };
 }
@@ -295,7 +299,7 @@ watch(openKeys, (nv, ov) => {
 }
 /* Divider between the light sidebar and the content (dark sider keeps none). */
 .sidebar-menu.ant-menu-light {
-  border-right: 1px solid #ececee;
+  border-inline-end: 1px solid #ececee;
 }
 
 /* Toggle arrow hugs the right edge (Ant's default sits at 16px). */

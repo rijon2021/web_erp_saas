@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Mail\CustomEmail;
 use App\Services\BatchService;
+use App\Services\ComboStockService;
 use App\Services\PromotionEngine;
 use App\Services\SerialNumberService;
 use App\Models\Account;
@@ -44,6 +45,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Str;
 use Infobip\Api\SendSmsApi;
 use Infobip\Configuration;
@@ -104,7 +106,7 @@ class SalesController extends BaseController
         $data = [];
 
         // Check If User Has Permission View  All Records
-        $Sales = Sale::with('facture', 'client', 'warehouse', 'user', 'currency')
+        $Sales = Sale::with('client', 'warehouse', 'user', 'currency')
             ->where('deleted_at', '=', null)
             ->where(function ($query) use ($view_records) {
                 if (! $view_records) {
@@ -120,6 +122,7 @@ class SalesController extends BaseController
             ->where(function ($query) use ($request) {
                 return $query->when($request->filled('search'), function ($query) use ($request) {
                     return $query->where('Ref', 'LIKE', "%{$request->search}%")
+                        ->orWhere('order_reference', 'LIKE', "%{$request->search}%")
                         ->orWhere('statut', 'LIKE', "%{$request->search}%")
                         ->orWhere('GrandTotal', $request->search)
                         ->orWhere('payment_statut', 'like', "%{$request->search}%")
@@ -158,11 +161,30 @@ class SalesController extends BaseController
             ->orderBy($order, $dir)
             ->get();
 
+        // Returns and document counts for the whole page in two queries, not
+        // up to three per sale: the "All" page size and the list exports load
+        // every row. Raw integers because a big page would otherwise pass
+        // MySQL's 65,535 placeholder limit.
+        $saleIds = $Sales->pluck('id')->all();
+        $returnIdBySale = SaleReturn::whereIntegerInRaw('sale_id', $saleIds)
+            ->whereNull('deleted_at')
+            ->groupBy('sale_id')
+            ->selectRaw('sale_id, MIN(id) as return_id')
+            ->pluck('return_id', 'sale_id');
+        $documentCounts = DB::table('sale_documents')
+            ->whereIntegerInRaw('sale_id', $saleIds)
+            ->whereNull('deleted_at')
+            ->groupBy('sale_id')
+            ->selectRaw('sale_id, COUNT(*) as total')
+            ->pluck('total', 'sale_id');
+
         foreach ($Sales as $Sale) {
 
+            $item = [];
             $item['id'] = $Sale['id'];
             $item['date'] = $Sale['date'].' '.$Sale['time'];
             $item['Ref'] = $Sale['Ref'];
+            $item['order_reference'] = $Sale['order_reference'];
             $item['created_by'] = $Sale['user']->username;
             $item['statut'] = $Sale['statut'];
             $item['shipping_status'] = $Sale['shipping_status'];
@@ -183,19 +205,15 @@ class SalesController extends BaseController
             // base-currency documents (amounts in this list are always base).
             $item['currency_code'] = optional($Sale['currency'])->code ? strtoupper($Sale['currency']->code) : null;
 
-            if (SaleReturn::where('sale_id', $Sale['id'])->where('deleted_at', '=', null)->exists()) {
-                $sellReturn = SaleReturn::where('sale_id', $Sale['id'])->where('deleted_at', '=', null)->first();
-                $item['salereturn_id'] = $sellReturn->id;
+            if (isset($returnIdBySale[$Sale['id']])) {
+                $item['salereturn_id'] = $returnIdBySale[$Sale['id']];
                 $item['sale_has_return'] = 'yes';
             } else {
                 $item['sale_has_return'] = 'no';
             }
 
             // Get documents count
-            $item['documents_count'] = DB::table('sale_documents')
-                ->where('sale_id', $Sale['id'])
-                ->whereNull('deleted_at')
-                ->count();
+            $item['documents_count'] = (int) ($documentCounts[$Sale['id']] ?? 0);
 
             $data[] = $item;
         }
@@ -228,6 +246,48 @@ class SalesController extends BaseController
 
     // ------------- STORE NEW SALE-----------\\
 
+    /**
+     * Change Salesperson: same contract as PosController::resolvePosSellerId().
+     * The user to credit for the sale, or null when the Features switch is
+     * off, nothing was sent, or the id is not an active user. Stored in
+     * sales.seller_id (attribution) — sales.user_id always stays the creator.
+     */
+    private function resolveSellerId(Request $request): ?int
+    {
+        if (! $request->filled('seller_id')) {
+            return null;
+        }
+        $settings = Setting::where('deleted_at', '=', null)->first();
+        if (! (bool) ($settings->enable_pos_salesperson_switch ?? false)) {
+            return null;
+        }
+
+        return User::where('id', (int) $request->seller_id)
+            ->where('deleted_at', '=', null)
+            ->where('statut', 1)
+            ->value('id');
+    }
+
+    /**
+     * Active-user list for the Salesperson select (same shape as the POS
+     * bootstrap); empty when the feature is off so the form hides the field.
+     */
+    private function salespeopleList(bool $enabled)
+    {
+        return $enabled
+            ? User::where('deleted_at', '=', null)
+                ->where('statut', 1)
+                ->orderBy('username')
+                ->get(['id', 'username', 'firstname', 'lastname'])
+                ->map(fn ($u) => [
+                    'id' => $u->id,
+                    'name' => trim(($u->firstname ?? '').' '.($u->lastname ?? '')) ?: $u->username,
+                    'username' => $u->username,
+                ])
+                ->values()
+            : collect();
+    }
+
     public function store(Request $request)
     {
         $this->authorizeForUser($request->user('api'), 'create', Sale::class);
@@ -235,6 +295,7 @@ class SalesController extends BaseController
         request()->validate([
             'client_id' => 'required',
             'warehouse_id' => 'required',
+            'order_reference' => 'nullable|string|max:100',
         ]);
 
         // A completed sale must not oversell any managed-stock line (packs
@@ -258,6 +319,7 @@ class SalesController extends BaseController
         $promotionCodeApplied = trim((string) $request->input('promotion_code', '')) ?: null;
         $appliedPromotions = $promotionResult['applied'] ?? [];
 
+        try {
         $sale = \DB::transaction(function () use ($request, $promotionDiscount, $promotionCodeApplied, $appliedPromotions) {
             $helpers = new helpers;
             $order = new Sale;
@@ -280,8 +342,10 @@ class SalesController extends BaseController
             $order->statut = $request->statut;
             $order->payment_statut = 'unpaid';
             $order->notes = $request->notes;
+            $order->order_reference = $this->orderReference($request);
             $order->user_id = Auth::user()->id;
             $order->sales_agent_id = $request->sales_agent_id ?? null;
+            $order->seller_id = $this->resolveSellerId($request);
             // Multi-Currency snapshot (NULL/NULL = base currency); amounts on
             // the sale are always stored in the base currency.
             $docCurrency = helpers::resolve_request_currency($request);
@@ -292,9 +356,18 @@ class SalesController extends BaseController
             // Quotation conversion: remember which sale the quotation became so
             // the list can link to it and hide the convert action.
             if ($request->filled('quotation_id')) {
-                Quotation::whereNull('deleted_at')
+                $linked = Quotation::whereNull('deleted_at')
                     ->where('id', $request->quotation_id)
                     ->update(['converted_sale_id' => $order->id]);
+
+                // CRM: the deal behind this quotation is won.
+                if ($linked && \Illuminate\Support\Facades\Schema::hasTable('crm_deals') && \Illuminate\Support\Facades\Schema::hasColumn('crm_deals', 'quotation_id')) {
+                    try {
+                        app(\App\Services\Crm\CrmConversionService::class)->onQuotationConverted((int) $request->quotation_id, (int) $order->id);
+                    } catch (\Throwable $e) {
+                        report($e);
+                    }
+                }
             }
 
             // Record one promotion_usages row per applied promotion so caps and
@@ -360,7 +433,7 @@ class SalesController extends BaseController
                             ->where('warehouse_id', $order->warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse) {
                             if ($unit->operator == '/') {
@@ -371,11 +444,13 @@ class SalesController extends BaseController
                             $product_warehouse->save();
                         }
 
+                    } elseif ($unit && app(ComboStockService::class)->moveComponents((int) $value['product_id'], (int) $order->warehouse_id, -ComboStockService::baseQty($packQty, $unit))) {
+                        // Virtual combo: its components were taken instead of its own row.
                     } else {
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $order->warehouse_id)
                             ->where('product_id', $value['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse) {
                             if ($unit->operator == '/') {
@@ -414,6 +489,9 @@ class SalesController extends BaseController
                 }
             }
 
+            // Software License products: claim / issue one key per unit sold (completed sales only).
+            \App\Services\LicenseKeys\LicenseFulfilment::afterSaleWrite($order->id);
+
             $user = Auth::user();
             // New way: Check user's record_view field (user-level boolean)
             // Backward compatibility: If record_view is null, fall back to role permission check
@@ -433,40 +511,95 @@ class SalesController extends BaseController
 
                 try {
 
-                    $total_paid = $sale->paid_amount + $request['amount'];
-                    $due = $sale->GrandTotal - $total_paid;
+                    // `amount` is what the customer handed over, which can be more
+                    // than the sale: only the part owed stays in the till, the
+                    // rest goes back as change and must not count as received.
+                    $received = (float) $request['amount'];
+                    $leftToPay = max((float) $sale->GrandTotal - (float) $sale->paid_amount, 0);
+                    $paymentAmount = min($received, $leftToPay);
+                    $changeReturn = $received > $leftToPay ? round($received - $leftToPay, 4) : $request['change'];
 
-                    if ($due === 0.0 || $due < 0.0) {
-                        $payment_statut = 'paid';
-                    } elseif ($due != $sale->GrandTotal) {
-                        $payment_statut = 'partial';
-                    } elseif ($due == $sale->GrandTotal) {
-                        $payment_statut = 'unpaid';
-                    }
+                    $total_paid = $sale->paid_amount + $paymentAmount;
+                    $payment_statut = Sale::paymentStatusFor($sale->GrandTotal, $total_paid);
 
-                    if ($request['amount'] > 0 && $request->payment['status'] != 'pending') {
+                    if ($paymentAmount > 0 && $request->payment['status'] != 'pending') {
                         // All payment methods (including card) are now handled uniformly; no Stripe charge is performed here.
-                        PaymentSale::create([
-                            'sale_id' => $order->id,
-                            'Ref' => app('App\Http\Controllers\PaymentSalesController')->getNumberOrder(),
-                            'date' => Carbon::now(),
-                            'account_id' => $request->payment['account_id'] ? $request->payment['account_id'] : null,
-                            'payment_method_id' => $request->payment['payment_method_id'],
-                            'montant' => $request['amount'],
-                            'change' => $request['change'],
-                            'notes' => null,
-                            'user_id' => Auth::user()->id,
-                        ]);
-
-                        $account = Account::where('id', $request->payment['account_id'])->exists();
-
-                        if ($account) {
-                            // Account exists, perform the update
-                            $account = Account::find($request->payment['account_id']);
-                            $account->update([
-                                'balance' => $account->balance + $request['amount'],
-                            ]);
+                        // One payment row per tender. The form sends the split as
+                        // `payments` (the legacy single `payment` stands in when
+                        // it is absent). Change comes back out of the cash-like
+                        // lines first, last line first, never out of the wallet
+                        // unless nothing else can absorb it.
+                        $wallets = app(\App\Services\CustomerWallet\CustomerWalletService::class);
+                        $lines = collect(is_array($request->input('payments')) ? $request->input('payments') : [])
+                            ->filter(fn ($l) => is_array($l) && (float) ($l['amount'] ?? 0) > 0 && ! empty($l['payment_method_id']))
+                            ->map(fn ($l) => [
+                                'payment_method_id' => $l['payment_method_id'],
+                                'account_id' => $l['account_id'] ?? null,
+                                'amount' => round((float) $l['amount'], 4),
+                                'change' => 0.0,
+                            ])->values()->all();
+                        if (! $lines) {
+                            $lines = [[
+                                'payment_method_id' => $request->payment['payment_method_id'] ?? null,
+                                'account_id' => $request->payment['account_id'] ?? null,
+                                'amount' => (float) $paymentAmount,
+                                'change' => (float) ($changeReturn ?? 0),
+                            ]];
+                        } else {
+                            $excess = round(array_sum(array_column($lines, 'amount')) - (float) $paymentAmount, 4);
+                            foreach ([false, true] as $walletPass) {
+                                for ($i = count($lines) - 1; $i >= 0 && $excess > 0; $i--) {
+                                    if ($wallets->isWalletMethod($lines[$i]['payment_method_id']) !== $walletPass) {
+                                        continue;
+                                    }
+                                    $cut = min($excess, $lines[$i]['amount']);
+                                    $lines[$i]['amount'] = round($lines[$i]['amount'] - $cut, 4);
+                                    $lines[$i]['change'] = $walletPass ? 0.0 : $cut;
+                                    $excess = round($excess - $cut, 4);
+                                }
+                            }
                         }
+
+                        $writtenTotal = 0.0;
+                        foreach ($lines as $line) {
+                            if ($line['amount'] <= 0) {
+                                continue;
+                            }
+                            $writtenTotal += (float) $line['amount'];
+                            // Customer-wallet tender: debit the customer's wallet, no cash account.
+                            $fromWallet = $wallets->isWalletMethod($line['payment_method_id']);
+                            $paymentRef = app('App\Http\Controllers\PaymentSalesController')->getNumberOrder();
+                            $walletTxId = null;
+                            if ($fromWallet) {
+                                $walletTxId = $wallets->payFromWallet((int) $order->client_id, (float) $line['amount'], 'sale_payment', [
+                                    'reference_type' => Sale::class,
+                                    'reference_id' => $order->id,
+                                    'note' => 'Sale '.$order->Ref.' · '.$paymentRef,
+                                    'user_id' => Auth::id(),
+                                ])->id;
+                            }
+
+                            PaymentSale::create([
+                                'sale_id' => $order->id,
+                                'Ref' => $paymentRef,
+                                'date' => Carbon::now(),
+                                'account_id' => (! $fromWallet && $line['account_id']) ? $line['account_id'] : null,
+                                'payment_method_id' => $line['payment_method_id'],
+                                'montant' => $line['amount'],
+                                'change' => $fromWallet ? 0 : $line['change'],
+                                'notes' => null,
+                                'user_id' => Auth::user()->id,
+                            ] + \App\Services\CustomerWallet\CustomerWalletService::txColumn($walletTxId));
+
+                            if (! $fromWallet) {
+                                Account::adjustBalance($line['account_id'], $line['amount']);
+                            }
+                        }
+
+                        // Paid = what the rows above actually record (a split
+                        // line without a method is dropped, not counted).
+                        $total_paid = (float) $sale->paid_amount + round($writtenTotal, 4);
+                        $payment_statut = Sale::paymentStatusFor($sale->GrandTotal, $total_paid);
 
                         $sale->update([
                             'paid_amount' => $total_paid,
@@ -515,6 +648,11 @@ class SalesController extends BaseController
             return $order;
 
         }, 10);
+        } catch (\App\Services\SupplierWallet\WalletException $e) {
+            // Customer-wallet tender refused (disabled, frozen, not enough
+            // balance): nothing was written.
+            return $e->toResponse();
+        }
 
         // Calculate commissions when sale is completed
         if ($sale->statut === 'completed') {
@@ -589,6 +727,14 @@ class SalesController extends BaseController
             \Log::warning('FBR submit dispatch failed (non-blocking): '.$e->getMessage(), ['sale_id' => $sale->id]);
         }
 
+        // AGT e-invoicing (Angola): non-blocking; the job is a no-op unless the
+        // module is on (System Settings > Features) and AGT settings are complete.
+        try {
+            \App\Jobs\SubmitDocumentToAgt::dispatch(\App\Models\Sale::class, $sale->id)->afterCommit();
+        } catch (\Throwable $e) {
+            \Log::warning('AGT submit dispatch failed (non-blocking): '.$e->getMessage(), ['sale_id' => $sale->id]);
+        }
+
         return response()->json([
             'success' => true,
             'sale_id' => $sale->id,
@@ -627,9 +773,13 @@ class SalesController extends BaseController
         request()->validate([
             'warehouse_id' => 'required',
             'client_id' => 'required',
+            'order_reference' => 'nullable|string|max:100',
         ]);
 
         $existing = Sale::findOrFail($id);
+
+        // Sales already communicated to a tax authority (AGT / DGI) are immutable.
+        \App\Services\EInvoicing\FiscalLock::assertMutable($existing);
 
         // The edited total must not drop below what the customer already paid;
         // otherwise the sale would stay "paid" while holding an unrefunded surplus.
@@ -712,6 +862,12 @@ class SalesController extends BaseController
                 $serialPayloadPresent = $serialService->payloadHasSerials($new_sale_details);
                 if ($serialService->isSupported() && $serialPayloadPresent && $current_Sale->statut == 'completed') {
                     $serialService->reverseForSaleDetails($old_sale_details);
+                } elseif ($serialService->isSupported()) {
+                    // Lines removed from the sale always give their units back.
+                    $keptIds = collect($new_sale_details)->pluck('id')->filter()->map(fn ($v) => (int) $v)->all();
+                    $serialService->reverseForSaleDetails(
+                        collect($old_sale_details)->reject(fn ($d) => in_array((int) $d->id, $keptIds, true))
+                    );
                 }
 
                 // Init Data with old Parametre
@@ -746,7 +902,7 @@ class SalesController extends BaseController
                                 ->where('warehouse_id', $current_Sale->warehouse_id)
                                 ->where('product_id', $value['product_id'])
                                 ->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($product_warehouse && $old_unit) {
                                 if ($old_unit->operator == '/') {
@@ -757,11 +913,13 @@ class SalesController extends BaseController
                                 $product_warehouse->save();
                             }
 
+                        } elseif ($old_unit && app(ComboStockService::class)->moveComponents((int) $value['product_id'], (int) $current_Sale->warehouse_id, ComboStockService::baseQty($oldPackQty, $old_unit))) {
+                            // Virtual combo: its components were put back instead of its own row.
                         } else {
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_Sale->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
                             if ($product_warehouse && $old_unit) {
                                 if ($old_unit->operator == '/') {
                                     $product_warehouse->qte += $oldPackQty / $old_unit->operator_value;
@@ -804,7 +962,7 @@ class SalesController extends BaseController
                                     ->where('warehouse_id', $request->warehouse_id)
                                     ->where('product_id', $prod_detail['product_id'])
                                     ->where('product_variant_id', $prod_detail['product_variant_id'])
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse && $unit_prod) {
                                     if ($unit_prod->operator == '/') {
@@ -815,11 +973,13 @@ class SalesController extends BaseController
                                     $product_warehouse->save();
                                 }
 
+                            } elseif ($unit_prod && app(ComboStockService::class)->moveComponents((int) $prod_detail['product_id'], (int) $request->warehouse_id, -ComboStockService::baseQty($newPackQty, $unit_prod))) {
+                                // Virtual combo: its components were taken instead of its own row.
                             } else {
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $request->warehouse_id)
                                     ->where('product_id', $prod_detail['product_id'])
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse && $unit_prod) {
                                     if ($unit_prod->operator == '/') {
@@ -995,22 +1155,18 @@ class SalesController extends BaseController
                 }
 
 
-                $due = $request['GrandTotal'] - $current_Sale->paid_amount;
-                if ($due === 0.0 || $due < 0.0) {
-                    $payment_statut = 'paid';
-                } elseif ($due != $request['GrandTotal']) {
-                    $payment_statut = 'partial';
-                } elseif ($due == $request['GrandTotal']) {
-                    $payment_statut = 'unpaid';
-                }
+                $payment_statut = Sale::paymentStatusFor($request['GrandTotal'], $current_Sale->paid_amount);
 
                 $current_Sale->update([
                     'date' => $request['date'],
                     'client_id' => $request['client_id'],
                     'warehouse_id' => $request['warehouse_id'],
                     'notes' => $request['notes'],
+                    // Only forms that carry the field may change it.
+                    'order_reference' => $request->has('order_reference') ? $this->orderReference($request) : $current_Sale->order_reference,
                     'statut' => $request['statut'],
                     'sales_agent_id' => $request->filled('sales_agent_id') ? $request->sales_agent_id : $current_Sale->sales_agent_id,
+                    'seller_id' => $request->has('seller_id') ? $this->resolveSellerId($request) : $current_Sale->seller_id,
                     'tax_rate' => $request['tax_rate'],
                     'TaxNet' => $request['TaxNet'],
                     'discount' => $request['discount'],
@@ -1025,16 +1181,21 @@ class SalesController extends BaseController
                     'earned_points' => $new_earned,
                     'discount_from_points' => $request['discount_from_points'],
                 ] + helpers::resolve_request_currency($request, $current_Sale->currency_id, $current_Sale->exchange_rate));
+
+                // Software License products: keep the sale's keys in line with its new lines / status.
+                \App\Services\LicenseKeys\LicenseFulfilment::afterSaleWrite($current_Sale->fresh());
             }
 
             return $current_Sale;
 
         }, 10);
 
-        // Calculate commissions when sale is completed (idempotent)
+        // Recalculate commissions (idempotent). Saving the sale on purpose also
+        // works out lines a user had cancelled; status changes and deletions
+        // away from completed are handled by CommissionSaleObserver.
         if ($sale->statut === 'completed') {
             try {
-                app(\App\Services\CommissionService::class)->calculateForSale($sale->fresh());
+                app(\App\Services\CommissionService::class)->calculateForSale($sale->fresh(), true);
             } catch (\Throwable $e) {
                 \Log::warning('Commission calculation failed (non-blocking): '.$e->getMessage(), ['sale_id' => $sale->id]);
             }
@@ -1045,9 +1206,12 @@ class SalesController extends BaseController
         try {
             /** @var \App\Services\QuickBooksService $qb */
             $qb = app(\App\Services\QuickBooksService::class);
-            $res = $qb->updateInvoice($sale);
+            // Not connected to QuickBooks: nothing to sync (no failure to log).
+            $res = $qb->isConnected() ? $qb->updateInvoice($sale) : null;
 
-            if (! ($res['ok'] ?? false)) {
+            if ($res === null) {
+                // skipped
+            } elseif (! ($res['ok'] ?? false)) {
                 \Log::warning('QBO update failed (no create fallback)', [
                     'sale_id' => $sale->id,
                     'error' => $res['error'] ?? 'unknown',
@@ -1079,6 +1243,15 @@ class SalesController extends BaseController
             $qboSync = 'failed';
         }
 
+        // AGT e-invoicing (Angola): a sale completed by this edit is communicated now.
+        if ($sale->statut === 'completed') {
+            try {
+                \App\Jobs\SubmitDocumentToAgt::dispatch(\App\Models\Sale::class, $sale->id)->afterCommit();
+            } catch (\Throwable $e) {
+                \Log::warning('AGT submit dispatch failed (non-blocking): '.$e->getMessage(), ['sale_id' => $sale->id]);
+            }
+        }
+
         return response()->json([
             'success' => true,
             'sale_id' => $sale->id,
@@ -1091,6 +1264,9 @@ class SalesController extends BaseController
     public function destroy(Request $request, $id)
     {
         $this->authorizeForUser($request->user('api'), 'delete', \App\Models\Sale::class);
+
+        // Sales already communicated to a tax authority (AGT / DGI) cannot be deleted.
+        \App\Services\EInvoicing\FiscalLock::assertMutable(\App\Models\Sale::find($id), true);
 
         // We’ll capture QBO identifiers before deletion so we can sync after commit
         $qboInfo = [
@@ -1162,11 +1338,17 @@ class SalesController extends BaseController
                     $opv = max((float) ($unit->operator_value ?? 1), 1);
                     $addQ = ($unit && $unit->operator === '/') ? ($qty / $opv) : ($qty * $opv);
 
+                    // Virtual combo: put its components back instead of its own row.
+                    if ($unit && ! $d->product_variant_id
+                        && app(ComboStockService::class)->moveComponents((int) $d->product_id, (int) $current->warehouse_id, $addQ)) {
+                        continue;
+                    }
+
                     $pw = \App\Models\product_warehouse::whereNull('deleted_at')
                         ->where('warehouse_id', $current->warehouse_id)
                         ->where('product_id', $d->product_id)
                         ->when($d->product_variant_id, fn ($q) => $q->where('product_variant_id', $d->product_variant_id))
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($pw && $unit) {
                         // No max(0, …) clamp here: with Allow Overselling the stock
@@ -1215,6 +1397,9 @@ class SalesController extends BaseController
                 $serialService->reverseForSaleDetails($current->details);
             }
 
+            // Software License keys come back (uploaded → Returned for review, generated → revoked).
+            app(\App\Services\LicenseKeys\LicenseFulfilment::class)->releaseSale((int) $current->id, Auth::id());
+
             // Delete details
             $current->details()->delete();
 
@@ -1226,8 +1411,10 @@ class SalesController extends BaseController
                         $card->delete();
                     }
                 }
-                if ($p->account_id && ($acct = \App\Models\Account::find($p->account_id))) {
-                    $acct->update(['balance' => $acct->balance - (float) $p->montant]);
+                if (! empty($p->wallet_transaction_id)) {
+                    app(\App\Services\CustomerWallet\CustomerWalletService::class)->reversePayment($p, 'Sale payment', ['note' => 'Sale '.$current->Ref.' deleted']);
+                } else {
+                    \App\Models\Account::adjustBalance($p->account_id, -(float) $p->montant);
                 }
                 $p->delete();
             }
@@ -1254,9 +1441,13 @@ class SalesController extends BaseController
 
             /** @var \App\Services\QuickBooksService $qb */
             $qb = app(\App\Services\QuickBooksService::class);
-            $res = $qb->deleteInvoice($saleStub);
+            // Not connected, or never synced to QuickBooks: nothing to delete there.
+            $synced = ! empty($qboInfo['id']) || ! empty($qboInfo['realm']);
+            $res = $qb->isConnected() && $synced ? $qb->deleteInvoice($saleStub) : null;
 
-            if (! ($res['ok'] ?? false)) {
+            if ($res === null) {
+                // skipped
+            } elseif (! ($res['ok'] ?? false)) {
                 \Log::warning('QBO delete failed (non-blocking)', [
                     'sale_id' => $id,
                     'error' => $res['error'] ?? 'unknown',
@@ -1264,8 +1455,9 @@ class SalesController extends BaseController
                     'body' => $res['body'] ?? null,
                 ]);
 
-                // Save error on the soft-deleted row (use withTrashed if model has SoftDeletes)
-                $deletedSale = \App\Models\Sale::withTrashed()->find($id) ?: \App\Models\Sale::query()->find($id);
+                // Save error on the soft-deleted row
+                // Sale has no SoftDeletes trait: a plain find returns the deleted row too.
+                $deletedSale = \App\Models\Sale::query()->find($id);
                 if ($deletedSale) {
                     $deletedSale->update([
                         'quickbooks_sync_error' => substr(($res['error'] ?? '').' '.($res['body'] ?? ''), 0, 65000),
@@ -1274,7 +1466,8 @@ class SalesController extends BaseController
                 $qboSync = 'failed';
             } else {
                 // Optionally mark as deleted in QBO
-                $deletedSale = \App\Models\Sale::withTrashed()->find($id) ?: \App\Models\Sale::query()->find($id);
+                // Sale has no SoftDeletes trait: a plain find returns the deleted row too.
+                $deletedSale = \App\Models\Sale::query()->find($id);
                 if ($deletedSale) {
                     $deletedSale->update([
                         'quickbooks_sync_error' => null,
@@ -1299,6 +1492,11 @@ class SalesController extends BaseController
     {
 
         $this->authorizeForUser($request->user('api'), 'delete', Sale::class);
+
+        // Refuse the whole batch when one sale was communicated to AGT / DGI.
+        foreach ((array) $request->selectedIds as $selectedId) {
+            \App\Services\EInvoicing\FiscalLock::assertMutable(Sale::find($selectedId), true);
+        }
 
         \DB::transaction(function () use ($request) {
             $user = Auth::user();
@@ -1360,6 +1558,9 @@ class SalesController extends BaseController
                         $serialService->reverseForSaleDetails($old_sale_details);
                     }
 
+                    // Software License keys come back (uploaded → Returned for review, generated → revoked).
+                    app(\App\Services\LicenseKeys\LicenseFulfilment::class)->releaseSale((int) $current_Sale->id, Auth::id());
+
                     foreach ($old_sale_details as $key => $value) {
 
                         // check if detail has sale_unit_id Or Null
@@ -1387,7 +1588,7 @@ class SalesController extends BaseController
                                     ->where('warehouse_id', $current_Sale->warehouse_id)
                                     ->where('product_id', $value['product_id'])
                                     ->where('product_variant_id', $value['product_variant_id'])
-                                    ->first();
+                                    ->lockForUpdate()->first();
 
                                 if ($product_warehouse && $old_unit) {
                                     if ($old_unit->operator == '/') {
@@ -1398,11 +1599,13 @@ class SalesController extends BaseController
                                     $product_warehouse->save();
                                 }
 
+                            } elseif ($old_unit && app(ComboStockService::class)->moveComponents((int) $value['product_id'], (int) $current_Sale->warehouse_id, ComboStockService::baseQty($selPackQty, $old_unit))) {
+                                // Virtual combo: its components were put back instead of its own row.
                             } else {
                                 $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                     ->where('warehouse_id', $current_Sale->warehouse_id)
                                     ->where('product_id', $value['product_id'])
-                                    ->first();
+                                    ->lockForUpdate()->first();
                                 if ($product_warehouse && $old_unit) {
                                     if ($old_unit->operator == '/') {
                                         $product_warehouse->qte += $selPackQty / $old_unit->operator_value;
@@ -1453,12 +1656,10 @@ class SalesController extends BaseController
                             }
                         }
 
-                        $account = Account::find($Payment_Sale->account_id);
-
-                        if ($account) {
-                            $account->update([
-                                'balance' => $account->balance - $Payment_Sale->montant,
-                            ]);
+                        if (! empty($Payment_Sale->wallet_transaction_id)) {
+                            app(\App\Services\CustomerWallet\CustomerWalletService::class)->reversePayment($Payment_Sale, 'Sale payment', ['note' => 'Sale '.$current_Sale->Ref.' deleted']);
+                        } else {
+                            Account::adjustBalance($Payment_Sale->account_id, -$Payment_Sale->montant);
                         }
 
                         $Payment_Sale->delete();
@@ -1467,6 +1668,73 @@ class SalesController extends BaseController
             }
 
         }, 10);
+
+        return response()->json(['success' => true]);
+    }
+
+    // ------------- Assign serials to a completed sale -----------\\
+
+    /**
+     * Record which serial / IMEI units left on a completed sale without
+     * re-saving the sale — channel orders (online store, WooCommerce, Shopify,
+     * Salla, PrestaShop, Jumia) arrive without serials, and any sale may have
+     * been saved before they were known. Only serials move: stock, totals and
+     * payments are untouched.
+     *
+     * Body: details: [{sale_detail_id, serial_numbers: []}]. Each listed line's
+     * serials are replaced (an empty list clears them); a combo line takes its
+     * tracked components' serials, like the sale form.
+     */
+    public function assignSerials(Request $request, $id)
+    {
+        $this->authorizeForUser($request->user('api'), 'update', Sale::class);
+        $sale = Sale::where('deleted_at', '=', null)->findOrFail($id);
+        $this->abortIfDocumentWarehouseDenied($sale);
+        if (! Auth::user()->hasRecordView()) {
+            $this->authorizeForUser($request->user('api'), 'check_record', $sale);
+        }
+
+        $serialService = app(SerialNumberService::class);
+        if (! $serialService->isSupported() || $sale->statut !== 'completed') {
+            throw ValidationException::withMessages([
+                'serial_numbers' => ['Serials can only be assigned to a completed sale.'],
+            ]);
+        }
+        // A return already moved some of these units; same lock as editing the sale.
+        if (SaleReturn::where('sale_id', $sale->id)->where('deleted_at', '=', null)->exists()) {
+            throw ValidationException::withMessages([
+                'serial_numbers' => ['This sale has a return, so its serials can no longer be changed.'],
+            ]);
+        }
+
+        $request->validate([
+            'details' => 'required|array',
+            'details.*.sale_detail_id' => 'required|integer',
+            'details.*.serial_numbers' => 'present|array',
+            'details.*.serial_numbers.*' => 'string',
+        ]);
+
+        $rows = collect($request->input('details'))
+            ->keyBy(fn ($row) => (int) $row['sale_detail_id']);
+        // Only lines that track serials: a tracked product, or a combo with a
+        // tracked component.
+        $details = SaleDetail::with('product:id,type,is_imei')
+            ->where('sale_id', $sale->id)
+            ->whereIn('id', $rows->keys()->all())
+            ->get()
+            ->filter(fn ($d) => $serialService->productIsTracked($d->product_id) || $serialService->comboRecipe((int) $d->product_id))
+            ->values();
+
+        \DB::transaction(function () use ($sale, $details, $rows, $serialService) {
+            // Release every listed line first so serials can swap between lines.
+            $serialService->reverseForSaleDetails($details);
+            foreach ($details as $detail) {
+                $serials = $serialService->normalizeSerials($rows[(int) $detail->id]['serial_numbers'] ?? []);
+                $serialService->sellOnSale($sale, $detail, $serials);
+                $detail->imei_number = $serials ? implode(',', $serials) : null;
+                $detail->save();
+            }
+        });
 
         return response()->json(['success' => true]);
     }
@@ -1499,7 +1767,9 @@ class SalesController extends BaseController
             $this->authorizeForUser($request->user('api'), 'check_record', $sale_data);
         }
 
+        $sale_details['id'] = $sale_data->id;
         $sale_details['Ref'] = $sale_data->Ref;
+        $sale_details['order_reference'] = $sale_data->order_reference;
         $sale_details['date'] = $sale_data->date.' '.$sale_data->time;
         $sale_details['note'] = $sale_data->notes;
         $sale_details['statut'] = $sale_data->statut;
@@ -1528,6 +1798,18 @@ class SalesController extends BaseController
         $sale_details['paid_amount'] = number_format($sale_data->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $sale_details['due'] = number_format($sale_details['GrandTotal'] - $sale_details['paid_amount'], helpers::price_decimals(), '.', '');
         $sale_details['payment_status'] = $sale_data->payment_statut;
+        // The online order this sale came from. Tolerated, not schema-checked:
+        // the Sale updated hook writes the same column and swallows its own
+        // failure the same way, and a schema lookup per page view is not free.
+        try {
+            $sale_details['online_order'] = \App\Models\OnlineOrder::where('sale_id', $id)->first(['id', 'ref'])?->only(['id', 'ref']);
+        } catch (\Throwable $e) {
+            $sale_details['online_order'] = null;
+        }
+        $sale_details['previous_dues'] = number_format(
+            $this->clientPreviousDues($sale_data->client_id, $sale_data->id) * $docCurrency['rate'],
+            helpers::price_decimals(), '.', ''
+        );
         $sale_details['discount_from_points'] = ($sale_data->discount_from_points ?? 0) * $docCurrency['rate'];
 
         if (SaleReturn::where('sale_id', $id)->where('deleted_at', '=', null)->exists()) {
@@ -1541,6 +1823,18 @@ class SalesController extends BaseController
         // Preload existing batch pivots for this sale's details (pharmacy/batch module).
         $saleBatchesByDetail = app(\App\Services\BatchService::class)
             ->batchesForSaleDetails($sale_data['details']);
+
+        // Serial / IMEI: what each line tracks and the serials the ledger holds
+        // for it, so the page can flag and assign missing serials (channel
+        // orders and any sale saved without them).
+        $sale_details['warehouse_id'] = $sale_data->warehouse_id;
+        $serialService = app(SerialNumberService::class);
+        $serialComponentsByCombo = $serialService->comboSerialComponents(
+            collect($sale_data['details'])->pluck('product_id')->all()
+        );
+        $serialGroupsByDetail = $serialService->serialGroupsBySaleDetail(
+            collect($sale_data['details'])->pluck('id')->all()
+        );
 
         foreach ($sale_data['details'] as $detail) {
 
@@ -1562,9 +1856,9 @@ class SalesController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -1603,10 +1897,24 @@ class SalesController extends BaseController
                 $data['taxe'] = $detail->price - $data['Net_price'] - $data['DiscountNet'];
             }
 
-            $data['is_imei'] = $detail['product']['is_imei'];
+            $data['is_imei'] = $detail['product']['is_imei']
+                // Combo lines print the serials of their tracked components.
+                || ($detail['product']['type'] === 'is_combo' && $detail->imei_number);
             $data['imei_number'] = $detail->imei_number;
             $data['is_batch_tracked'] = (bool) ($detail['product']['is_batch_tracked'] ?? false);
             $data['batches'] = $saleBatchesByDetail[(int) $detail->id] ?? [];
+            $groups = $serialGroupsByDetail[(int) $detail->id] ?? [];
+            $data['serial_line'] = [
+                'sale_detail_id' => (int) $detail->id,
+                'product_id' => (int) $detail->product_id,
+                'product_variant_id' => $detail->product_variant_id ? (int) $detail->product_variant_id : null,
+                'tracked' => (bool) $detail['product']['is_imei'],
+                // Base units the line moved (quantity × pack × unit): one serial each.
+                'units' => (int) round($serialService->serialUnits($detail)),
+                'serial_components' => $serialComponentsByCombo[(int) $detail->product_id] ?? [],
+                'serial_numbers' => $groups[(int) $detail->product_id] ?? [],
+                'serial_groups' => (object) $groups,
+            ];
 
             // Multi-Pack Selling: pack name + total pieces (quantity × multiplier).
             $data['pack_name'] = $detail->pack_name;
@@ -1621,6 +1929,8 @@ class SalesController extends BaseController
             'details' => $details,
             'sale' => $sale_details,
             'company' => $company,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($sale_data->warehouse_id, $company),
         ]);
 
     }
@@ -1636,10 +1946,13 @@ class SalesController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $sale, ['view', 'Sales_pos']);
+
         $docCurrency = helpers::Get_Document_Currency($sale);
 
         $item['id'] = $sale->id;
         $item['Ref'] = $sale->Ref;
+        $item['order_reference'] = $sale->order_reference;
         $item['date'] = $sale->date.' '.$sale->time;
         // Percent discounts stay as-is; fixed amounts are shown in the document currency.
         $item['discount'] = number_format(($sale->discount_Method ?? '2') == '1' ? $sale->discount : $sale->discount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
@@ -1669,10 +1982,17 @@ class SalesController extends BaseController
         $item['tax_rate'] = $sale->tax_rate;
         $item['client_name'] = $sale['client']->name;
         $item['warehouse_name'] = $sale['warehouse']->name;
+        // Lets the POS rebuild this sale's branch letterhead offline, when no
+        // server-resolved issuer came with the payload.
+        $item['warehouse_id'] = $sale->warehouse_id;
         $item['seller_name'] = $sale['user']->username;
         $item['GrandTotal'] = number_format($sale->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $item['paid_amount'] = number_format($sale->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $item['notes'] = $sale->notes;
+        $item['previous_dues'] = number_format(
+            $this->clientPreviousDues($sale->client_id, $sale->id) * $docCurrency['rate'],
+            helpers::price_decimals(), '.', ''
+        );
 
         foreach ($sale['details'] as $detail) {
 
@@ -1693,9 +2013,9 @@ class SalesController extends BaseController
                     ->first();
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -1726,7 +2046,9 @@ class SalesController extends BaseController
                 : (float) ($detail->discount ?? 0);
             $data['DiscountNet'] = number_format($unitDiscountAmount, helpers::price_decimals(), '.', '');
 
-            $data['is_imei'] = $detail['product']['is_imei'];
+            $data['is_imei'] = $detail['product']['is_imei']
+                // Combo lines print the serials of their tracked components.
+                || ($detail['product']['type'] === 'is_combo' && $detail->imei_number);
             $data['imei_number'] = $detail->imei_number;
 
             // Multi-Pack Selling: expose the pack so receipts can show the pack
@@ -1781,10 +2103,22 @@ class SalesController extends BaseController
         $fbrDocument = \App\Models\FbrDocument::forSource($sale);
         $fbrInvoiceNumber = ($fbrDocument && $fbrDocument->isAccepted()) ? $fbrDocument->fbr_invoice_number : null;
 
+        // Branch letterhead: the warehouse that rang up this sale. The
+        // receipt header uses it in place of the company settings, each
+        // field falling back to the company value when the branch has none.
+        $issuer = \App\Services\InvoiceIssuerService::resolve($sale->warehouse_id, $settings);
+        // Ship logo URLs that point at a file that exists (see receipt_logo_url)
+        // so the receipt never prints a broken-image box.
+        $issuer['logo'] = receipt_logo_url($issuer['logo'] ?? null);
+        if ($settings) {
+            $settings->logo = receipt_logo_url($settings->logo);
+        }
+
         return response()->json([
             'symbol' => $symbol,
             'payments' => $payments,
             'setting' => $settings,
+            'issuer' => $issuer,
             'pos_settings' => $pos_settings,
             'sale' => $item,
             'details' => $details,
@@ -1792,9 +2126,50 @@ class SalesController extends BaseController
             'zatca_status' => $zatcaDocument->status ?? null,
             'fbr_invoice_number' => $fbrInvoiceNumber,
             'fbr_status' => $fbrDocument->status ?? null,
+            'fiscal' => \App\Services\EInvoicing\FiscalPrint::forSource($sale),
             'public_invoice_url' => $publicInvoiceUrl,
+            // License Keys › Settings › "Print keys on receipt": [{product, key}]
+            'license_keys' => $this->receiptLicenseKeys((int) $sale->id),
         ]);
 
+    }
+
+    /** Software license keys of a sale for the POS receipt (only when the setting is on). */
+    private function receiptLicenseKeys(int $saleId): array
+    {
+        try {
+            if (! \App\Services\LicenseKeys\LicenseFulfilment::ready()) {
+                return [];
+            }
+            $settings = \App\Models\LicenseSetting::current();
+            if (! $settings || ! $settings->show_on_receipt) {
+                return [];
+            }
+            // Full keys on a reprint of an older sale need the reveal right;
+            // the receipt printed right after the sale always carries them.
+            $createdAt = \App\Models\Sale::whereKey($saleId)->value('created_at');
+            $fresh = $createdAt && \Carbon\Carbon::parse($createdAt)->gt(now()->subMinutes(30));
+            if (! $fresh) {
+                $user = request()->user('api') ?: Auth::user();
+                if (! $user || ! \Illuminate\Support\Facades\Gate::forUser($user)->allows('license_keys_reveal', \App\Models\LicenseKey::class)) {
+                    return [];
+                }
+            }
+
+            return \App\Models\LicenseKey::with(['product:id,name', 'variant:id,name'])
+                ->where('sale_id', $saleId)
+                ->whereNotNull('sale_detail_id')
+                ->where('status', \App\Models\LicenseKey::STATUS_SOLD)
+                ->orderBy('id')
+                ->get()
+                ->map(fn ($k) => [
+                    'product' => trim(($k->product->name ?? '').($k->variant ? ' — '.$k->variant->name : '')),
+                    'key' => $k->plainKey(),
+                    'expires_at' => $k->isGenerated() ? optional($k->expires_at)->toDateString() : null,
+                ])->values()->all();
+        } catch (\Throwable $e) {
+            return [];
+        }
     }
 
     // ------------- DIRECT NETWORK PRINT (RAW / port 9100) -----------\\
@@ -1826,6 +2201,8 @@ class SalesController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $sale, ['view', 'Sales_pos']);
+
         $settings = Setting::where('deleted_at', '=', null)->first();
         $docCurrency = helpers::Get_Document_Currency($sale);
         $symbol = $docCurrency['code'];
@@ -1856,17 +2233,22 @@ class SalesController extends BaseController
             return $left . str_repeat(' ', $space) . $right . chr(10);
         };
 
+        // Branch letterhead: the warehouse that rang up the sale, falling back
+        // to the company settings field by field (and wholly, when the module
+        // is off).
+        $issuer = \App\Services\InvoiceIssuerService::resolve($sale->warehouse_id, $settings);
+
         $out  = $initPrinter;
         $out .= $alignCenter . $boldOn;
-        if ($settings && !empty($settings->CompanyName)) {
-            $out .= $settings->CompanyName . $LF;
+        if ($issuer['name'] !== '') {
+            $out .= $issuer['name'] . $LF;
         }
         $out .= $boldOff;
-        if ($settings && !empty($settings->CompanyAdress)) {
-            $out .= $settings->CompanyAdress . $LF;
+        if ($issuer['full_address'] !== '') {
+            $out .= $issuer['full_address'] . $LF;
         }
-        if ($settings && !empty($settings->CompanyPhone)) {
-            $out .= $settings->CompanyPhone . $LF;
+        if ($issuer['phone'] !== '') {
+            $out .= $issuer['phone'] . $LF;
         }
 
         $out .= $alignLeft . $line;
@@ -1888,16 +2270,16 @@ class SalesController extends BaseController
             $qty = rtrim(rtrim(number_format((float) $detail->quantity, helpers::price_decimals(), '.', ''), '0'), '.');
             $total = number_format((float) $detail->total * $docCurrency['rate'], helpers::price_decimals(), '.', '');
             $out .= mb_substr($name, 0, $width) . $LF;
-            $out .= $pad('  ' . $qty . ' x', $symbol . ' ' . $total);
+            $out .= $pad('  ' . $qty . ' x', helpers::with_currency($symbol, $total));
         }
 
         $out .= $line;
         // The receipt math treats every term as an amount (legacy behavior), so the
         // whole block is scaled uniformly to the document currency (rate 1.0 for base docs).
         $rate = (float) $docCurrency['rate'];
-        $out .= $pad('Subtotal:', $symbol . ' ' . number_format((float) ($sale->GrandTotal - $sale->TaxNet + $sale->discount - $sale->shipping) * $rate, helpers::price_decimals(), '.', ''));
+        $out .= $pad('Subtotal:', helpers::with_currency($symbol, number_format((float) ($sale->GrandTotal - $sale->TaxNet + $sale->discount - $sale->shipping) * $rate, helpers::price_decimals(), '.', '')));
         if ((float) $sale->discount > 0) {
-            $out .= $pad('Discount:', '-' . $symbol . ' ' . number_format((float) $sale->discount * $rate, helpers::price_decimals(), '.', ''));
+            $out .= $pad('Discount:', '-' . helpers::with_currency($symbol, number_format((float) $sale->discount * $rate, helpers::price_decimals(), '.', '')));
         }
         // Per-promotion breakdown (name + amount). Falls back to the single
         // promotion_discount column when no usage rows exist (legacy sales).
@@ -1908,25 +2290,28 @@ class SalesController extends BaseController
         if ($promoUsages->isNotEmpty()) {
             foreach ($promoUsages as $u) {
                 $label = 'Promo (' . ($u->promotion ? mb_substr($u->promotion->name, 0, $width - 16) : '#' . $u->promotion_id) . '):';
-                $out .= $pad($label, '-' . $symbol . ' ' . number_format((float) $u->discount_amount * $rate, helpers::price_decimals(), '.', ''));
+                $out .= $pad($label, '-' . helpers::with_currency($symbol, number_format((float) $u->discount_amount * $rate, helpers::price_decimals(), '.', '')));
             }
         } elseif ((float) ($sale->promotion_discount ?? 0) > 0) {
-            $out .= $pad('Promo:', '-' . $symbol . ' ' . number_format((float) $sale->promotion_discount * $rate, helpers::price_decimals(), '.', ''));
+            $out .= $pad('Promo:', '-' . helpers::with_currency($symbol, number_format((float) $sale->promotion_discount * $rate, helpers::price_decimals(), '.', '')));
         }
         if ((float) $sale->TaxNet > 0) {
-            $out .= $pad('Tax:', $symbol . ' ' . number_format((float) $sale->TaxNet * $rate, helpers::price_decimals(), '.', ''));
+            $out .= $pad('Tax:', helpers::with_currency($symbol, number_format((float) $sale->TaxNet * $rate, helpers::price_decimals(), '.', '')));
         }
         if ((float) $sale->shipping > 0) {
-            $out .= $pad('Shipping:', $symbol . ' ' . number_format((float) $sale->shipping * $rate, helpers::price_decimals(), '.', ''));
+            $out .= $pad('Shipping:', helpers::with_currency($symbol, number_format((float) $sale->shipping * $rate, helpers::price_decimals(), '.', '')));
         }
-        $out .= $boldOn . $pad('TOTAL:', $symbol . ' ' . number_format((float) $sale->GrandTotal * $rate, helpers::price_decimals(), '.', '')) . $boldOff;
-        $out .= $pad('Paid:', $symbol . ' ' . number_format((float) $sale->paid_amount * $rate, helpers::price_decimals(), '.', ''));
+        $out .= $boldOn . $pad('TOTAL:', helpers::with_currency($symbol, number_format((float) $sale->GrandTotal * $rate, helpers::price_decimals(), '.', ''))) . $boldOff;
+        $out .= $pad('Paid:', helpers::with_currency($symbol, number_format((float) $sale->paid_amount * $rate, helpers::price_decimals(), '.', '')));
         $due = ((float) $sale->GrandTotal - (float) $sale->paid_amount) * $rate;
         if ($due > 0) {
-            $out .= $pad('Due:', $symbol . ' ' . number_format($due, helpers::price_decimals(), '.', ''));
+            $out .= $pad('Due:', helpers::with_currency($symbol, number_format($due, helpers::price_decimals(), '.', '')));
         }
 
         $out .= $LF . $alignCenter . 'Thank you!' . $LF;
+        if ($issuer['footer'] !== '') {
+            $out .= $issuer['footer'] . $LF;
+        }
         $out .= str_repeat($LF, 4);
         $out .= $cut;
 
@@ -1997,6 +2382,37 @@ class SalesController extends BaseController
 
     // ------------- Reference Number Order SALE -----------\\
 
+    /**
+     * Outstanding balance the client carried BEFORE this sale.
+     *
+     * Mirrors the netBalance formula in ClientController (opening balance +
+     * unpaid sales - what is owed back on returns) but leaves THIS sale out,
+     * so that previous_dues + this sale's due equals the client's net balance.
+     * Not warehouse-scoped: it is the customer's balance, not the viewer's.
+     */
+    private function clientPreviousDues($client_id, $sale_id)
+    {
+        if (! $client_id) {
+            return 0.0;
+        }
+
+        $opening = (float) (Client::where('id', $client_id)->value('opening_balance') ?? 0);
+
+        $sales_due = (float) DB::table('sales')
+            ->whereNull('deleted_at')
+            ->where('client_id', $client_id)
+            ->where('statut', 'completed')
+            ->where('id', '!=', $sale_id)
+            ->sum(DB::raw('GrandTotal - paid_amount'));
+
+        $returns_due = (float) DB::table('sale_returns')
+            ->whereNull('deleted_at')
+            ->where('client_id', $client_id)
+            ->sum(DB::raw('GrandTotal - paid_amount'));
+
+        return round($opening + $sales_due - $returns_due, 2);
+    }
+
     public function getNumberOrder()
     {
         // Get prefix from settings, fallback to 'SL' if not set
@@ -2005,10 +2421,18 @@ class SalesController extends BaseController
         
         // Get the last sale with a reference that starts with the prefix
         // Support both formats: WO_12 and WO-12
+        // "_" and "%" are LIKE wildcards: escape them so only the literal
+        // prefix + separator matches (SL_% used to match "SLx5" too).
+        $likePrefix = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $prefix);
+
+        // Deliberately NOT lockForUpdate: callers run inside the sale
+        // transaction (POS, online-order confirmation), so a lock here would
+        // serialise every till behind the slowest open sale and can deadlock
+        // with online-order confirmation.
         $last = DB::table('sales')
-            ->where(function ($q) use ($prefix) {
-                $q->where('Ref', 'like', $prefix.'_%')
-                    ->orWhere('Ref', 'like', $prefix.'-%');
+            ->where(function ($q) use ($likePrefix) {
+                $q->where('Ref', 'like', $likePrefix.'\\_%')
+                    ->orWhere('Ref', 'like', $likePrefix.'-%');
             })
             ->latest('id')
             ->first();
@@ -2165,7 +2589,10 @@ class SalesController extends BaseController
                     'price_type' => 'retail',
                 ], $warrantyGuarantee);
 
-                if ($order->statut === 'completed' && $product->type !== 'is_service') {
+                if ($order->statut === 'completed' && $product->type !== 'is_service'
+                    && ! ($unit && $productVariantId === null
+                        && app(ComboStockService::class)->moveComponents((int) $productId, (int) $order->warehouse_id, -ComboStockService::baseQty($qty, $unit)))) {
+                    // A virtual combo takes its components (in the condition) instead of its own row.
                     $pwQuery = product_warehouse::whereNull('deleted_at')
                         ->where('warehouse_id', $order->warehouse_id)
                         ->where('product_id', $productId);
@@ -2174,7 +2601,7 @@ class SalesController extends BaseController
                     } else {
                         $pwQuery->whereNull('product_variant_id');
                     }
-                    $product_warehouse = $pwQuery->first();
+                    $product_warehouse = $pwQuery->lockForUpdate()->first();
 
                     if ($unit && $product_warehouse) {
                         if ($unit->operator == '/') {
@@ -2195,6 +2622,9 @@ class SalesController extends BaseController
             $sale_data->TaxNet = $TaxNet;
             $sale_data->GrandTotal = $total_without_discount + $TaxNet + $sale_data->shipping;
             $sale_data->save();
+
+            // Software License products: claim / issue one key per unit sold.
+            \App\Services\LicenseKeys\LicenseFulfilment::afterSaleWrite($sale_data);
         }, 10);
 
         return response()->json(['success' => true, 'message' => 'Sale created successfully.']);
@@ -2228,12 +2658,17 @@ class SalesController extends BaseController
             }
         }
 
-        $insufficient = [];
+        $insufficient = $this->importComboShortages($byKey, $warehouse_id);
         foreach ($byKey as $key => $agg) {
             $productId = $agg['product_id'];
             $variantId = $agg['product_variant_id'];
             $requestedQty = $agg['qty'];
             $productCode = $agg['product_code'];
+
+            // Checked on the components by importComboShortages().
+            if (! empty($agg['via_components'])) {
+                continue;
+            }
 
             $product = Product::whereNull('deleted_at')->find($productId);
             if (! $product) {
@@ -2284,6 +2719,85 @@ class SalesController extends BaseController
         }
 
         return $insufficient;
+    }
+
+    /**
+     * Virtual combo stock for the sales import: a combo line has no stock of
+     * its own, so its components are checked instead, merged with any line
+     * importing those components directly. Lines handled here are flagged
+     * `via_components` so the per-product check skips them. Mirrors
+     * ChecksSaleStock: "Always in stock" / service components and rows
+     * without manage_stock never limit.
+     *
+     * @return array<int, array{product_code: string, requested: float, available: float}>
+     */
+    protected function importComboShortages(array &$byKey, int $warehouse_id): array
+    {
+        if (! ComboStockService::enabled()) {
+            return [];
+        }
+
+        $comboStock = app(ComboStockService::class);
+        $products = Product::whereNull('deleted_at')
+            ->whereIn('id', array_column($byKey, 'product_id'))
+            ->get()
+            ->keyBy('id');
+        // An "Always in stock" combo is never checked, like any such product.
+        $recipes = array_filter($comboStock->recipes($products->where('type', 'is_combo')->reject(fn ($p) => $p->always_in_stock)->keys()->all()));
+        if (! $recipes) {
+            return [];
+        }
+
+        $componentIds = [];
+        foreach ($recipes as $recipe) {
+            $componentIds += array_flip(array_keys($recipe));
+        }
+
+        $toBase = function (float $qty, $product) {
+            return ComboStockService::baseQty($qty, $product ? Unit::find($product->unit_sale_id) : null);
+        };
+
+        // Base units each component must cover, across combo and loose lines.
+        $demand = [];
+        foreach ($byKey as $key => $agg) {
+            $pid = $agg['product_id'];
+            if ($agg['product_variant_id'] !== null || ! (isset($recipes[$pid]) || isset($componentIds[$pid]))) {
+                continue;
+            }
+            $byKey[$key]['via_components'] = true;
+            $base = $toBase($agg['qty'], $products->get($pid));
+            $needs = isset($recipes[$pid]) ? $comboStock->componentNeeds($pid, $base) : [$pid => $base];
+            foreach ($needs as $componentId => $units) {
+                $demand[$componentId] = ($demand[$componentId] ?? 0) + $units;
+            }
+        }
+
+        $components = Product::whereIn('id', array_keys($demand))->get()->keyBy('id');
+        $rows = product_warehouse::whereNull('deleted_at')
+            ->where('warehouse_id', $warehouse_id)
+            ->whereIn('product_id', array_keys($demand))
+            ->whereNull('product_variant_id')
+            ->get()
+            ->keyBy('product_id');
+
+        $short = [];
+        foreach ($demand as $componentId => $need) {
+            $component = $components->get($componentId);
+            $row = $rows->get($componentId);
+            if (! $component || $component->always_in_stock || $component->type === 'is_service' || ($row && ! $row->manage_stock)) {
+                continue;
+            }
+            $have = $row ? (float) $row->qte : 0.0;
+            if ($need > $have + 1e-9) {
+                $short[] = [
+                    'product_code' => $component->code.' (combo component)',
+                    'requested' => round($need, 2),
+                    'available' => round(max($have, 0), 2),
+                ];
+            }
+        }
+
+        return $short;
     }
 
     // ------ batches_for_sale ---------------\\
@@ -2549,6 +3063,13 @@ class SalesController extends BaseController
             return response()->json(['msg' => 'Validation failed.', 'errors' => $validator->errors(), 'status' => false], 422);
         }
 
+        // Different prices per store: the sale's warehouse prices (preview and
+        // store both send warehouse_id). No warehouse = the normal price.
+        $storePriceMap = $request->filled('warehouse_id')
+            ? \App\Services\WarehousePrices::map((int) $request->warehouse_id,
+                array_values(array_unique(array_column($codeToResolved, 'product_id'))))
+            : [];
+
         // Enrich each row with product_id, product_variant_id, price, unit_sale_id
         foreach ($cleanedData as $index => $row) {
             $code = trim($row['productcode'] ?? '');
@@ -2556,7 +3077,10 @@ class SalesController extends BaseController
                 $r = $codeToResolved[$code];
                 $cleanedData[$index]['product_id'] = $r['product_id'];
                 $cleanedData[$index]['product_variant_id'] = $r['product_variant_id'];
-                $cleanedData[$index]['price'] = $r['price'];
+                $cleanedData[$index]['price'] = (float) \App\Services\WarehousePrices::pick(
+                    $storePriceMap[\App\Services\WarehousePrices::key($r['product_id'], $r['product_variant_id'])] ?? null,
+                    'price', $r['price']
+                );
                 $cleanedData[$index]['unit_sale_id'] = $r['unit_sale_id'];
             }
         }
@@ -2575,6 +3099,8 @@ class SalesController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $sale_data, ['view', 'Sales_pos']);
+
         $docCurrency = helpers::Get_Document_Currency($sale_data);
 
         $sale['client_name'] = $sale_data['client']->name;
@@ -2586,6 +3112,8 @@ class SalesController extends BaseController
         // number on the A4 invoice once the sale has been accepted.
         $fbr_doc = \App\Models\FbrDocument::forSource($sale_data);
         $sale['fbr_invoice_number'] = ($fbr_doc && $fbr_doc->isAccepted()) ? $fbr_doc->fbr_invoice_number : null;
+        // AGT (Angola) / DGI (DR Congo) e-invoicing: fiscal block with legal mentions + QR.
+        $sale['fiscal'] = \App\Services\EInvoicing\FiscalPrint::forSource($sale_data);
         $sale['TaxNet'] = number_format($sale_data->TaxNet * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         // Percent discounts stay as-is; fixed amounts are shown in the document currency.
         $sale['discount'] = number_format(($sale_data->discount_Method ?? '2') == '1' ? $sale_data->discount : $sale_data->discount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
@@ -2609,6 +3137,7 @@ class SalesController extends BaseController
         $sale['shipping'] = number_format($sale_data->shipping * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $sale['statut'] = $sale_data->statut;
         $sale['Ref'] = $sale_data->Ref;
+        $sale['order_reference'] = $sale_data->order_reference;
         $sale['date'] = $sale_data->date.' '.$sale_data->time;
         $sale['GrandTotal'] = number_format($sale_data->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $sale['paid_amount'] = number_format($sale_data->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
@@ -2647,9 +3176,9 @@ class SalesController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -2688,7 +3217,9 @@ class SalesController extends BaseController
                 $data['taxe'] = number_format($detail->price - $data['Net_price'] - $data['DiscountNet'], helpers::price_decimals(), '.', '');
             }
 
-            $data['is_imei'] = $detail['product']['is_imei'];
+            $data['is_imei'] = $detail['product']['is_imei']
+                // Combo lines print the serials of their tracked components.
+                || ($detail['product']['type'] === 'is_combo' && $detail->imei_number);
             $data['imei_number'] = $detail->imei_number;
 
             // Multi-Pack Selling: pack name + total pieces (quantity × multiplier).
@@ -2703,6 +3234,8 @@ class SalesController extends BaseController
         $Html = view('pdf.sale_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($sale_data->warehouse_id, $settings),
             'sale' => $sale,
             'details' => $details,
         ])->render();
@@ -2736,6 +3269,8 @@ class SalesController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $sale_data, ['view', 'Sales_pos']);
+
         $docCurrency = helpers::Get_Document_Currency($sale_data);
 
         $sale['client_name'] = $sale_data['client']->name;
@@ -2747,6 +3282,8 @@ class SalesController extends BaseController
         // number on the A4 invoice once the sale has been accepted.
         $fbr_doc = \App\Models\FbrDocument::forSource($sale_data);
         $sale['fbr_invoice_number'] = ($fbr_doc && $fbr_doc->isAccepted()) ? $fbr_doc->fbr_invoice_number : null;
+        // AGT (Angola) / DGI (DR Congo) e-invoicing: fiscal block with legal mentions + QR.
+        $sale['fiscal'] = \App\Services\EInvoicing\FiscalPrint::forSource($sale_data);
         $sale['TaxNet'] = number_format($sale_data->TaxNet * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         // Percent discounts stay as-is; fixed amounts are shown in the document currency.
         $sale['discount'] = number_format(($sale_data->discount_Method ?? '2') == '1' ? $sale_data->discount : $sale_data->discount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
@@ -2770,6 +3307,7 @@ class SalesController extends BaseController
         $sale['shipping'] = number_format($sale_data->shipping * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $sale['statut'] = $sale_data->statut;
         $sale['Ref'] = $sale_data->Ref;
+        $sale['order_reference'] = $sale_data->order_reference;
         $sale['date'] = $sale_data->date.' '.$sale_data->time;
         $sale['GrandTotal'] = number_format($sale_data->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', '');
         $sale['paid_amount'] = number_format($sale_data->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', '');
@@ -2808,8 +3346,9 @@ class SalesController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
             }
 
             if ($detail->product_variant_id) {
@@ -2847,7 +3386,9 @@ class SalesController extends BaseController
                 $data['taxe'] = number_format($detail->price - $data['Net_price'] - $data['DiscountNet'], helpers::price_decimals(), '.', '');
             }
 
-            $data['is_imei'] = $detail['product']['is_imei'];
+            $data['is_imei'] = $detail['product']['is_imei']
+                // Combo lines print the serials of their tracked components.
+                || ($detail['product']['type'] === 'is_combo' && $detail->imei_number);
             $data['imei_number'] = $detail->imei_number;
 
             // Multi-Pack Selling: pack name + total pieces (quantity × multiplier).
@@ -2863,6 +3404,8 @@ class SalesController extends BaseController
         $Html = view('pdf.sale_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($sale_data->warehouse_id, $settings),
             'sale' => $sale,
             'details' => $details,
         ])->render();
@@ -2894,6 +3437,14 @@ class SalesController extends BaseController
 
     // ----------------Show Form Create Sale ---------------\\
 
+    /** The customer's / supplier's own order number (e.g. a CS-Cart order), trimmed; blank = none. */
+    private function orderReference(Request $request): ?string
+    {
+        $ref = trim((string) $request->input('order_reference', ''));
+
+        return $ref === '' ? null : mb_substr($ref, 0, 100);
+    }
+
     public function create(Request $request)
     {
 
@@ -2914,6 +3465,7 @@ class SalesController extends BaseController
         $sales_agents = SalesAgent::where('deleted_at', '=', null)->get(['id', 'name']);
         $stripe_key = \App\Models\PaymentSetting::current()->stripe_key;
         $settings = Setting::where('deleted_at', '=', null)->first();
+        $salesperson_switch_enabled = (bool) ($settings->enable_pos_salesperson_switch ?? false);
 
         return response()->json([
             'stripe_key' => $stripe_key,
@@ -2922,6 +3474,8 @@ class SalesController extends BaseController
             'sales_agents' => $sales_agents,
             'accounts' => $accounts,
             'payment_methods' => $payment_methods,
+            'enable_pos_salesperson_switch' => $salesperson_switch_enabled,
+            'salespeople' => $this->salespeopleList($salesperson_switch_enabled),
             'point_to_amount_rate' => $settings->point_to_amount_rate,
         ]);
 
@@ -3001,6 +3555,7 @@ class SalesController extends BaseController
             }
 
             $sale['sales_agent_id'] = $Sale_data->sales_agent_id ?? null;
+            $sale['seller_id'] = $Sale_data->seller_id ?? null;
 
             $sale['date'] = $Sale_data->date;
             $sale['tax_rate'] = $Sale_data->tax_rate;
@@ -3011,6 +3566,7 @@ class SalesController extends BaseController
             $sale['shipping'] = $Sale_data->shipping;
             $sale['statut'] = $Sale_data->statut;
             $sale['notes'] = $Sale_data->notes;
+            $sale['order_reference'] = $Sale_data->order_reference;
             // Multi-Currency snapshot (null = base currency)
             $sale['currency_id'] = $Sale_data->currency_id;
             $sale['exchange_rate'] = $Sale_data->exchange_rate;
@@ -3019,6 +3575,16 @@ class SalesController extends BaseController
             // render the same selector the create-sale page uses (optional override).
             $saleBatchesByDetail = app(\App\Services\BatchService::class)
                 ->batchesForSaleDetails($Sale_data['details']);
+
+            // Combo lines: their tracked components, and the serials already
+            // sold per component, so the edit UI can reopen each picker.
+            $serialService = app(SerialNumberService::class);
+            $serialComponentsByCombo = $serialService->comboSerialComponents(
+                collect($Sale_data['details'])->pluck('product_id')->all()
+            );
+            $serialGroupsByDetail = $serialService->serialGroupsBySaleDetail(
+                collect($Sale_data['details'])->pluck('id')->all()
+            );
 
             // Multi-Pack Selling: when enabled, preload active packs per product so the
             // edit UI can restore and re-select packs. Empty otherwise.
@@ -3059,9 +3625,9 @@ class SalesController extends BaseController
 
                     if ($product_unit_sale_id['unitSale']) {
                         $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                    } else {
+                        $unit = null;
                     }
-                    $unit = null;
-
                     $data['no_unit'] = 0;
                 }
 
@@ -3092,6 +3658,8 @@ class SalesController extends BaseController
                     $item_product = product_warehouse::where('product_id', $detail->product_id)
                         ->where('deleted_at', '=', null)->where('warehouse_id', $Sale_data->warehouse_id)
                         ->where('product_variant_id', '=', null)->first();
+                    // Virtual combo stock: show what the components can still fill.
+                    app(\App\Services\ComboStockService::class)->overlayRows(array_filter([$item_product]));
 
                     $item_product ? $data['del'] = 0 : $data['del'] = 1;
                     $data['product_variant_id'] = null;
@@ -3123,6 +3691,10 @@ class SalesController extends BaseController
                 $data['sale_unit_id'] = $unit ? $unit->id : '';
                 $data['is_imei'] = $detail['product']['is_imei'];
                 $data['imei_number'] = $detail->imei_number;
+                $data['serial_components'] = $serialComponentsByCombo[(int) $detail->product_id] ?? [];
+                $data['serial_groups'] = $data['serial_components']
+                    ? (object) ($serialGroupsByDetail[(int) $detail->id] ?? [])
+                    : (object) [];
 
                 // Multi-Pack Selling: restore the selected pack and available packs.
                 $data['product_pack_id'] = $detail->product_pack_id;
@@ -3180,6 +3752,8 @@ class SalesController extends BaseController
                 'sales_agents' => $sales_agents,
                 'discount_from_points' => $Sale_data->discount_from_points,
                 'point_to_amount_rate' => $settings->point_to_amount_rate,
+                'enable_pos_salesperson_switch' => (bool) ($settings->enable_pos_salesperson_switch ?? false),
+                'salespeople' => $this->salespeopleList((bool) ($settings->enable_pos_salesperson_switch ?? false)),
             ]);
         }
 
@@ -3268,6 +3842,13 @@ class SalesController extends BaseController
         $sale['currency_id'] = $Quotation->currency_id;
         $sale['exchange_rate'] = $Quotation->exchange_rate;
 
+        // Combo lines pick serials of their tracked components; the quotation's
+        // serials pre-fill them, grouped per component.
+        $serialService = app(SerialNumberService::class);
+        $serialComponentsByCombo = $serialService->comboSerialComponents(
+            collect($Quotation['details'])->pluck('product_id')->all()
+        );
+
         $detail_id = 0;
         foreach ($Quotation['details'] as $detail) {
 
@@ -3312,6 +3893,8 @@ class SalesController extends BaseController
                         ->where('product_variant_id', '=', null)
                         ->where('deleted_at', '=', null)
                         ->first();
+                    // Virtual combo stock: show what the components can still fill.
+                    app(\App\Services\ComboStockService::class)->overlayRows(array_filter([$item_product]));
 
                     $item_product ? $data['del'] = 0 : $data['del'] = 1;
                     $data['product_variant_id'] = null;
@@ -3341,6 +3924,13 @@ class SalesController extends BaseController
 
                 $data['is_imei'] = $detail['product']['is_imei'];
                 $data['imei_number'] = $detail->imei_number;
+                $data['serial_components'] = $serialComponentsByCombo[(int) $detail->product_id] ?? [];
+                $data['serial_groups'] = (object) ($data['serial_components'] && $detail->imei_number
+                    ? array_intersect_key(
+                        $serialService->groupSerialsByProduct($detail->imei_number),
+                        array_flip(array_column($data['serial_components'], 'product_id'))
+                    )
+                    : []);
 
                 if ($detail->discount_method == '2') {
                     $data['DiscountNet'] = $detail->discount;
@@ -3440,9 +4030,9 @@ class SalesController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
                 $data['no_unit'] = 0;
             }
 
@@ -3474,6 +4064,8 @@ class SalesController extends BaseController
                     ->where('warehouse_id', $SaleReturn->warehouse_id)
                     ->where('deleted_at', '=', null)->where('product_variant_id', '=', null)
                     ->first();
+                // Virtual combo stock: show what the components can still fill.
+                app(\App\Services\ComboStockService::class)->overlayRows(array_filter([$item_product]));
 
                 $item_product ? $data['del'] = 0 : $data['del'] = 1;
                 $data['product_variant_id'] = null;
@@ -3568,13 +4160,13 @@ class SalesController extends BaseController
         }
 
         // Tags
-        $random_number = Str::random(10);
-        $invoice_url = url('/api/sale_pdf/'.$request->id.'?'.$random_number);
+        $this->authorizeDocumentView($request, $sale, ['view', 'Sales_pos']);
+        $invoice_url = $sale->shareUrl();
         $invoice_number = $sale->Ref;
 
-        $total_amount = $currency.' '.number_format($sale->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $paid_amount = $currency.' '.number_format($sale->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $due_amount = $currency.' '.number_format(($sale->GrandTotal - $sale->paid_amount) * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
+        $total_amount = helpers::with_currency($currency, helpers::format_price($sale->GrandTotal * $docCurrency['rate'], null, 'comma_dot'));
+        $paid_amount = helpers::with_currency($currency, helpers::format_price($sale->paid_amount * $docCurrency['rate'], null, 'comma_dot'));
+        $due_amount = helpers::with_currency($currency, helpers::format_price(($sale->GrandTotal - $sale->paid_amount) * $docCurrency['rate'], null, 'comma_dot'));
 
         $contact_name = $sale['client']->name;
         $business_name = $settings->CompanyName;
@@ -3583,8 +4175,8 @@ class SalesController extends BaseController
         $receiver_email = $sale['client']->email;
 
         // replace the text with tags
-        $message_body = str_replace('{contact_name}', $contact_name, $message_body);
-        $message_body = str_replace('{business_name}', $business_name, $message_body);
+        $message_body = str_replace('{contact_name}', e((string) $contact_name), $message_body);
+        $message_body = str_replace('{business_name}', e((string) $business_name), $message_body);
         $message_body = str_replace('{invoice_url}', $invoice_url, $message_body);
         $message_body = str_replace('{invoice_number}', $invoice_number, $message_body);
 
@@ -3632,13 +4224,13 @@ class SalesController extends BaseController
         }
 
         // Tags
-        $random_number = Str::random(10);
-        $invoice_url = url('/api/sale_pdf/'.$request->id.'?'.$random_number);
+        $this->authorizeDocumentView($request, $sale, ['view', 'Sales_pos']);
+        $invoice_url = $sale->shareUrl();
         $invoice_number = $sale->Ref;
 
-        $total_amount = $currency.' '.number_format($sale->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $paid_amount = $currency.' '.number_format($sale->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $due_amount = $currency.' '.number_format(($sale->GrandTotal - $sale->paid_amount) * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
+        $total_amount = helpers::with_currency($currency, helpers::format_price($sale->GrandTotal * $docCurrency['rate'], null, 'comma_dot'));
+        $paid_amount = helpers::with_currency($currency, helpers::format_price($sale->paid_amount * $docCurrency['rate'], null, 'comma_dot'));
+        $due_amount = helpers::with_currency($currency, helpers::format_price(($sale->GrandTotal - $sale->paid_amount) * $docCurrency['rate'], null, 'comma_dot'));
 
         $contact_name = $sale['client']->name;
         $business_name = $settings->CompanyName;
@@ -3696,13 +4288,13 @@ class SalesController extends BaseController
         }
 
         // Tags
-        $random_number = Str::random(10);
-        $invoice_url = url('/api/sale_pdf/'.$request->id.'?'.$random_number);
+        $this->authorizeDocumentView($request, $sale, ['view', 'Sales_pos']);
+        $invoice_url = $sale->shareUrl();
         $invoice_number = $sale->Ref;
 
-        $total_amount = $currency.' '.number_format($sale->GrandTotal * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $paid_amount = $currency.' '.number_format($sale->paid_amount * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
-        $due_amount = $currency.' '.number_format(($sale->GrandTotal - $sale->paid_amount) * $docCurrency['rate'], helpers::price_decimals(), '.', ',');
+        $total_amount = helpers::with_currency($currency, helpers::format_price($sale->GrandTotal * $docCurrency['rate'], null, 'comma_dot'));
+        $paid_amount = helpers::with_currency($currency, helpers::format_price($sale->paid_amount * $docCurrency['rate'], null, 'comma_dot'));
+        $due_amount = helpers::with_currency($currency, helpers::format_price(($sale->GrandTotal - $sale->paid_amount) * $docCurrency['rate'], null, 'comma_dot'));
 
         $contact_name = $sale['client']->name;
         $business_name = $settings->CompanyName;
@@ -3939,7 +4531,7 @@ class SalesController extends BaseController
         $sale = Sale::findOrFail($saleId);
 
         $request->validate([
-            'documents.*' => 'required|file|max:10240', // Max 10MB per file
+            'documents.*' => 'required|file|mimes:jpg,jpeg,png,webp,pdf,doc,docx,xls,xlsx,csv,txt|max:10240', // Max 10MB per file
         ]);
 
         $uploadedDocuments = [];
@@ -3951,14 +4543,21 @@ class SalesController extends BaseController
                 mkdir($uploadPath, 0755, true);
             }
 
-            foreach ($request->file('documents') as $file) {
+            // Refuse the whole batch before writing anything if one file is not an allowed type
+            $extensions = [];
+            foreach ($request->file('documents') as $i => $file) {
+                $extensions[$i] = \App\Support\SafeUpload::documentExtension($file, 'documents');
+            }
+
+            foreach ($request->file('documents') as $i => $file) {
                 // Capture metadata BEFORE moving the file (tmp file is still readable)
-                $originalName = $file->getClientOriginalName();
+                $originalName = \App\Support\SafeUpload::displayName($file);
                 $size = $file->getSize();
                 $mimeType = $file->getMimeType();
 
-                $filename = time() . '_' . Str::random(10) . '_' . $originalName;
-                
+                // Never reuse the client name on disk: it decides how public/ serves the file
+                $filename = \App\Support\SafeUpload::name($extensions[$i], time() . '_');
+
                 // Move file to public/images/sale_documents
                 $file->move($uploadPath, $filename);
                 
@@ -4038,8 +4637,11 @@ class SalesController extends BaseController
             ->update(['deleted_at' => Carbon::now()]);
 
         // Optionally delete the physical file
-        $filePath = public_path($document->path);
-        if (file_exists($filePath)) {
+        // Only delete files that really live under public/images — the stored
+        // path is server-written, but keep the unlink() contained regardless.
+        $filePath = realpath(public_path($document->path));
+        $imagesRoot = realpath(public_path('images'));
+        if ($filePath && $imagesRoot && str_starts_with($filePath, $imagesRoot . DIRECTORY_SEPARATOR) && is_file($filePath)) {
             unlink($filePath);
         }
 
@@ -4118,6 +4720,8 @@ class SalesController extends BaseController
             'details' => $details,
             'payments' => $payments,
             'setting' => $settings,
+            // Branch letterhead: the warehouse that issued the scanned invoice.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($sale->warehouse_id, $settings),
             'symbol' => $symbol,
         ]);
     }

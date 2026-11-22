@@ -1,3 +1,10 @@
+@php
+    // Branch letterhead: the warehouse that issued this document supplies the
+    // name, address, phone, email and logo below. Each field falls back to the
+    // global company settings on its own, and documents with no warehouse get
+    // the plain company block.
+    $issuer = $issuer ?? \App\Services\InvoiceIssuerService::company($setting ?? null);
+@endphp
 @php $pdfLocale = app()->getLocale(); $isRtl = $pdfLocale === 'ar'; @endphp
 <!DOCTYPE html>
 <html lang="{{ $pdfLocale }}" dir="{{ $isRtl ? 'rtl' : 'ltr' }}">
@@ -50,12 +57,12 @@
             <td style="width: 30%; vertical-align: top;">
                 @php
                     $logoSrc = null;
-                    if (!empty($setting['logo'])) {
+                    if (!empty($issuer['logo'])) {
                         // Tenant-aware upload location (images/tenants/{id}/settings or images/super/settings),
                         // falling back to the legacy shared path for old files like logo-default.png.
-                        $logoPath = upload_public_path('settings/'.$setting['logo']);
+                        $logoPath = upload_public_path('settings/'.$issuer['logo']);
                         if (!is_file($logoPath)) {
-                            $logoPath = public_path('images/'.$setting['logo']);
+                            $logoPath = public_path('images/'.$issuer['logo']);
                         }
                         if (file_exists($logoPath) && is_readable($logoPath)) {
                             $logoData = @file_get_contents($logoPath);
@@ -144,11 +151,11 @@
                         <div style="color: #ffffff; font-size: 9pt; font-weight: bold; text-transform: uppercase;">COMPANY</div>
                     </div>
                     <div style="padding: 8px 10px; background: #f9fafb;">
-                        <div style="font-size: 10pt; font-weight: bold; color: #1f2937; margin-bottom: 4px;">{{$setting['CompanyName']}}</div>
+                        <div style="font-size: 10pt; font-weight: bold; color: #1f2937; margin-bottom: 4px;">{{$issuer['name']}}</div>
                         <div style="font-size: 7.5pt; color: #6b7280; line-height: 1.5;">
-                            <div><strong style="color: #1f2937;">Phone:</strong> {{$setting['CompanyPhone']}}</div>
-                            <div><strong style="color: #1f2937;">Email:</strong> {{$setting['email']}}</div>
-                            <div><strong style="color: #1f2937;">Address:</strong> {{$setting['CompanyAdress']}}</div>
+                            <div><strong style="color: #1f2937;">Phone:</strong> {{$issuer['phone']}}</div>
+                            <div><strong style="color: #1f2937;">Email:</strong> {{$issuer['email']}}</div>
+                            <div><strong style="color: #1f2937;">Address:</strong> {{$issuer['full_address']}}</div>
                         </div>
                     </div>
                 </div>
@@ -273,8 +280,8 @@
                 <td style="padding: 6px 10px; font-size: 8pt; text-transform: uppercase; color: #6b7280;">{{ $row['type'] ?? 'part' }}</td>
                 <td style="padding: 6px 10px; font-size: 8.5pt;">{{ $row['description'] }}</td>
                 <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right;">{{ $row['quantity'] }}</td>
-                <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right;">{{ $cur }}{{ number_format((float)$row['unit_price'], 2) }}</td>
-                <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right; font-weight: bold;">{{ $cur }}{{ number_format((float)$row['total'], 2) }}</td>
+                <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right;">{{ \App\utils\helpers::with_currency($cur, \App\utils\helpers::format_price((float)$row['unit_price'], 2)) }}</td>
+                <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right; font-weight: bold;">{{ \App\utils\helpers::with_currency($cur, \App\utils\helpers::format_price((float)$row['total'], 2)) }}</td>
             </tr>
             @endforeach
         </tbody>
@@ -282,21 +289,21 @@
             @if(!empty($job['diagnostic_fee']) && (float)$job['diagnostic_fee'] > 0)
             <tr style="background: #f9fafb;">
                 <td colspan="4" style="padding: 6px 10px; font-size: 8.5pt; text-align: right;">Diagnostic Fee</td>
-                <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right;">{{ $cur }}{{ number_format((float)$job['diagnostic_fee'], 2) }}</td>
+                <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right;">{{ \App\utils\helpers::with_currency($cur, \App\utils\helpers::format_price((float)$job['diagnostic_fee'], 2)) }}</td>
             </tr>
             @endif
             <tr style="background: #1a56db; color: #ffffff;">
                 <td colspan="4" style="padding: 8px 10px; font-size: 9pt; text-align: right; font-weight: bold;">GRAND TOTAL</td>
-                <td style="padding: 8px 10px; font-size: 10pt; text-align: right; font-weight: bold;">{{ $cur }}{{ number_format((float)$job['total_amount'], 2) }}</td>
+                <td style="padding: 8px 10px; font-size: 10pt; text-align: right; font-weight: bold;">{{ \App\utils\helpers::with_currency($cur, \App\utils\helpers::format_price((float)$job['total_amount'], 2)) }}</td>
             </tr>
             @if((float)($job['paid_amount'] ?? 0) > 0)
             <tr style="background: #d1fae5;">
                 <td colspan="4" style="padding: 6px 10px; font-size: 8.5pt; text-align: right; color: #065f46; font-weight: bold;">Paid</td>
-                <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right; color: #065f46; font-weight: bold;">{{ $cur }}{{ number_format((float)$job['paid_amount'], 2) }}</td>
+                <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right; color: #065f46; font-weight: bold;">{{ \App\utils\helpers::with_currency($cur, \App\utils\helpers::format_price((float)$job['paid_amount'], 2)) }}</td>
             </tr>
             <tr style="background: {{ ((float)$job['total_amount'] - (float)$job['paid_amount']) > 0 ? '#fee2e2' : '#d1fae5' }};">
                 <td colspan="4" style="padding: 6px 10px; font-size: 8.5pt; text-align: right; font-weight: bold;">Balance Due</td>
-                <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right; font-weight: bold;">{{ $cur }}{{ number_format((float)$job['total_amount'] - (float)$job['paid_amount'], 2) }}</td>
+                <td style="padding: 6px 10px; font-size: 8.5pt; text-align: right; font-weight: bold;">{{ \App\utils\helpers::with_currency($cur, \App\utils\helpers::format_price((float)$job['total_amount'] - (float)$job['paid_amount'], 2)) }}</td>
             </tr>
             @endif
         </tfoot>
@@ -325,7 +332,7 @@
                 <td style="padding: 6px 10px; font-size: 8pt;">{{ $p['date'] }}</td>
                 <td style="padding: 6px 10px; font-size: 8pt; text-transform: capitalize;">{{ $p['payment_kind'] ?? 'payment' }}</td>
                 <td style="padding: 6px 10px; font-size: 8pt;">{{ $p['payment_method'] ?? '-' }}</td>
-                <td style="padding: 6px 10px; font-size: 8pt; text-align: right;">{{ $cur }}{{ number_format((float)$p['montant'], 2) }}</td>
+                <td style="padding: 6px 10px; font-size: 8pt; text-align: right;">{{ \App\utils\helpers::with_currency($cur, \App\utils\helpers::format_price((float)$p['montant'], 2)) }}</td>
             </tr>
             @endforeach
         </tbody>
@@ -384,9 +391,12 @@
 
     <!-- Footer -->
     <div style="margin-top: 15px; padding-top: 10px; border-top: 2px solid #e5e7eb;">
-        @if(!empty($setting['is_invoice_footer']) && !empty($setting['invoice_footer']))
+        @php
+            $footerText = $issuer['footer'] !== '' ? $issuer['footer'] : ((! empty($setting['is_invoice_footer']) && ! empty($setting['invoice_footer'])) ? $setting['invoice_footer'] : '');
+        @endphp
+        @if($footerText !== '')
             <div style="padding: 8px 10px; background: #f9fafb; border-left: 3px solid #1a56db; border-radius: 3px; margin-bottom: 10px;">
-                <p style="font-size: 7.5pt; color: #6b7280; line-height: 1.5; margin: 0;">{{$setting['invoice_footer']}}</p>
+                <p style="font-size: 7.5pt; color: #6b7280; line-height: 1.5; margin: 0;">{{ $footerText }}</p>
             </div>
         @endif
         <div style="text-align: center; padding: 8px 0;">

@@ -13,6 +13,8 @@ use App\Models\Sale;
 use App\Models\Setting;
 use App\Models\sms_gateway;
 use App\Models\SMSMessage;
+use App\Services\CustomerWallet\CustomerWalletService;
+use App\Services\SupplierWallet\WalletException;
 use App\utils\helpers;
 use ArPHP\I18N\Arabic;
 use Carbon\Carbon;
@@ -134,6 +136,7 @@ class PaymentSalesController extends BaseController
             $item['sale_id'] = $Payment['sale']->id;
             $item['client_name'] = $Payment['sale']['client']?->name ?? '---';
             $item['payment_method'] = $Payment['payment_method']?->name ?? '---';
+            $item['wallet_transaction_id'] = $Payment->wallet_transaction_id ?? null;
             $item['montant'] = $Payment->montant;
             $item['account_name'] = $Payment['account'] ? $Payment['account']->account_name : '---';
             $item['user_name'] = $Payment['user'] ? $Payment['user']->username : '---';
@@ -163,13 +166,25 @@ class PaymentSalesController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'create', PaymentSale::class);
 
-        \DB::transaction(function () use ($request) {
+        // Customer-wallet tender: the amount leaves the customer's wallet
+        // instead of landing in a cash account, so no account is needed.
+        $wallets = app(CustomerWalletService::class);
+        $fromWallet = $wallets->isWalletMethod($request['payment_method_id']);
+
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $fromWallet ? 'nullable' : $this->paymentAccountRule()]);
+
+        try {
+        \DB::transaction(function () use ($request, $wallets, $fromWallet) {
             $helpers = new helpers;
             $user = Auth::user();
             // New way: Check user's record_view field (user-level boolean)
             // Backward compatibility: If record_view is null, fall back to role permission check
             $view_records = $user->hasRecordView();
-            $sale = Sale::findOrFail($request['sale_id']);
+            // Locked: two payments on the same sale at once must not both read
+            // the old paid_amount (lost update / payment status wrong).
+            $sale = Sale::lockForUpdate()->findOrFail($request['sale_id']);
 
             // Check If User Has Permission view All Records
             // Warehouse half of the same rule: record_view says whose documents,
@@ -181,41 +196,54 @@ class PaymentSalesController extends BaseController
                 $this->authorizeForUser($request->user('api'), 'check_record', $sale);
             }
 
+            // Server-side overpayment guard (the form already caps the amount at
+            // the due; a direct API call could not be trusted to). Only `montant`
+            // is recorded here (payments[] is not read by this endpoint), and it
+            // is base currency like GrandTotal / paid_amount.
+            $requested = max(0, (float) $request['montant']);
+            $due = (float) $sale->GrandTotal - (float) $sale->paid_amount;
+            // The form's cap is the due formatted to price_decimals, so allow
+            // half a display unit of rounding (never less than a cent).
+            $tolerance = max(0.01, 0.5 / (10 ** max(0, (int) helpers::price_decimals())));
+            if ($requested > $due + $tolerance) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'montant' => 'Paying amount is greater than the amount due.',
+                ]);
+            }
+
             try {
 
                 $total_paid = $sale->paid_amount + $request['montant'];
-                $due = $sale->GrandTotal - $total_paid;
-
-                if ($due === 0.0 || $due < 0.0) {
-                    $payment_statut = 'paid';
-                } elseif ($due !== $sale->GrandTotal) {
-                    $payment_statut = 'partial';
-                } elseif ($due === $sale->GrandTotal) {
-                    $payment_statut = 'unpaid';
-                }
+                $payment_statut = Sale::paymentStatusFor($sale->GrandTotal, $total_paid);
 
                 if ($request['montant'] > 0) {
                     // All payment methods are now handled the same way; no online Stripe charge is performed here.
+                    $ref = app('App\Http\Controllers\PaymentSalesController')->getNumberOrder();
+                    $walletTxId = null;
+                    if ($fromWallet) {
+                        $walletTxId = $wallets->payFromWallet((int) $sale->client_id, (float) $request['montant'], 'sale_payment', [
+                            'reference_type' => Sale::class,
+                            'reference_id' => $sale->id,
+                            'note' => 'Sale '.$sale->Ref.' · '.$ref,
+                            'date' => $request['date'],
+                            'user_id' => Auth::id(),
+                        ])->id;
+                    }
+
                     PaymentSale::create([
                         'sale_id' => $sale->id,
-                        'Ref' => app('App\Http\Controllers\PaymentSalesController')->getNumberOrder(),
+                        'Ref' => $ref,
                         'date' => $request['date'],
-                        'account_id' => $request['account_id'] ? $request['account_id'] : null,
+                        'account_id' => (! $fromWallet && $request['account_id']) ? $request['account_id'] : null,
                         'payment_method_id' => $request['payment_method_id'],
                         'montant' => $request['montant'],
-                        'change' => $request['change'],
+                        'change' => $fromWallet ? 0 : $request['change'],
                         'notes' => $request['notes'],
                         'user_id' => Auth::user()->id,
-                    ]);
+                    ] + CustomerWalletService::txColumn($walletTxId));
 
-                    $account = Account::where('id', $request['account_id'])->exists();
-
-                    if ($account) {
-                        // Account exists, perform the update
-                        $account = Account::find($request['account_id']);
-                        $account->update([
-                            'balance' => $account->balance + $request['montant'],
-                        ]);
+                    if (! $fromWallet) {
+                        Account::adjustBalance($request['account_id'], $request['montant']);
                     }
 
                     $sale->update([
@@ -229,6 +257,9 @@ class PaymentSalesController extends BaseController
             }
 
         }, 10);
+        } catch (WalletException $e) {
+            return $e->toResponse();
+        }
 
         // Recalculate commissions after a payment is recorded. Commission rules with a
         // "Paid Amount" source depend on paid_amount, which only changes here when payment
@@ -270,7 +301,15 @@ class PaymentSalesController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'update', PaymentSale::class);
 
-        \DB::transaction(function () use ($id, $request) {
+        $wallets = app(CustomerWalletService::class);
+        $toWallet = $wallets->isWalletMethod($request['payment_method_id']);
+
+        // Optional per-tenant rule; 'nullable' unless the merchant turned on
+        // Settings > Features > Require payment account.
+        $request->validate(['account_id' => $toWallet ? 'nullable' : $this->paymentAccountRule()]);
+
+        try {
+        \DB::transaction(function () use ($id, $request, $wallets, $toWallet) {
             $helpers = new helpers;
             $user = Auth::user();
             // New way: Check user's record_view field (user-level boolean)
@@ -292,53 +331,57 @@ class PaymentSalesController extends BaseController
             $old_total_paid = $sale->paid_amount - $payment->montant;
             $new_total_paid = $old_total_paid + $request['montant'];
 
-            $due = $sale->GrandTotal - $new_total_paid;
-            if ($due === 0.0 || $due < 0.0) {
-                $payment_statut = 'paid';
-            } elseif ($due !== $sale->GrandTotal) {
-                $payment_statut = 'partial';
-            } elseif ($due === $sale->GrandTotal) {
-                $payment_statut = 'unpaid';
-            }
-
-            // delete old balance
-            $account = Account::where('id', $payment->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance - $payment->montant,
-                ]);
-            }
+            $payment_statut = Sale::paymentStatusFor($sale->GrandTotal, $new_total_paid);
 
             try {
                 if ($payment->payment_method_id != 1 && $payment->payment_method_id != '1') {
 
+                    // Reverse the old account and credit the new one only on the
+                    // path that actually rewrites the payment. Card payments fall
+                    // through this branch untouched, so reversing before the check
+                    // would take the money off the account with nothing putting it
+                    // back. A wallet-funded payment gives its amount back to the
+                    // customer's wallet instead.
+                    $before = clone $payment; // for the accounting reversal of the old state
+                    if (! empty($payment->wallet_transaction_id)) {
+                        $wallets->reversePayment($payment, 'Sale payment', ['note' => 'Sale payment '.$payment->Ref.' edited']);
+                    } else {
+                        Account::adjustBalance($payment->account_id, -$payment->montant);
+                    }
+
+                    $walletTxId = null;
+                    if ($toWallet && (float) $request['montant'] > 0) {
+                        $walletTxId = $wallets->payFromWallet((int) $sale->client_id, (float) $request['montant'], 'sale_payment', [
+                            'reference_type' => Sale::class,
+                            'reference_id' => $sale->id,
+                            'note' => 'Sale '.$sale->Ref.' · '.$payment->Ref,
+                            'date' => $request['date'],
+                            'user_id' => Auth::id(),
+                        ])->id;
+                    }
+
                     $payment->update([
                         'date' => $request['date'],
                         'payment_method_id' => $request['payment_method_id'],
-                        'account_id' => $request['account_id'] ? $request['account_id'] : null,
+                        'account_id' => (! $toWallet && $request['account_id']) ? $request['account_id'] : null,
                         'montant' => $request['montant'],
-                        'change' => $request['change'],
+                        'change' => $toWallet ? 0 : $request['change'],
                         'notes' => $request['notes'],
-                    ]);
+                    ] + ((! empty($before->wallet_transaction_id) || $walletTxId) ? ['wallet_transaction_id' => $walletTxId] : []));
 
-                    // update new account
-                    $new_account = Account::where('id', $request['account_id'])->exists();
-
-                    if ($new_account) {
-                        // Account exists, perform the update
-                        $new_account = Account::find($request['account_id']);
-                        $new_account->update([
-                            'balance' => $new_account->balance + $request['montant'],
-                        ]);
+                    if (! $toWallet) {
+                        Account::adjustBalance($request['account_id'], $request['montant']);
                     }
 
                     $sale->update([
                         'paid_amount' => $new_total_paid,
                         'payment_statut' => $payment_statut,
                     ]);
+
+                    // Accounting V2: an edit is a reversal of the old row plus a
+                    // fresh posting of the new one (model update() fires neither).
+                    event(new \App\Events\PaymentDeleted($before));
+                    event(new \App\Events\PaymentCreated($payment->fresh()));
 
                 }
 
@@ -347,6 +390,9 @@ class PaymentSalesController extends BaseController
             }
 
         }, 10);
+        } catch (WalletException $e) {
+            return $e->toResponse();
+        }
 
         return response()->json(['success' => true, 'message' => 'Payment Update successfully'], 200);
     }
@@ -376,29 +422,22 @@ class PaymentSalesController extends BaseController
 
             $sale = Sale::find($payment->sale_id);
             $total_paid = $sale->paid_amount - $payment->montant;
-            $due = $sale->GrandTotal - $total_paid;
-
-            if ($due === 0.0 || $due < 0.0) {
-                $payment_statut = 'paid';
-            } elseif ($due !== $sale->GrandTotal) {
-                $payment_statut = 'partial';
-            } elseif ($due === $sale->GrandTotal) {
-                $payment_statut = 'unpaid';
-            }
+            $payment_statut = Sale::paymentStatusFor($sale->GrandTotal, $total_paid);
 
             PaymentSale::whereId($id)->update([
                 'deleted_at' => Carbon::now(),
             ]);
 
-            $account = Account::where('id', $payment->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($payment->account_id);
-                $account->update([
-                    'balance' => $account->balance - $payment->montant,
-                ]);
+            if (! empty($payment->wallet_transaction_id)) {
+                // Wallet-funded: the amount goes back to the customer's wallet.
+                app(CustomerWalletService::class)->reversePayment($payment, 'Sale payment');
+            } else {
+                Account::adjustBalance($payment->account_id, -$payment->montant);
             }
+
+            // Accounting V2: the query-builder delete above fires no model
+            // hook, so post the reversal journal explicitly.
+            event(new \App\Events\PaymentDeleted($payment));
 
             $sale->update([
                 'paid_amount' => $total_paid,
@@ -452,6 +491,8 @@ class PaymentSalesController extends BaseController
     {
         $payment = PaymentSale::with('sale', 'sale.client')->findOrFail($id);
 
+        $this->authorizeDocumentView($request, $payment);
+
         $payment_data['sale_Ref'] = $payment['sale']->Ref;
         $payment_data['client_name'] = $payment['sale']['client']?->name ?? '---';
         $payment_data['client_phone'] = $payment['sale']['client']->phone;
@@ -469,6 +510,8 @@ class PaymentSalesController extends BaseController
         $Html = view('pdf.payment_sale', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve(optional($payment->sale)->warehouse_id, $settings),
             'payment' => $payment_data,
         ])->render();
 
@@ -513,7 +556,7 @@ class PaymentSalesController extends BaseController
 
         $payment_number = $payment->Ref;
 
-        $total_amount = $currency.' '.number_format($payment->montant, 2, '.', ',');
+        $total_amount = helpers::with_currency($currency, number_format($payment->montant, 2, '.', ','));
 
         $contact_name = $payment['sale']['client']?->name ?? '---';
         $business_name = $settings->CompanyName;
@@ -522,8 +565,8 @@ class PaymentSalesController extends BaseController
         $receiver_email = $payment['sale']['client']->email;
 
         // replace the text with tags
-        $message_body = str_replace('{contact_name}', $contact_name, $message_body);
-        $message_body = str_replace('{business_name}', $business_name, $message_body);
+        $message_body = str_replace('{contact_name}', e((string) $contact_name), $message_body);
+        $message_body = str_replace('{business_name}', e((string) $business_name), $message_body);
         $message_body = str_replace('{payment_number}', $payment_number, $message_body);
         $message_body = str_replace('{total_amount}', $total_amount, $message_body);
 
@@ -569,7 +612,7 @@ class PaymentSalesController extends BaseController
 
         $payment_number = $payment->Ref;
 
-        $total_amount = $currency.' '.number_format($payment->montant, 2, '.', ',');
+        $total_amount = helpers::with_currency($currency, number_format($payment->montant, 2, '.', ','));
 
         $contact_name = $payment['sale']['client']?->name ?? '---';
         $business_name = $settings->CompanyName;

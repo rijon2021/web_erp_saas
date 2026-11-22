@@ -1,4 +1,11 @@
 @php
+    // Branch letterhead: the warehouse that issued this document supplies the
+    // name, address, phone, email and logo below. Each field falls back to the
+    // global company settings on its own, and documents with no warehouse get
+    // the plain company block.
+    $issuer = $issuer ?? \App\Services\InvoiceIssuerService::company($setting ?? null);
+@endphp
+@php
     $pdfLocale = app()->getLocale();
     $isRtl = $pdfLocale === 'ar';
     $rtlLabelSuffix = $isRtl ? '' : ':';
@@ -6,15 +13,8 @@
     $priceFormat = $setting['price_format'] ?? null;
     if (!function_exists('formatAdjustmentPrice')) {
         function formatAdjustmentPrice($number, $decimals = 2, $priceFormat = null) {
-            $number = (float) $number;
-            $decimals = (int) $decimals;
-            if (empty($priceFormat)) { return number_format($number, $decimals, '.', ','); }
-            switch ($priceFormat) {
-                case 'comma_dot': return number_format($number, $decimals, '.', ',');
-                case 'dot_comma': return number_format($number, $decimals, ',', '.');
-                case 'space_comma': return number_format($number, $decimals, ',', ' ');
-                default: return number_format($number, $decimals, '.', ',');
-            }
+            // Shared formatter: Price Format separators + the Hide Zero Decimals setting (100.00 => 100).
+            return \App\utils\helpers::format_price($number, $decimals, $priceFormat === null ? '' : $priceFormat);
         }
     }
 @endphp
@@ -42,12 +42,12 @@
             <td style="width: 30%; vertical-align: top;">
                 @php
                     $logoSrc = null;
-                    if (!empty($setting['logo'])) {
+                    if (!empty($issuer['logo'])) {
                         // Tenant-aware upload location (images/tenants/{id}/settings or images/super/settings),
                         // falling back to the legacy shared path for old files like logo-default.png.
-                        $logoPath = upload_public_path('settings/'.$setting['logo']);
+                        $logoPath = upload_public_path('settings/'.$issuer['logo']);
                         if (!is_file($logoPath)) {
-                            $logoPath = public_path('images/'.$setting['logo']);
+                            $logoPath = public_path('images/'.$issuer['logo']);
                         }
                         if (file_exists($logoPath) && is_readable($logoPath)) {
                             $logoData = @file_get_contents($logoPath);
@@ -145,8 +145,8 @@
                     <div style="font-size: 7pt; color: #6b7280;">{{ __('pdf.code') }} {{$detail['code']}}</div>
                 </td>
                 <td style="padding: 5px; text-align: right; font-size: 9pt; font-weight: bold; color: {{ ($detail['type'] ?? '') === 'add' ? '#16a34a' : '#dc2626' }};">{{$detail['quantity']}} {{$detail['unit']}}</td>
-                <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: #1f2937;">{{$symbol}} {{ formatAdjustmentPrice($linePurchaseCost, 2, $priceFormat) }}</td>
-                <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: #1f2937;">{{$symbol}} {{ formatAdjustmentPrice($lineSalePrice, 2, $priceFormat) }}</td>
+                <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: #1f2937;">{{ \App\utils\helpers::with_currency($symbol, formatAdjustmentPrice($linePurchaseCost, 2, $priceFormat)) }}</td>
+                <td style="padding: 5px; text-align: right; font-size: 8.5pt; color: #1f2937;">{{ \App\utils\helpers::with_currency($symbol, formatAdjustmentPrice($lineSalePrice, 2, $priceFormat)) }}</td>
             </tr>
             @if(!empty($detail['is_batch_tracked']) && !empty($detail['batches']))
             <tr style="background: #ffffff;">
@@ -247,11 +247,11 @@
                         <td style="{{ $tdLabelRight }} color: #6b7280;">{{ __('pdf.total_items') }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
                     <tr style="background: #ffffff; border-bottom: 1px solid #e5e7eb;">
-                        <td style="{{ $tdAmountLeft }} color: #1f2937;">{{$symbol}} {{ formatAdjustmentPrice($totalPurchaseCost, 2, $priceFormat) }}</td>
+                        <td style="{{ $tdAmountLeft }} color: #1f2937;">{{ \App\utils\helpers::with_currency($symbol, formatAdjustmentPrice($totalPurchaseCost, 2, $priceFormat)) }}</td>
                         <td style="{{ $tdLabelRight }} color: #6b7280;">{{ __('pdf.total_purchase_cost') }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
                     <tr style="background: #f9fafb;">
-                        <td style="{{ $tdAmountLeft }} color: #1f2937;">{{$symbol}} {{ formatAdjustmentPrice($totalSalePrice, 2, $priceFormat) }}</td>
+                        <td style="{{ $tdAmountLeft }} color: #1f2937;">{{ \App\utils\helpers::with_currency($symbol, formatAdjustmentPrice($totalSalePrice, 2, $priceFormat)) }}</td>
                         <td style="{{ $tdLabelRight }} color: #6b7280;">{{ __('pdf.total_sale_price') }}{!! $rtlLabelSuffix !!}</td>
                     </tr>
                     @else
@@ -261,11 +261,11 @@
                     </tr>
                     <tr style="background: #ffffff; border-bottom: 1px solid #e5e7eb;">
                         <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">{{ __('pdf.total_purchase_cost') }}</td>
-                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: #1f2937;">{{$symbol}} {{ formatAdjustmentPrice($totalPurchaseCost, 2, $priceFormat) }}</td>
+                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: #1f2937;">{{ \App\utils\helpers::with_currency($symbol, formatAdjustmentPrice($totalPurchaseCost, 2, $priceFormat)) }}</td>
                     </tr>
                     <tr style="background: #f9fafb;">
                         <td style="padding: 5px 10px; font-size: 8pt; font-weight: 600; color: #6b7280;">{{ __('pdf.total_sale_price') }}</td>
-                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: #1f2937;">{{$symbol}} {{ formatAdjustmentPrice($totalSalePrice, 2, $priceFormat) }}</td>
+                        <td style="padding: 5px 10px; text-align: right; font-size: 8.5pt; font-weight: 600; color: #1f2937;">{{ \App\utils\helpers::with_currency($symbol, formatAdjustmentPrice($totalSalePrice, 2, $priceFormat)) }}</td>
                     </tr>
                     @endif
                 </table>
@@ -274,9 +274,13 @@
     </table>
 
     <div style="margin-top: 15px; padding-top: 10px; border-top: 2px solid #e5e7eb; text-align: {{ $isRtl ? 'right' : 'left' }};">
-        @if($setting['is_invoice_footer'] && $setting['invoice_footer'] !==null)
+        @php
+            // A branch note replaces the global invoice footer when it is set.
+            $footerText = $issuer['footer'] !== '' ? $issuer['footer'] : ((! empty($setting['is_invoice_footer']) && $setting['invoice_footer'] !== null) ? $setting['invoice_footer'] : '');
+        @endphp
+        @if($footerText !== '')
             <div style="padding: 8px 10px; background: #f9fafb; border-{{ $isRtl ? 'right' : 'left' }}: 3px solid #1a56db; border-radius: 3px; margin-bottom: 10px;">
-                <p style="font-size: 7.5pt; color: #6b7280; line-height: 1.5; margin: 0;">{{$setting['invoice_footer']}}</p>
+                <p style="font-size: 7.5pt; color: #6b7280; line-height: 1.5; margin: 0;">{{ $footerText }}</p>
             </div>
         @endif
         <p style="font-size: 10pt; font-weight: bold; color: #1a56db; margin: 0; letter-spacing: 0.3px;">{{ __('pdf.adjustment_completed') }}</p>

@@ -325,6 +325,7 @@ blockquote {
   }
   button.close {
     float: right;
+    [dir="rtl"] & { float: left; }
     font-size: 1.2195rem;
     font-weight: 700;
     line-height: 1;

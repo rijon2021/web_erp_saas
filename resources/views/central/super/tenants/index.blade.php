@@ -30,12 +30,17 @@
         <form method="GET" action="{{ route('super.tenants.index') }}" class="d-flex align-items-center gap-3 flex-wrap w-100" id="filterForm">
             <div class="search-box">
                 <i class="bi bi-search"></i>
-                <input type="text" name="search" value="{{ request('search') }}" placeholder="{{ __('super.tenants.search') }}" autocomplete="off">
+                <input type="text" name="search" value="{{ request('search') }}" placeholder="{{ __('central.TenantListSearch') }}" autocomplete="off">
             </div>
             <select class="form-control filter-select w-auto" name="status" id="statusFilter">
                 <option value="">{{ __('super.tenants.all_statuses') }}</option>
                 <option value="active" {{ request('status') === 'active' ? 'selected' : '' }}>{{ __('super.status.active') }}</option>
                 <option value="trial" {{ request('status') === 'trial' ? 'selected' : '' }}>{{ __('super.status.trial') }}</option>
+                <option value="expiring" {{ request('status') === 'expiring' ? 'selected' : '' }}>{{ __('central.TenantFilterExpiring') }}</option>
+                @if(\App\Models\Central\TenantSubscription::graceDays() > 0)
+                    <option value="grace" {{ request('status') === 'grace' ? 'selected' : '' }}>{{ __('central.TenantFilterGrace') }}</option>
+                @endif
+                <option value="unpaid" {{ request('status') === 'unpaid' ? 'selected' : '' }}>{{ __('central.TenantFilterUnpaid') }}</option>
                 <option value="suspended" {{ request('status') === 'suspended' ? 'selected' : '' }}>{{ __('super.status.suspended') }}</option>
                 <option value="pending" {{ request('status') === 'pending' ? 'selected' : '' }}>{{ __('central.Pending') }}</option>
                 <option value="provisioning" {{ request('status') === 'provisioning' ? 'selected' : '' }}>{{ __('central.Provisioning') }}</option>
@@ -56,6 +61,7 @@
                     <th>{{ __('super.tenants.domains') }}</th>
                     <th>{{ __('super.common.status') }}</th>
                     <th>{{ __('super.tenants.plan') }}</th>
+                    <th>{{ __('central.TenantListRenews') }}</th>
                     <th>{{ __('super.tenants.created') }}</th>
                     <th class="action-cell"></th>
                 </tr>
@@ -75,7 +81,7 @@
                             <div>
                                 <p class="mb-0 fw-600 fs-md"><a href="{{ route('super.tenants.show', $t) }}" class="text-reset text-decoration-none link-hover-primary" title="{{ __('super.common.view') }}">{{ $displayName }}</a></p>
                                 <p class="mb-0 text-muted fs-xs3">
-                                    {{ $t->admin_email ?? ('Created ' . $t->created_at->diffForHumans()) }}
+                                    {{ $t->admin_email ?? __('super.common.created_ago', ['time' => $t->created_at->diffForHumans()]) }}
                                 </p>
                             </div>
                         </div>
@@ -103,11 +109,33 @@
                         @endif
                     </td>
                     <td><span class="badge badge-{{ $t->status }}">{{ ucfirst($t->status) }}</span></td>
+                    @php
+                        $tCur = $t->currentSubscriptionLoaded();
+                        $tEnd = $tCur ? (($tCur->status === 'trial' && $tCur->trial_ends_at) ? $tCur->trial_ends_at : $tCur->ends_at) : null;
+                        $tDays = $tEnd ? (int) now()->startOfDay()->diffInDays($tEnd->copy()->startOfDay(), false) : null;
+                    @endphp
                     <td>
-                        @if($t->subscription?->plan)
-                            <span class="fw-500">{{ $t->subscription->plan->name }}</span>
+                        @if($tCur?->plan)
+                            <span class="fw-500">{{ $tCur->plan->name }}</span>
+                            <span class="d-block text-muted fs-xs3">{{ $tCur->billing_cycle === 'yearly' ? __('super.payments.yearly') : __('super.payments.monthly') }}@if($tCur->status === 'trial') · {{ __('super.status.trial') }}@endif</span>
                         @else
                             <span class="text-muted">—</span>
+                        @endif
+                    </td>
+                    <td>
+                        @if(! $tCur || in_array($tCur->status, ['pending', 'failed'], true) || ! in_array($t->status, ['active', 'suspended', 'cancelled'], true))
+                            <span class="text-muted">—</span>
+                        @elseif(! $tEnd)
+                            <span class="fs-sm3 text-muted">{{ __('central.SubPanelNever') }}</span>
+                        @else
+                            <span class="fs-sm3">{{ $tEnd->format('M d, Y') }}</span>
+                            @if($tCur->inGracePeriod())
+                                <span class="sub-pill sub-pill-danger d-inline-block">{{ __('central.TenantListInGrace') }}</span>
+                            @elseif($tDays < 0)
+                                <span class="sub-pill sub-pill-danger d-inline-block">{{ __('central.TenantListExpired') }}</span>
+                            @elseif($tDays <= 7)
+                                <span class="sub-pill {{ $tDays <= 3 ? 'sub-pill-danger' : 'sub-pill-warn' }} d-inline-block">{{ $tDays === 0 ? __('central.SubPanelEndsToday') : trans_choice('central.SubPanelDaysLeft', $tDays, ['days' => $tDays]) }}</span>
+                            @endif
                         @endif
                     </td>
                     <td>
@@ -140,7 +168,7 @@
                 {{-- DB config form row --}}
                 @if($t->status === 'pending')
                 <tr id="db-form-{{ $t->id }}" class="db-form-row">
-                    <td colspan="6" class="td-no-padding">
+                    <td colspan="7" class="td-no-padding">
                         <div class="db-config-panel">
                             <div class="d-flex align-items-center gap-2 mb-3">
                                 <i class="bi bi-database-fill-gear text-primary-mid fs-lg2"></i>
@@ -220,7 +248,7 @@
                     $isCustomCreds = $t->hasDatabaseCredentials();
                 @endphp
                 <tr id="db-form-{{ $t->id }}" class="db-form-row">
-                    <td colspan="6" class="td-no-padding">
+                    <td colspan="7" class="td-no-padding">
                         <div class="db-config-panel">
                             <div class="d-flex align-items-center justify-content-between mb-3">
                                 <div class="d-flex align-items-center gap-2">
@@ -309,7 +337,7 @@
                 @endif
                 @empty
                 <tr>
-                    <td colspan="6">
+                    <td colspan="7">
                         <div class="empty-state">
                             <div class="empty-icon"><i class="bi bi-building"></i></div>
                             <h3>{{ __('super.tenants.no_tenants') }}</h3>

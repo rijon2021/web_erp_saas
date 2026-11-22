@@ -17,7 +17,7 @@ class CurrencySeeder extends Seeder
     {
         [$code, $symbol] = $this->tenantCurrency();
 
-        DB::table('currencies')->insert(
+        DB::table('currencies')->insertOrIgnore(
             [
                 'id'     => 1,
                 'code'   => $code,
@@ -33,6 +33,17 @@ class CurrencySeeder extends Seeder
      */
     protected function tenantCurrency(): array
     {
+        // A workspace that signed up in another currency (multi-currency
+        // pricing) starts its shop in that currency.
+        try {
+            $billing = function_exists('tenant') && tenant() ? strtoupper((string) (tenant('billing_currency') ?? '')) : '';
+            if (preg_match('/^[A-Z]{3}$/', $billing) && $billing !== strtoupper((string) GeneralSetting::currencyCode())) {
+                return [$billing, \App\Support\SellingCurrencies::symbol($billing)];
+            }
+        } catch (\Throwable) {
+            // fall back to the Tenant Settings default
+        }
+
         try {
             $defaults = GeneralSetting::instance()->getTenantDefaults();
             return [$defaults['currency_code'] ?: 'USD', $defaults['currency_symbol'] ?: '$'];
@@ -55,6 +66,13 @@ class CurrencySeeder extends Seeder
             'GHS' => 'Ghanaian Cedi',
             'ZAR' => 'South African Rand',
             'KES' => 'Kenyan Shilling',
+            'XOF' => 'West African CFA Franc',
+            'XAF' => 'Central African CFA Franc',
+            'UGX' => 'Ugandan Shilling',
+            'TZS' => 'Tanzanian Shilling',
+            'RWF' => 'Rwandan Franc',
+            'ZMW' => 'Zambian Kwacha',
+            'ETB' => 'Ethiopian Birr',
             'INR' => 'Indian Rupee',
             'CAD' => 'Canadian Dollar',
             'AUD' => 'Australian Dollar',

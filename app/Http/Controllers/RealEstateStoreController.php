@@ -217,6 +217,17 @@ class RealEstateStoreController extends Controller
         // Optional email notification to the property agent or store admin.
         $this->notifyInquiry($inquiry);
 
+        // CRM: the inquiry can become a lead (CRM Settings → Lead capture).
+        \App\Services\Crm\CrmCaptureService::hook('capture_property_inquiries', function ($crm) use ($inquiry) {
+            $property = $inquiry->property_id ? Property::find($inquiry->property_id) : null;
+            $crm->capture('property_inquiry', [
+                'name' => $inquiry->name, 'email' => $inquiry->email, 'phone' => $inquiry->phone,
+                'subject' => optional($property)->title, 'message' => $inquiry->message,
+                'estimated_value' => optional($property)->price,
+                'extra' => ['Property' => $property ? $property->title . ' (#' . $property->id . ')' : null],
+            ], ['ref_id' => $inquiry->id]);
+        });
+
         return response()->json(['message' => __('messages.InquirySent')]);
     }
 

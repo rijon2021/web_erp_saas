@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\SyncJob;
 use App\Models\WooCommerceSetting;
 use App\Services\WooCommerce\SyncService;
+use App\Services\WooCommerce\AutoSync as WooAutoSync;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -110,13 +111,13 @@ class WooCommerceProductsPullJob implements ShouldQueue
         try {
             $sync = SyncService::fromSettings($settings);
 
-            $batchSize = (int) env('WOO_PRODUCTS_PER_JOB', 5);
+            $batchSize = (int) WooCommerceSetting::tuning($settings)['products_per_job'];
             $batchSize = max(1, min(200, $batchSize));
 
             $cursorPage = (int) ($state['cursor_page'] ?? 1);
             $cursorIndex = (int) ($state['cursor_index'] ?? 0);
 
-            $result = $sync->pullProducts(
+            $result = WooAutoSync::muted(fn () => $sync->pullProducts(
                 $this->onlyUnsynced,
                 function (array $p) use (&$state, $cache) {
                     $state['stage'] = (string) ($p['stage'] ?? 'pulling');
@@ -133,7 +134,7 @@ class WooCommerceProductsPullJob implements ShouldQueue
                 $batchSize,
                 $cursorPage,
                 $cursorIndex
-            );
+            ));
 
             $state['created'] = (int) ($state['created'] ?? 0) + (int) ($result['created'] ?? 0);
             $state['updated'] = (int) ($state['updated'] ?? 0) + (int) ($result['updated'] ?? 0);

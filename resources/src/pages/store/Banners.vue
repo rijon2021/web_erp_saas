@@ -53,7 +53,7 @@ import { useI18n } from 'vue-i18n';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import http from '../../lib/http';
-import { PAGE_SIZE_OPTIONS, buildPageSizeOptionText } from '../../composables/useCrudTable';
+import { pageSizesFor, buildPageSizeOptionText } from '../../composables/useCrudTable';
 
 const { t } = useI18n();
 
@@ -77,7 +77,7 @@ const pagination = computed(() => ({
   pageSize: perPage.value,
   total: total.value,
   showSizeChanger: true,
-  pageSizeOptions: PAGE_SIZE_OPTIONS,
+  pageSizeOptions: pageSizesFor(total.value),
   buildOptionText: buildPageSizeOptionText,
 }));
 

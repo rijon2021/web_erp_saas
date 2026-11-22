@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\Shopify\ShopifySyncJob;
 use App\Models\Client as CustomerModel;
 use App\Models\Product;
 use App\Models\Sale;
@@ -17,15 +18,27 @@ use Illuminate\Support\Facades\DB;
 /**
  * Running syncs, watching them, and inspecting what got linked.
  *
- * A sync runs inside the request that starts it — same as the existing
- * WooCommerce module, so this needs no queue worker to be useful. What makes it
- * survivable is that progress is written to the run row as it goes: the browser
- * polls `status`, and a run whose process dies stops sending heartbeats and is
- * reported as stale rather than hanging on "running" for ever.
+ * A sync is worked in slices, never in one long request: hosting that ends a
+ * request after a minute or two used to kill a big one part-way. Starting a
+ * sync creates the run paused and hands it to the queue (ShopifySyncJob),
+ * which carries it on from its cursor. Without a queue worker the page that
+ * started it takes over after a few seconds and drives it through `start`
+ * with `resume`, a short slice per request. Progress is written to the run row
+ * as it goes: the browser polls `status`, and a run whose process dies stops
+ * sending heartbeats and is reported as stale rather than hanging on
+ * "running" for ever.
  */
 class ShopifySyncController extends BaseController
 {
     private const DIRECTIONS = ['push', 'pull'];
+
+    /**
+     * How long one request works on a sync that can be carried on by the next
+     * (see SyncService::run). Hosting commonly ends a web request after 60
+     * seconds or so, and a slice only stops between records, so this leaves
+     * room for the record in hand to finish.
+     */
+    private const SLICE_SECONDS = 20;
 
     public function start(Request $request)
     {
@@ -36,6 +49,7 @@ class ShopifySyncController extends BaseController
             'entity' => 'required|in:'.implode(',', ShopifyStore::ENTITIES),
             'direction' => 'required|in:'.implode(',', self::DIRECTIONS),
             'since' => 'nullable|date',
+            'resume' => 'nullable|integer',
         ]);
 
         $store = ShopifyStore::whereNull('deleted_at')->findOrFail($request->store_id);
@@ -63,39 +77,101 @@ class ShopifySyncController extends BaseController
 
         // One run per store+entity at a time. Two concurrent product pushes
         // would race on the same link rows and double-create in the shop.
-        $active = ShopifySyncRun::where('store_id', $store->id)
+        // Webhook runs do not count — see ShopifySyncRun::scopeBulk().
+        $open = ShopifySyncRun::where('store_id', $store->id)
             ->where('entity', $entity)
             ->where('status', 'running')
-            ->first();
+            ->orderByDesc('id')
+            ->get();
 
-        if ($active && ! $active->isStale()) {
+        $active = $open->first(fn ($run) => ! $run->isWebhook() && ! $run->isStale());
+
+        // A paused run is carried on rather than refused: by the page that is
+        // driving it (which names it), or by whoever starts the same sync
+        // again after that page has gone. claimForResume() settles a tie.
+        $resume = null;
+        if ($active && $active->isPaused() && $active->direction === $direction
+            && (! $request->filled('resume') || (int) $request->resume === (int) $active->id)
+            && $active->claimForResume()) {
+            $resume = $active;
+        }
+
+        if ($request->filled('resume') && ! $resume) {
+            // The run the page wanted to carry on is finished, or another
+            // request already has it. Report it as it stands.
+            $named = ShopifySyncRun::where('store_id', $store->id)->where('entity', $entity)->find($request->resume);
+
+            return response()->json([
+                'success' => $named && $named->status === 'completed',
+                'run' => $named ? $named->toPublicArray() : null,
+                'continue' => false,
+            ], 200);
+        }
+
+        if ($active && ! $resume) {
             return response()->json([
                 'success' => false,
                 'message' => 'A '.$entity.' sync is already running for this store.',
                 'run' => $active->toPublicArray(),
             ], 409);
         }
-        if ($active) {
-            // Its worker is gone; close it out so it stops blocking.
-            $active->update([
-                'status' => 'failed',
-                'finished_at' => now(),
-                'last_error' => 'The process handling this run stopped responding.',
-            ]);
+
+        // Anything else still open has lost its worker; close it out so it
+        // stops blocking and stops showing as running.
+        foreach ($open as $dead) {
+            if ($dead->isStale()) {
+                $dead->update([
+                    'status' => 'failed',
+                    'finished_at' => now(),
+                    'last_error' => 'The process handling this run stopped responding.',
+                ]);
+            }
         }
 
         @ini_set('max_execution_time', '1800');
         @ini_set('memory_limit', '512M');
+        // The run outlives the browser's patience on a large catalogue; a
+        // closed tab or a proxy that gave up waiting must not kill it mid-way.
+        @ignore_user_abort(true);
 
-        $run = SyncService::for($store)->run($entity, $direction, [
+        $options = [
             'dry_run' => $request->boolean('dry_run'),
             'only_unsynced' => $request->boolean('only_unsynced'),
             'since' => $request->since,
-        ], optional($request->user('api'))->id);
+            'time_budget' => self::SLICE_SECONDS,
+        ];
+
+        $userId = optional($request->user('api'))->id;
+
+        if (! $resume && config('queue.default') !== 'sync') {
+            // Answer at once: the queue works it, or this page does if no
+            // worker has claimed it within a few seconds (`waiting`).
+            $run = SyncService::for($store)->queue($entity, $direction, $options, $userId);
+            ShopifySyncJob::queueFor($run);
+
+            return response()->json([
+                'success' => true,
+                'queued' => true,
+                'run' => $run->fresh()->toPublicArray(),
+                'continue' => false,
+            ], 200);
+        }
+
+        $run = $resume
+            ? SyncService::for($store)->resume($resume, $options)
+            : SyncService::for($store)->run($entity, $direction, $options, $userId);
+
+        // Hand the next slice to the queue as well, so the run is not
+        // stranded if this page is closed before it calls back.
+        if ($run->isPaused()) {
+            ShopifySyncJob::queueFor($run);
+        }
 
         return response()->json([
             'success' => $run->status === 'completed',
             'run' => $run->toPublicArray(),
+            // Out of time, not finished: the page calls again with `resume`.
+            'continue' => $run->isPaused(),
         ], 200);
     }
 
@@ -124,6 +200,11 @@ class ShopifySyncController extends BaseController
 
         $run->update(['cancel_requested' => true]);
         ShopifyLog::write($run->store_id, 'sync.cancel', 'Cancel requested for run #'.$run->id, 'warning', [], $run->id, $run->entity);
+
+        // A paused run has no worker to notice the flag, so end it here.
+        if ($run->isPaused() && $run->claimForResume()) {
+            $run->update(['status' => 'cancelled', 'finished_at' => now()]);
+        }
 
         return response()->json(['success' => true, 'run' => $run->fresh()->toPublicArray()]);
     }
@@ -175,10 +256,20 @@ class ShopifySyncController extends BaseController
 
         $latest = [];
         foreach (ShopifyStore::ENTITIES as $entity) {
+            // A run that is still going wins over anything newer. Webhooks log
+            // their own rows while it works, and showing one of those instead
+            // would hide its progress and its Stop button.
             $run = ShopifySyncRun::where('store_id', $request->store_id)
                 ->where('entity', $entity)
+                ->where('status', 'running')
+                ->bulk()
                 ->orderByDesc('id')
-                ->first();
+                ->get()
+                ->first(fn ($r) => ! $r->isStale())
+                ?: ShopifySyncRun::where('store_id', $request->store_id)
+                    ->where('entity', $entity)
+                    ->orderByDesc('id')
+                    ->first();
             $latest[$entity] = $run ? $run->toPublicArray() : null;
         }
 

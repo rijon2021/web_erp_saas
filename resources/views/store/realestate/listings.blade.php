@@ -142,7 +142,7 @@
                 <div class="re-card-body" style="padding:20px 22px">
                   <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
                     <span class="re-card-cat">{{ $property->category->name ?? '' }}</span>
-                    <span style="font-weight:800;color:var(--re-accent);font-size:20px">{{ $currency }}{{ number_format((float)$property->price) }}@if($property->purpose==='rent')<span style="font-weight:500;color:var(--re-muted);font-size:13px"> /{{ __('messages.Month') }}</span>@endif</span>
+                    <span style="font-weight:800;color:var(--re-accent);font-size:20px">{{ store_with_currency($currency, number_format((float) $property->price)) }}@if($property->purpose==='rent')<span style="font-weight:500;color:var(--re-muted);font-size:13px"> /{{ __('messages.Month') }}</span>@endif</span>
                   </div>
                   <h3 class="re-card-title" style="font-size:19px"><a href="{{ route('store.realestate.show', $property->slug) }}">{{ $property->title }}</a></h3>
                   @if($loc)<div class="re-card-loc"><x-store.icon name="map-pin" />{{ $loc }}</div>@endif

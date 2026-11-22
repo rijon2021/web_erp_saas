@@ -8,6 +8,7 @@
     export-endpoint="report/dead_stock"
     :export-params="filterParams"
     export-rows-key="report"
+    product-data
   >
     <template #actions>
       <!-- Multi-Currency: view amounts converted (display-only) -->
@@ -25,15 +26,16 @@
           <div class="banner-text">
             <div class="banner-headline">
               <a-spin v-if="crud.loading.value" size="small" />
+              <!-- Frozen value is at cost; !canSeeCost gets the product count instead. -->
               <template v-else-if="hasDeadStock">
-                {{ money(summary.frozen_value) }}
+                {{ auth.canSeeCost ? money(summary.frozen_value) : `${fmt(summary.products)} ${$t('Products')}` }}
                 <span class="banner-dim">{{ tf('Frozen_In_Dead_Stock', 'frozen in dead stock') }}</span>
               </template>
               <template v-else>{{ tf('No_Dead_Stock', 'No dead stock in this period.') }}</template>
             </div>
             <a-typography-text v-if="hasDeadStock && !crud.loading.value" type="secondary">
-              {{ fmt(summary.products) }} {{ $t('Products') }}
-              · {{ fmt(summary.units) }} {{ tf('Units_On_Hand', 'units on hand') }}
+              <!-- The headline already carries the product count when value is hidden. -->
+              <template v-if="auth.canSeeCost">{{ fmt(summary.products) }} {{ $t('Products') }} · </template>{{ fmt(summary.units) }} {{ tf('Units_On_Hand', 'units on hand') }}
               · {{ fmt(summary.never_moved) }} {{ tf('Never_Moved', 'never moved') }}
             </a-typography-text>
             <a-typography-text v-else-if="!crud.loading.value" type="secondary">
@@ -43,7 +45,7 @@
         </div>
       </a-card>
 
-      <a-row v-if="hasDeadStock" :gutter="[16, 16]" style="margin-bottom: 16px">
+      <a-row v-if="hasDeadStock && auth.canSeeCost" :gutter="[16, 16]" style="margin-bottom: 16px">
         <a-col :xs="24" :xl="15">
           <a-card size="small" class="chart-card" :title="tf('Where_Money_Is_Stuck', 'Where the money is stuck')">
             <apexchart
@@ -141,12 +143,14 @@ import ViewCurrencySelect from '../../components/ViewCurrencySelect.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { useUiStore } from '../../stores/ui';
+import { useAuthStore } from '../../stores/auth';
 import { t as tf } from '../../i18n';
 import http from '../../lib/http';
 
 const { t } = useI18n();
 const { money, date } = useFormat();
 const ui = useUiStore();
+const auth = useAuthStore();
 
 const period = ref(90);
 const warehouseId = ref(undefined);

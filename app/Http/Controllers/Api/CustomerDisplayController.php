@@ -52,6 +52,10 @@ class CustomerDisplayController extends Controller
         // Keep only safe shape
         $payload = [
             'currency' => $cart['currency'] ?? ($cart['symbol'] ?? ''),
+            // System Settings → Currency Position (symbol before/after the amount).
+            'currency_position' => \App\utils\helpers::currency_position(),
+            'price_decimals' => \App\utils\helpers::price_decimals(),
+            'hide_zero_decimals' => \App\utils\helpers::hide_zero_decimals(),
             'discount' => (float) ($cart['discount'] ?? 0),
             'TaxNet' => (float) ($cart['TaxNet'] ?? ($cart['tax'] ?? 0)),
             'shipping' => (float) ($cart['shipping'] ?? 0),
@@ -87,9 +91,19 @@ class CustomerDisplayController extends Controller
         return response()->json(['ok' => true]);
     }
 
-    /** Return the last cart for polling clients. ?screen=1|2|... */
+    /**
+     * Return the last cart for polling clients. ?screen=1|2|...&token=...
+     *
+     * No login (the display is an unattended screen), but the caller must hold
+     * the access token generate() issued — the same one /customer-display checks.
+     */
     public function lastCart(Request $request)
     {
+        $expected = (string) cache('customer_display_token');
+        if ($expected === '' || ! hash_equals($expected, (string) $request->query('token', ''))) {
+            return response()->json(['message' => 'Unauthorized display access'], 403);
+        }
+
         $screenId = (string) ($request->query('screen', '1'));
         $data = Cache::get('customer_display:last_cart:'.$screenId);
         if (! $data) {

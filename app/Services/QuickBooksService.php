@@ -59,6 +59,20 @@ class QuickBooksService
         return in_array($e, ['development', 'dev', 'sandbox'], true) ? 'Development' : 'Production';
     }
 
+    /**
+     * Whether this tenant has connected QuickBooks at all. Callers skip the
+     * sync when it hasn't, instead of logging a "no connection" failure on
+     * every sale.
+     */
+    public function isConnected(): bool
+    {
+        try {
+            return QuickBooksToken::query()->exists();
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
     private function resolveTokenRow(?string $realmId, ?string $environment): ?QuickBooksToken
     {
         $env = $this->normalizeEnv($environment ?? $this->qbSetting('env'));

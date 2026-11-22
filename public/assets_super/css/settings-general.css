@@ -639,3 +639,46 @@ body.dark-mode .update-note i { color: #38bdf8; }
     }
     .update-step-title { font-size: 0.9rem; }
 }
+
+/* ── Default colour fields (Appearance + Tenant Settings tabs) ── */
+.default-color-swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.default-color-swatch {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid var(--color-border, #e2e8f0);
+    cursor: pointer;
+    padding: 0;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.default-color-swatch:hover { transform: scale(1.08); }
+.default-color-swatch.is-active {
+    box-shadow: 0 0 0 2px var(--color-surface, #fff), 0 0 0 4px currentColor;
+    color: #0f172a;
+}
+body.dark-mode .default-color-swatch.is-active { color: #f8fafc; }
+.default-color-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.default-color-picker {
+    width: 42px;
+    height: 38px;
+    padding: 2px;
+    border: 1px solid var(--color-border, #e2e8f0);
+    border-radius: 8px;
+    background: transparent;
+    cursor: pointer;
+}
+.default-color-hex {
+    width: 130px;
+    max-width: 100%;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    text-transform: uppercase;
+}

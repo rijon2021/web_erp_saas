@@ -33,6 +33,7 @@ class AuthServiceProvider extends ServiceProvider
         'App\Models\Adjustment' => 'App\Policies\AdjustmentPolicy',
         'App\Models\Product' => 'App\Policies\ProductPolicy',
         'App\Models\Brand' => 'App\Policies\BrandPolicy',
+        'App\Models\SizeGuide' => 'App\Policies\SizeGuidePolicy',
         'App\Models\Category' => 'App\Policies\CategoryPolicy',
         'App\Models\SubCategory' => 'App\Policies\SubCategoryPolicy',
         'App\Models\Client' => 'App\Policies\ClientPolicy',
@@ -62,7 +63,11 @@ class AuthServiceProvider extends ServiceProvider
         'App\Models\Deposit' => 'App\Policies\DepositPolicy',
         'App\Models\DepositCategory' => 'App\Policies\DepositCategoryPolicy',
         'App\Models\Asset' => 'App\Policies\AssetPolicy',
+        'App\Models\AssetAssignment' => 'App\Policies\AssetAssignmentPolicy',
+        'App\Models\AssetMaintenance' => 'App\Policies\AssetMaintenancePolicy',
+        'App\Models\AssetTransfer' => 'App\Policies\AssetTransferPolicy',
         'App\Models\Damage' => 'App\Policies\DamagePolicy',
+        'App\Models\LicenseKey' => 'App\Policies\LicenseKeyPolicy',
 
         // Document Archive module
         'App\Models\Document' => 'App\Policies\DocumentPolicy',
@@ -140,6 +145,18 @@ class AuthServiceProvider extends ServiceProvider
         'App\Models\Meeting' => 'App\Policies\MeetingPolicy',
         // Protocol & Requests module
         'App\Models\ProtocolRequest' => 'App\Policies\ProtocolRequestPolicy',
+        // Rental Management module
+        'App\Models\RentalItem' => 'App\Policies\RentalItemPolicy',
+        'App\Models\RestaurantSetting' => 'App\Policies\RestaurantPolicy',
+        'App\Models\RentalCategory' => 'App\Policies\RentalCategoryPolicy',
+        'App\Models\RentalCustomer' => 'App\Policies\RentalCustomerPolicy',
+        'App\Models\RentalContract' => 'App\Policies\RentalContractPolicy',
+        'App\Models\RentalReservation' => 'App\Policies\RentalReservationPolicy',
+        'App\Models\RentalInvoice' => 'App\Policies\RentalInvoicePolicy',
+        // CRM module
+        'App\Models\CrmLead' => 'App\Policies\CrmLeadPolicy',
+        'App\Models\CrmDeal' => 'App\Policies\CrmDealPolicy',
+        'App\Models\CrmActivity' => 'App\Policies\CrmActivityPolicy',
 
         // Marketing module
         'App\Models\MarketingCampaign' => 'App\Policies\MarketingCampaignPolicy',
@@ -165,6 +182,9 @@ class AuthServiceProvider extends ServiceProvider
         'App\Models\SlackSetting' => 'App\Policies\SlackSettingPolicy',
         'App\Models\TelegramSetting' => 'App\Policies\TelegramSettingPolicy',
 
+        // Courier integration
+        'App\Models\CourierAccount' => 'App\Policies\CourierAccountPolicy',
+
         // Salla integration
         'App\Models\SallaSetting' => 'App\Policies\SallaSettingPolicy',
 
@@ -174,6 +194,9 @@ class AuthServiceProvider extends ServiceProvider
         // PrestaShop integration
         'App\Models\PrestashopSetting' => 'App\Policies\PrestashopSettingPolicy',
 
+        // OpenCart integration
+        'App\Models\OpencartSetting' => 'App\Policies\OpencartSettingPolicy',
+
         // Google Sheets integration
         'App\Models\GoogleSheetSetting' => 'App\Policies\GoogleSheetSettingPolicy',
 
@@ -182,6 +205,9 @@ class AuthServiceProvider extends ServiceProvider
 
         // Jumia integration
         'App\Models\JumiaSetting' => 'App\Policies\JumiaSettingPolicy',
+
+        // Printful (print-on-demand) integration
+        'App\Models\PrintfulSetting' => 'App\Policies\PrintfulSettingPolicy',
 
     ];
 

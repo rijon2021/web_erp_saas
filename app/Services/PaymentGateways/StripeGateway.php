@@ -47,8 +47,8 @@ class StripeGateway implements PaymentGatewayInterface
         $result = $this->createCheckoutUrl(
             amount: (float) $chargeAmount,
             currency: $chargeCurrency,
-            productName: ($payment->plan->name ?? 'Subscription') . ' Plan',
-            description: ucfirst($payment->billing_cycle) . ' subscription',
+            productName: $payment->checkoutProductName(),
+            description: $payment->checkoutDescription(),
             metadata: [
                 'payment_id' => $payment->id,
                 'tenant_id'  => $payment->tenant_id,
@@ -79,8 +79,9 @@ class StripeGateway implements PaymentGatewayInterface
         $this->loadSettings();
         $stripe = new \Stripe\StripeClient($this->resolvedCredentials['secret_key']);
 
+        // No payment_method_types: API 2026-09-30.endive rejects it with a 400.
+        // Checkout offers the methods enabled in the Stripe Dashboard instead.
         $session = $stripe->checkout->sessions->create([
-            'payment_method_types' => ['card'],
             'mode'                 => 'payment',
             'line_items'           => [[
                 'price_data' => [

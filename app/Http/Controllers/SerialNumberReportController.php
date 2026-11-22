@@ -196,6 +196,8 @@ class SerialNumberReportController extends BaseController
             DB::raw("SUM(ps.status = 'returned_supplier') as returned_supplier"),
             DB::raw("SUM(ps.status = 'damaged') as damaged"),
             DB::raw("SUM(ps.status = 'reserved') as reserved"),
+            DB::raw("SUM(ps.status = 'in_kit') as in_kit"),
+            DB::raw("SUM(ps.status = 'written_off') as written_off"),
             DB::raw('COUNT(*) as total')
         )
             ->orderBy('p.name', 'asc')
@@ -213,6 +215,8 @@ class SerialNumberReportController extends BaseController
             'returned_supplier' => (int) $r->returned_supplier,
             'damaged' => (int) $r->damaged,
             'reserved' => (int) $r->reserved,
+            'in_kit' => (int) $r->in_kit,
+            'written_off' => (int) $r->written_off,
             'total' => (int) $r->total,
         ]);
 

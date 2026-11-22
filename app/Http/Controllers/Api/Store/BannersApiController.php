@@ -56,7 +56,7 @@ class BannersApiController extends Controller
             $image = $request->file('image');
 
             // Generate unique name
-            $filename = rand(11111111, 99999999).$image->getClientOriginalName();
+            $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::imageExtension($image, 'image'));
 
             // Create folder if it doesn’t exist (tenant-aware)
             $path = upload_public_path('banners');
@@ -122,7 +122,7 @@ class BannersApiController extends Controller
 
             // save new
             $image = $request->file('image');
-            $filename = rand(11111111, 99999999).$image->getClientOriginalName();
+            $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::imageExtension($image, 'image'));
 
             $img = Image::make($image->getRealPath());
             $img->save(upload_public_path('banners').'/'.$filename);

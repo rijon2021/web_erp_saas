@@ -71,7 +71,10 @@ export function barcodeValueError(format, value) {
 export function generateBarcodeValue(format) {
   const body = GTIN_BODY_LENGTH[format];
   if (body) {
-    const digits = randomDigits(body, true);
+    let digits = randomDigits(body, true);
+    // GS1 keeps a leading 2 for in-store weighing-scale labels; a product code
+    // starting with 2 could be read as one (System Settings > Weighing scale).
+    while (digits[0] === '2') digits = randomDigits(body, true);
     return digits + gtinCheckDigit(digits);
   }
   // Legacy generateNumber(): random integer in [10^7, 10^8).

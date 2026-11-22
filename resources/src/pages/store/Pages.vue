@@ -157,7 +157,7 @@ function setLocales(map) {
 
 const columns = computed(() => [
   { title: t('Name'), key: 'title' },
-  { title: 'Slug', key: 'slug' },
+  { title: t('Slug'), key: 'slug' },
   { title: t('Status'), key: 'status', width: 160 },
   { title: t('Created_at'), key: 'created_at' },
   { title: t('Actions'), key: 'actions', width: 140 },

@@ -89,6 +89,16 @@ class SalesReturnController extends BaseController
             $SaleReturn->whereIn('warehouse_id', $warehouse_ids);
         }
 
+        // Date range. `date` above is an exact match kept for backwards
+        // compatibility; from/to are the range filter the rest of the app uses,
+        // and either bound may be given on its own (open-ended).
+        if ($request->filled('from')) {
+            $SaleReturn->whereDate('date', '>=', Carbon::parse($request->from)->toDateString());
+        }
+        if ($request->filled('to')) {
+            $SaleReturn->whereDate('date', '<=', Carbon::parse($request->to)->toDateString());
+        }
+
         // Multiple Filter
         $Filtred = $helpers->filter($SaleReturn, $columns, $param, $request)
         // Search With Multiple Param
@@ -117,6 +127,19 @@ class SalesReturnController extends BaseController
             });
 
         $totalRows = $Filtred->count();
+
+        // Totals over the WHOLE filtered set, not just the page on screen —
+        // the list previously reported per-row figures only, so there was no
+        // way to see what a warehouse or a period actually came to.
+        $sumGrandTotal = (float) (clone $Filtred)->sum('GrandTotal');
+        $sumPaid = (float) (clone $Filtred)->sum('paid_amount');
+        $summary = [
+            'count' => $totalRows,
+            'total' => round($sumGrandTotal, 2),
+            'paid' => round($sumPaid, 2),
+            'due' => round($sumGrandTotal - $sumPaid, 2),
+        ];
+
         if ($perPage == '-1') {
             $perPage = $totalRows;
         }
@@ -167,6 +190,7 @@ class SalesReturnController extends BaseController
 
         return response()->json([
             'totalRows' => $totalRows,
+            'summary' => $summary,
             'sale_Return' => $data,
             'customers' => $customers,
             'warehouses' => $warehouses,
@@ -190,6 +214,10 @@ class SalesReturnController extends BaseController
         ]);
 
         $createdReturn = \DB::transaction(function () use ($request) {
+            // Inside the transaction, with the sale row locked: two returns
+            // saved at once cannot both pass the "left to refund" check.
+            $this->abortIfExceedsSaleTotal($request->sale_id, $request->GrandTotal);
+
             $order = new SaleReturn;
 
             $order->date = $request->date;
@@ -252,7 +280,7 @@ class SalesReturnController extends BaseController
                             ->where('warehouse_id', $order->warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse) {
                             if ($unit->operator == '/') {
@@ -264,11 +292,13 @@ class SalesReturnController extends BaseController
                             $product_warehouse->save();
                         }
 
+                    } elseif ($unit && app(\App\Services\ComboStockService::class)->moveComponents((int) $value['product_id'], (int) $order->warehouse_id, \App\Services\ComboStockService::baseQty($packQty, $unit))) {
+                        // Virtual combo: its components move (returned units come back) instead of its own row.
                     } else {
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $order->warehouse_id)
                             ->where('product_id', $value['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse) {
                             if ($unit->operator == '/') {
@@ -302,6 +332,9 @@ class SalesReturnController extends BaseController
                 if ($serialService->isSupported()) {
                     $serialService->applyForSaleReturn($order, $data, $persistedDetails);
                 }
+
+                // Software License keys of the returned units: uploaded → Returned, generated → revoked.
+                \App\Services\LicenseKeys\LicenseFulfilment::afterReturnWrite($order->sale_id ? (int) $order->sale_id : null);
             }
 
             return $order;
@@ -315,7 +348,16 @@ class SalesReturnController extends BaseController
             \Log::warning('ZATCA submit dispatch failed (non-blocking): '.$e->getMessage(), ['sale_return_id' => $createdReturn->id]);
         }
 
-        return response()->json(['success' => true]);
+        // AGT e-invoicing (Angola): a received return is a credit note (NC)
+        // referencing the sale's AGT document; no-op unless the module is on.
+        try {
+            \App\Jobs\SubmitDocumentToAgt::dispatch(SaleReturn::class, $createdReturn->id)->afterCommit();
+        } catch (\Throwable $e) {
+            \Log::warning('AGT submit dispatch failed (non-blocking): '.$e->getMessage(), ['sale_return_id' => $createdReturn->id]);
+        }
+
+        // The id lets the form record the refund right away ("Refund now").
+        return response()->json(['success' => true, 'id' => $createdReturn->id]);
     }
 
     // ------------ Update Return Sale--------------\\
@@ -325,7 +367,13 @@ class SalesReturnController extends BaseController
 
         $this->authorizeForUser($request->user('api'), 'update', SaleReturn::class);
 
+        // Credit notes already communicated to AGT / DGI are immutable.
+        \App\Services\EInvoicing\FiscalLock::assertMutable(SaleReturn::find($id));
+
         \DB::transaction(function () use ($request, $id) {
+            // Locked check, as in store().
+            $this->abortIfExceedsSaleTotal(SaleReturn::whereKey($id)->value('sale_id'), $request['GrandTotal'], (int) $id);
+
             $user = Auth::user();
             // New way: Check user's record_view field (user-level boolean)
             // Backward compatibility: If record_view is null, fall back to role permission check
@@ -394,9 +442,9 @@ class SalesReturnController extends BaseController
 
                     if ($product_unit_sale_id['unitSale']) {
                         $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                    } else {
+                        $unit = null;
                     }
-                    $unit = null;
-
                 }
 
                 // Multi-Pack Selling: reverse using the pack multiplier snapshot
@@ -409,7 +457,7 @@ class SalesReturnController extends BaseController
                         if ($value['product_variant_id'] !== null) {
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)->where('warehouse_id', $current_SaleReturn->warehouse_id)
                                 ->where('product_id', $value['product_id'])->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse) {
                                 if ($unit->operator == '/') {
@@ -420,10 +468,12 @@ class SalesReturnController extends BaseController
                                 $product_warehouse->save();
                             }
 
+                        } elseif ($unit && app(\App\Services\ComboStockService::class)->moveComponents((int) $value['product_id'], (int) $current_SaleReturn->warehouse_id, -\App\Services\ComboStockService::baseQty($oldPackQty, $unit))) {
+                            // Virtual combo: its components move (the old return is undone) instead of its own row.
                         } else {
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)->where('warehouse_id', $current_SaleReturn->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse) {
                                 if ($unit->operator == '/') {
@@ -467,7 +517,7 @@ class SalesReturnController extends BaseController
                                 ->where('warehouse_id', $request->warehouse_id)
                                 ->where('product_id', $product_detail['product_id'])
                                 ->where('product_variant_id', $product_detail['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit_prod && $product_warehouse) {
                                 if ($unit_prod->operator == '/') {
@@ -478,11 +528,13 @@ class SalesReturnController extends BaseController
                                 $product_warehouse->save();
                             }
 
+                        } elseif ($unit_prod && app(\App\Services\ComboStockService::class)->moveComponents((int) $product_detail['product_id'], (int) $request->warehouse_id, \App\Services\ComboStockService::baseQty($newPackQty, $unit_prod))) {
+                            // Virtual combo: its components move (returned units come back) instead of its own row.
                         } else {
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $request->warehouse_id)
                                 ->where('product_id', $product_detail['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit_prod && $product_warehouse) {
                                 if ($unit_prod->operator == '/') {
@@ -564,7 +616,19 @@ class SalesReturnController extends BaseController
                 'payment_statut' => $payment_statut,
             ]);
 
+            // Software License keys: re-sync the sale with its (edited) returns.
+            \App\Services\LicenseKeys\LicenseFulfilment::afterReturnWrite($current_SaleReturn->sale_id ? (int) $current_SaleReturn->sale_id : null);
+
         }, 10);
+
+        // AGT e-invoicing (Angola): a return received by this edit becomes a credit note now.
+        if ($request['statut'] === 'received') {
+            try {
+                \App\Jobs\SubmitDocumentToAgt::dispatch(SaleReturn::class, (int) $id)->afterCommit();
+            } catch (\Throwable $e) {
+                \Log::warning('AGT submit dispatch failed (non-blocking): '.$e->getMessage(), ['sale_return_id' => $id]);
+            }
+        }
 
         return response()->json(['success' => true]);
     }
@@ -574,6 +638,9 @@ class SalesReturnController extends BaseController
     public function destroy(Request $request, $id)
     {
         $this->authorizeForUser($request->user('api'), 'delete', SaleReturn::class);
+
+        // Credit notes already communicated to AGT / DGI cannot be deleted.
+        \App\Services\EInvoicing\FiscalLock::assertMutable(SaleReturn::find($id), true);
 
         \DB::transaction(function () use ($id, $request) {
             $user = Auth::user();
@@ -630,6 +697,9 @@ class SalesReturnController extends BaseController
                 }
             }
 
+            // Software License keys go back to the customer where they still can.
+            \App\Services\LicenseKeys\LicenseFulfilment::afterReturnWrite($current_SaleReturn->sale_id ? (int) $current_SaleReturn->sale_id : null, (int) $current_SaleReturn->id);
+
             foreach ($old_return_details as $key => $value) {
 
                 // check if detail has sale_unit_id Or Null
@@ -642,9 +712,9 @@ class SalesReturnController extends BaseController
 
                     if ($product_unit_sale_id['unitSale']) {
                         $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                    } else {
+                        $unit = null;
                     }
-                    $unit = null;
-
                 }
 
                 // Multi-Pack Selling: reverse using the pack multiplier snapshot.
@@ -655,7 +725,7 @@ class SalesReturnController extends BaseController
                     if ($value['product_variant_id'] !== null) {
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)->where('warehouse_id', $current_SaleReturn->warehouse_id)
                             ->where('product_id', $value['product_id'])->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse) {
                             if ($unit->operator == '/') {
@@ -666,10 +736,12 @@ class SalesReturnController extends BaseController
                             $product_warehouse->save();
                         }
 
+                    } elseif ($unit && app(\App\Services\ComboStockService::class)->moveComponents((int) $value['product_id'], (int) $current_SaleReturn->warehouse_id, -\App\Services\ComboStockService::baseQty($packQty, $unit))) {
+                        // Virtual combo: its components move (the deleted return is undone) instead of its own row.
                     } else {
                         $product_warehouse = product_warehouse::where('deleted_at', '=', null)->where('warehouse_id', $current_SaleReturn->warehouse_id)
                             ->where('product_id', $value['product_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse) {
                             if ($unit->operator == '/') {
@@ -694,12 +766,11 @@ class SalesReturnController extends BaseController
 
             foreach ($payments as $payment) {
 
-                $account = Account::find($payment->account_id);
-
-                if ($account) {
-                    $account->update([
-                        'balance' => $account->balance + $payment->montant,
-                    ]);
+                if (! empty($payment->wallet_transaction_id)) {
+                    // Credited to the customer's wallet: take it back out.
+                    app(\App\Services\CustomerWallet\CustomerWalletService::class)->reversePayment($payment, 'Return payment', ['note' => 'Sale return '.$current_SaleReturn->Ref.' deleted']);
+                } else {
+                    Account::adjustBalance($payment->account_id, $payment->montant);
                 }
 
             }
@@ -719,6 +790,10 @@ class SalesReturnController extends BaseController
     {
 
         $this->authorizeForUser($request->user('api'), 'delete', SaleReturn::class);
+
+        foreach ((array) $request->selectedIds as $selectedId) {
+            \App\Services\EInvoicing\FiscalLock::assertMutable(SaleReturn::find($selectedId), true);
+        }
 
         \DB::transaction(function () use ($request) {
             $user = Auth::user();
@@ -777,6 +852,9 @@ class SalesReturnController extends BaseController
                     }
                 }
 
+                // Software License keys go back to the customer where they still can.
+                \App\Services\LicenseKeys\LicenseFulfilment::afterReturnWrite($current_SaleReturn->sale_id ? (int) $current_SaleReturn->sale_id : null, (int) $current_SaleReturn->id);
+
                 foreach ($old_return_details as $key => $value) {
 
                     // check if detail has sale_unit_id Or Null
@@ -789,9 +867,9 @@ class SalesReturnController extends BaseController
 
                         if ($product_unit_sale_id['unitSale']) {
                             $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                        } else {
+                            $unit = null;
                         }
-                        $unit = null;
-
                     }
 
                     // Multi-Pack Selling: reverse using the pack multiplier snapshot.
@@ -802,7 +880,7 @@ class SalesReturnController extends BaseController
                         if ($value['product_variant_id'] !== null) {
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)->where('warehouse_id', $current_SaleReturn->warehouse_id)
                                 ->where('product_id', $value['product_id'])->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse) {
                                 if ($unit->operator == '/') {
@@ -813,10 +891,12 @@ class SalesReturnController extends BaseController
                                 $product_warehouse->save();
                             }
 
+                        } elseif ($unit && app(\App\Services\ComboStockService::class)->moveComponents((int) $value['product_id'], (int) $current_SaleReturn->warehouse_id, -\App\Services\ComboStockService::baseQty($selPackQty, $unit))) {
+                            // Virtual combo: its components move (the deleted return is undone) instead of its own row.
                         } else {
                             $product_warehouse = product_warehouse::where('deleted_at', '=', null)->where('warehouse_id', $current_SaleReturn->warehouse_id)
                                 ->where('product_id', $value['product_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse) {
                                 if ($unit->operator == '/') {
@@ -841,12 +921,10 @@ class SalesReturnController extends BaseController
 
                 foreach ($payments as $payment) {
 
-                    $account = Account::find($payment->account_id);
-
-                    if ($account) {
-                        $account->update([
-                            'balance' => $account->balance + $payment->montant,
-                        ]);
+                    if (! empty($payment->wallet_transaction_id)) {
+                        app(\App\Services\CustomerWallet\CustomerWalletService::class)->reversePayment($payment, 'Return payment', ['note' => 'Sale return '.$current_SaleReturn->Ref.' deleted']);
+                    } else {
+                        Account::adjustBalance($payment->account_id, $payment->montant);
                     }
 
                 }
@@ -956,6 +1034,7 @@ class SalesReturnController extends BaseController
             $this->authorizeForUser($request->user('api'), 'check_record', $Sale_Return);
         }
 
+        $return_details['id'] = $Sale_Return->id;
         $return_details['Ref'] = $Sale_Return->Ref;
         // Multi-Currency: amounts in this payload are converted into the
         // document currency — the page must render them with THIS symbol.
@@ -1005,9 +1084,9 @@ class SalesReturnController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -1061,6 +1140,8 @@ class SalesReturnController extends BaseController
             'details' => $details,
             'sale_Return' => $return_details,
             'company' => $company,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Sale_Return->warehouse_id, $company),
         ]);
     }
 
@@ -1147,6 +1228,62 @@ class SalesReturnController extends BaseController
         return response()->json(['sales' => $data]);
     }
 
+    /**
+     * What the sale took off at order level (header discount, points,
+     * promotions) and the lines total it was taken from. Lines are summed with
+     * the same per-unit math the return lines use, so a full return gets the
+     * whole reduction and a partial one its proportional share — a return
+     * then refunds what the customer paid, not the pre-discount price.
+     */
+    private function saleOrderDiscountMeta(Sale $sale): array
+    {
+        $linesTotal = 0.0;
+        foreach ($sale->details as $detail) {
+            $discountNet = $detail->discount_method == '2'
+                ? (float) $detail->discount
+                : (float) $detail->price * (float) $detail->discount / 100;
+            $net = (float) $detail->price - $discountNet;
+            // Exclusive tax sits on top of the net price; inclusive is inside it.
+            $unitTotal = $detail->tax_method == '1' ? $net * (1 + (float) $detail->TaxNet / 100) : $net;
+            $linesTotal += $unitTotal * (float) $detail->quantity;
+        }
+
+        $reduction = $linesTotal + (float) $sale->TaxNet + (float) $sale->shipping - (float) $sale->GrandTotal;
+
+        return [
+            'sale_lines_total' => round($linesTotal, 4),
+            'sale_order_discount' => $reduction > 0.005 ? round($reduction, 4) : 0,
+        ];
+    }
+
+    /**
+     * A sale can never refund more than it took: this return plus the sale's
+     * other live returns must stay within the sale total.
+     */
+    private function abortIfExceedsSaleTotal($saleId, $grandTotal, ?int $exceptReturnId = null): void
+    {
+        // Locked: callers run this inside their transaction.
+        $sale = $saleId ? Sale::whereNull('deleted_at')->lockForUpdate()->find($saleId) : null;
+        if (! $sale) {
+            return;
+        }
+
+        $alreadyReturned = (float) SaleReturn::whereNull('deleted_at')
+            ->where('sale_id', $sale->id)
+            ->when($exceptReturnId, fn ($q) => $q->where('id', '!=', $exceptReturnId))
+            ->sum('GrandTotal');
+        $remaining = max((float) $sale->GrandTotal - $alreadyReturned, 0);
+
+        if ((float) $grandTotal > $remaining + 0.01) {
+            abort(response()->json([
+                'success' => false,
+                'message' => __('messages.ReturnExceedsSaleTotal', [
+                    'remaining' => number_format($remaining, helpers::price_decimals(), '.', ''),
+                ]),
+            ], 422));
+        }
+    }
+
     public function create_sell_return(Request $request, $id)
     {
 
@@ -1175,12 +1312,20 @@ class SalesReturnController extends BaseController
         $Return_detail['warehouse_id'] = $SaleReturn->warehouse_id;
         $Return_detail['sale_id'] = $SaleReturn->id;
         $Return_detail['sale_ref'] = $SaleReturn->Ref;
-        $Return_detail['tax_rate'] = 0;
+        // The sale's order tax carries over; its order discount is shared out
+        // over the returned lines by the form (see saleOrderDiscountMeta).
+        $Return_detail['tax_rate'] = (float) $SaleReturn->tax_rate;
         $Return_detail['TaxNet'] = 0;
         $Return_detail['discount'] = 0;
         $Return_detail['shipping'] = 0;
         $Return_detail['statut'] = 'received';
         $Return_detail['notes'] = '';
+        $Return_detail += $this->saleOrderDiscountMeta($SaleReturn);
+
+        // Combo lines return serials of their tracked components.
+        $serialComponentsByCombo = app(SerialNumberService::class)->comboSerialComponents(
+            collect($SaleReturn['details'])->pluck('product_id')->all()
+        );
 
         $detail_id = 0;
         foreach ($SaleReturn['details'] as $detail) {
@@ -1196,9 +1341,9 @@ class SalesReturnController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
                 $data['no_unit'] = 0;
             }
 
@@ -1240,6 +1385,7 @@ class SalesReturnController extends BaseController
             $data['sale_unit_id'] = $unit ? $unit->id : '';
             $data['is_imei'] = $detail['product']['is_imei'];
             $data['imei_number'] = $detail->imei_number;
+            $data['serial_components'] = $serialComponentsByCombo[(int) $detail->product_id] ?? [];
             $data['is_batch_tracked'] = (bool) ($detail['product']['is_batch_tracked'] ?? false);
 
             if ($detail->discount_method == '2') {
@@ -1272,6 +1418,12 @@ class SalesReturnController extends BaseController
         return response()->json([
             'details' => $details,
             'sale_return' => $Return_detail,
+            // For "Refund now": the refund is recorded in the same step.
+            'payment_methods' => PaymentMethod::active()->whereNull('deleted_at')->get(['id', 'name']),
+            'accounts' => Account::where('deleted_at', '=', null)->orderBy('id', 'desc')->get(['id', 'account_name']),
+            // Settings > Features > Require payment account: the refund form
+            // must ask for one, or the payment is refused after the return saved.
+            'require_payment_account' => str_starts_with($this->paymentAccountRule(), 'required'),
         ]);
 
     }
@@ -1286,6 +1438,8 @@ class SalesReturnController extends BaseController
         $Sale_Return = SaleReturn::with('sale', 'details.product.unitSale')
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
+
+        $this->authorizeDocumentView($request, $Sale_Return);
 
         $docCurrency = helpers::Get_Document_Currency($Sale_Return);
 
@@ -1329,9 +1483,9 @@ class SalesReturnController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
             }
 
             if ($detail->product_variant_id) {
@@ -1383,8 +1537,12 @@ class SalesReturnController extends BaseController
         $Html = view('pdf.Sales_Return_pdf', [
             'symbol' => $symbol,
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($Sale_Return->warehouse_id, $settings),
             'return_sale' => $return_details,
             'details' => $details,
+            // AGT (Angola) credit note / DGI (DR Congo) mentions + QR.
+            'fiscal' => \App\Services\EInvoicing\FiscalPrint::forSource($Sale_Return),
         ])->render();
 
         $arabic = new Arabic;
@@ -1458,6 +1616,9 @@ class SalesReturnController extends BaseController
         $Return_detail['shipping'] = $SaleReturn->shipping;
         $Return_detail['notes'] = $SaleReturn->notes;
         $Return_detail['statut'] = $SaleReturn->statut;
+        if ($SaleReturn['sale']) {
+            $Return_detail += $this->saleOrderDiscountMeta($SaleReturn['sale']->loadMissing('details'));
+        }
 
         $detail_id = 0;
         foreach ($SaleReturn['details'] as $detail) {
@@ -1473,9 +1634,9 @@ class SalesReturnController extends BaseController
 
                 if ($product_unit_sale_id['unitSale']) {
                     $unit = Unit::where('id', $product_unit_sale_id['unitSale']->id)->first();
+                } else {
+                    $unit = null;
                 }
-                $unit = null;
-
                 $data['no_unit'] = 0;
             }
 

@@ -34,6 +34,12 @@ export const usePlanStore = defineStore('plan', {
             const f = features[key];
             return f ? !!f.enabled : true;
         },
+        /** Not in the plan, but for sale as an add-on (Billing → Add-ons). */
+        featurePurchasable: s => key => {
+            const features = (s.summary && s.summary.has_plan && s.summary.features) || {};
+            const f = features[key];
+            return !!(f && !f.enabled && f.purchasable);
+        },
     },
     actions: {
         // Re-read after a plan change made in-app (billing pages) without a reload.

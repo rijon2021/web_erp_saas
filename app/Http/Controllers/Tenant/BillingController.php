@@ -15,9 +15,24 @@ use Illuminate\Support\Facades\Log;
 
 class BillingController extends Controller
 {
-    public function plans()
+    public function plans(\Illuminate\Http\Request $request)
     {
-        $plans = Plan::where('is_active', true)->orderBy('price')->get();
+        // One billing area: every "renew" link (lapsed-subscription redirect,
+        // banner, emails, the SPA) lands here — send users who may use the
+        // full billing pages (plan, usage, invoices, cancel) to them. Staff
+        // without billing access keep this page; ?classic=1 forces it.
+        $user = $request->user();
+        if (! $request->boolean('classic') && $user && ((int) $user->id === 1 || $this->userHasBillingPermission($user))) {
+            // The SPA can't read Laravel flash — carry the message ("renew to
+            // continue", "payment cancelled"…) along so the page can show it.
+            $error = $request->session()->get('error');
+            $notice = $error ?? $request->session()->get('success');
+            $query = $notice ? '?' . http_build_query(['notice' => (string) $notice, 'notice_type' => $error ? 'warning' : 'success']) : '';
+
+            return redirect('/subscription/change-plan' . $query);
+        }
+
+        $plans = Plan::availableToTenant(tenant()?->id)->orderBy('price')->get();
         $tenant = tenant();
         $subscription = $tenant ? TenantSubscription::where('tenant_id', $tenant->id)
             ->whereIn('status', [TenantSubscription::STATUS_ACTIVE, TenantSubscription::STATUS_TRIAL])
@@ -25,20 +40,51 @@ class BillingController extends Controller
             ->latest()
             ->first() : null;
 
-        return view('billing.plans', compact('plans', 'subscription'));
+        $billingCycles = GeneralSetting::enabledBillingCycles();
+
+        return view('billing.plans', compact('plans', 'subscription', 'billingCycles'));
+    }
+
+    /** Same rule as BillingApiController::hasBillingPermission (the SPA billing API gate). */
+    private function userHasBillingPermission($user): bool
+    {
+        try {
+            foreach ($user->roles ?? [] as $role) {
+                if ($role->permissions->pluck('name')->contains('billing_view')) {
+                    return true;
+                }
+            }
+        } catch (\Throwable) {
+            return false;
+        }
+
+        return false;
     }
 
     public function checkout(Request $request, $planId)
     {
-        $plan = Plan::where('is_active', true)->findOrFail($planId);
+        $plan = Plan::availableToTenant(tenant()?->id)->findOrFail($planId);
         $tenant = tenant();
-        $cycle = $request->query('cycle', 'monthly');
-        $amount = $plan->getPriceForCycle($cycle);
+        // A ?cycle= that is no longer sold falls back to one that is, so the
+        // page never prices a cycle the POST would then reject.
+        $cycle = GeneralSetting::defaultBillingCycle($request->query('cycle'));
 
         // Free plans: activate immediately without payment
         if ($plan->isFree()) {
             return $this->activateFreePlan($tenant, $plan, $cycle);
         }
+
+        // Priced in the workspace's billing currency (multi-currency pricing).
+        $billingCurrency = \App\Services\Billing\PlanPricing::tenantCurrency($tenant);
+        $basePlan = $plan;
+        $plan = \App\Services\Billing\PlanPricing::displayPlan($plan, $billingCurrency);
+        if ($plan === $basePlan && $billingCurrency !== \App\Support\SellingCurrencies::main()) {
+            // No rate for an automatic price right now: never show a main-currency number as GH₵.
+            return redirect()->route('billing.plans', ['classic' => 1])
+                ->with('error', 'This plan cannot be priced in ' . $billingCurrency . ' right now. Please try again later.');
+        }
+        \App\Support\DisplayCurrency::set($billingCurrency !== \App\Support\SellingCurrencies::main() ? $billingCurrency : null);
+        $amount = $plan->getPriceForCycle($cycle);
 
         $gateways = PaymentGatewayFactory::getAvailableGateways();
 
@@ -60,66 +106,56 @@ class BillingController extends Controller
                 ->first();
         }
 
+        // Renewal of the same plan: add-ons billed with it, per cycle.
+        $addons = app(\App\Services\Billing\AddonService::class);
+        $addonLines = [];
+        foreach (['monthly', 'yearly'] as $c) {
+            $addonLines[$c] = $tenant ? $addons->planCharge($tenant, $basePlan, $c, 0, $billingCurrency)['lines'] : [];
+        }
+
         return view('billing.checkout', [
             'plan'           => $plan,
             'cycle'          => $cycle,
-            'amount'         => $amount,
+            'amount'         => $amount + array_sum(array_column($addonLines[$cycle] ?? [], 'amount')),
+            'planAmount'     => $amount,
+            'addonLines'     => $addonLines,
             'gateways'       => $gateways,
             'subscription'   => $subscription,
             'pendingPayment' => $pendingPayment,
-            'currencyCode'   => $settings->currency_code ?? 'USD',
-            'currencySymbol' => $settings->currency_symbol ?? '$',
+            'currencyCode'   => $billingCurrency,
+            'currencySymbol' => \App\Support\SellingCurrencies::symbol($billingCurrency),
             'bankDetails'    => $settings->getBankDetails(),
+            'billingCycles'  => GeneralSetting::enabledBillingCycles(),
         ]);
     }
 
     /**
-     * Request a switch to a free plan.
-     *
-     * Deliberately NOT instant: the request goes through the same
-     * pending → admin-approval flow as paid plans. Instant activation let an
-     * expired tenant restore permanent access (ends_at = null) with one
-     * click, silently overwriting their expired paid subscription row.
+     * Request a switch to a free plan — pending until an admin approves it
+     * (see TenantSubscription::requestFreePlan()).
      */
     protected function activateFreePlan($tenant, Plan $plan, string $cycle)
     {
-        $existingPending = TenantSubscription::where('tenant_id', $tenant->id)
-            ->where('status', TenantSubscription::STATUS_PENDING)
-            ->latest()
-            ->first();
-
-        if ($existingPending) {
-            $existingPending->update([
-                'plan_id'       => $plan->id,
-                'billing_cycle' => $cycle,
-                'amount'        => 0,
-                'currency'      => GeneralSetting::currencyCode(),
-                'starts_at'     => $existingPending->starts_at ?? now(),
-            ]);
-        } else {
-            TenantSubscription::create([
-                'tenant_id'     => $tenant->id,
-                'plan_id'       => $plan->id,
-                'billing_cycle' => $cycle,
-                'amount'        => 0,
-                'currency'      => GeneralSetting::currencyCode(),
-                'status'        => TenantSubscription::STATUS_PENDING,
-                'starts_at'     => now(),
-            ]);
+        if (! TenantSubscription::requestFreePlan($tenant->id, $plan, $cycle)) {
+            return redirect()->route('billing.plans', ['classic' => 1])
+                ->with('error', 'You have a payment awaiting confirmation. Wait for it, or cancel it, before switching to a free plan.');
         }
 
-        return redirect()->route('billing.plans')
+        // ?classic=1: stay on this page so the confirmation below is shown.
+        return redirect()->route('billing.plans', ['classic' => 1])
             ->with('success', 'Your request to switch to the ' . $plan->name . ' plan has been submitted and is awaiting admin approval.');
     }
 
     public function processPayment(Request $request, $planId)
     {
-        $plan = Plan::where('is_active', true)->findOrFail($planId);
+        $plan = Plan::availableToTenant(tenant()?->id)->findOrFail($planId);
         $tenant = tenant();
 
         // Block submission if a pending payment already exists for this tenant.
+        // Payment-link attempts (super admin custom charges) are not plan
+        // payments and must not block a plan checkout.
         $existingPending = TenantBillingPayment::where('tenant_id', $tenant->id)
             ->where('status', TenantBillingPayment::STATUS_PENDING)
+            ->withoutPaymentLinks()
             ->first();
 
         if ($existingPending) {
@@ -130,7 +166,7 @@ class BillingController extends Controller
 
         $rules = [
             'gateway'       => ['required', 'string', 'in:stripe,paypal,paystack,flutterwave,mollie,razorpay,payfast,ligdicash,dodo,waafipay,bkash,sslcommerz,paymob,myfatoorah,moyasar,xpay,offline'],
-            'billing_cycle' => ['required', 'in:monthly,yearly'],
+            'billing_cycle' => ['required', GeneralSetting::billingCycleRule()],
         ];
 
         $gatewayKey = $request->input('gateway');
@@ -143,8 +179,17 @@ class BillingController extends Controller
         $request->validate($rules);
 
         $billingCycle = $request->input('billing_cycle');
-        $amount       = $plan->getPriceForCycle($billingCycle);
-        $systemCurrency = GeneralSetting::currencyCode();
+        // Charged in the workspace's billing currency (multi-currency pricing).
+        $systemCurrency = \App\Services\Billing\PlanPricing::tenantCurrency($tenant);
+        try {
+            $amount = \App\Services\Billing\PlanPricing::price($plan, $billingCycle, $systemCurrency);
+        } catch (\Throwable $e) {
+            return back()->withErrors(['payment' => 'This plan cannot be priced in ' . $systemCurrency . ' right now. Please try again later.']);
+        }
+        // Renewing the same plan: add-ons billed with it go on this payment
+        // ($amount stays the plan price — it is the subscription's amount).
+        $addonCharge = app(\App\Services\Billing\AddonService::class)->planCharge($tenant, $plan, $billingCycle, (float) $amount, $systemCurrency);
+        $payAmount = $addonCharge['amount'];
 
         $gateway = PaymentGatewayFactory::resolve($gatewayKey);
         if (! $gateway) {
@@ -215,23 +260,33 @@ class BillingController extends Controller
                         \Illuminate\Support\Facades\File::makeDirectory($uploadDir, 0755, true);
                     }
                     $file = $request->file('payment_proof');
-                    $filename = 'proof_' . $tenant->id . '_' . time() . '.' . $file->getClientOriginalExtension();
+                    $filename = 'proof_' . $tenant->id . '_' . time() . '.' . \App\Support\SafeUpload::contentExtension($file, ['jpg', 'png', 'webp', 'pdf'], 'payment_proof');
                     $file->move($uploadDir, $filename);
                     $proofPath = upload_path('payment-proofs') . '/' . $filename;
                 }
 
-                $payment = $lifecycle->createPayment($subscription, [
-                    'amount'                 => $amount,
+                $payment = $lifecycle->createPayment($subscription, array_filter([
+                    'amount'                 => $payAmount,
                     'currency'               => $systemCurrency,
                     'gateway_currency'       => $systemCurrency,
-                    'gateway_amount'         => $amount,
+                    'gateway_amount'         => $payAmount,
                     'exchange_rate'          => 1,
                     'conversion_applied'     => false,
                     'billing_cycle'          => $billingCycle,
                     'gateway'                => 'offline',
                     'gateway_payment_id'     => 'offline_' . uniqid(),
                     'payment_proof_path'     => $proofPath,
-                ]);
+                    'metadata'               => $addonCharge['metadata'] ?: null,
+                ], fn ($v) => $v !== null));
+
+                \App\Services\EmailNotificationService::paymentProofSubmitted(
+                    (string) ($tenant->admin_email ?? ''),
+                    $tenant->company_name ?? $tenant->id,
+                    $payAmount,
+                    $plan->name,
+                    'super/payments/' . $payment->id,
+                    $tenant->locale ?? null
+                );
 
                 return redirect()->route('billing.offline-submitted', ['payment' => $payment->id]);
             } catch (\Throwable $e) {
@@ -247,15 +302,30 @@ class BillingController extends Controller
 
         // Resolve currency conversion
         $currencyConfig = PaymentGatewayFactory::getGatewayCurrencyConfig($gatewayKey);
-        $conversion = CurrencyConversionService::resolve(
-            $amount,
-            $systemCurrency,
-            $currencyConfig['supported_currencies'],
-            $currencyConfig['default_currency']
-        );
 
-        $payment = $lifecycle->createPayment($subscription, [
-            'amount'                 => $amount,
+        try {
+            $conversion = CurrencyConversionService::resolve(
+                $payAmount,
+                $systemCurrency,
+                $currencyConfig['supported_currencies'],
+                $currencyConfig['default_currency']
+            );
+        } catch (\Throwable $e) {
+            // Typically an unknown/misspelled platform currency code (e.g. "DBT"
+            // instead of "BDT") that no exchange-rate provider can resolve.
+            // Surface it on the billing page instead of a bare 500.
+            Log::error("Tenant billing currency conversion failed: {$e->getMessage()}", [
+                'tenant_id'        => $tenant->id,
+                'system_currency'  => $systemCurrency,
+                'gateway'          => $gatewayKey,
+                'gateway_currency' => $currencyConfig['default_currency'],
+            ]);
+
+            return back()->withErrors(['payment' => $e->getMessage()]);
+        }
+
+        $payment = $lifecycle->createPayment($subscription, array_filter([
+            'amount'                 => $payAmount,
             'currency'               => $systemCurrency,
             'gateway_currency'       => $conversion['gateway_currency'],
             'gateway_amount'         => $conversion['gateway_amount'],
@@ -263,7 +333,8 @@ class BillingController extends Controller
             'conversion_applied'     => $conversion['conversion_applied'],
             'billing_cycle'          => $billingCycle,
             'gateway'                => $gatewayKey,
-        ]);
+            'metadata'               => $addonCharge['metadata'] ?: null,
+        ], fn ($v) => $v !== null));
 
         try {
             $successUrl = route('billing.success') . '?payment=' . $payment->id;
@@ -321,6 +392,12 @@ class BillingController extends Controller
             $payment = TenantBillingPayment::with(['plan', 'subscription'])
                 ->where('tenant_id', $tenant->id)
                 ->find($paymentId);
+        }
+
+        // A refunded payment is final — re-verifying it (Stripe sessions stay
+        // "paid" after a refund) would re-activate the cancelled subscription.
+        if ($payment && $payment->isRefunded()) {
+            return redirect('/app/billing/history');
         }
 
         // PayPal requires an explicit server-side capture before the
@@ -453,6 +530,13 @@ class BillingController extends Controller
         if (! $payment) {
             return redirect()->route('billing.plans')
                 ->with('warning', 'Payment record not found.');
+        }
+
+        // Refunded is final — see callback(). (The success view would spin
+        // forever waiting for "paid", so send the tenant to their history.)
+        if ($payment->isRefunded()) {
+            return redirect()->route('billing.history')
+                ->with('warning', 'This payment has been refunded.');
         }
 
         // PayPal: capture the order when user returns from PayPal checkout.
@@ -1409,6 +1493,7 @@ class BillingController extends Controller
             ->first();
 
         $payments = TenantBillingPayment::where('tenant_id', $tenant->id)
+            ->visibleToTenant()
             ->with('plan', 'subscription')
             ->latest()
             ->paginate(20);
@@ -1422,6 +1507,7 @@ class BillingController extends Controller
         $oldPayment = TenantBillingPayment::where('tenant_id', $tenant->id)
             ->where('id', $paymentId)
             ->where('status', TenantBillingPayment::STATUS_FAILED)
+            ->withoutPaymentLinks()
             ->firstOrFail();
 
         return redirect()->route('billing.checkout', [

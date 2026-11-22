@@ -10,6 +10,9 @@ use Intervention\Image\ImageManagerStatic as Image;
 
 class BrandsController extends Controller
 {
+    // Not a BaseController subclass, so the warehouse helpers are mixed in here.
+    use \App\Traits\ScopesWarehouseAccess;
+
     // ------------ GET ALL Brands -----------\\
 
     public function index(Request $request)
@@ -20,12 +23,21 @@ class BrandsController extends Controller
         $pageStart = \Request::get('page', 1);
         // Start displaying items from this number;
         $offSet = ($pageStart * $perPage) - $perPage;
-        $order = $request->SortField;
+        // Whitelisted, and defaulted: an absent SortField previously reached
+        // orderBy('') and the query died with "Unknown column ''".
+        $order = in_array($request->SortField, ['id', 'name', 'description'], true) ? $request->SortField : 'id';
         $dir = strtolower((string) $request->input('SortType')) === 'asc' ? 'asc' : 'desc';
         $helpers = new helpers;
 
-        $brands = Brand::where('deleted_at', '=', null)
+        $brands = Brand::where('deleted_at', '=', null);
 
+        // Settings -> Features: optionally show only brands that have a product
+        // this user may see (owned by / stocked in one of their warehouses).
+        // A brand with no product at all stays visible, so a new brand is never
+        // hidden from its author.
+        $this->scopeMasterDataToProducts($brands, fn ($sub) => $sub->whereColumn('products.brand_id', 'brands.id'));
+
+        $brands
         // Search With Multiple Param
             ->where(function ($query) use ($request) {
                 return $query->when($request->filled('search'), function ($query) use ($request) {
@@ -49,7 +61,7 @@ class BrandsController extends Controller
 
     }
 
-    // ---------------- STORE NEW Brand -------------\\
+    // ---------------- STORE NEW Brand -------------\
 
     public function store(Request $request)
     {
@@ -57,28 +69,16 @@ class BrandsController extends Controller
 
         request()->validate([
             'name' => 'required',
+            'image' => 'nullable|image|max:2048',
         ]);
 
         $createdBrand = \DB::transaction(function () use ($request) {
-
-            if ($request->hasFile('image')) {
-
-                $image = $request->file('image');
-                $filename = rand(11111111, 99999999).$image->getClientOriginalName();
-
-                $image_resize = Image::make($image->getRealPath());
-                $image_resize->resize(200, 200);
-                $image_resize->save(public_path('/images/brands/'.$filename));
-
-            } else {
-                $filename = 'no-image.png';
-            }
 
             $Brand = new Brand;
 
             $Brand->name = $request['name'];
             $Brand->description = $request['description'];
-            $Brand->image = $filename;
+            $Brand->image = $this->storeImage($request) ?? 'no-image.png';
             $Brand->save();
 
             return $Brand; // Return the created brand
@@ -91,7 +91,7 @@ class BrandsController extends Controller
 
     }
 
-    // ------------ function show -----------\\
+    // ------------ function show -----------\
 
     public function show($id)
     {
@@ -99,7 +99,7 @@ class BrandsController extends Controller
 
     }
 
-    // ---------------- UPDATE Brand -------------\\
+    // ---------------- UPDATE Brand -------------\
 
     public function update(Request $request, $id)
     {
@@ -108,36 +108,19 @@ class BrandsController extends Controller
 
         request()->validate([
             'name' => 'required',
+            'image' => 'nullable|image|max:2048',
         ]);
         \DB::transaction(function () use ($request, $id) {
             $Brand = Brand::findOrFail($id);
             $currentImage = $Brand->image;
 
-            if ($currentImage && $request->image != $currentImage) {
-                $image = $request->file('image');
-                $path = public_path().'/images/brands';
-                $filename = rand(11111111, 99999999).$image->getClientOriginalName();
-
-                $image_resize = Image::make($image->getRealPath());
-                $image_resize->resize(200, 200);
-                $image_resize->save(public_path('/images/brands/'.$filename));
-
-                $BrandImage = $path.'/'.$currentImage;
-                if (file_exists($BrandImage)) {
-                    if ($currentImage != 'no-image.png') {
-                        @unlink($BrandImage);
-                    }
-                }
-            } elseif (! $currentImage && $request->image != 'null') {
-                $image = $request->file('image');
-                $path = public_path().'/images/brands';
-                $filename = rand(11111111, 99999999).$image->getClientOriginalName();
-
-                $image_resize = Image::make($image->getRealPath());
-                $image_resize->resize(200, 200);
-                $image_resize->save(public_path('/images/brands/'.$filename));
+            // Only a newly uploaded file replaces the image; an edit that sends
+            // no file keeps the current one.
+            $filename = $this->storeImage($request);
+            if ($filename) {
+                $this->deleteImage($currentImage);
             } else {
-                $filename = $currentImage ? $currentImage : 'no-image.png';
+                $filename = $currentImage ?: 'no-image.png';
             }
 
             Brand::whereId($id)->update([
@@ -149,6 +132,48 @@ class BrandsController extends Controller
         }, 10);
 
         return response()->json(['success' => true]);
+    }
+
+    /**
+     * Save the uploaded brand image (resized to 200x200) into the tenant's
+     * upload folder — upload_public_path('brands') — which is where the SPA
+     * reads it back from (uploadUrl('brands', …)). Returns the stored
+     * filename, or null when the request carries no file.
+     */
+    private function storeImage(Request $request): ?string
+    {
+        if (! $request->hasFile('image') || ! $request->file('image')->isValid()) {
+            return null;
+        }
+
+        $image = $request->file('image');
+        $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::imageExtension($image, 'image'));
+
+        $dir = upload_public_path('brands');
+        if (! is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+
+        Image::make($image->getRealPath())
+            ->resize(200, 200)
+            ->save($dir.'/'.$filename);
+
+        return $filename;
+    }
+
+    private function deleteImage($filename): void
+    {
+        if (! $filename || $filename === 'no-image.png') {
+            return;
+        }
+
+        // Tenant folder first, then the legacy shared public/images/brands
+        // location used before uploads moved into per-tenant folders.
+        foreach ([upload_public_path('brands').'/'.$filename, public_path('images/brands/'.$filename)] as $path) {
+            if (is_file($path)) {
+                @unlink($path);
+            }
+        }
     }
 
     // ------------ Delete Brand -----------\\

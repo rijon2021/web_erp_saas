@@ -5,10 +5,86 @@ namespace App\Http\Controllers;
 use App\Traits\ScopesWarehouseAccess;
 use Config;
 use DB;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Schema;
 
 class BaseController extends Controller
 {
     use ScopesWarehouseAccess;
+
+    /**
+     * Gate for the Print & PDF endpoints, which open one document by id.
+     *
+     * Same three checks the detail endpoints apply: the user holds one of
+     * $abilities on the document's policy (several are accepted so a POS
+     * cashier can reprint a receipt without Sales_view), the document comes
+     * from a warehouse they are assigned to, and — without record_view — they
+     * own it. A document reached through a verified share link skips the gate.
+     */
+    protected function authorizeDocumentView(Request $request, Model $document, array $abilities = ['view']): void
+    {
+        if ($this->isSharedDocument($request, $document)) {
+            return;
+        }
+
+        $user = $request->user('api');
+        $class = get_class($document);
+
+        if (! $user || ! collect($abilities)->contains(fn ($ability) => $user->can($ability, $class))) {
+            throw new AuthorizationException;
+        }
+
+        $this->abortIfDocumentWarehouseDenied($document);
+
+        $policy = Gate::getPolicyFor($class);
+        if (! $user->hasRecordView() && $policy && method_exists($policy, 'check_record')) {
+            $this->authorizeForUser($user, 'check_record', $document);
+        }
+    }
+
+    /**
+     * True when DocumentShareController resolved this request's share token to
+     * $document. Request attributes are server-side only, so a client cannot
+     * set this flag itself.
+     */
+    protected function isSharedDocument(Request $request, Model $document): bool
+    {
+        $shared = $request->attributes->get('shared_document');
+
+        return $shared instanceof Model && $shared->is($document);
+    }
+
+    /**
+     * Validation rule for a payment's cash/bank account.
+     *
+     * The accounts module is optional, so this is 'nullable' by default and a
+     * payment recorded without an account is still complete — it just belongs to
+     * no account. A merchant who does run tills can switch on
+     * Settings > Features > "Require payment account" to stop unattributed
+     * payments being saved, and this returns 'required' for them.
+     */
+    protected function paymentAccountRule(): string
+    {
+        try {
+            if (Schema::hasColumn('settings', 'require_payment_account')) {
+                $required = (bool) \App\Models\Setting::query()
+                    ->whereNull('deleted_at')
+                    ->value('require_payment_account');
+
+                if ($required) {
+                    return 'required|exists:accounts,id';
+                }
+            }
+        } catch (\Throwable $e) {
+            // Settings unavailable (boot, migrations): fall back to optional,
+            // which is the behaviour every install had before this setting.
+        }
+
+        return 'nullable|exists:accounts,id';
+    }
 
     public function sendResponse($result, $msg)
     {

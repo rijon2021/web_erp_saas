@@ -12,7 +12,7 @@ class PaymentSale extends Model
     protected $dates = ['deleted_at'];
 
     protected $fillable = [
-        'sale_id', 'date', 'montant', 'Ref', 'change', 'payment_method_id', 'user_id', 'notes', 'account_id',
+        'sale_id', 'date', 'montant', 'Ref', 'change', 'payment_method_id', 'user_id', 'notes', 'account_id', 'wallet_transaction_id',
     ];
 
     protected $casts = [

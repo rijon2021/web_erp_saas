@@ -12,6 +12,16 @@ class CheckForMaintenanceMode extends Middleware
      * @var array
      */
     protected $except = [
-        //
+        // System Update (super admin) must stay reachable while the platform
+        // is down for updating: its page drives the resumable update steps
+        // and polls progress, and the standalone recovery console lives
+        // under it too.
+        'super/system-update',
+        'super/system-update/*',
+        // The login routes needed to get back in if the super admin's
+        // session expired mid-update.
+        'super/login',
+        'super/login/*',
+        'super/logout',
     ];
 }

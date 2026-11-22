@@ -93,7 +93,7 @@ const columns = computed(() => [
 // Same curated Bootstrap Icons list as the legacy page; the stored value is the
 // full class name (e.g. "bi bi-bag"), rendered by bootstrap-icons CSS.
 const iconOptions = computed(() => [
-  { value: '', label: 'None' },
+  { value: '', label: t('None') },
   ...BOOTSTRAP_ICONS.map(n => ({ value: `bi bi-${n}`, label: n.replace(/-/g, ' ') })),
 ]);
 

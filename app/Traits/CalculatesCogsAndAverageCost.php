@@ -6,7 +6,9 @@ use App\Models\AdjustmentDetail;
 use App\Models\Product;
 use App\Models\ProductVariant;
 use App\Models\PurchaseDetail;
+use App\Models\PurchaseReturnDetails;
 use App\Models\SaleDetail;
+use App\Models\SaleReturnDetails;
 use App\Models\ServiceJob;
 use App\Models\ServiceJobItem;
 use Carbon\Carbon;
@@ -24,6 +26,9 @@ trait CalculatesCogsAndAverageCost
      * Fast COGS using:
      *  - FIFO: purchases grouped once + pointer burn-up to start date
      *  - AVG: set-based average cost per product/variant at end date
+     *
+     * Received sale returns are netted out: returned units went back to stock, so
+     * they are no longer a cost of the period. COGS is costed on (sold − returned).
      */
     protected function calcCogsAndAvgCostFast(string $start, string $end, ?int $warehouseId, array $warehouseIds): array
     {
@@ -31,28 +36,59 @@ trait CalculatesCogsAndAverageCost
         $user = Auth::user();
         $view_records = $user ? $user->hasRecordView() : false;
 
-        // Keys (products actually sold in period)
-        $soldKeys = SaleDetail::join('sales as s', 's.id', '=', 'sale_details.sale_id')
-            ->where('s.statut', 'completed')
-            ->when($warehouseId, fn ($q) => $q->where('s.warehouse_id', $warehouseId),
-                fn ($q) => $q->whereIn('s.warehouse_id', $warehouseIds))
-            ->where(function ($query) use ($view_records) {
-                if (! $view_records) {
-                    return $query->where('s.user_id', '=', Auth::user()->id);
-                }
-            })
-            ->whereBetween('sale_details.date', [$start, $end])
-            ->select('sale_details.product_id', 'sale_details.product_variant_id')
-            ->distinct()->get();
+        $key = fn ($pid, $vid) => $pid.':'.($vid ?? 'null');
 
-        if ($soldKeys->isEmpty()) {
+        $soldQty = function ($dateScope, $productIds = null) use ($warehouseId, $warehouseIds, $view_records, $key) {
+            return SaleDetail::join('sales as s', 's.id', '=', 'sale_details.sale_id')
+                ->when($productIds !== null, fn ($q) => $q->whereIn('sale_details.product_id', $productIds))
+                ->where('s.statut', 'completed')
+                ->when($warehouseId, fn ($q) => $q->where('s.warehouse_id', $warehouseId),
+                    fn ($q) => $q->whereIn('s.warehouse_id', $warehouseIds))
+                ->where(function ($query) use ($view_records) {
+                    if (! $view_records) {
+                        return $query->where('s.user_id', '=', Auth::user()->id);
+                    }
+                })
+                ->where($dateScope)
+                ->select('sale_details.product_id', 'sale_details.product_variant_id', DB::raw('SUM(sale_details.quantity) as qty'))
+                ->groupBy('sale_details.product_id', 'sale_details.product_variant_id')
+                ->get()
+                ->keyBy(fn ($r) => $key($r->product_id, $r->product_variant_id));
+        };
+
+        // Same scoping as sales, on the return header (return details carry no date).
+        $returnedQty = function ($dateScope, $productIds = null) use ($warehouseId, $warehouseIds, $view_records, $key) {
+            return SaleReturnDetails::join('sale_returns as sr', 'sr.id', '=', 'sale_return_details.sale_return_id')
+                ->when($productIds !== null, fn ($q) => $q->whereIn('sale_return_details.product_id', $productIds))
+                ->whereNull('sr.deleted_at')
+                ->where('sr.statut', 'received')
+                ->when($warehouseId, fn ($q) => $q->where('sr.warehouse_id', $warehouseId),
+                    fn ($q) => $q->whereIn('sr.warehouse_id', $warehouseIds))
+                ->where(function ($query) use ($view_records) {
+                    if (! $view_records) {
+                        return $query->where('sr.user_id', '=', Auth::user()->id);
+                    }
+                })
+                ->where($dateScope)
+                ->select('sale_return_details.product_id', 'sale_return_details.product_variant_id', DB::raw('SUM(sale_return_details.quantity) as qty'))
+                ->groupBy('sale_return_details.product_id', 'sale_return_details.product_variant_id')
+                ->get()
+                ->keyBy(fn ($r) => $key($r->product_id, $r->product_variant_id));
+        };
+
+        // Sold / returned qty in period per key — together their keys are the set
+        // of (product, variant) pairs whose cost moved in the period.
+        $salesQty = $soldQty(fn ($q) => $q->whereBetween('sale_details.date', [$start, $end]));
+        $returnsQty = $returnedQty(fn ($q) => $q->whereBetween('sr.date', [$start, $end]));
+
+        $periodKeys = $salesQty->union($returnsQty)->values();
+
+        if ($periodKeys->isEmpty()) {
             return ['fifo' => 0.0, 'avg' => 0.0];
         }
 
-        $key = fn ($pid, $vid) => $pid.':'.($vid ?? 'null');
-
-        $productIds = $soldKeys->pluck('product_id')->unique()->values();
-        $variantIds = $soldKeys->pluck('product_variant_id')->unique()->filter()->values();
+        $productIds = $periodKeys->pluck('product_id')->unique()->values();
+        $variantIds = $periodKeys->pluck('product_variant_id')->unique()->filter()->values();
 
         // Preload product.cost once for safe fallbacks when there are no purchases/adjustments
         $productCosts = Product::whereIn('id', $productIds)
@@ -63,41 +99,18 @@ trait CalculatesCogsAndAverageCost
             ? collect()
             : ProductVariant::whereIn('id', $variantIds)->pluck('cost', 'id');
 
-        // Sales qty in period per key
-        $salesQty = SaleDetail::join('sales as s', 's.id', '=', 'sale_details.sale_id')
-            ->where('s.statut', 'completed')
-            ->when($warehouseId, fn ($q) => $q->where('s.warehouse_id', $warehouseId),
-                fn ($q) => $q->whereIn('s.warehouse_id', $warehouseIds))
-            ->where(function ($query) use ($view_records) {
-                if (! $view_records) {
-                    return $query->where('s.user_id', '=', Auth::user()->id);
-                }
-            })
-            ->whereBetween('sale_details.date', [$start, $end])
-            ->select('sale_details.product_id', 'sale_details.product_variant_id', DB::raw('SUM(sale_details.quantity) as qty'))
-            ->groupBy('sale_details.product_id', 'sale_details.product_variant_id')
-            ->get()
-            ->keyBy(fn ($r) => $key($r->product_id, $r->product_variant_id));
+        // Sold / returned qty before start (to burn FIFO layers). Only the products
+        // moved in the period are ever read back, so only those are summed — the
+        // unfiltered version aggregated the tenant's entire sales history.
+        $salesBefore = $soldQty(fn ($q) => $q->where('sale_details.date', '<', $start), $productIds);
+        $returnsBefore = $returnedQty(fn ($q) => $q->where('sr.date', '<', $start), $productIds);
 
-        // Sales qty before start (to burn FIFO layers)
-        $salesBefore = SaleDetail::join('sales as s', 's.id', '=', 'sale_details.sale_id')
-            ->where('s.statut', 'completed')
-            ->when($warehouseId, fn ($q) => $q->where('s.warehouse_id', $warehouseId),
-                fn ($q) => $q->whereIn('s.warehouse_id', $warehouseIds))
-            ->where(function ($query) use ($view_records) {
-                if (! $view_records) {
-                    return $query->where('s.user_id', '=', Auth::user()->id);
-                }
-            })
-            ->where('sale_details.date', '<', $start)
-            ->select('sale_details.product_id', 'sale_details.product_variant_id', DB::raw('SUM(sale_details.quantity) as qty'))
-            ->groupBy('sale_details.product_id', 'sale_details.product_variant_id')
-            ->get()
-            ->keyBy(fn ($r) => $key($r->product_id, $r->product_variant_id));
-
-        // Purchases (all time up to end) grouped and ordered (for FIFO)
+        // Purchases (all time up to end) grouped and ordered (for FIFO). Purchases dated
+        // after the period could not have supplied its sales, so they are left out.
         $purchases = PurchaseDetail::join('purchases as p', 'p.id', '=', 'purchase_details.purchase_id')
+            ->whereNull('p.deleted_at')
             ->where('p.statut', 'received')
+            ->where('p.date', '<=', $end)
             ->when($warehouseId, fn ($q) => $q->where('p.warehouse_id', $warehouseId),
                 fn ($q) => $q->whereIn('p.warehouse_id', $warehouseIds))
             ->whereIn('purchase_details.product_id', $productIds)
@@ -106,23 +119,103 @@ trait CalculatesCogsAndAverageCost
                 'purchase_details.product_variant_id',
                 'purchase_details.quantity',
                 'purchase_details.cost',
+                'purchase_details.purchase_id',
                 'p.date',
             ])
             ->orderBy('p.date', 'asc')
+            ->orderBy('p.id', 'asc')
+            ->orderBy('purchase_details.id', 'asc')
             ->get()
             ->groupBy(fn ($r) => $key($r->product_id, $r->product_variant_id));
 
+        // Completed purchase returns (up to end) send units back to the supplier, so they
+        // shrink the layer they came from: the linked purchase's lines, or — when the
+        // return is not linked to a purchase — the newest layers on hand at the return
+        // date (under FIFO the newest stock is what is still on the shelf).
+        $purchaseReturns = PurchaseReturnDetails::join('purchase_returns as pr', 'pr.id', '=', 'purchase_return_details.purchase_return_id')
+            ->whereNull('pr.deleted_at')
+            ->whereNull('purchase_return_details.deleted_at')
+            ->where('pr.statut', 'completed')
+            ->where('pr.date', '<=', $end)
+            ->when($warehouseId, fn ($q) => $q->where('pr.warehouse_id', $warehouseId),
+                fn ($q) => $q->whereIn('pr.warehouse_id', $warehouseIds))
+            ->whereIn('purchase_return_details.product_id', $productIds)
+            ->select([
+                'purchase_return_details.product_id',
+                'purchase_return_details.product_variant_id',
+                'purchase_return_details.quantity',
+                'pr.purchase_id',
+                'pr.date',
+            ])
+            ->orderBy('pr.date', 'asc')
+            ->orderBy('pr.id', 'asc')
+            ->get()
+            ->groupBy(fn ($r) => $key($r->product_id, $r->product_variant_id));
+
+        $day = fn ($d) => substr((string) $d, 0, 10);
+
+        foreach ($purchaseReturns as $kstr => $returns) {
+            $layers = $purchases[$kstr] ?? null;
+            if (! $layers) {
+                continue;
+            }
+
+            foreach ($returns as $ret) {
+                $left = (float) $ret->quantity;
+                $linked = $ret->purchase_id ? $layers->where('purchase_id', $ret->purchase_id) : collect();
+                $candidates = $linked->isNotEmpty()
+                    ? $linked
+                    : $layers->filter(fn ($l) => $day($l->date) <= $day($ret->date))->reverse();
+
+                foreach ($candidates as $layer) {
+                    if ($left <= 0) {
+                        break;
+                    }
+                    $take = min(max(0.0, (float) $layer->quantity), $left);
+                    $layer->quantity = (float) $layer->quantity - $take;
+                    $left -= $take;
+                }
+            }
+        }
+
         // Average cost per key at end date (set-based)
         $avgCost = $this->averageCostBulk($productIds->all(), $variantIds->all(), $end, $warehouseId, $warehouseIds);
+
+        // Cost of the units at positions [$from, $to) of the FIFO layer sequence;
+        // units past the last layer are valued at $avg.
+        $costRange = function ($layers, float $from, float $to, float $avg): float {
+            $cost = 0.0;
+            $pos = 0.0;
+            foreach ($layers as $layer) {
+                if ($pos >= $to) {
+                    break;
+                }
+                $q = max(0.0, (float) $layer->quantity);
+                $lo = max($from, $pos);
+                $hi = min($to, $pos + $q);
+                if ($hi > $lo) {
+                    $cost += ($hi - $lo) * (float) $layer->cost;
+                }
+                $pos += $q;
+            }
+            $overflowFrom = max($from, $pos);
+            if ($to > $overflowFrom) {
+                $cost += ($to - $overflowFrom) * $avg;
+            }
+
+            return $cost;
+        };
 
         // FIFO: iterate keys once with preloaded rows
         $totalFifo = 0.0;
         $totalAvg = 0.0;
 
-        foreach ($soldKeys as $k) {
+        foreach ($periodKeys as $k) {
             $kstr = $key($k->product_id, $k->product_variant_id);
-            $qtySold = (float) ($salesQty[$kstr]->qty ?? 0);
-            if ($qtySold <= 0) {
+            // Negative when more came back than was sold (returns of earlier sales):
+            // the period is then credited the cost of those units.
+            $netQty = (float) ($salesQty[$kstr]->qty ?? 0) - (float) ($returnsQty[$kstr]->qty ?? 0);
+            if (abs($netQty) < 1e-9) {
                 continue;
             }
 
@@ -144,59 +237,32 @@ trait CalculatesCogsAndAverageCost
                 }
             }
 
-            $totalAvg += $avg * $qtySold;
+            $totalAvg += $avg * $netQty;
 
             // ---- FIFO ----
-            $layers = ($purchases[$kstr] ?? collect())->values(); // list of {quantity, cost}
+            $layers = $purchases[$kstr] ?? collect(); // list of {quantity, cost}
             if ($layers->isEmpty()) {
                 // no purchases -> fallback to average (which may already include product.cost fallback)
-                $totalFifo += $avg * $qtySold;
+                $totalFifo += $avg * $netQty;
 
                 continue;
             }
 
-            // burn layers for sales before start
-            $burn = (float) ($salesBefore[$kstr]->qty ?? 0);
-            $i = 0;
-            while ($burn > 0 && $i < $layers->count()) {
-                $q = (float) $layers[$i]->quantity;
-                if ($q <= 0) {
-                    $i++;
+            // Units consumed before start; returned units went back to stock, so
+            // they no longer hold a layer.
+            $burn = max(0.0, (float) ($salesBefore[$kstr]->qty ?? 0) - (float) ($returnsBefore[$kstr]->qty ?? 0));
 
-                    continue;
+            if ($netQty > 0) {
+                $totalFifo += $costRange($layers, $burn, $burn + $netQty, $avg);
+            } else {
+                // Returned units are credited at the cost of the most recently consumed
+                // layers; any excess beyond recorded consumption is credited at $avg.
+                $lo = $burn + $netQty;
+                $credit = $costRange($layers, max(0.0, $lo), $burn, $avg);
+                if ($lo < 0) {
+                    $credit += -$lo * $avg;
                 }
-                $consume = min($q, $burn);
-                $layers[$i]->quantity = $q - $consume;
-                $burn -= $consume;
-                if ($layers[$i]->quantity <= 0) {
-                    $i++;
-                }
-            }
-
-            // now cost the period sales
-            $remain = $qtySold;
-            while ($remain > 0) {
-                if ($i >= $layers->count()) {
-                    // ran out of layers -> fallback to avg (which may already include product.cost fallback) for the rest
-                    $totalFifo += $avg * $remain;
-                    $remain = 0;
-                    break;
-                }
-                $q = max(0.0, (float) $layers[$i]->quantity);
-                $c = (float) $layers[$i]->cost;
-                if ($q <= 0) {
-                    $i++;
-
-                    continue;
-                }
-
-                $take = min($q, $remain);
-                $totalFifo += $take * $c;
-                $layers[$i]->quantity = $q - $take;
-                $remain -= $take;
-                if ($layers[$i]->quantity <= 0) {
-                    $i++;
-                }
+                $totalFifo -= $credit;
             }
         }
 
@@ -255,7 +321,8 @@ trait CalculatesCogsAndAverageCost
 
     /**
      * Set-based average cost by (product,variant) at end date.
-     * AVG = (Σ purchases qty*cost + Σ adjustments(±qty)*product.cost) / (Σ purchases qty + Σ adjustments qty)
+     * AVG = (Σ purchases qty*cost − Σ purchase returns qty*cost + Σ adjustments(±qty)*product.cost)
+     *       / (Σ purchases qty − Σ purchase returns qty + Σ adjustments qty)
      */
     protected function averageCostBulk(array $productIds, array $variantIds, string $end, ?int $warehouseId, array $warehouseIds): array
     {
@@ -263,6 +330,7 @@ trait CalculatesCogsAndAverageCost
 
         // Purchases up to end
         $pIn = PurchaseDetail::join('purchases as p', 'p.id', '=', 'purchase_details.purchase_id')
+            ->whereNull('p.deleted_at')
             ->where('p.statut', 'received')
             ->when($warehouseId, fn ($q) => $q->where('p.warehouse_id', $warehouseId),
                 fn ($q) => $q->whereIn('p.warehouse_id', $warehouseIds))
@@ -275,6 +343,25 @@ trait CalculatesCogsAndAverageCost
                 DB::raw('SUM(purchase_details.quantity * purchase_details.cost) as cost')
             )
             ->groupBy('purchase_details.product_id', 'purchase_details.product_variant_id')
+            ->get()
+            ->keyBy(fn ($r) => $key($r->product_id, $r->product_variant_id));
+
+        // Completed purchase returns up to end, at the cost credited on the return line
+        $pOut = PurchaseReturnDetails::join('purchase_returns as pr', 'pr.id', '=', 'purchase_return_details.purchase_return_id')
+            ->whereNull('pr.deleted_at')
+            ->whereNull('purchase_return_details.deleted_at')
+            ->where('pr.statut', 'completed')
+            ->when($warehouseId, fn ($q) => $q->where('pr.warehouse_id', $warehouseId),
+                fn ($q) => $q->whereIn('pr.warehouse_id', $warehouseIds))
+            ->whereIn('purchase_return_details.product_id', $productIds)
+            ->where('pr.date', '<=', $end)
+            ->select(
+                'purchase_return_details.product_id',
+                'purchase_return_details.product_variant_id',
+                DB::raw('SUM(purchase_return_details.quantity) as qty'),
+                DB::raw('SUM(purchase_return_details.quantity * purchase_return_details.cost) as cost')
+            )
+            ->groupBy('purchase_return_details.product_id', 'purchase_return_details.product_variant_id')
             ->get()
             ->keyBy(fn ($r) => $key($r->product_id, $r->product_variant_id));
 
@@ -305,10 +392,12 @@ trait CalculatesCogsAndAverageCost
             $pc = (float) ($pIn[$kstr]->cost ?? 0);
             $aq = (float) ($adj[$kstr]->qty ?? 0);
             $ac = (float) ($adj[$kstr]->cost ?? 0);
+            $rq = (float) ($pOut[$kstr]->qty ?? 0);
+            $rc = (float) ($pOut[$kstr]->cost ?? 0);
 
-            $qty = $pq + $aq;
-            $cost = $pc + $ac;
-            $avg[$kstr] = $qty > 0 ? ($cost / $qty) : 0.0;
+            $qty = $pq - $rq + $aq;
+            $cost = $pc - $rc + $ac;
+            $avg[$kstr] = $qty > 0 ? max(0.0, $cost / $qty) : 0.0;
         }
 
         return $avg;

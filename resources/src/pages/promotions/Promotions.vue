@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <PageHeader :title="'Promotions'" :breadcrumb="[$t('Sales'), 'Promotions']">
+    <PageHeader :title="$t('Promotions')" :breadcrumb="[$t('Sales'), $t('Promotions')]">
       <template #actions>
         <a-button @click="$router.push('/promotions/usages')">
           <template #icon><BarChartOutlined /></template>
-          Usage Report
+          {{ $t('UsageReport') }}
         </a-button>
         <a-button type="primary" @click="$router.push('/promotions/create')">
           <template #icon><PlusOutlined /></template>
@@ -25,17 +25,17 @@
         />
         <a-select
           v-model:value="filters.kind" class="toolbar-filter" :options="[
-            { value: '', label: 'All types' },
-            { value: 'discount', label: 'Discount' },
-            { value: 'promotion', label: 'Promotion' },
+            { value: '', label: $t('All_Types') },
+            { value: 'discount', label: $t('Discount') },
+            { value: 'promotion', label: $t('Promotion') },
           ]"
           @change="crud.reload"
         />
         <a-select
           v-model:value="filters.active" class="toolbar-filter" :options="[
-            { value: '', label: 'All statuses' },
-            { value: '1', label: 'Active' },
-            { value: '0', label: 'Inactive' },
+            { value: '', label: $t('All_Status') },
+            { value: '1', label: $t('Active') },
+            { value: '0', label: $t('Inactive') },
           ]"
           @change="crud.reload"
         />
@@ -72,7 +72,7 @@
 
           <template v-else-if="column.key === 'kind'">
             <a-tag :color="record.kind === 'discount' ? 'processing' : 'success'">
-              {{ record.kind === 'discount' ? 'Discount' : 'Promotion' }}
+              {{ record.kind === 'discount' ? $t('Discount') : $t('Promotion') }}
             </a-tag>
           </template>
 
@@ -93,7 +93,7 @@
           </template>
 
           <template v-else-if="column.key === 'window'">
-            <span v-if="!record.starts_at && !record.ends_at" class="muted">Always</span>
+            <span v-if="!record.starts_at && !record.ends_at" class="muted">{{ $t('Always') }}</span>
             <span v-else class="window-text">{{ windowLabel(record) }}</span>
           </template>
 
@@ -122,10 +122,10 @@
         </template>
 
         <template #emptyText>
-          <a-empty style="padding: 40px 0" description="No promotions yet.">
+          <a-empty style="padding: 40px 0" :description="$t('Promo_None_Yet')">
             <a-button type="primary" @click="$router.push('/promotions/create')">
               <template #icon><PlusOutlined /></template>
-              Create your first promotion
+              {{ $t('Promo_Create_First') }}
             </a-button>
           </a-empty>
         </template>
@@ -147,11 +147,13 @@ import {
   PlusOutlined, BarChartOutlined, EditOutlined, DeleteOutlined,
   PercentageOutlined, GiftOutlined,
 } from '@ant-design/icons-vue';
+import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import http from '../../lib/http';
 
+const { t } = useI18n();
 const { money, date } = useFormat();
 
 const filters = ref({ kind: '', active: '', warehouse_id: undefined });
@@ -169,13 +171,13 @@ const warehouses = ref([]);
 const warehouseOptions = computed(() => warehouses.value.map(w => ({ value: w.id, label: w.name })));
 
 const columns = computed(() => [
-  { title: 'Promotion', dataIndex: 'name', key: 'name', sorter: true },
-  { title: 'Type', dataIndex: 'kind', key: 'kind', sorter: true, width: 120 },
-  { title: 'Value', dataIndex: 'discount_value', key: 'value', sorter: true, width: 110 },
-  { title: 'Warehouses', key: 'warehouses', width: 220 },
-  { title: 'Window', key: 'window', width: 200 },
-  { title: 'Priority', dataIndex: 'priority', key: 'priority', sorter: true, width: 90 },
-  { title: 'Active', key: 'is_active', width: 80 },
+  { title: t('Promotion'), dataIndex: 'name', key: 'name', sorter: true },
+  { title: t('Type'), dataIndex: 'kind', key: 'kind', sorter: true, width: 120 },
+  { title: t('Value'), dataIndex: 'discount_value', key: 'value', sorter: true, width: 110 },
+  { title: t('Page_Warehouses'), key: 'warehouses', width: 220 },
+  { title: t('Window'), key: 'window', width: 200 },
+  { title: t('Priority'), dataIndex: 'priority', key: 'priority', sorter: true, width: 90 },
+  { title: t('Active'), key: 'is_active', width: 80 },
   { title: '', key: 'actions', width: 90 },
 ]);
 
@@ -183,8 +185,8 @@ function windowLabel(record) {
   const from = record.starts_at ? date(record.starts_at) : null;
   const to = record.ends_at ? date(record.ends_at) : null;
   if (from && to) return `${from} → ${to}`;
-  if (from) return `From ${from}`;
-  return `Until ${to}`;
+  if (from) return t('Promo_From_Date', { date: from });
+  return t('Promo_Until_Date', { date: to });
 }
 
 const togglingId = ref(null);
@@ -194,7 +196,7 @@ async function toggle(record) {
     const data = await http.post(`promotions/${record.id}/toggle`);
     record.is_active = !!data.is_active;
   } catch (e) {
-    message.error(e?.data?.message || 'Could not update the promotion.');
+    message.error(e?.data?.message || t('Promo_Update_Failed'));
   } finally {
     togglingId.value = null;
   }

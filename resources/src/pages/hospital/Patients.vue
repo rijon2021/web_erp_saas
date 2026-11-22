@@ -1,14 +1,14 @@
 <template>
   <div class="page">
-    <PageHeader title="Patients" :breadcrumb="['Hospital', 'Patients']">
+    <PageHeader :title="$t('Hm_Patients')" :breadcrumb="[$t('Hm_Hospital'), $t('Hm_Patients')]">
       <template #actions>
         <a-button @click="$router.push('/hospital/dashboard')">
           <template #icon><DashboardOutlined /></template>
-          Dashboard
+          {{ $t('Dashboard') }}
         </a-button>
         <a-button v-if="canAdd" type="primary" @click="$router.push('/hospital/patients/create')">
           <template #icon><UserAddOutlined /></template>
-          Register patient
+          {{ $t('Hm_Register_Patient') }}
         </a-button>
       </template>
     </PageHeader>
@@ -17,23 +17,23 @@
       <div class="toolbar">
         <a-input-search
           v-model:value="crud.search.value"
-          placeholder="Search name, MRN, phone or national ID…"
+          :placeholder="$t('Hm_Search_Patient_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item" allow-clear
-          placeholder="All statuses" :options="PATIENT_STATUSES" @change="crud.reload"
+          :placeholder="$t('Hm_All_Statuses')" :options="PATIENT_STATUSES" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.gender" class="tb-item" allow-clear
-          placeholder="Any gender" :options="GENDERS" @change="crud.reload"
+          :placeholder="$t('Hm_Any_Gender')" :options="GENDERS" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.blood_group" class="tb-item-sm" allow-clear
-          placeholder="Blood" :options="BLOOD_GROUPS" @change="crud.reload"
+          :placeholder="$t('Hm_Blood')" :options="BLOOD_GROUPS" @change="crud.reload"
         />
         <a-checkbox v-model:checked="filters.admitted" class="tb-check" @change="crud.reload">
-          Currently admitted
+          {{ $t('Hm_Currently_Admitted') }}
         </a-checkbox>
       </div>
     </a-card>
@@ -48,7 +48,7 @@
             <span class="cell-text">
               <span class="cell-name">
                 {{ record.name }}
-                <a-tag v-if="record.is_admitted" color="processing" class="cell-badge">Admitted</a-tag>
+                <a-tag v-if="record.is_admitted" color="processing" class="cell-badge">{{ $t('Hm_Admitted') }}</a-tag>
               </span>
               <span class="cell-mrn">{{ record.mrn }}</span>
             </span>
@@ -69,7 +69,7 @@
 
         <template v-else-if="column.key === 'allergies'">
           <a-tooltip v-if="record.allergies" :title="record.allergies">
-            <a-tag color="warning"><WarningOutlined /> Allergies</a-tag>
+            <a-tag color="warning"><WarningOutlined /> {{ $t('Hm_Allergies') }}</a-tag>
           </a-tooltip>
           <span v-else class="muted">—</span>
         </template>
@@ -82,7 +82,7 @@
 
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
-            <a-tooltip title="Open record">
+            <a-tooltip :title="$t('Hm_Open_Record')">
               <a-button type="text" size="small" @click="open(record)">
                 <template #icon><EyeOutlined /></template>
               </a-button>
@@ -115,6 +115,7 @@
  */
 import { reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import {
   UserAddOutlined, EditOutlined, DeleteOutlined, EyeOutlined,
   DashboardOutlined, WarningOutlined,
@@ -125,6 +126,7 @@ import { useCrudTable } from '../../composables/useCrudTable';
 import { useAuthStore } from '../../stores/auth';
 import { GENDERS, BLOOD_GROUPS, PATIENT_STATUSES, labelOf, optionOf } from './hospitalOptions';
 
+const { t } = useI18n();
 const auth = useAuthStore();
 const router = useRouter();
 
@@ -147,13 +149,13 @@ const crud = useCrudTable('hospital/patients', {
 });
 
 const columns = computed(() => [
-  { title: 'Patient', key: 'name', dataIndex: 'name', sorter: true },
-  { title: 'Age', key: 'age', dataIndex: 'age', width: 80 },
-  { title: 'Gender', key: 'gender', dataIndex: 'gender', sorter: true, width: 110 },
-  { title: 'Blood', key: 'blood_group', dataIndex: 'blood_group', width: 100 },
-  { title: 'Phone', dataIndex: 'phone', key: 'phone', sorter: true, width: 150 },
-  { title: 'Alerts', key: 'allergies', width: 130 },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 120 },
+  { title: t('Hm_Patient'), key: 'name', dataIndex: 'name', sorter: true },
+  { title: t('Hm_Age'), key: 'age', dataIndex: 'age', width: 80 },
+  { title: t('Hm_Gender'), key: 'gender', dataIndex: 'gender', sorter: true, width: 110 },
+  { title: t('Hm_Blood'), key: 'blood_group', dataIndex: 'blood_group', width: 100 },
+  { title: t('Phone'), dataIndex: 'phone', key: 'phone', sorter: true, width: 150 },
+  { title: t('Hm_Alerts'), key: 'allergies', width: 130 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 120 },
   { title: '', key: 'actions', width: 120 },
 ]);
 

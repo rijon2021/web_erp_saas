@@ -99,6 +99,22 @@ class ProviderPolicy
         return $user->hasRole($permission->roles);
     }
 
+    // Supplier Wallet: see balances / ledger.
+    public function supplier_wallet_view(User $user)
+    {
+        $permission = Permission::where('name', 'supplier_wallet_view')->first();
+
+        return $permission ? $user->hasRole($permission->roles) : false;
+    }
+
+    // Supplier Wallet: top-up, refund, adjust, freeze.
+    public function supplier_wallet_manage(User $user)
+    {
+        $permission = Permission::where('name', 'supplier_wallet_manage')->first();
+
+        return $permission ? $user->hasRole($permission->roles) : false;
+    }
+
     public function Top_Suppliers_Report(User $user)
     {
         $permission = Permission::where('name', 'Top_Suppliers_Report')->first();

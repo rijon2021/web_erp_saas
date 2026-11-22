@@ -2,82 +2,75 @@
 
 namespace App\Console\Commands;
 
+use App\Services\Backup\DatabaseDumper;
+use App\Services\Backup\TenantBackupStore;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
+/**
+ * On-demand backup of the current tenant's database — the "Generate backup"
+ * button on the tenant's Backup page. Only the newest manual backup is kept;
+ * scheduled history comes from the plan's automatic backups (tenants:backup).
+ *
+ * Written to the tenant's private storage. This used to write into the
+ * tenant's public disk, which is served without authentication.
+ */
 class DatabaseBackUp extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
     protected $signature = 'database:backup';
 
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
-    protected $description = 'Command description';
+    protected $description = "Back up the current tenant's database to its private storage";
 
-    /**
-     * Create a new command instance.
-     *
-     * @return void
-     */
-    public function __construct()
+    public function handle(DatabaseDumper $dumper, TenantBackupStore $store)
     {
-        parent::__construct();
-    }
+        // Outside a tenant the default connection is the central DB; dumping it
+        // here (into whatever storage/ is) is exactly what must not happen.
+        if (! tenancy()->initialized) {
+            $this->line('ERROR_DETAILS: database:backup backs up a tenant database and must run inside a tenant. Use central:backup for the central database.');
 
-    /**
-     * Execute the console command.
-     *
-     * @return int
-     */
-    public function handle()
-    {
-        $backupDir = storage_path().'/app/public/backup';
-        if (!is_dir($backupDir)) {
-            @mkdir($backupDir, 0755, true);
+            return 1;
         }
 
-        foreach (glob($backupDir.'/*') as $filename) {
-            $path = $backupDir.'/'.basename($filename);
-            @unlink($path);
+        // One manual backup at a time per tenant: two quick clicks would write
+        // the same file, or one would delete the other's as "previous".
+        // 15 minutes: long enough for a big dump, short enough that a request
+        // killed mid-dump (no finally) doesn't block the button for an hour.
+        $lock = Cache::lock('database-backup:'.tenant('id'), 900);
+        if (! $lock->get()) {
+            $this->line('ERROR_DETAILS: A backup is already being generated. Please wait for it to finish.');
+
+            return 1;
         }
 
-        $conn = config('database.default');
-        $dumpPath = config("database.connections.$conn.dump_path", 'mysqldump');
-        $db_user  = config("database.connections.$conn.username");
-        $db_pass  = config("database.connections.$conn.password");
-        $db_host  = config("database.connections.$conn.host");
-        $db_name  = config("database.connections.$conn.database");
+        try {
+            $store->migrateLegacy();
 
-        $filename = 'backup-'.Carbon::now()->format('Y-m-d').'.sql';
-        $outputPath = $backupDir.'/'.$filename;
+            $dir = $store->manualDir();
+            DatabaseDumper::ensurePrivateDir($dir);
 
-        if ($db_pass != '') {
-            $command = $dumpPath.' --user='.$db_user." --password='".$db_pass."' --host=".$db_host.' '.$db_name.' > '.$outputPath;
-        } else {
-            $command = $dumpPath.' --user='.$db_user.' --password='.$db_pass.' --host='.$db_host.' '.$db_name.' > '.$outputPath;
-        }
+            $filename = 'backup-'.Carbon::now()->format('Y-m-d_His').'.sql';
+            $method = $dumper->dump((string) config('database.default'), $dir.'/'.$filename, 'Tenant database');
 
-        $output = [];
-        $returnVar = null;
-        \exec($command.' 2>&1', $output, $returnVar);
-
-        if ($returnVar !== 0) {
-            $err = 'Exit code: '.$returnVar;
-            if (!empty($output)) {
-                $err .= "\n".implode("\n", $output);
-            } elseif (file_exists($outputPath) && filesize($outputPath) > 0) {
-                $err .= "\n".trim(@file_get_contents($outputPath));
+            // Keep only the backup just written.
+            foreach (glob($dir.'/*.sql') ?: [] as $old) {
+                if (basename($old) !== $filename) {
+                    @unlink($old);
+                }
             }
-            $this->line('ERROR_DETAILS: '.$err);
-        }
 
-        return $returnVar ?? 0;
+            $this->line('BACKUP_METHOD: '.$method);
+            $this->line('BACKUP_FILE: '.$filename);
+
+            return 0;
+        } catch (\Throwable $e) {
+            Log::error('database:backup failed: '.$e->getMessage(), ['tenant' => tenant('id')]);
+            $this->line('ERROR_DETAILS: '.$e->getMessage());
+
+            return 1;
+        } finally {
+            $lock->release();
+        }
     }
 }

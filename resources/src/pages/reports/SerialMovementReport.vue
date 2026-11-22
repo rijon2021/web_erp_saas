@@ -8,6 +8,7 @@
     export-endpoint="report/serials/movements"
     :export-params="filterParams"
     export-rows-key="report"
+    product-data
   >
     <template #filters>
       <DateRangePicker v-model:value="range" allow-clear @change="crud.reload()" />
@@ -23,7 +24,7 @@
         <code>{{ record.serial_number }}</code>
       </template>
       <template v-else-if="column.key === 'action'">
-        <a-tag :color="actionColor(record.action)">{{ record.action }}</a-tag>
+        <a-tag :color="actionColor(record.action)">{{ actionLabel(record.action) }}</a-tag>
       </template>
       <template v-else-if="column.key === 'transition'">{{ transitionLabel(record) || '—' }}</template>
       <template v-else-if="column.key === 'reference'">{{ referenceLabel(record) || '—' }}</template>
@@ -57,6 +58,7 @@ const actionOptions = computed(() => [
   { value: 'sale_returned', label: t('Status_returned_customer') },
   { value: 'purchase_returned', label: t('Status_returned_supplier') },
   { value: 'status_changed', label: t('Status_changed') },
+  { value: 'transferred', label: t('Serial_Transferred') },
 ]);
 
 // Payload: { report, totalRows }
@@ -70,15 +72,29 @@ const crud = useCrudTable('report/serials/movements', {
 const columns = computed(() => [
   { title: t('date'), key: 'created_at', dataIndex: 'created_at', sorter: true, exportValue: r => dateTime(r.created_at) },
   { title: t('Serial_Number'), key: 'serial_number', dataIndex: 'serial_number', sorter: true, exportValue: r => r.serial_number },
-  { title: t('Action'), key: 'action', dataIndex: 'action', exportValue: r => r.action },
+  { title: t('Action'), key: 'action', dataIndex: 'action', exportValue: r => actionLabel(r.action) },
   { title: t('Serial_Status'), dataIndex: 'to_status', key: 'transition', exportValue: r => transitionLabel(r) },
   { title: t('Reference'), dataIndex: 'reference_id', key: 'reference', exportValue: r => referenceLabel(r) },
 ]);
 
+// Display labels for the raw action / serial-status values (as legacy did).
+const ACTION_KEYS = {
+  purchased: 'Purchased', sold: 'Status_sold', sale_returned: 'Status_returned_customer',
+  purchase_returned: 'Status_returned_supplier', status_changed: 'Status_changed', adjusted: 'Adjusted',
+  transferred: 'Serial_Transferred',
+};
+const STATUS_KEYS = {
+  available: 'Status_available', sold: 'Status_sold', returned_customer: 'Status_returned_customer',
+  returned_supplier: 'Status_returned_supplier', damaged: 'Status_damaged', reserved: 'Status_reserved',
+  in_kit: 'Status_in_kit', written_off: 'Status_written_off',
+};
+const actionLabel = a => (ACTION_KEYS[a] ? t(ACTION_KEYS[a]) : a);
+const statusLabel = s => (STATUS_KEYS[s] ? t(STATUS_KEYS[s]) : s);
+
 // Backend returns from_status/to_status and reference_type/reference_id separately.
 const transitionLabel = r => {
-  const from = r.from_status || '';
-  const to = r.to_status || '';
+  const from = r.from_status ? statusLabel(r.from_status) : '';
+  const to = r.to_status ? statusLabel(r.to_status) : '';
   if (from && to) return `${from} → ${to}`;
   return to || from;
 };

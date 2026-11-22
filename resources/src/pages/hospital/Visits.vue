@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <PageHeader title="Consultations" :breadcrumb="['Hospital', 'Consultations']">
+    <PageHeader :title="$t('Hm_Consultations')" :breadcrumb="[$t('Hm_Hospital'), $t('Hm_Consultations')]">
       <template #actions>
         <a-button type="primary" @click="$router.push('/hospital/visits/create')">
           <template #icon><PlusOutlined /></template>
-          New consultation
+          {{ $t('Hm_New_Consultation') }}
         </a-button>
       </template>
     </PageHeader>
@@ -12,20 +12,20 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search patient, MRN, diagnosis…"
+          v-model:value="crud.search.value" :placeholder="$t('Hm_Search_Visit_Placeholder')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.doctor_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All doctors" :options="doctorOptions" @change="crud.reload"
+          option-filter-prop="label" :placeholder="$t('Hm_All_Doctors')" :options="doctorOptions" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.department_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All departments" :options="departmentOptions" @change="crud.reload"
+          option-filter-prop="label" :placeholder="$t('Hm_All_Departments')" :options="departmentOptions" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.type" class="tb-item-sm" allow-clear
-          placeholder="Type" :options="VISIT_TYPES" @change="crud.reload"
+          :placeholder="$t('Type')" :options="VISIT_TYPES" @change="crud.reload"
         />
         <a-range-picker v-model:value="filters.range" class="tb-range" value-format="YYYY-MM-DD" @change="crud.reload" />
       </div>
@@ -48,8 +48,8 @@
         </template>
         <template v-else-if="column.key === 'vitals'">
           <a-space :size="4">
-            <a-tag v-if="record.blood_pressure">BP {{ record.blood_pressure }}</a-tag>
-            <a-tag v-if="record.bmi">BMI {{ record.bmi }}</a-tag>
+            <a-tag v-if="record.blood_pressure">{{ $t('Hm_BP') }} {{ record.blood_pressure }}</a-tag>
+            <a-tag v-if="record.bmi">{{ $t('Hm_BMI') }} {{ record.bmi }}</a-tag>
             <span v-if="!record.blood_pressure && !record.bmi" class="muted">—</span>
           </a-space>
         </template>
@@ -61,7 +61,7 @@
         <template v-else-if="column.key === 'fee'">{{ money(record.fee) }}</template>
         <template v-else-if="column.key === 'actions'">
           <a-space :size="0">
-            <a-tooltip title="Bill this consultation">
+            <a-tooltip :title="$t('Hm_Bill_This_Consultation')">
               <a-button type="text" size="small" @click="bill(record)">
                 <template #icon><DollarOutlined /></template>
               </a-button>
@@ -91,6 +91,7 @@
  */
 import { reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { PlusOutlined, EditOutlined, DeleteOutlined, DollarOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
@@ -100,6 +101,7 @@ import { VISIT_TYPES, VISIT_STATUSES, labelOf, optionOf } from './hospitalOption
 import http from '../../lib/http';
 import { ref } from 'vue';
 
+const { t } = useI18n();
 const router = useRouter();
 const { money, dateTime } = useFormat();
 
@@ -125,14 +127,14 @@ const doctorOptions = computed(() => doctors.value.map(d => ({ value: d.id, labe
 const departmentOptions = computed(() => departments.value.map(d => ({ value: d.id, label: d.name })));
 
 const columns = computed(() => [
-  { title: 'When', key: 'visit_date', dataIndex: 'visit_date', sorter: true, width: 190 },
-  { title: 'Patient', key: 'patient', dataIndex: 'patient_name' },
-  { title: 'Doctor', dataIndex: 'doctor_name', key: 'doctor_name', width: 150 },
-  { title: 'Type', key: 'type', dataIndex: 'type', sorter: true, width: 120 },
-  { title: 'Diagnosis', dataIndex: 'diagnosis', key: 'diagnosis' },
-  { title: 'Vitals', key: 'vitals', width: 170 },
-  { title: 'Status', key: 'status', dataIndex: 'status', sorter: true, width: 120 },
-  { title: 'Fee', key: 'fee', dataIndex: 'fee', sorter: true, width: 110 },
+  { title: t('Hm_When'), key: 'visit_date', dataIndex: 'visit_date', sorter: true, width: 190 },
+  { title: t('Hm_Patient'), key: 'patient', dataIndex: 'patient_name' },
+  { title: t('Hm_Doctor'), dataIndex: 'doctor_name', key: 'doctor_name', width: 150 },
+  { title: t('Type'), key: 'type', dataIndex: 'type', sorter: true, width: 120 },
+  { title: t('Hm_Diagnosis'), dataIndex: 'diagnosis', key: 'diagnosis' },
+  { title: t('Hm_Vitals'), key: 'vitals', width: 170 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', sorter: true, width: 120 },
+  { title: t('Hm_Fee'), key: 'fee', dataIndex: 'fee', sorter: true, width: 110 },
   { title: '', key: 'actions', width: 120 },
 ]);
 

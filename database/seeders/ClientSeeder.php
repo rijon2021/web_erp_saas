@@ -14,7 +14,7 @@ class ClientSeeder extends Seeder
      */
     public function run()
     {
-        DB::table('clients')->insert([
+        DB::table('clients')->insertOrIgnore([
             'id' => 1,
             'name' => 'walk-in-customer',
             'code' => 1,

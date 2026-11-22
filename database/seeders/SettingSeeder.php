@@ -38,7 +38,7 @@ class SettingSeeder extends Seeder
         // "logo-default.png" filename resolves to the tenant-scoped copy.
         $logo = 'logo-default.png';
 
-        DB::table('settings')->insert(
+        DB::table('settings')->insertOrIgnore(
             [
                 'id' => 1,
                 'email' => $defaults['email'],
@@ -89,6 +89,7 @@ class SettingSeeder extends Seeder
                 'currency_code'     => 'USD',
                 'currency_symbol'   => '$',
                 'default_language'  => null,
+                'enabled_languages' => null,
                 'footer_text'       => 'Stocky - Ultimate Inventory With POS',
                 'page_title_suffix' => 'Ultimate Inventory With POS',
                 'developed_by'      => 'Stocky',

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 @php
-    $isRtl = in_array(app()->getLocale(), ['ar', 'he', 'fa', 'ur']);
+    $isRtl = \App\Models\Central\CentralLanguage::isRtl(app()->getLocale());
     $generalSettings = \App\Models\Central\GeneralSetting::instance();
     $appName = $generalSettings->app_name ?: 'Stocky';
     $logoUrl = $generalSettings->getLogoUrl();
@@ -20,13 +20,10 @@
         @if($seo->og_image)
             <meta property="og:image" content="{{ asset($seo->og_image) }}">
         @endif
-        @if($seo->favicon)
-            <link rel="icon" href="{{ asset($seo->favicon) }}">
-        @endif
     @else
         <title>{{ $appName }}</title>
-        <link rel="icon" href="{{ asset('images/super/settings/favicon.ico') }}">
     @endif
+    <link rel="icon" href="{{ $generalSettings->getPublicFaviconUrl($seo) }}">
     <script src="{{ asset('assets_super/js/tailwindcss.js') }}"></script>
     <link href="{{ asset('assets_super/css/manrope.css') }}" rel="stylesheet">
     <link href="{{ asset('assets_super/css/bootstrap-icons.min.css') }}" rel="stylesheet">
@@ -303,10 +300,17 @@
         @if(!empty($pricing['is_active']))
         @php
             $l6Plans = $pricing['plans'] ?? collect();
-            $l6PricingYearly = $l6Plans->isNotEmpty() && $l6Plans->contains(fn ($p) => ($p->yearly_price ?? 0) > 0);
+            $l6ShowMonthly = $pricing['show_monthly'] ?? true;
+            $l6ShowYearly  = $pricing['show_yearly'] ?? true;
+            // The monthly/yearly tabs need both cycles on sale AND a plan that
+            // actually carries a yearly price.
+            $l6PricingYearly = $l6ShowYearly && $l6Plans->isNotEmpty()
+                && $l6Plans->contains(fn ($p) => ($p->yearly_price ?? 0) > 0);
+            $l6ShowTabs = $l6ShowMonthly && $l6PricingYearly;
         @endphp
         <section id="pricing" class="py-20 md:py-28 px-5 bg-[#F3F8F5] scroll-mt-24">
             <div class="max-w-6xl mx-auto">
+                <div class="currency-switcher-wrap">@include('central.partials.currency-switcher')</div>
                 <div class="text-center mb-14">
                     @if($pricing['settings'])
                         <h2 class="text-3xl md:text-[2.25rem] font-extrabold text-[#0A2640] tracking-tight mb-4" id="l6-pricing-title">{{ $pricing['settings']->section_title }}</h2>
@@ -314,7 +318,7 @@
                     @else
                         <h2 class="text-3xl md:text-[2.25rem] font-extrabold text-[#0A2640] tracking-tight mb-4" id="l6-pricing-title">{{ __('landing.pricing') }}</h2>
                     @endif
-                    @if($l6PricingYearly)
+                    @if($l6ShowTabs)
                     <div class="inline-flex items-center p-1 bg-white rounded-full border border-black/10 mt-8 shadow-sm l6-price-tab-wrap" role="group" aria-label="{{ __('landing.billing_cycle') }}">
                         <button type="button" class="l6-price-tab is-active px-6 py-2 rounded-full text-sm font-bold" data-cycle="monthly">{{ __('landing.monthly') }}</button>
                         <button type="button" class="l6-price-tab px-6 py-2 rounded-full text-sm font-bold" data-cycle="yearly">{{ __('landing.yearly') }}</button>
@@ -334,17 +338,25 @@
                             <p class="text-xs font-bold uppercase tracking-widest text-[#65CE89] mb-4">{{ __('landing.most_popular') }}</p>
                         @endif
                         <h3 class="text-xl font-bold mb-2 {{ $featured ? 'text-white' : 'text-[#0A2640]' }}">{{ $plan->name }}</h3>
+                        {{-- A free plan has no yearly block to fall back on, so its
+                             "Free" label lives here and must survive monthly being off. --}}
+                        @php $l6Free = $plan->price == 0 && $plan->yearly_price == 0; @endphp
+                        @if($l6ShowMonthly || $l6Free)
                         <div class="mb-6 l6-plan-price" data-monthly>
-                            @if($plan->price == 0 && $plan->yearly_price == 0)
+                            @if($l6Free)
                                 <span class="text-4xl font-extrabold {{ $featured ? 'text-white' : 'text-[#0A2640]' }}">{{ __('landing.free') }}</span>
                             @else
                                 <span class="text-4xl font-extrabold {{ $featured ? 'text-white' : 'text-[#0A2640]' }}">{{ $currencySymbol }}<span class="l6-amt-monthly">{{ $plan->price == floor($plan->price) ? number_format($plan->price, 0) : number_format($plan->price, 2) }}</span></span>
                                 <span class="text-sm {{ $featured ? 'text-white/60' : 'text-[#0A2640]/50' }}">/ {{ __('landing.mo') }}</span>
                             @endif
                         </div>
-                        @if($plan->yearly_price > 0)
-                        <div class="mb-6 l6-plan-price hidden" data-yearly>
-                            <span class="text-4xl font-extrabold {{ $featured ? 'text-white' : 'text-[#0A2640]' }}">{{ $currencySymbol }}<span class="l6-amt-yearly">{{ $plan->yearly_price == floor($plan->yearly_price) ? number_format($plan->yearly_price, 0) : number_format($plan->yearly_price, 2) }}</span></span>
+                        @endif
+                        {{-- Yearly block is normally hidden until the tab is clicked;
+                             with monthly off there are no tabs, so show it outright. --}}
+                        @php $l6Yr = $plan->getPriceForCycle('yearly'); @endphp
+                        @if($l6ShowYearly && $l6Yr > 0)
+                        <div class="mb-6 l6-plan-price{{ $l6ShowMonthly ? ' hidden' : '' }}" data-yearly>
+                            <span class="text-4xl font-extrabold {{ $featured ? 'text-white' : 'text-[#0A2640]' }}">{{ $currencySymbol }}<span class="l6-amt-yearly">{{ $l6Yr == floor($l6Yr) ? number_format($l6Yr, 0) : number_format($l6Yr, 2) }}</span></span>
                             <span class="text-sm {{ $featured ? 'text-white/60' : 'text-[#0A2640]/50' }}">/ {{ __('landing.yr') }}</span>
                         </div>
                         @endif
@@ -353,13 +365,13 @@
                         </a>
                         <ul class="space-y-3 text-sm {{ $featured ? 'text-white/85' : 'text-[#0A2640]/70' }} flex-1">
                             @foreach($limits as $key => $value)
-                                @php $meta = \App\Models\Central\Plan::AVAILABLE_LIMITS[$key] ?? null; @endphp
+                                @php $meta = \App\Models\Central\Plan::availableLimits()[$key] ?? null; @endphp
                                 @if($meta)
                                     <li class="flex gap-2"><i class="bi bi-check-lg text-[#65CE89] shrink-0"></i> {{ $value == -1 ? __('landing.unlimited') : $value }} {{ $meta['label'] }}</li>
                                 @endif
                             @endforeach
                             @foreach($planFeatures as $fKey)
-                                @php $fMeta = \App\Models\Central\Plan::AVAILABLE_FEATURES[$fKey] ?? null; @endphp
+                                @php $fMeta = \App\Models\Central\Plan::availableFeatures()[$fKey] ?? null; @endphp
                                 @if($fMeta)
                                     <li class="flex gap-2"><i class="bi bi-check-lg text-[#65CE89] shrink-0"></i> {{ $fMeta['label'] }}</li>
                                 @endif

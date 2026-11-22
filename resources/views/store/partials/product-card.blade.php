@@ -30,6 +30,7 @@
     ];
   })->values();
   $productStock = $variants->isEmpty() ? (int) max(0, $p->stock ?? 0) : null;
+  $variantOptions = store_variant_options($p); // null = legacy flat list
 
   $isPreorder = (bool) ($p->is_preorder ?? false);
   $preorderDate = $p->preorder_available_date ? $p->preorder_available_date->format('M d, Y') : null;
@@ -92,7 +93,7 @@
      data-currency="{{ $currency }}"
      data-description="{{ e($descShort) }}"
      data-stock="{{ $productStock !== null ? $productStock : '' }}"
-     data-variants='@json($variantPayload)'
+     data-variants='@json($variantPayload)' data-options='@json($variantOptions)'
      data-quote-only="{{ $quoteOnly ? '1' : '0' }}"
      aria-label="{{ $p->name }}"
      @unless($productUrl) @click.prevent @endunless>
@@ -124,7 +125,7 @@
               data-currency="{{ $currency }}"
               data-description="{{ e($descShort) }}"
               data-stock="{{ $productStock !== null ? $productStock : '' }}"
-              data-variants='@json($variantPayload)'
+              data-variants='@json($variantPayload)' data-options='@json($variantOptions)'
               aria-label="{{ __('messages.QuickView') }}">
         <x-store.icon name="eye" class="w-4 h-4" />
       </button>
@@ -188,7 +189,7 @@
               data-qty="1"
               data-product-id="{{ $p->id }}"
               data-product-image="{{ $imgUrl }}"
-              data-variants='@json($variantPayload)'
+              data-variants='@json($variantPayload)' data-options='@json($variantOptions)'
               data-stock="{{ $productStock !== null ? $productStock : '' }}"
               data-added-label="{{ __('messages.Added') }}">
         @if($isPreorderActive)

@@ -10,6 +10,13 @@ class Permission extends Model
 
     protected $fillable = ['name', 'label', 'description'];
 
+    /**
+     * Restriction permissions: ticking one on a role TAKES AWAY access
+     * (hide cost figures, block product exports). Grant-all paths for the
+     * owner role (updaters) must skip these.
+     */
+    public const RESTRICTIONS = ['hide_product_cost', 'disable_product_export'];
+
     public function roles()
     {
         return $this->belongsToMany(Role::class);

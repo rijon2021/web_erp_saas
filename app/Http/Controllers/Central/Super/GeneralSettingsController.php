@@ -6,6 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Models\Central\CentralLanguage;
 use App\Models\Central\GeneralSetting;
 use App\Models\Central\LandingFooter;
+use App\Models\Central\Plan;
+use App\Services\TenantBrandingService;
+use App\Support\IsoCurrencies;
+use App\Support\SuperDashboard\DashboardLayout;
+use App\Support\SuperDashboard\WidgetRegistry;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
@@ -35,6 +40,16 @@ class GeneralSettingsController extends Controller
             'allLanguages'   => $allLanguages,
             'defaultLocale'  => $defaultLocale,
             'env'            => $env,
+            // Signup links per plan, for owners who run their own website.
+            'publicPlans'    => Plan::public()->orderBy('price')->get(['id', 'name', 'price']),
+            // Dashboard tab: saved layout, widget catalogue and the defaults "Reset" restores.
+            'dashboardLayout'   => DashboardLayout::current(),
+            'dashboardDefaults' => DashboardLayout::defaults(),
+            'dashboardWidgets'  => WidgetRegistry::all(),
+            'dashboardStorable' => DashboardLayout::storable(),
+            // Security + E-Invoicing tabs keep their own controllers (forms post there).
+            'security'       => app(SecuritySettingsController::class)->viewData(),
+            'einv'           => app(EInvoicingSettingsController::class)->viewData(),
         ]);
     }
 
@@ -50,7 +65,7 @@ class GeneralSettingsController extends Controller
 
         $validated = $request->validate([
             'app_name'      => ['required', 'string', 'max:255'],
-            'currency_code'   => ['required', 'string', 'max:10', 'regex:/^[A-Z]{3}$/'],
+            'currency_code'   => ['required', 'string', 'max:10', 'regex:/^[A-Z]{3}$/', IsoCurrencies::rule()],
             'currency_symbol' => ['required', 'string', 'max:5'],
             'company_name'    => ['nullable', 'string', 'max:255'],
             'phone'        => ['nullable', 'string', 'max:50'],
@@ -68,7 +83,10 @@ class GeneralSettingsController extends Controller
             'landing_heading_font' => ['nullable', 'string', \Illuminate\Validation\Rule::in($allowedFonts)],
             'landing_custom_font_name' => ['nullable', 'string', 'max:50', 'regex:/^[A-Za-z0-9 _-]+$/'],
             'custom_font_file'         => ['nullable', 'file', 'max:5120'],
-            'landing_redirect_url'     => ['nullable', 'url:http,https', 'max:500'],
+            'landing_mode'             => ['required', \Illuminate\Validation\Rule::in(GeneralSetting::LANDING_MODES)],
+            'landing_redirect_url'     => ['exclude_unless:landing_mode,redirect', 'required', 'url:https', 'max:500'],
+            'landing_redirect_status'  => ['nullable', 'integer', \Illuminate\Validation\Rule::in(GeneralSetting::LANDING_REDIRECT_STATUSES)],
+            'landing_disabled_target'  => ['nullable', \Illuminate\Validation\Rule::in(GeneralSetting::LANDING_DISABLED_TARGETS)],
             'bank_details'                  => ['nullable', 'array'],
             'bank_details.bank_name'        => ['nullable', 'string', 'max:255'],
             'bank_details.account_holder'   => ['nullable', 'string', 'max:255'],
@@ -89,13 +107,19 @@ class GeneralSettingsController extends Controller
             'tenant_address'           => ['nullable', 'string', 'max:500'],
             'tenant_logo'              => ['nullable', 'image', 'mimes:png,jpg,jpeg,svg,webp', 'max:2048'],
             'tenant_favicon'           => ['nullable', 'file', 'mimes:png,ico,jpg,jpeg,svg', 'max:1024'],
-            'tenant_currency_code'     => ['nullable', 'string', 'max:10', 'regex:/^[A-Za-z]{3}$/'],
+            'tenant_currency_code'     => ['nullable', 'string', 'max:10', 'regex:/^[A-Za-z]{3}$/', IsoCurrencies::rule()],
             'tenant_currency_symbol'   => ['nullable', 'string', 'max:5'],
             'tenant_default_language'  => ['nullable', 'string', 'max:10'],
-            'tenant_footer_text'       => ['nullable', 'string', 'max:255'],
+            'tenant_enabled_languages'   => ['nullable', 'array'],
+            'tenant_enabled_languages.*' => ['string', \Illuminate\Validation\Rule::in(\App\Support\TenantLanguages::locales())],
+            'tenant_footer_text'      => ['nullable', 'string', 'max:255'],
             'tenant_page_title_suffix' => ['nullable', 'string', 'max:255'],
             'tenant_developed_by'      => ['nullable', 'string', 'max:255'],
             'reserved_subdomains'      => ['nullable', 'string', 'max:5000'],
+
+            // ── Default colours (empty = keep the built-in colour) ──
+            'super_primary_color'      => ['nullable', 'string', 'regex:/^#?[0-9a-fA-F]{6}$/'],
+            'tenant_primary_color'     => ['nullable', 'string', 'regex:/^#?[0-9a-fA-F]{6}$/'],
 
             // ── Subscription Reminders ──
             'subscription_reminder_offsets'  => ['nullable', 'string', 'max:255'],
@@ -103,9 +127,17 @@ class GeneralSettingsController extends Controller
             'subscription_reminder_channels'   => ['nullable', 'array'],
             'subscription_reminder_channels.*' => ['string', 'in:email,sms,banner'],
             'subscription_banner_threshold_days' => ['nullable', 'integer', 'min:1', 'max:90'],
+            'subscription_grace_days'        => ['nullable', 'integer', 'min:0', 'max:60'],
+            'subscription_grace_mode'        => ['nullable', 'in:full,read_only'],
+            'suspend_unpaid_after_days'      => ['nullable', 'integer', 'min:0', 'max:365'],
+            'delete_inactive_after_days'     => ['nullable', 'integer', 'min:0', 'max:3650'],
             'sms_gateway'                    => ['nullable', 'in:twilio,infobip,termii,custom'],
             'subscription_reminder_sms'      => ['nullable', 'string', 'max:480'],
             'trial_reminder_sms'             => ['nullable', 'string', 'max:480'],
+
+            // ── Billing cycles offered to customers ──
+            'billing_cycles'   => ['nullable', 'array'],
+            'billing_cycles.*' => ['string', 'in:monthly,yearly'],
         ]);
 
         if (! empty($validated['tenant_currency_code'])) {
@@ -128,17 +160,51 @@ class GeneralSettingsController extends Controller
         }
         $validated['reserved_subdomains'] = array_keys($reserved);
 
+        // Languages enabled in new tenants. Everything ticked is stored as
+        // null ("all"), so languages added to the catalog later start on too.
+        // Skipped until the tenant_enabled_languages migration has run.
+        if (\Illuminate\Support\Facades\Schema::connection('central')->hasColumn('general_settings', 'tenant_enabled_languages')) {
+            $enabledLanguages = array_values(array_intersect(
+                \App\Support\TenantLanguages::locales(),
+                $validated['tenant_enabled_languages'] ?? []
+            ));
+            $validated['tenant_enabled_languages'] = count($enabledLanguages) === count(\App\Support\TenantLanguages::ALL)
+                ? null
+                : $enabledLanguages;
+        } else {
+            unset($validated['tenant_enabled_languages']);
+        }
+
+        // Default colours: stored as lowercase #rrggbb, or null for the built-in
+        // colour. Skipped until the default-colours migration has run, and when
+        // the field is not on the submitted form.
+        foreach (['super_primary_color', 'tenant_primary_color'] as $colorKey) {
+            if ($request->has($colorKey)
+                && \Illuminate\Support\Facades\Schema::connection('central')->hasColumn('general_settings', $colorKey)) {
+                $validated[$colorKey] = GeneralSetting::normalizeHexColor($validated[$colorKey] ?? null);
+            } else {
+                unset($validated[$colorKey]);
+            }
+        }
+
         // Coerce checkbox value (unchecked checkboxes are not submitted)
         $validated['show_customizer_button'] = $request->boolean('show_customizer_button');
         $validated['show_site_name'] = $request->boolean('show_site_name');
 
-        // ── Landing page toggle + custom redirect URL ──
+        // ── Landing page mode (built-in / external redirect / disabled) ──
         // The redirect must never point back at the central root, or visitors
         // would bounce in an endless loop (any other path on a central domain
-        // is fine — e.g. /blog).
-        $validated['landing_page_enabled'] = $request->boolean('landing_page_enabled');
-        $redirectUrl = trim((string) ($validated['landing_redirect_url'] ?? ''));
-        if ($redirectUrl !== '') {
+        // is fine — e.g. /blog). landing_page_enabled is kept in sync for
+        // anything still reading the legacy toggle.
+        $validated['landing_page_enabled'] = $validated['landing_mode'] === GeneralSetting::LANDING_MODE_BUILTIN;
+        $validated['landing_redirect_status'] = (int) ($validated['landing_redirect_status'] ?? 302) === 301 ? 301 : 302;
+        $validated['landing_disabled_target'] = $validated['landing_disabled_target'] ?? 'login';
+        // The URL is only validated in redirect mode; other modes keep the
+        // stored one so switching back does not lose it.
+        $redirectUrl = $validated['landing_mode'] === GeneralSetting::LANDING_MODE_REDIRECT
+            ? trim((string) ($validated['landing_redirect_url'] ?? ''))
+            : trim((string) (GeneralSetting::instance()->landing_redirect_url ?? ''));
+        if ($redirectUrl !== '' && $validated['landing_mode'] === GeneralSetting::LANDING_MODE_REDIRECT) {
             $host = strtolower((string) (parse_url($redirectUrl, PHP_URL_HOST) ?? ''));
             $path = rtrim((string) (parse_url($redirectUrl, PHP_URL_PATH) ?? ''), '/');
             $centralHosts = array_map('strtolower', config('tenancy.central_domains', []));
@@ -149,6 +215,16 @@ class GeneralSettingsController extends Controller
             }
         }
         $validated['landing_redirect_url'] = $redirectUrl !== '' ? $redirectUrl : null;
+
+        // Before the landing_mode migration runs, only the legacy toggle + URL
+        // can be stored (GeneralSetting::landingMode() derives the mode from
+        // them). "Off + URL" reads as redirect there, so disabled drops the URL.
+        if (! \Illuminate\Support\Facades\Schema::connection('central')->hasColumn('general_settings', 'landing_mode')) {
+            if ($validated['landing_mode'] === GeneralSetting::LANDING_MODE_DISABLED) {
+                $validated['landing_redirect_url'] = null;
+            }
+            unset($validated['landing_mode'], $validated['landing_redirect_status'], $validated['landing_disabled_target']);
+        }
 
         // Seed demo data into newly provisioned tenants when enabled.
         $validated['demo_data_enabled'] = $request->boolean('demo_data_enabled');
@@ -167,6 +243,36 @@ class GeneralSettingsController extends Controller
         if (empty($validated['subscription_banner_threshold_days'])) {
             unset($validated['subscription_banner_threshold_days']);
         }
+
+        // ── After expiry: grace, auto-suspend, auto-delete (0 = off) ──
+        $afterExpiryKeys = ['subscription_grace_days', 'subscription_grace_mode', 'suspend_unpaid_after_days', 'delete_inactive_after_days'];
+        if ($request->has('subscription_grace_days')
+            && \Illuminate\Support\Facades\Schema::connection('central')->hasColumn('general_settings', 'subscription_grace_days')) {
+            $validated['subscription_grace_days'] = (int) ($validated['subscription_grace_days'] ?? 0);
+            $validated['subscription_grace_mode'] = $validated['subscription_grace_mode'] ?? 'full';
+            $validated['suspend_unpaid_after_days'] = (int) ($validated['suspend_unpaid_after_days'] ?? 0);
+            $validated['delete_inactive_after_days'] = (int) ($validated['delete_inactive_after_days'] ?? 0);
+        } else {
+            // Column missing (migration not run) or field not on this form.
+            foreach ($afterExpiryKeys as $key) {
+                unset($validated[$key]);
+            }
+        }
+
+        // ── Billing cycles on offer ──
+        // Two checkboxes, stored as two booleans. Unchecking both would leave
+        // nothing to sell, so monthly is forced back on rather than failing the
+        // whole save over a checkbox.
+        $cycles = array_values(array_intersect(
+            GeneralSetting::BILLING_CYCLES,
+            $validated['billing_cycles'] ?? []
+        ));
+        if (empty($cycles)) {
+            $cycles = ['monthly'];
+        }
+        $validated['billing_monthly_enabled'] = in_array('monthly', $cycles, true);
+        $validated['billing_yearly_enabled'] = in_array('yearly', $cycles, true);
+        unset($validated['billing_cycles']);
 
         // Normalize empty SMS strings to null so model accessors fall back to defaults.
         $validated['sms_gateway'] = $validated['sms_gateway'] ?? null;
@@ -203,7 +309,7 @@ class GeneralSettingsController extends Controller
                 @unlink(public_path($setting->logo_path));
             }
             $file = $request->file('logo');
-            $filename = 'logo_' . time() . '.' . $file->getClientOriginalExtension();
+            $filename = 'logo_' . time() . '.' . \App\Support\SafeUpload::contentExtension($file, ['png', 'jpg', 'webp', 'svg'], 'logo');
             $file->move($uploadDir, $filename);
             $validated['logo_path'] = upload_path('settings') . '/' . $filename;
         }
@@ -214,7 +320,7 @@ class GeneralSettingsController extends Controller
                 @unlink(public_path($setting->favicon_path));
             }
             $file = $request->file('favicon');
-            $filename = 'favicon_' . time() . '.' . $file->getClientOriginalExtension();
+            $filename = 'favicon_' . time() . '.' . \App\Support\SafeUpload::contentExtension($file, ['png', 'ico', 'jpg', 'svg'], 'favicon');
             $file->move($uploadDir, $filename);
             $validated['favicon_path'] = upload_path('settings') . '/' . $filename;
         }
@@ -269,7 +375,7 @@ class GeneralSettingsController extends Controller
                 @unlink(public_path($setting->tenant_logo_path));
             }
             $file = $request->file('tenant_logo');
-            $filename = 'tenant_logo_' . time() . '.' . $file->getClientOriginalExtension();
+            $filename = 'tenant_logo_' . time() . '.' . \App\Support\SafeUpload::contentExtension($file, ['png', 'jpg', 'webp', 'svg'], 'tenant_logo');
             $file->move($uploadDir, $filename);
             $validated['tenant_logo_path'] = upload_path('settings') . '/' . $filename;
         }
@@ -280,7 +386,7 @@ class GeneralSettingsController extends Controller
                 @unlink(public_path($setting->tenant_favicon_path));
             }
             $file = $request->file('tenant_favicon');
-            $filename = 'tenant_favicon_' . time() . '.' . $file->getClientOriginalExtension();
+            $filename = 'tenant_favicon_' . time() . '.' . \App\Support\SafeUpload::contentExtension($file, ['png', 'ico', 'jpg', 'svg'], 'tenant_favicon');
             $file->move($uploadDir, $filename);
             $validated['tenant_favicon_path'] = upload_path('settings') . '/' . $filename;
         }
@@ -308,23 +414,38 @@ class GeneralSettingsController extends Controller
 
         // Enable/disable languages shown in the language selector. The default
         // language is always kept active so a fallback locale is guaranteed.
-        $activeLocales = $validated['languages_active'] ?? [];
-        unset($validated['languages_active']);
-        $defaultLocale = CentralLanguage::defaultLocale();
+        // Only when the form posts the checklist: languages are now managed on
+        // Super admin > Languages, and an absent list must not switch them all off.
+        if (array_key_exists('languages_active', $validated)) {
+            $activeLocales = $validated['languages_active'] ?? [];
+            $defaultLocale = CentralLanguage::defaultLocale();
 
-        foreach (CentralLanguage::all() as $language) {
-            $shouldBeActive = $language->locale === $defaultLocale
-                || in_array($language->locale, $activeLocales, true);
+            foreach (CentralLanguage::all() as $language) {
+                $shouldBeActive = $language->locale === $defaultLocale
+                    || in_array($language->locale, $activeLocales, true);
 
-            if ($language->is_active !== $shouldBeActive) {
-                $language->update(['is_active' => $shouldBeActive]);
+                if ($language->is_active !== $shouldBeActive) {
+                    $language->update(['is_active' => $shouldBeActive]);
+                }
             }
         }
+        unset($validated['languages_active']);
 
         // Remove file inputs from validated data
         unset($validated['logo'], $validated['favicon'], $validated['tenant_logo'], $validated['tenant_favicon']);
 
+        // ── Super-admin dashboard layout (Dashboard tab) ──
+        // Resolved against the widget registry, so unknown widgets and
+        // out-of-range choices are dropped instead of failing the whole save.
+        // Skipped until the super_dashboard_layout migration has run.
+        if (is_array($request->input('dashboard_layout')) && DashboardLayout::storable()) {
+            $validated['super_dashboard_layout'] = DashboardLayout::toStorage(
+                DashboardLayout::resolve($request->input('dashboard_layout'))
+            );
+        }
+
         $setting->update($validated);
+        \App\Models\Central\TenantSubscription::flushGraceDays();
 
         // Mirror admin-login visibility and contact email into the landing footer
         // so the landing page / privacy policy stay in sync with general settings.
@@ -333,7 +454,7 @@ class GeneralSettingsController extends Controller
             'contact_email'    => $validated['email'] ?? null,
         ]);
 
-        return back()->with('success', 'General settings saved successfully.');
+        return back()->with('success', __('super.flash.general_saved'));
     }
 
     public function removeLogo()
@@ -345,7 +466,7 @@ class GeneralSettingsController extends Controller
         }
         $setting->update(['logo_path' => null]);
 
-        return back()->with('success', 'Logo removed.');
+        return back()->with('success', __('super.flash.logo_removed'));
     }
 
     public function removeFavicon()
@@ -357,7 +478,7 @@ class GeneralSettingsController extends Controller
         }
         $setting->update(['favicon_path' => null]);
 
-        return back()->with('success', 'Favicon removed.');
+        return back()->with('success', __('super.flash.favicon_removed'));
     }
 
     public function removeTenantLogo()
@@ -369,7 +490,7 @@ class GeneralSettingsController extends Controller
         }
         $setting->update(['tenant_logo_path' => null]);
 
-        return back()->with('success', 'Tenant default logo removed.');
+        return back()->with('success', __('super.flash.tenant_logo_removed'));
     }
 
     public function removeTenantFavicon()
@@ -381,7 +502,39 @@ class GeneralSettingsController extends Controller
         }
         $setting->update(['tenant_favicon_path' => null]);
 
-        return back()->with('success', 'Tenant default favicon removed.');
+        return back()->with('success', __('super.flash.tenant_favicon_removed'));
+    }
+
+    /**
+     * Push the saved Tenant Settings branding to workspaces that already
+     * exist (provisioning only applies it to new ones). Runs inline — no
+     * queue worker needed — touching one settings row per tenant.
+     */
+    public function applyTenantBranding(Request $request, TenantBrandingService $branding)
+    {
+        $validated = $request->validate([
+            'parts'   => ['required', 'array', 'min:1'],
+            'parts.*' => ['string', \Illuminate\Validation\Rule::in(TenantBrandingService::PARTS)],
+        ], [
+            'parts.required' => __('super.general_settings.apply_branding_pick_one'),
+            'parts.min'      => __('super.general_settings.apply_branding_pick_one'),
+        ]);
+
+        @set_time_limit(0);
+
+        $result = $branding->applyToAll($validated['parts']);
+
+        $redirect = redirect()->to(route('super.settings.general') . '#tab=tenant');
+
+        if ($result['failed']) {
+            return $redirect->with('error', __('super.flash.tenant_branding_partial', [
+                'updated' => $result['updated'],
+                'failed'  => count($result['failed']),
+                'tenants' => implode(', ', array_slice(array_keys($result['failed']), 0, 10)),
+            ]));
+        }
+
+        return $redirect->with('success', __('super.flash.tenant_branding_applied', ['count' => $result['updated']]));
     }
 
     public function clearCache()
@@ -391,7 +544,7 @@ class GeneralSettingsController extends Controller
         Artisan::call('view:clear');
         Artisan::call('cache:clear');
 
-        return back()->with('success', 'Central cache cleared successfully.');
+        return back()->with('success', __('super.flash.cache_cleared'));
     }
 
     /**

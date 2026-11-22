@@ -1,8 +1,8 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="isEdit ? 'Edit production order' : 'New production order'"
-      :breadcrumb="['Manufacturing', 'Production Orders', isEdit ? form.reference : 'New']"
+      :title="isEdit ? $t('Mrp_Edit_Production_Order') : $t('Mrp_New_Production_Order')"
+      :breadcrumb="[$t('Manufacturing'), $t('Mrp_Production_Orders'), isEdit ? form.reference : $t('New')]"
     >
       <template #actions>
         <a-button @click="$router.push('/mrp/production-orders')">{{ $t('Cancel') }}</a-button>
@@ -21,59 +21,74 @@
           <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
             <a-row :gutter="16">
               <a-col :xs="24" :md="12">
-                <a-form-item label="Product to make *" name="product_id">
+                <a-form-item :label="$t('Mrp_Product_To_Make') + ' *'" name="product_id">
                   <a-select
                     v-model:value="form.product_id" show-search :filter-option="false"
-                    :options="productOptions" placeholder="Search a product"
+                    :options="productOptions" :placeholder="$t('Mrp_Search_A_Product')"
                     :disabled="isEdit" @search="searchProducts" @change="onProductChange"
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="Bill of materials" name="bom_id" :extra="bomHint">
+                <a-form-item :label="$t('Mrp_Bill_Of_Materials')" name="bom_id" :extra="bomHint">
                   <a-select
                     v-model:value="form.bom_id" :options="bomOptions" allow-clear
-                    :disabled="isEdit" placeholder="Default for the product"
+                    :disabled="isEdit" :placeholder="$t('Mrp_Default_For_Product')"
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Quantity *" name="qty_planned">
+                <a-form-item :label="$t('Mrp_Quantity_Batch_Size') + ' *'" name="qty_planned">
                   <a-input-number v-model:value="form.qty_planned" :min="0.0001" style="width: 100%" />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item :label="$t('Status')" name="priority">
+                <a-form-item :label="$t('Priority')" name="priority">
                   <a-select v-model:value="form.priority" :options="PRIORITIES" />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
-                <a-form-item label="Build in *" name="warehouse_id" extra="Materials are drawn from here">
+                <a-form-item :label="$t('Mrp_Build_In') + ' *'" name="warehouse_id" :extra="$t('Mrp_Build_In_Hint')">
                   <a-select
                     v-model:value="form.warehouse_id" show-search option-filter-prop="label"
-                    :options="warehouseOptions" placeholder="Select a warehouse"
+                    :options="warehouseOptions" :placeholder="$t('Mrp_Select_Warehouse')"
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
                 <a-form-item
-                  label="Finished goods to" name="fg_warehouse_id"
-                  extra="Leave blank to receive back into the build warehouse"
+                  :label="$t('Mrp_Finished_Goods_To')" name="fg_warehouse_id"
+                  :extra="$t('Mrp_Finished_Goods_Hint')"
                 >
                   <a-select
                     v-model:value="form.fg_warehouse_id" show-search option-filter-prop="label"
-                    :options="warehouseOptions" allow-clear placeholder="Same as build"
+                    :options="warehouseOptions" allow-clear :placeholder="$t('Mrp_Same_As_Build')"
                   />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Start" name="planned_start">
+                <a-form-item :label="$t('Mrp_Start')" name="planned_start">
                   <a-date-picker v-model:value="form.planned_start" style="width: 100%" value-format="YYYY-MM-DD" />
                 </a-form-item>
               </a-col>
               <a-col :xs="12" :md="6">
-                <a-form-item label="Due" name="planned_end">
+                <a-form-item :label="$t('Due')" name="planned_end">
                   <a-date-picker v-model:value="form.planned_end" style="width: 100%" value-format="YYYY-MM-DD" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="8">
+                <a-form-item :label="$t('Mrp_Batch_No')" name="batch_no" :extra="batchHint">
+                  <a-input v-model:value="form.batch_no" allow-clear :placeholder="$t('Mrp_Batch_Blank_Uses_Reference')" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="12" :md="8">
+                <a-form-item :label="$t('Mrp_Production_Date')" name="production_date" :extra="$t('Mrp_Production_Date_Hint')">
+                  <a-date-picker v-model:value="form.production_date" style="width: 100%" value-format="YYYY-MM-DD" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="12" :md="8">
+                <a-form-item :label="$t('Mrp_Expiry_Date')" name="expiry_date" :extra="expiryHint">
+                  <a-date-picker v-model:value="form.expiry_date" style="width: 100%" value-format="YYYY-MM-DD" />
                 </a-form-item>
               </a-col>
               <a-col :span="24">
@@ -87,10 +102,10 @@
       </a-col>
 
       <a-col :xs="24" :xl="8">
-        <a-card size="small" title="What this will need" class="sticky">
+        <a-card size="small" :title="$t('Mrp_What_This_Will_Need')" class="sticky">
           <a-empty
             v-if="!preview.length" :image="simpleImage"
-            :description="form.bom_id ? 'Set a quantity' : 'Pick a product with a bill of materials'"
+            :description="form.bom_id ? $t('Mrp_Set_A_Quantity') : $t('Mrp_Pick_Product_With_Bom')"
           />
           <template v-else>
             <ul class="preview">
@@ -101,12 +116,11 @@
             </ul>
             <a-divider style="margin: 12px 0 10px" />
             <div class="pv-total">
-              <span>Estimated material</span>
+              <span>{{ $t('Mrp_Estimated_Material') }}</span>
               <strong>{{ money(previewCost) }}</strong>
             </div>
             <p class="pv-note">
-              Availability is checked when the order is released, not now — stock
-              moves between then and here.
+              {{ $t('Mrp_Availability_Checked_On_Release') }}
             </p>
           </template>
         </a-card>
@@ -132,7 +146,7 @@ import PageHeader from '../../components/PageHeader.vue';
 import { useFormat } from '../../composables/useFormat';
 import { PRIORITIES } from './mrpOptions';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { t, i18n } from '../../i18n';
 
 const route = useRoute();
 const router = useRouter();
@@ -150,6 +164,7 @@ const form = reactive({
   reference: '', product_id: undefined, bom_id: undefined, qty_planned: 1,
   warehouse_id: undefined, fg_warehouse_id: undefined, priority: 'normal',
   planned_start: new Date().toISOString().slice(0, 10), planned_end: null, notes: '',
+  batch_no: '', production_date: null, expiry_date: null,
 });
 
 const products = ref([]);
@@ -163,11 +178,42 @@ const bomOptions = computed(() => boms.value
   .map(b => ({ value: b.id, label: b.label })));
 
 const bomHint = computed(() => {
-  if (!form.product_id) return 'Pick a product first';
+  if (!form.product_id) return t('Mrp_Pick_A_Product_First');
   return bomOptions.value.length
-    ? `${bomOptions.value.length} recipe(s) available`
-    : 'No active recipe — the order will have no materials';
+    ? `${bomOptions.value.length} ${t('Mrp_Recipes_Available')}`
+    : t('Mrp_No_Active_Recipe');
 });
+
+// ---------------- batch & expiry ----------------
+
+const selectedProduct = computed(() => products.value.find(p => p.id === form.product_id) || null);
+
+const batchHint = computed(() => {
+  if (!selectedProduct.value) return t('Mrp_Batch_Printed_On_Label');
+  return selectedProduct.value.is_batch_tracked
+    ? t('Mrp_Batch_Tracked_Hint')
+    : t('Mrp_Batch_Untracked_Hint');
+});
+
+const expiryHint = computed(() => {
+  const days = Number(selectedProduct.value?.shelf_life_days) || 0;
+  return days ? i18n.global.t('Mrp_Expiry_Blank_Date_Hint', { days }) : t('Mrp_Optional');
+});
+
+/** Suggest an expiry from the product's shelf life once a production date is known. */
+watch(() => [form.product_id, form.production_date], () => {
+  const days = Number(selectedProduct.value?.shelf_life_days) || 0;
+  if (!days || !form.production_date || form.expiry_date) return;
+  form.expiry_date = addDays(form.production_date, days);
+});
+
+function addDays(date, days) {
+  const d = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + days);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
 const required = () => [{ required: true, message: t('Field_is_required', 'This field is required') }];
 const rules = computed(() => ({
@@ -223,7 +269,7 @@ async function submit() {
   try {
     await formRef.value.validate();
   } catch (e) {
-    message.error('Fill in the highlighted fields');
+    message.error(t('Mrp_Fill_Highlighted_Fields'));
     return;
   }
 
@@ -239,7 +285,7 @@ async function submit() {
       router.push(res?.id ? `/mrp/production-orders/${res.id}` : '/mrp/production-orders');
     }
   } catch (e) {
-    message.error(firstError(e) || 'Could not save that order');
+    message.error(firstError(e) || t('Mrp_Could_Not_Save_Order'));
   } finally {
     saving.value = false;
   }
@@ -272,17 +318,21 @@ async function bootstrap() {
         qty_planned: o.qty_planned, warehouse_id: o.warehouse_id,
         fg_warehouse_id: o.fg_warehouse_id, priority: o.priority,
         planned_start: o.planned_start, planned_end: o.planned_end, notes: o.notes,
+        batch_no: o.batch_no || '', production_date: o.production_date, expiry_date: o.expiry_date,
       });
 
       if (!products.value.some(p => p.id === o.product_id)) {
-        products.value.push({ id: o.product_id, label: `${o.product_code} — ${o.product_name}`, cost: 0 });
+        products.value.push({
+          id: o.product_id, label: `${o.product_code} — ${o.product_name}`, cost: 0,
+          is_batch_tracked: !!o.is_batch_tracked, shelf_life_days: o.shelf_life_days || 0,
+        });
       }
       loadPreview();
     } else if (warehouses.value.length === 1) {
       form.warehouse_id = warehouses.value[0].id;
     }
   } catch (e) {
-    message.error('Could not load that order');
+    message.error(t('Mrp_Could_Not_Load_Order'));
     router.push('/mrp/production-orders');
   } finally {
     loadingRecord.value = false;

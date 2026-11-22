@@ -121,6 +121,11 @@ return [
 
     'key' => env('APP_KEY'),
 
+    // Reverse proxies allowed to set X-Forwarded-* (comma list, or * when the
+    // app is only reachable through the proxy). Empty = trust nobody.
+    // See App\Http\Middleware\TrustProxies.
+    'trusted_proxies' => env('TRUSTED_PROXIES', ''),
+
     'cipher' => 'AES-256-CBC',
 
     /*
@@ -246,7 +251,10 @@ return [
         'URL' => Illuminate\Support\Facades\URL::class,
         'Validator' => Illuminate\Support\Facades\Validator::class,
         'View' => Illuminate\Support\Facades\View::class,
-        'PDF' => Barryvdh\DomPDF\Facade::class,
+        // laravel-dompdf v3 moved the facade; the old Barryvdh\DomPDF\Facade
+        // class no longer exists. Package discovery aliases both PDF and Pdf
+        // to this, so the two spellings used across the controllers both work.
+        'PDF' => Barryvdh\DomPDF\Facade\Pdf::class,
         'Excel' => Maatwebsite\Excel\Facades\Excel::class,
         'ImageResize' => \Gumlet\ImageResize::class,
         'Image' => Intervention\Image\Facades\Image::class,

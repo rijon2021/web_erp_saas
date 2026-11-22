@@ -1,10 +1,10 @@
 <template>
   <a-modal
     :open="open"
-    :title="isEdit ? 'Edit document details' : 'Upload documents'"
+    :title="isEdit ? $t('Edit_Document_Details') : $t('Upload_Documents_Title')"
     :width="620"
     :confirm-loading="saving"
-    :ok-text="isEdit ? $t('submit') : 'Upload'"
+    :ok-text="isEdit ? $t('submit') : $t('Upload')"
     :cancel-text="$t('Cancel')"
     :ok-button-props="{ disabled: !isEdit && !files.length }"
     @ok="submit"
@@ -20,10 +20,9 @@
           @remove="removeFile"
         >
           <p class="ant-upload-drag-icon"><InboxOutlined /></p>
-          <p class="ant-upload-text">Drop files here, or click to browse</p>
+          <p class="ant-upload-text">{{ $t('Doc_Drop_Files_Browse') }}</p>
           <p class="ant-upload-hint">
-            Any file type, up to 50 MB each. Drop several at once — each becomes
-            its own archived document.
+            {{ $t('Upload_Hint_Any_Type') }}
           </p>
         </a-upload-dragger>
 
@@ -35,25 +34,25 @@
 
       <a-form-item
         v-if="isEdit || files.length <= 1"
-        label="Title" name="title"
-        :extra="!isEdit && !files.length ? 'Leave empty to use the file name' : null"
+        :label="$t('Title')" name="title"
+        :extra="!isEdit && !files.length ? $t('Leave_Empty_Use_File_Name') : null"
         style="margin-top: 16px"
       >
-        <a-input v-model:value="form.title" placeholder="e.g. Lease agreement 2026" allow-clear />
+        <a-input v-model:value="form.title" :placeholder="$t('Document_Title_Placeholder')" allow-clear />
       </a-form-item>
       <a-alert
         v-else type="info" show-icon banner
-        :message="`${files.length} files selected — each keeps its own file name as its title.`"
+        :message="`${files.length} ${$t('Files_Selected_Keep_Names')}`"
         style="margin: 16px 0"
       />
 
       <a-row :gutter="16">
         <a-col :xs="24" :sm="12">
-          <a-form-item label="Folder">
+          <a-form-item :label="$t('Folder')">
             <a-tree-select
               v-model:value="form.folder_id"
               :tree-data="folderOptions"
-              placeholder="Uncategorised"
+              :placeholder="$t('Uncategorised')"
               allow-clear
               tree-default-expand-all
               :field-names="{ label: 'title', value: 'value', children: 'children' }"
@@ -61,23 +60,23 @@
           </a-form-item>
         </a-col>
         <a-col :xs="24" :sm="12">
-          <a-form-item label="Reference">
-            <a-input v-model:value="form.reference" placeholder="Invoice / contract no." allow-clear />
+          <a-form-item :label="$t('Reference')">
+            <a-input v-model:value="form.reference" :placeholder="$t('Reference_Placeholder')" allow-clear />
           </a-form-item>
         </a-col>
       </a-row>
 
       <a-row :gutter="16">
         <a-col :xs="24" :sm="12">
-          <a-form-item label="Expiry date" extra="Used by the “expiring soon” filter">
+          <a-form-item :label="$t('Expiry_Date')" :extra="$t('Expiry_Date_Hint')">
             <a-date-picker v-model:value="form.expiry_date" style="width: 100%" value-format="YYYY-MM-DD" />
           </a-form-item>
         </a-col>
         <a-col :xs="24" :sm="12">
-          <a-form-item label="Tags">
+          <a-form-item :label="$t('Tags')">
             <a-select
               v-model:value="form.tags" mode="tags" style="width: 100%"
-              placeholder="Type and press enter" :options="tagOptions" :token-separators="[',']"
+              :placeholder="$t('Tags_Placeholder')" :options="tagOptions" :token-separators="[',']"
             />
           </a-form-item>
         </a-col>
@@ -206,7 +205,7 @@ async function saveMetadata() {
 
 async function upload() {
   if (!files.value.length) {
-    message.warning('Choose at least one file to upload.');
+    message.warning(t('Choose_At_Least_One_File'));
     return;
   }
 
@@ -224,7 +223,7 @@ async function upload() {
 
   if (res.status >= 200 && res.status < 300) {
     const count = res.data?.count || files.value.length;
-    message.success(`${count} document${count === 1 ? '' : 's'} uploaded.`);
+    message.success(`${count} ${t('Documents_Uploaded')}`);
     emit('saved');
     return;
   }

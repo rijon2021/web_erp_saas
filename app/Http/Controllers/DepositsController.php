@@ -122,13 +122,7 @@ class DepositsController extends BaseController
                 'amount' => $request['deposit']['amount'],
             ]);
 
-            $account = Account::find($request['deposit']['account_id']);
-
-            if ($account) {
-                $account->update([
-                    'balance' => $account->balance + $request['deposit']['amount'],
-                ]);
-            }
+            Account::adjustBalance($request['deposit']['account_id'], $request['deposit']['amount']);
 
         }, 10);
 
@@ -169,13 +163,7 @@ class DepositsController extends BaseController
                 'deposit.amount' => 'required',
             ]);
 
-            $account = Account::find($deposit->account_id);
-
-            if ($account) {
-                $account->update([
-                    'balance' => $account->balance - $deposit->amount,
-                ]);
-            }
+            Account::adjustBalance($deposit->account_id, -$deposit->amount);
 
             Deposit::whereId($id)->update([
                 'date' => $request['deposit']['date'],
@@ -185,12 +173,7 @@ class DepositsController extends BaseController
                 'amount' => $request['deposit']['amount'],
             ]);
 
-            $account = Account::find($request['deposit']['account_id']);
-            if ($account) {
-                $account->update([
-                    'balance' => $account->balance + $request['deposit']['amount'],
-                ]);
-            }
+            Account::adjustBalance($request['deposit']['account_id'], $request['deposit']['amount']);
 
         }, 10);
 
@@ -218,15 +201,7 @@ class DepositsController extends BaseController
             'deleted_at' => Carbon::now(),
         ]);
 
-        $account = Account::where('id', $deposit->account_id)->exists();
-
-        if ($account) {
-            // Account exists, perform the update
-            $account = Account::find($deposit->account_id);
-            $account->update([
-                'balance' => $account->balance - $deposit->amount,
-            ]);
-        }
+        Account::adjustBalance($deposit->account_id, -$deposit->amount);
 
         return response()->json(['success' => true]);
     }
@@ -251,15 +226,7 @@ class DepositsController extends BaseController
                 $this->authorizeForUser($request->user('api'), 'check_record', $deposit);
             }
 
-            $account = Account::where('id', $deposit->account_id)->exists();
-
-            if ($account) {
-                // Account exists, perform the update
-                $account = Account::find($deposit->account_id);
-                $account->update([
-                    'balance' => $account->balance - $deposit->amount,
-                ]);
-            }
+            Account::adjustBalance($deposit->account_id, -$deposit->amount);
 
             Deposit::whereId($deposit_id)->update([
                 'deleted_at' => Carbon::now(),
@@ -278,10 +245,26 @@ class DepositsController extends BaseController
         $last = DB::table('deposits')->latest('id')->first();
 
         if ($last) {
-            $item = $last->deposit_ref;
-            $nwMsg = explode('_', $item);
-            $inMsg = $nwMsg[1] + 1;
-            $code = $nwMsg[0].'_'.$inMsg;
+            $item = (string) ($last->deposit_ref ?? '');
+
+            // Accept either '_' or '-' as separator without assuming array index exists
+            if (strpos($item, '_') !== false) {
+                $nwMsg = explode('_', $item);
+                $sep = '_';
+            } elseif (strpos($item, '-') !== false) {
+                $nwMsg = explode('-', $item);
+                $sep = '-';
+            } else {
+                $nwMsg = [];
+                $sep = '_';
+            }
+
+            if (isset($nwMsg[0], $nwMsg[1]) && is_numeric($nwMsg[1])) {
+                $inMsg = $nwMsg[1] + 1;
+                $code = $nwMsg[0].$sep.$inMsg;
+            } else {
+                $code = 'DP_1111';
+            }
         } else {
             $code = 'DP_1111';
         }

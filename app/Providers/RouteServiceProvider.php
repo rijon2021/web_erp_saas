@@ -102,6 +102,11 @@ class RouteServiceProvider extends ServiceProvider
         Route::middleware('web')
             ->namespace($this->namespace)
             ->group(base_path('routes/central.php'));
+
+        // Super-admin mobile app (token auth, no session or CSRF).
+        Route::prefix('api/super')
+            ->middleware(['api', \App\Http\Middleware\ForceJsonResponse::class])
+            ->group(base_path('routes/central_api.php'));
     }
 
     /**
@@ -113,6 +118,8 @@ class RouteServiceProvider extends ServiceProvider
             \App\Http\Middleware\RedirectSetupToCentral::class,
             PreventAccessFromCentralDomains::class,
             InitializeTenancyByDomainOrSubdomain::class,
+            // Switched-off subdomain → tenant's custom domain (page visits only)
+            \App\Http\Middleware\RedirectInactiveDomain::class,
             'tenant.active',
             // Audit trail for super-admin impersonation sessions (no-op when none is active)
             \App\Http\Middleware\LogImpersonationActions::class,
@@ -123,7 +130,12 @@ class RouteServiceProvider extends ServiceProvider
             ->group(base_path('routes/tenant_web.php'));
 
         Route::prefix('api')
-            ->middleware(array_merge(['api'], $tenancy))
+            // Audit log: updates / deletes done with a query (no model event) — see AuditRegistry::CONTROLLERS.
+            // Mobile App switched off: refuse the Flutter app's calls (X-Stocky-Client: mobile).
+            ->middleware(array_merge(['api'], $tenancy, [
+                \App\Http\Middleware\EnsureMobileAppEnabled::class,
+                \App\Http\Middleware\AuditQueryWrites::class,
+            ]))
             ->namespace($this->namespace)
             ->group(base_path('routes/tenant_api.php'));
 

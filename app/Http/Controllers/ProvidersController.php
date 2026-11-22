@@ -11,12 +11,15 @@ use App\Models\ProviderPaymentOpeningBalance;
 use App\Models\Purchase;
 use App\Models\PurchaseReturn;
 use App\Models\Setting;
+use App\Services\SupplierWallet\SupplierWalletService;
+use App\Services\SupplierWallet\WalletException;
 use App\utils\helpers;
 use Carbon\Carbon;
 use DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
 use Maatwebsite\Excel\Facades\Excel;
 
 class ProvidersController extends BaseController
@@ -32,7 +35,9 @@ class ProvidersController extends BaseController
         $pageStart = \Request::get('page', 1);
         // Start displaying items from this number;
         $offSet = ($pageStart * $perPage) - $perPage;
-        $order = $request->SortField;
+        // Whitelisted, and defaulted: an absent SortField previously reached
+        // orderBy('') and the query died with "Unknown column ''".
+        $order = in_array($request->SortField, ['id', 'name', 'code', 'phone', 'email'], true) ? $request->SortField : 'id';
         $dir = strtolower((string) $request->input('SortType')) === 'asc' ? 'asc' : 'desc';
         $helpers = new helpers;
         // Filter fields With Params to retrieve
@@ -41,6 +46,14 @@ class ProvidersController extends BaseController
         $data = [];
 
         $providers = Provider::where('deleted_at', '=', null);
+
+        // Settings -> Features: optionally show only suppliers this user's
+        // warehouses have bought from. A supplier with no purchases anywhere
+        // stays visible so a newly created one is not hidden from its author.
+        $this->scopeMasterDataToWarehouses($providers, fn ($ids) => DB::table('purchases')
+            ->whereNull('purchases.deleted_at')
+            ->whereColumn('purchases.provider_id', 'providers.id')
+            ->when($ids !== null, fn ($q) => $q->whereIn('purchases.warehouse_id', $ids)));
 
         // Multiple Filter
         $Filtred = $helpers->filter($providers, $columns, $param, $request)
@@ -61,6 +74,12 @@ class ProvidersController extends BaseController
             ->limit($perPage)
             ->orderBy($order, $dir)
             ->get();
+
+        // Supplier Wallet: balances for the rows on this page (one query), so the
+        // list can show the advance held with each supplier and the net after it.
+        $wallets = app(SupplierWalletService::class);
+        $walletOn = $wallets->enabled();
+        $walletBalances = $walletOn ? $wallets->balancesFor($providers->pluck('id')->all()) : [];
 
         foreach ($providers as $provider) {
 
@@ -99,12 +118,18 @@ class ProvidersController extends BaseController
             $item['country'] = $provider->country;
             $item['city'] = $provider->city;
             $item['adresse'] = $provider->adresse;
+            $item['opening_balance'] = $provider->opening_balance ?? 0;
+            $item['credit_limit'] = $provider->credit_limit ?? 0;
+            $item['net_balance'] = ($provider->opening_balance ?? 0) + $item['due'] - $item['return_Due'];
+            // Prepaid balance held with this supplier, and what is left to pay once it is applied.
+            $item['wallet_balance'] = round((float) ($walletBalances[$provider->id] ?? 0), 2);
+            $item['net_after_wallet'] = round($item['net_balance'] - $item['wallet_balance'], 2);
             $data[] = $item;
         }
 
         $company_info = Setting::where('deleted_at', '=', null)->first();
         $accounts = Account::where('deleted_at', '=', null)->orderBy('id', 'desc')->get(['id', 'account_name']);
-        $payment_methods = PaymentMethod::active()->whereNull('deleted_at')->get(['id', 'name']);
+        $payment_methods = PaymentMethod::active()->exceptCustomerWallet()->whereNull('deleted_at')->get(['id', 'name']);
 
         return response()->json([
             'providers' => $data,
@@ -112,6 +137,7 @@ class ProvidersController extends BaseController
             'totalRows' => $totalRows,
             'accounts' => $accounts,
             'payment_methods' => $payment_methods,
+            'supplier_wallet' => ['enabled' => $walletOn, 'allow_negative' => $walletOn ? $wallets->allowsNegative() : false],
         ]);
     }
 
@@ -167,9 +193,10 @@ class ProvidersController extends BaseController
 
         request()->validate([
             'name' => 'required',
+            'opening_balance' => 'nullable|numeric',
         ]);
 
-        Provider::whereId($id)->update([
+        $data = [
             'name' => $request['name'],
             'adresse' => $request['adresse'],
             'phone' => $request['phone'],
@@ -178,10 +205,56 @@ class ProvidersController extends BaseController
             'city' => $request['city'],
             'tax_number' => $request['tax_number'],
             'credit_limit' => $request->input('credit_limit', 0),
-        ]);
+        ];
+
+        // Only touch opening_balance when the client sends it, so a stale edit
+        // form can't overwrite a balance already reduced by due payments.
+        if ($request->has('opening_balance')) {
+            $data['opening_balance'] = round((float) $request->input('opening_balance', 0), 2);
+        }
+
+        Provider::whereId($id)->update($data);
 
         return response()->json(['success' => true]);
 
+    }
+
+    // ----------- Adjust Supplier Opening Balance (add / subtract / set) -------\\
+
+    public function adjustOpeningBalance(Request $request, $id)
+    {
+        $this->authorizeForUser($request->user('api'), 'update', Provider::class);
+
+        $request->validate([
+            'mode' => ['required', Rule::in(['add', 'subtract', 'set'])],
+            'amount' => ['required', 'numeric'],
+        ]);
+
+        $provider = Provider::whereNull('deleted_at')->findOrFail($id);
+        $current = (float) ($provider->opening_balance ?? 0);
+        $amount = (float) $request->input('amount');
+
+        switch ($request->input('mode')) {
+            case 'add':
+                $new = $current + abs($amount);
+                break;
+            case 'subtract':
+                $new = $current - abs($amount);
+                break;
+            case 'set':
+            default:
+                $new = $amount;
+                break;
+        }
+
+        $provider->opening_balance = round($new, 2);
+        $provider->save();
+
+        return response()->json([
+            'success' => true,
+            'previous_opening_balance' => round($current, 2),
+            'opening_balance' => round((float) $provider->opening_balance, 2),
+        ]);
     }
 
     // ----------- Remdeleteove Provider-------\\
@@ -470,94 +543,116 @@ class ProvidersController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'pay_supplier_due', Provider::class);
 
+        // from_wallet=1: settle from the supplier's prepaid wallet instead of a
+        // cash account. Each payment row gets its own wallet debit, so deleting
+        // one later gives exactly its amount back.
+        $fromWallet = SupplierWalletService::wantsWallet($request);
+        $wallets = app(SupplierWalletService::class);
+
         if ($request['amount'] > 0) {
-            $provider = Provider::findOrFail($request->provider_id);
-            $paid_amount_total = $request->amount;
+            try {
+                DB::transaction(function () use ($request, $fromWallet, $wallets) {
+                    $provider = Provider::findOrFail($request->provider_id);
+                    $paid_amount_total = $request->amount;
+                    $accountId = (! $fromWallet && $request['account_id']) ? $request['account_id'] : null;
+                    $methodId = $fromWallet ? null : $request['payment_method_id'];
 
-            // Pay opening balance first (only when this supplier has one).
-            // Suppliers created before this feature have opening_balance = 0,
-            // so this block is skipped and the original purchase-payment flow runs unchanged.
-            if ($provider->opening_balance > 0 && $paid_amount_total > 0) {
-                if ($paid_amount_total >= $provider->opening_balance) {
-                    $opening_balance_paid = $provider->opening_balance;
-                    $paid_amount_total -= $provider->opening_balance;
-                    $provider->opening_balance = 0;
-                } else {
-                    $opening_balance_paid = $paid_amount_total;
-                    $provider->opening_balance -= $paid_amount_total;
-                    $paid_amount_total = 0;
-                }
-                $provider->save();
+                    // Pay opening balance first (only when this supplier has one).
+                    // Suppliers created before this feature have opening_balance = 0,
+                    // so this block is skipped and the original purchase-payment flow runs unchanged.
+                    if ($provider->opening_balance > 0 && $paid_amount_total > 0) {
+                        if ($paid_amount_total >= $provider->opening_balance) {
+                            $opening_balance_paid = $provider->opening_balance;
+                            $paid_amount_total -= $provider->opening_balance;
+                            $provider->opening_balance = 0;
+                        } else {
+                            $opening_balance_paid = $paid_amount_total;
+                            $provider->opening_balance -= $paid_amount_total;
+                            $paid_amount_total = 0;
+                        }
+                        $provider->save();
 
-                $payment_opening_balance = new ProviderPaymentOpeningBalance;
-                $payment_opening_balance->provider_id = $request->provider_id;
-                $payment_opening_balance->account_id = $request['account_id'] ? $request['account_id'] : null;
-                $payment_opening_balance->Ref = $this->getOpeningBalancePaymentNumberOrder();
-                $payment_opening_balance->date = Carbon::now();
-                $payment_opening_balance->payment_method_id = $request['payment_method_id'];
-                $payment_opening_balance->montant = $opening_balance_paid;
-                $payment_opening_balance->change = 0;
-                $payment_opening_balance->notes = $request['notes'];
-                $payment_opening_balance->user_id = Auth::user()->id;
-                $payment_opening_balance->save();
+                        $payment_opening_balance = new ProviderPaymentOpeningBalance;
+                        $payment_opening_balance->provider_id = $request->provider_id;
+                        $payment_opening_balance->account_id = $accountId;
+                        $payment_opening_balance->Ref = $this->getOpeningBalancePaymentNumberOrder();
+                        $payment_opening_balance->date = Carbon::now();
+                        $payment_opening_balance->payment_method_id = $methodId;
+                        $payment_opening_balance->montant = $opening_balance_paid;
+                        $payment_opening_balance->change = 0;
+                        $payment_opening_balance->notes = $request['notes'];
+                        $payment_opening_balance->user_id = Auth::user()->id;
+                        $payment_opening_balance->save();
+                        if ($fromWallet) {
+                            // Saved first so the wallet move can point at the row's id.
+                            $payment_opening_balance->wallet_transaction_id = $wallets->payFromWallet(
+                                (int) $provider->id, (float) $opening_balance_paid, 'opening_balance_payment', [
+                                    'reference_type' => ProviderPaymentOpeningBalance::class,
+                                    'reference_id' => $payment_opening_balance->id,
+                                    'note' => 'Opening balance · '.$payment_opening_balance->Ref,
+                                    'user_id' => Auth::id(),
+                                ]
+                            )->id;
+                            $payment_opening_balance->save();
+                        }
 
-                $account = Account::where('id', $request['account_id'])->exists();
-                if ($account) {
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance - $opening_balance_paid,
-                    ]);
-                }
-            }
+                        Account::adjustBalance($accountId, -$opening_balance_paid);
+                    }
 
-            $provider_purchases_due = Purchase::where('deleted_at', '=', null)
-                ->where('statut', 'received')
-                ->where([
-                    ['payment_statut', '!=', 'paid'],
-                    ['provider_id', $request->provider_id],
-                ])->get();
+                    $provider_purchases_due = Purchase::where('deleted_at', '=', null)
+                        ->where('statut', 'received')
+                        ->where([
+                            ['payment_statut', '!=', 'paid'],
+                            ['provider_id', $request->provider_id],
+                        ])->get();
 
-            foreach ($provider_purchases_due as $key => $provider_purchase) {
-                if ($paid_amount_total == 0) {
-                    break;
-                }
-                $due = $provider_purchase->GrandTotal - $provider_purchase->paid_amount;
+                    foreach ($provider_purchases_due as $key => $provider_purchase) {
+                        if ($paid_amount_total == 0) {
+                            break;
+                        }
+                        $due = $provider_purchase->GrandTotal - $provider_purchase->paid_amount;
 
-                if ($paid_amount_total >= $due) {
-                    $amount = $due;
-                    $payment_status = 'paid';
-                } else {
-                    $amount = $paid_amount_total;
-                    $payment_status = 'partial';
-                }
+                        if ($paid_amount_total >= $due) {
+                            $amount = $due;
+                            $payment_status = 'paid';
+                        } else {
+                            $amount = $paid_amount_total;
+                            $payment_status = 'partial';
+                        }
 
-                $payment_purchase = new PaymentPurchase;
-                $payment_purchase->purchase_id = $provider_purchase->id;
-                $payment_purchase->account_id = $request['account_id'] ? $request['account_id'] : null;
-                $payment_purchase->Ref = app('App\Http\Controllers\PaymentPurchasesController')->getNumberOrder();
-                $payment_purchase->date = Carbon::now();
-                $payment_purchase->payment_method_id = $request['payment_method_id'];
-                $payment_purchase->montant = $amount;
-                $payment_purchase->change = 0;
-                $payment_purchase->notes = $request['notes'];
-                $payment_purchase->user_id = Auth::user()->id;
-                $payment_purchase->save();
+                        $payment_purchase = new PaymentPurchase;
+                        $payment_purchase->purchase_id = $provider_purchase->id;
+                        $payment_purchase->account_id = $accountId;
+                        $payment_purchase->Ref = app('App\Http\Controllers\PaymentPurchasesController')->getNumberOrder();
+                        $payment_purchase->date = Carbon::now();
+                        $payment_purchase->payment_method_id = $methodId;
+                        $payment_purchase->montant = $amount;
+                        $payment_purchase->change = 0;
+                        $payment_purchase->notes = $request['notes'];
+                        $payment_purchase->user_id = Auth::user()->id;
+                        if ($fromWallet) {
+                            $payment_purchase->wallet_transaction_id = $wallets->payFromWallet(
+                                (int) $provider->id, (float) $amount, 'purchase_payment', [
+                                    'reference_type' => Purchase::class,
+                                    'reference_id' => $provider_purchase->id,
+                                    'note' => 'Purchase '.$provider_purchase->Ref.' · '.$payment_purchase->Ref,
+                                    'user_id' => Auth::id(),
+                                ]
+                            )->id;
+                        }
+                        $payment_purchase->save();
 
-                $account = Account::where('id', $request['account_id'])->exists();
+                        Account::adjustBalance($accountId, -$amount);
 
-                if ($account) {
-                    // Account exists, perform the update
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance - $amount,
-                    ]);
-                }
+                        $provider_purchase->paid_amount += $amount;
+                        $provider_purchase->payment_statut = $payment_status;
+                        $provider_purchase->save();
 
-                $provider_purchase->paid_amount += $amount;
-                $provider_purchase->payment_statut = $payment_status;
-                $provider_purchase->save();
-
-                $paid_amount_total -= $amount;
+                        $paid_amount_total -= $amount;
+                    }
+                }, 10);
+            } catch (WalletException $e) {
+                return $e->toResponse();
             }
         }
 
@@ -606,15 +701,7 @@ class ProvidersController extends BaseController
                 $payment_purchase_return->user_id = Auth::user()->id;
                 $payment_purchase_return->save();
 
-                $account = Account::where('id', $request['account_id'])->exists();
-
-                if ($account) {
-                    // Account exists, perform the update
-                    $account = Account::find($request['account_id']);
-                    $account->update([
-                        'balance' => $account->balance + $amount,
-                    ]);
-                }
+                Account::adjustBalance($request['account_id'], $amount);
 
                 $supplier_purchase_return->paid_amount += $amount;
                 $supplier_purchase_return->payment_statut = $payment_status;

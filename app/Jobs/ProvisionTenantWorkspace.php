@@ -22,9 +22,15 @@ class ProvisionTenantWorkspace implements ShouldQueue
     public int $tries = 1;
     public int $timeout = 2000;
 
+    /**
+     * @param bool $sendWelcome Email the "workspace ready" welcome on a first
+     *                          provision. The admin approval flow passes false
+     *                          because it sends its own "approved" email.
+     */
     public function __construct(
         protected string $tenantId,
         protected bool $forceReprovision = false,
+        protected bool $sendWelcome = true,
     ) {
         $this->onQueue('default');
     }
@@ -33,6 +39,8 @@ class ProvisionTenantWorkspace implements ShouldQueue
     {
         set_time_limit(2000);
         ignore_user_abort(true);
+        // Migrations + seeders run in this one process; the 128M host default is not enough.
+        @ini_set('memory_limit', '512M');
 
         $tenant = Tenant::find($this->tenantId);
 
@@ -76,9 +84,23 @@ class ProvisionTenantWorkspace implements ShouldQueue
             $this->copyDefaultImages($tenant);
             Log::info("ProvisionTenantWorkspace: Default images copied for {$this->tenantId}");
 
-            $tenant->update(['status' => 'active']);
+            $tenant->status = 'active';
+            // A (re)installed workspace is live again — no suspension is left.
+            $tenant->suspension_reason = null;
+            $tenant->status_before_suspension = null;
+            // First time live — see Tenant::neverWentLive().
+            if (empty($tenant->went_live_at)) {
+                $tenant->went_live_at = now()->toDateTimeString();
+            }
+            $tenant->save();
 
             $this->markRegistrationCompleted($tenant);
+
+            // `?? true`: a job queued before this property existed unserializes
+            // with it uninitialized (no constructor runs).
+            if (($this->sendWelcome ?? true) && ! $this->forceReprovision) {
+                \App\Services\EmailNotificationService::workspaceReady($tenant);
+            }
 
             Log::info("ProvisionTenantWorkspace: Tenant {$this->tenantId} provisioned successfully.");
         } catch (\Throwable $e) {
@@ -89,6 +111,9 @@ class ProvisionTenantWorkspace implements ShouldQueue
             $tenant->provisioning_error = $e->getMessage();
             $tenant->status = 'failed';
             $tenant->save();
+
+            // The customer is stuck until someone acts — tell the platform admin.
+            \App\Services\EmailNotificationService::adminProvisioningFailed($tenant, $e->getMessage());
 
             // Capture provisioning failure for super admin monitoring.
             // Wrapped because capture() already swallows errors, but we keep a belt-and-braces guard.
@@ -114,8 +139,10 @@ class ProvisionTenantWorkspace implements ShouldQueue
     protected function createDatabase(Tenant $tenant): bool
     {
         // When admin-provided DB credentials exist, the database was already
-        // created externally — just ensure tenancy_db_name is set.
-        if ($tenant->hasDatabaseCredentials()) {
+        // created externally — just ensure tenancy_db_name is set. A tenant on
+        // its own dedicated account is still auto-provisioned: it takes the
+        // path below, which re-creates a dropped database and its grant.
+        if ($tenant->hasDatabaseCredentials() && ! $tenant->usesDedicatedDatabaseUser()) {
             $dbName = $tenant->tenancy_db_name;
             Log::info("ProvisionTenantWorkspace: Using admin-provided DB '{$dbName}' for tenant {$tenant->id}");
 
@@ -142,6 +169,11 @@ class ProvisionTenantWorkspace implements ShouldQueue
 
         // Verify the tenant can resolve its database
         Log::info("ProvisionTenantWorkspace: DB name set to '{$dbName}' for tenant {$tenant->id}, freshly created: " . ($freshlyCreated ? 'yes' : 'no'));
+
+        // Give the workspace its own MySQL account (named after its database)
+        // instead of the central .env one. Falls back to the central account,
+        // as before, when the server does not allow creating users.
+        app(\App\Services\TenantDatabaseUser::class)->create($tenant, $dbName);
 
         return $freshlyCreated;
     }
@@ -226,27 +258,56 @@ class ProvisionTenantWorkspace implements ShouldQueue
         $passwordHash = $tenant->admin_password_hash ?? null;
 
         if (! $email || ! $passwordHash) {
-            Log::warning("ProvisionTenantWorkspace: No admin credentials in tenant data for {$tenant->id}.");
+            // Credentials are cleared after the first successful run, so this
+            // branch is also hit by Reprovision/retry of a LIVE workspace: only
+            // act while user 1 is still the untouched seeded account
+            // (admin@example.com + the publicly known seed password), never on
+            // a real owner. Then lock it with a random password; the owner can
+            // be set from the super-admin tenant tools.
+            $tenant->run(function () use ($tenant) {
+                $row = DB::table('users')->where('id', 1)->first(['email', 'password']);
+                if ($row
+                    && strtolower((string) $row->email) === 'admin@example.com'
+                    && \Illuminate\Support\Facades\Hash::check('123456', (string) $row->password)) {
+                    DB::table('users')->where('id', 1)->update([
+                        'password' => \Illuminate\Support\Facades\Hash::make(\Illuminate\Support\Str::random(64)),
+                    ]);
+                    Log::error("ProvisionTenantWorkspace: No admin credentials for {$tenant->id}; the seeded admin account was locked with a random password.");
+                } else {
+                    Log::warning("ProvisionTenantWorkspace: No admin credentials in tenant data for {$tenant->id} (owner account already set; left unchanged).");
+                }
+            });
+
             return;
         }
 
-        $tenant->run(function () use ($email, $passwordHash) {
+        // Registration collects no personal name, so the company name stands in
+        // for the seeded "John Doe" placeholder; the owner phone replaces the
+        // seeded dummy number.
+        $displayName = trim((string) ($tenant->company_name ?? '')) ?: 'Admin';
+        $phone       = trim((string) ($tenant->owner_phone ?? ''));
+
+        $tenant->run(function () use ($email, $passwordHash, $displayName, $phone) {
             $user = DB::table('users')->where('id', 1)->first();
 
             if ($user) {
                 DB::table('users')->where('id', 1)->update([
-                    'email'    => $email,
-                    'password' => $passwordHash,
+                    'firstname' => $displayName,
+                    'lastname'  => '',
+                    'username'  => $displayName,
+                    'email'     => $email,
+                    'password'  => $passwordHash,
+                    'phone'     => $phone,
                 ]);
             } else {
                 DB::table('users')->insert([
                     'id'        => 1,
-                    'firstname' => 'Admin',
+                    'firstname' => $displayName,
                     'lastname'  => '',
-                    'username'  => $email,
+                    'username'  => $displayName,
                     'email'     => $email,
                     'password'  => $passwordHash,
-                    'phone'     => '',
+                    'phone'     => $phone,
                     'role_id'   => 1,
                     'statut'    => 1,
                     'is_all_warehouses' => 1,
@@ -300,7 +361,22 @@ class ProvisionTenantWorkspace implements ShouldQueue
             return;
         }
 
-        $tenant->run(function () use ($companyName) {
+        $email = $tenant->admin_email ?? null;
+        $phone = trim((string) ($tenant->owner_phone ?? ''));
+
+        $tenant->run(function () use ($companyName, $email, $phone) {
+            // SettingSeeder fills the row with the Super Admin's platform
+            // defaults; replace the company identity with the tenant's own so
+            // invoices, receipts and the store show the right business.
+            $settings = ['CompanyName' => $companyName];
+            if ($email) {
+                $settings['email'] = $email;
+            }
+            if ($phone !== '') {
+                $settings['CompanyPhone'] = $phone;
+            }
+            DB::table('settings')->where('id', 1)->update($settings);
+
             $exists = DB::table('companies')->where('id', 1)->exists();
 
             if ($exists) {
@@ -329,6 +405,19 @@ class ProvisionTenantWorkspace implements ShouldQueue
         }
 
         File::copyDirectory($source, $destination);
+
+        // The tenant settings row references "logo-default.png"; if the template
+        // shipped without it, seed it from the shared platform default so the
+        // receipt / login logo is never a missing file.
+        $settingsDir = $destination . DIRECTORY_SEPARATOR . 'settings';
+        File::ensureDirectoryExists($settingsDir);
+        foreach (['logo-default.png', 'favicon.ico'] as $file) {
+            $target = $settingsDir . DIRECTORY_SEPARATOR . $file;
+            $fallback = public_path('images' . DIRECTORY_SEPARATOR . $file);
+            if (! is_file($target) && is_file($fallback)) {
+                @copy($fallback, $target);
+            }
+        }
 
         // If the tenant-default template has no PWA icons of its own, seed the
         // tenant's pwa/ folder from the shared /pwa_images defaults so the copy

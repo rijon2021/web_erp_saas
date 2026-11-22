@@ -87,6 +87,18 @@ class ChartOfAccountsController extends Controller
             'name' => 'sometimes|max:192',
             'type' => 'sometimes|in:asset,liability,equity,income,expense',
         ]);
+
+        // System accounts are found by code (and posted to by type), so only
+        // their name, parent and status may change.
+        if (ChartOfAccount::isSystemCode($coa->code)) {
+            if ($request->has('code') && (string) $request->get('code') !== $coa->code) {
+                return response()->json(['message' => __('messages.coa_system_code_locked', ['code' => $coa->code])], 422);
+            }
+            if ($request->has('type') && $request->get('type') !== $coa->type) {
+                return response()->json(['message' => __('messages.coa_system_type_locked', ['code' => $coa->code])], 422);
+            }
+        }
+
         $coa->update($request->only(['account_id', 'code', 'name', 'type', 'parent_id', 'level', 'is_active']));
 
         return response()->json($coa);
@@ -230,11 +242,16 @@ class ChartOfAccountsController extends Controller
         }
 
         // Parent codes must exist in the file or in the database
-        $existing = ChartOfAccount::query()->get(['id', 'code', 'parent_id']);
+        $existing = ChartOfAccount::query()->get(['id', 'code', 'type', 'parent_id']);
         $existingCodes = $existing->keyBy(fn ($a) => (string) $a->code);
         foreach ($prepared as $p) {
             if ($p['parent_code'] !== '' && ! isset($codesInFile[$p['parent_code']]) && ! isset($existingCodes[$p['parent_code']])) {
                 $errors[] = "Row {$p['line']}: parent_code '{$p['parent_code']}' does not match any account code in the file or in the existing chart of accounts.";
+            }
+            // Same rule as update(): automatic journals post to system accounts by type.
+            $current = $existingCodes[$p['code']] ?? null;
+            if ($current && ChartOfAccount::isSystemCode($p['code']) && $current->type !== $p['type']) {
+                $errors[] = "Row {$p['line']}: ".__('messages.coa_system_type_locked', ['code' => $p['code']]);
             }
         }
 
@@ -324,6 +341,22 @@ class ChartOfAccountsController extends Controller
         $this->authorizeForUser($request->user('api'), 'chart_of_accounts', Account::class);
 
         $coa = ChartOfAccount::findOrFail($id);
+
+        // No foreign keys back these links, so a delete would leave journal
+        // and budget lines pointing at nothing.
+        if (ChartOfAccount::isSystemCode($coa->code)) {
+            return response()->json(['message' => __('messages.coa_system_delete_locked', ['code' => $coa->code])], 422);
+        }
+        if ($coa->children()->exists()) {
+            return response()->json(['message' => __('messages.coa_has_children')], 422);
+        }
+        if (Schema::hasTable('acc_journal_entry_lines') && DB::table('acc_journal_entry_lines')->where('coa_id', $coa->id)->exists()) {
+            return response()->json(['message' => __('messages.coa_has_journal_lines')], 422);
+        }
+        if (Schema::hasTable('acc_budget_lines') && DB::table('acc_budget_lines')->where('coa_id', $coa->id)->exists()) {
+            return response()->json(['message' => __('messages.coa_has_budget_lines')], 422);
+        }
+
         $coa->delete();
 
         return response()->json(['success' => true]);

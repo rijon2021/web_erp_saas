@@ -1,105 +1,155 @@
 <template>
-  <ReportPage
-    :title="$t('Error_Logs')"
-    :breadcrumb="[$t('Reports'), $t('Error_Logs')]"
-    :crud="crud"
-    :columns="columns"
-    row-key="id"
-    export-endpoint="error-logs"
-    :export-params="exportParams"
-    :export-select="p => p?.logs || []"
-  >
-    <!-- Health view over the WHOLE filtered set (backend summary /
-         timeseries / by_context), not the visible page. -->
-    <template #chart>
-      <a-card size="small" class="err-banner" :class="{ clear: !hasErrors }" style="margin-bottom: 16px">
-        <div class="banner-inner">
-          <span class="banner-icon" :class="{ clear: !hasErrors }">
-            <CheckCircleOutlined v-if="!hasErrors && !crud.loading.value" />
-            <BugOutlined v-else />
-          </span>
-          <div class="banner-text">
-            <div class="banner-headline">
-              <a-spin v-if="crud.loading.value" size="small" />
-              <template v-else-if="hasErrors">
-                {{ fmt(summary.total) }} {{ tf('Errors_Logged', 'errors logged') }}
-              </template>
-              <template v-else>{{ tf('No_Errors_Logged', 'No errors logged — system healthy.') }}</template>
-            </div>
-            <a-typography-text v-if="hasErrors && !crud.loading.value" type="secondary">
-              <strong :style="summary.last_24h ? { color: '#f43f5e' } : null">{{ fmt(summary.last_24h) }}</strong>
-              {{ tf('In_Last_24h', 'in the last 24 hours') }}
-              · {{ fmt(summary.last_7d) }} {{ tf('In_Last_7d', 'in the last 7 days') }}
-              <template v-if="summary.top_context">
-                · {{ tf('Top_Context', 'top context') }}: <a-tag color="error" style="margin: 0">{{ summary.top_context }}</a-tag>
-              </template>
-            </a-typography-text>
-            <a-typography-text v-else-if="!crud.loading.value" type="secondary">
-              {{ tf('No_Errors_Hint', 'Nothing recorded in the selected scope.') }}
-            </a-typography-text>
-          </div>
-        </div>
-      </a-card>
-
-      <a-row v-if="hasErrors" :gutter="[16, 16]" style="margin-bottom: 16px">
-        <a-col :xs="24" :xl="15">
-          <a-card size="small" class="chart-card" :title="tf('Errors_Per_Day', 'Errors per day')">
-            <apexchart
-              v-if="tsSeries[0].data.length"
-              type="bar"
-              height="300"
-              :options="tsOptions"
-              :series="tsSeries"
-            />
-            <a-empty v-else :description="$t('NodataAvailable')" style="padding: 48px 0" />
-          </a-card>
-        </a-col>
-        <a-col :xs="24" :xl="9">
-          <a-card size="small" class="chart-card" :title="tf('By_Context', 'By context')">
-            <template v-if="byContext.length">
-              <div v-for="c in byContext" :key="c.name" class="ctx-row">
-                <a-typography-text class="ctx-name">{{ c.name }}</a-typography-text>
-                <div class="ctx-meter">
-                  <span class="ctx-count">{{ fmt(c.count) }}</span>
-                  <span class="ctx-track">
-                    <span class="ctx-fill" :style="{ width: shareOf(c) + '%' }"></span>
-                  </span>
-                </div>
+  <div>
+    <ReportPage
+      :title="$t('Error_Logs')"
+      :breadcrumb="[$t('Reports'), $t('Error_Logs')]"
+      :crud="crud"
+      :columns="columns"
+      row-key="id"
+      export-endpoint="error-logs"
+      :export-params="exportParams"
+      :export-select="p => p?.logs || []"
+    >
+      <!-- Health view over the WHOLE filtered set (backend summary /
+           timeseries / by_context), not the visible page. -->
+      <template #chart>
+        <a-card size="small" class="err-banner" :class="{ clear: !hasErrors }" style="margin-bottom: 16px">
+          <div class="banner-inner">
+            <span class="banner-icon" :class="{ clear: !hasErrors }">
+              <CheckCircleOutlined v-if="!hasErrors && !crud.loading.value" />
+              <BugOutlined v-else />
+            </span>
+            <div class="banner-text">
+              <div class="banner-headline">
+                <a-spin v-if="crud.loading.value" size="small" />
+                <template v-else-if="hasErrors">
+                  {{ fmt(summary.total) }} {{ tf('Errors_Logged', 'errors logged') }}
+                </template>
+                <template v-else>{{ tf('No_Errors_Logged', 'No errors logged — system healthy.') }}</template>
               </div>
-            </template>
-            <a-empty v-else :description="$t('NodataAvailable')" style="padding: 32px 0" />
-          </a-card>
-        </a-col>
-      </a-row>
-    </template>
+              <a-typography-text v-if="hasErrors && !crud.loading.value" type="secondary">
+                <strong :style="summary.last_24h ? { color: '#f43f5e' } : null">{{ fmt(summary.last_24h) }}</strong>
+                {{ tf('In_Last_24h', 'in the last 24 hours') }}
+                · {{ fmt(summary.last_7d) }} {{ tf('In_Last_7d', 'in the last 7 days') }}
+                <template v-if="summary.top_context">
+                  · {{ tf('Top_Context', 'top context') }}: <a-tag color="error" style="margin: 0">{{ summary.top_context }}</a-tag>
+                </template>
+              </a-typography-text>
+              <a-typography-text v-else-if="!crud.loading.value" type="secondary">
+                {{ tf('No_Errors_Hint', 'Nothing recorded in the selected scope.') }}
+              </a-typography-text>
+            </div>
+          </div>
+        </a-card>
 
-    <template #filters>
-      <DateRangePicker v-model:value="range" allow-clear @change="crud.reload()" />
-      <a-select
-        v-model:value="contextFilter"
-        style="width: 220px"
-        allow-clear
-        show-search
-        :placeholder="$t('Context')"
-        :options="contextOptions"
-        @change="crud.reload()"
-      />
-    </template>
-
-    <template #bodyCell="{ column, record }">
-      <template v-if="column.key === 'occurred_at'">{{ dateTime(record.occurred_at) }}</template>
-      <template v-else-if="column.key === 'context'">
-        <a-tag color="error">{{ record.context }}</a-tag>
+        <a-row v-if="hasErrors" :gutter="[16, 16]" style="margin-bottom: 16px">
+          <a-col :xs="24" :xl="15">
+            <a-card size="small" class="chart-card" :title="tf('Errors_Per_Day', 'Errors per day')">
+              <apexchart
+                v-if="tsSeries[0].data.length"
+                type="bar"
+                height="300"
+                :options="tsOptions"
+                :series="tsSeries"
+              />
+              <a-empty v-else :description="$t('NodataAvailable')" style="padding: 48px 0" />
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :xl="9">
+            <a-card size="small" class="chart-card" :title="tf('By_Context', 'By context')">
+              <template v-if="byContext.length">
+                <div v-for="c in byContext" :key="c.name" class="ctx-row">
+                  <a-typography-text class="ctx-name">{{ c.name }}</a-typography-text>
+                  <div class="ctx-meter">
+                    <span class="ctx-count">{{ fmt(c.count) }}</span>
+                    <span class="ctx-track">
+                      <span class="ctx-fill" :style="{ width: shareOf(c) + '%' }"></span>
+                    </span>
+                  </div>
+                </div>
+              </template>
+              <a-empty v-else :description="$t('NodataAvailable')" style="padding: 32px 0" />
+            </a-card>
+          </a-col>
+        </a-row>
       </template>
-      <template v-else-if="column.key === 'details'">
-        <a-typography-paragraph
-          :content="String(record.details || '')"
-          :ellipsis="{ rows: 2, expandable: true }"
-          style="margin: 0; max-width: 480px"
+
+      <template #filters>
+        <DateRangePicker v-model:value="range" allow-clear @change="crud.reload()" />
+        <a-select
+          v-model:value="contextFilter"
+          style="width: 220px"
+          allow-clear
+          show-search
+          :placeholder="$t('Context')"
+          :options="contextOptions"
+          @change="crud.reload()"
         />
       </template>
-    </template>
-  </ReportPage>
+
+      <template #bodyCell="{ column, record }">
+        <template v-if="column.key === 'occurred_at'">{{ dateTime(record.occurred_at) }}</template>
+        <template v-else-if="column.key === 'context'">
+          <a-tag color="error">{{ record.context }}</a-tag>
+        </template>
+        <template v-else-if="column.key === 'message'">
+          <div class="err-message">{{ record.message }}</div>
+        </template>
+        <template v-else-if="column.key === 'location'">
+          <a-typography-text v-if="locationOf(record)" code class="err-location">{{ locationOf(record) }}</a-typography-text>
+          <span v-else>—</span>
+        </template>
+        <template v-else-if="column.key === 'actions'">
+          <a-button size="small" @click="openEntry(record)">
+            <template #icon><EyeOutlined /></template>
+            {{ $t('View') }}
+          </a-button>
+        </template>
+      </template>
+    </ReportPage>
+
+    <!-- Full error: message, where it happened, extra fields and stack trace -->
+    <a-drawer
+      v-model:open="entryOpen"
+      :title="$t('Details')"
+      placement="right"
+      :width="drawerWidth"
+    >
+      <template v-if="entry">
+        <a-alert type="error" :message="entry.message" style="margin-bottom: 16px; white-space: pre-wrap; word-break: break-word" />
+
+        <a-descriptions :column="1" size="small" bordered>
+          <a-descriptions-item :label="$t('Context')">
+            <a-tag color="error" style="margin: 0">{{ entry.context || '—' }}</a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item :label="$t('Occurred_At')">{{ dateTime(entry.occurred_at) }}</a-descriptions-item>
+          <a-descriptions-item v-if="entryDetails.level" :label="$t('Level')">{{ entryDetails.level }}</a-descriptions-item>
+          <a-descriptions-item v-if="entryDetails.exception" :label="tf('Err_Exception', 'Exception')">
+            <span class="err-break">{{ entryDetails.exception }}</span>
+            <template v-if="entryDetails.code"> ({{ entryDetails.code }})</template>
+          </a-descriptions-item>
+          <a-descriptions-item v-if="entryDetails.file" :label="$t('File')">
+            <span class="err-break">{{ entryDetails.file }}<template v-if="entryDetails.line">:{{ entryDetails.line }}</template></span>
+          </a-descriptions-item>
+          <a-descriptions-item v-if="entryDetails.user_id" :label="$t('User')">#{{ entryDetails.user_id }}</a-descriptions-item>
+          <a-descriptions-item v-for="(value, key) in extraFields" :key="key" :label="humanize(key)">
+            <span class="err-break">{{ value }}</span>
+          </a-descriptions-item>
+        </a-descriptions>
+
+        <template v-if="entryTrace">
+          <div class="trace-head">
+            <h4>{{ tf('Err_Stack_Trace', 'Stack trace') }}</h4>
+            <a-button size="small" @click="copyTrace">
+              <template #icon><CopyOutlined /></template>
+              {{ $t('Copy') }}
+            </a-button>
+          </div>
+          <pre class="trace">{{ entryTrace }}</pre>
+        </template>
+      </template>
+    </a-drawer>
+  </div>
 </template>
 
 <script setup>
@@ -110,7 +160,8 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { BugOutlined, CheckCircleOutlined } from '@ant-design/icons-vue';
+import { message } from 'ant-design-vue';
+import { BugOutlined, CheckCircleOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons-vue';
 import ReportPage from '../../components/ReportPage.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
@@ -188,17 +239,116 @@ function shareOf(c) {
 
 /* ---------------------------------------------------------------- table */
 const columns = computed(() => [
-  { title: t('Context'), key: 'context', dataIndex: 'context', sorter: true, exportValue: r => r.context },
-  { title: t('Message'), dataIndex: 'message', key: 'message', ellipsis: true },
-  { title: t('Details'), key: 'details', dataIndex: 'details', exportValue: r => String(r.details || '') },
   { title: t('Occurred_At'), key: 'occurred_at', dataIndex: 'occurred_at', sorter: true, exportValue: r => dateTime(r.occurred_at) },
+  { title: t('Context'), key: 'context', dataIndex: 'context', sorter: true, exportValue: r => r.context },
+  { title: t('Message'), dataIndex: 'message', key: 'message', exportValue: r => r.message },
+  { title: t('Location'), key: 'location', dataIndex: 'details', sorter: false, exportValue: r => locationOf(r) },
+  { title: '', key: 'actions', width: 90 },
 ]);
+
+/* ------------------------------------------------------------- details
+ * `details` is usually JSON — imported log entries carry
+ * { source, level, exception, code, file, line, user_id, context, trace },
+ * app-recorded ones their own keys (e.g. Twilio: { receiver, trace }) —
+ * but older rows may hold plain text. */
+function parseDetails(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : { text: String(raw) };
+  } catch (e) {
+    return { text: String(raw) };
+  }
+}
+
+/** "Connection.php:824" — the file name is enough in a table cell. */
+function locationOf(record) {
+  const d = parseDetails(record.details);
+  if (!d.file) return '';
+  const name = String(d.file).split(/[\\/]/).pop();
+  return d.line ? `${name}:${d.line}` : name;
+}
+
+const entryOpen = ref(false);
+const entry = ref(null);
+const drawerWidth = computed(() => Math.min(760, window.innerWidth));
+const entryDetails = computed(() => parseDetails(entry.value?.details));
+
+const KNOWN_KEYS = ['source', 'level', 'exception', 'code', 'file', 'line', 'user_id', 'trace', 'text'];
+const extraFields = computed(() => {
+  const out = {};
+  Object.entries(entryDetails.value).forEach(([key, value]) => {
+    if (KNOWN_KEYS.includes(key) || value === null || value === '') return;
+    out[key] = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  });
+  return out;
+});
+const entryTrace = computed(() => {
+  const d = entryDetails.value;
+  return String(d.trace || d.text || '').trim();
+});
+
+function openEntry(record) {
+  entry.value = record;
+  entryOpen.value = true;
+}
+
+async function copyTrace() {
+  const text = [entry.value?.message, entryDetails.value.file ? `${entryDetails.value.file}:${entryDetails.value.line || ''}` : '', entryTrace.value]
+    .filter(Boolean)
+    .join('\n\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    message.success(t('Copied'));
+  } catch (e) {
+    message.error(t('InvalidData'));
+  }
+}
+
+function humanize(key) {
+  const s = String(key).replace(/_/g, ' ').replace(/([a-z\d])([A-Z])/g, '$1 $2').trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 onMounted(() => crud.fetchRows());
 </script>
 
 <style scoped>
 .chart-card { border-radius: 10px; }
+/* Table cells: full message (wrapped, capped), short file:line. */
+.err-message {
+  max-width: 560px;
+  white-space: normal;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.err-location { white-space: nowrap; }
+.err-break { word-break: break-all; }
+
+/* Drawer stack trace */
+.trace-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 20px 0 8px;
+}
+.trace-head h4 { margin: 0; }
+.trace {
+  max-height: 460px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+  background: rgba(128, 128, 128, 0.1);
+}
+
 
 /* Incident banner: red while errors exist, green when the scope is clean. */
 .err-banner {

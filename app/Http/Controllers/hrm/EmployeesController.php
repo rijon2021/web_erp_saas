@@ -192,10 +192,10 @@ class EmployeesController extends Controller
         $this->validate($request, [
             'firstname' => 'required|string',
             'lastname' => 'required|string',
-            'country' => 'required|string',
+            'country' => 'nullable|string',
             'gender' => 'required',
-            'phone' => 'required',
-            'total_leave' => 'required|numeric|min:0',
+            'phone' => 'nullable',
+            'total_leave' => 'nullable|numeric|min:0',
             'company_id' => 'required',
             'department_id' => 'required',
             'designation_id' => 'required',
@@ -229,20 +229,22 @@ class EmployeesController extends Controller
         $data['basic_salary'] = $request['basic_salary'];
         $data['hourly_rate'] = $request['hourly_rate'];
 
-        // calculation of total_leave & remaining_leave
+        // calculation of total_leave & remaining_leave (a blank annual leave means 0)
+        $total_leave = $request->filled('total_leave') ? $request->total_leave : 0;
+        $remaining_leave = $request->filled('remaining_leave') ? $request->remaining_leave : 0;
         $employee_leave_info = Employee::find($id);
         if ($employee_leave_info->total_leave == 0) {
-            $data['total_leave'] = $request->total_leave;
-            $data['remaining_leave'] = $request->total_leave;
-        } elseif ($request->total_leave > $employee_leave_info->total_leave) {
-            $data['total_leave'] = $request->total_leave;
-            $data['remaining_leave'] = $request->remaining_leave + ($request->total_leave - $employee_leave_info->total_leave);
-        } elseif ($request->total_leave < $employee_leave_info->total_leave) {
-            $data['total_leave'] = $request->total_leave;
-            $data['remaining_leave'] = $request->remaining_leave - ($employee_leave_info->total_leave - $request->total_leave);
+            $data['total_leave'] = $total_leave;
+            $data['remaining_leave'] = $total_leave;
+        } elseif ($total_leave > $employee_leave_info->total_leave) {
+            $data['total_leave'] = $total_leave;
+            $data['remaining_leave'] = $remaining_leave + ($total_leave - $employee_leave_info->total_leave);
+        } elseif ($total_leave < $employee_leave_info->total_leave) {
+            $data['total_leave'] = $total_leave;
+            $data['remaining_leave'] = $remaining_leave - ($employee_leave_info->total_leave - $total_leave);
 
         } else {
-            $data['total_leave'] = $request->total_leave;
+            $data['total_leave'] = $total_leave;
             $data['remaining_leave'] = $employee_leave_info->remaining_leave;
         }
 

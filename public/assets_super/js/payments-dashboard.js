@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', function() {
         data: {
             labels: data.labels,
             datasets: [{
-                label: 'Revenue (' + currencySymbol + ')',
+                label: __s('revenue') + ' (' + currencySymbol + ')',
                 data: data.revenue,
                 backgroundColor: 'rgba(99, 102, 241, 0.15)',
                 borderColor: '#6366f1',

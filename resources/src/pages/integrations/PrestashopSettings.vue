@@ -1,9 +1,9 @@
 <template>
   <div class="page">
-    <PageHeader title="PrestaShop" :breadcrumb="['Ecommerce Platforms', 'PrestaShop']">
+    <PageHeader title="PrestaShop" :breadcrumb="[$t('Int_Ecommerce_Platforms'), 'PrestaShop']">
       <template #actions>
         <a-tag v-if="!isLoading" :color="state.configured && state.enabled ? 'success' : 'default'" style="font-size: 13px; padding: 4px 12px">
-          {{ state.configured ? (state.enabled ? $t('Enabled') : $t('Disabled')) : 'Not configured' }}
+          {{ state.configured ? (state.enabled ? $t('Enabled') : $t('Disabled')) : $t('Int_Not_Configured') }}
         </a-tag>
       </template>
     </PageHeader>
@@ -18,43 +18,42 @@
           <template #icon><GlobalOutlined /></template>
         </a-avatar>
         <div>
-          <div class="hero-title">PrestaShop store sync</div>
-          <div class="muted">Sync products, stock and orders with your PrestaShop store over its webservice API.</div>
+          <div class="hero-title">{{ $t('Int_Store_Sync_Title', { name: 'PrestaShop' }) }}</div>
+          <div class="muted">{{ $t('Presta_Hero_Desc') }}</div>
         </div>
       </div>
 
       <a-tabs v-model:activeKey="tab">
         <!-- ============================ Connection ============================ -->
-        <a-tab-pane key="connection" tab="Connection">
-          <a-card size="small" title="Store connection" style="max-width: 640px">
+        <a-tab-pane key="connection" :tab="$t('Connection')">
+          <a-card size="small" :title="$t('Int_Store_Connection')" style="max-width: 640px">
             <a-form layout="vertical">
-              <a-form-item label="Store URL">
+              <a-form-item :label="$t('Store_URL')">
                 <a-input v-model:value="form.store_url" placeholder="https://store.example.com" />
               </a-form-item>
-              <a-form-item label="Webservice key">
+              <a-form-item :label="$t('Presta_Webservice_Key')">
                 <a-input-password
                   v-model:value="form.api_key"
-                  :placeholder="state.has_api_key ? 'Saved — paste a new key to replace it' : 'From Advanced Parameters → Webservice'"
+                  :placeholder="state.has_api_key ? $t('Int_Saved_Paste_New_Key') : $t('Presta_Key_Placeholder')"
                   autocomplete="off"
                 />
                 <div class="muted" style="margin-top: 4px">
-                  Enable the webservice in PrestaShop (Advanced Parameters → Webservice), create a key with
-                  permissions on products, stock_availables, orders and customers, and paste it here. Stored write-only.
+                  {{ $t('Presta_Key_Help') }}
                 </div>
               </a-form-item>
-              <a-form-item label="Shop language ID">
+              <a-form-item :label="$t('Presta_Shop_Language_ID')">
                 <a-input-number v-model:value="form.default_language_id" :min="1" style="width: 120px" />
-                <div class="muted" style="margin-top: 4px">Language id used for product names when pushing (1 = the shop's first language).</div>
+                <div class="muted" style="margin-top: 4px">{{ $t('Presta_Language_Help') }}</div>
               </a-form-item>
-              <a-form-item label="Stock warehouse">
+              <a-form-item :label="$t('Int_Stock_Warehouse')">
                 <a-select
                   v-model:value="form.warehouse_id"
-                  :options="[{ value: null, label: 'All warehouses (aggregate)' }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
+                  :options="[{ value: null, label: $t('Int_All_Warehouses_Aggregate') }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
                 />
               </a-form-item>
               <a-space align="center" style="margin-bottom: 16px">
                 <a-switch v-model:checked="form.enabled" />
-                <span>Enable PrestaShop sync</span>
+                <span>{{ $t('Int_Enable_Sync', { name: 'PrestaShop' }) }}</span>
               </a-space>
               <div>
                 <a-space wrap>
@@ -67,28 +66,27 @@
         </a-tab-pane>
 
         <!-- ============================ Products ============================ -->
-        <a-tab-pane key="products" tab="Products" :disabled="!state.configured">
-          <StatsRow :stats="stats" :items="[['products_total', 'Total products'], ['products_mapped', 'Linked to PrestaShop']]" />
-          <a-card size="small" title="Push products to PrestaShop" style="margin-bottom: 16px">
+        <a-tab-pane key="products" :tab="$t('Products')" :disabled="!state.configured">
+          <StatsRow :stats="stats" :items="[['products_total', $t('Total_Products')], ['products_mapped', $t('Int_Linked_To', { name: 'PrestaShop' })]]" />
+          <a-card size="small" :title="$t('Int_Push_Products_To', { name: 'PrestaShop' })" style="margin-bottom: 16px">
             <p class="muted">
-              Creates missing simple products on PrestaShop (with their current stock). Already-linked products and variant
-              products are skipped — keep editing product details in PrestaShop, or pull to refresh the local copy.
+              {{ $t('Presta_Push_Desc') }}
             </p>
             <a-space>
               <a-button type="primary" :disabled="sync.running.value" @click="runSync('prestashop/sync/products?mode=push', {}, 'push')">
-                <template #icon><UploadOutlined /></template>Push to PrestaShop
+                <template #icon><UploadOutlined /></template>{{ $t('Int_Push_To', { name: 'PrestaShop' }) }}
               </a-button>
               <a-button v-if="sync.running.value" danger @click="sync.cancel()">{{ $t('Cancel') }}</a-button>
             </a-space>
           </a-card>
-          <a-card size="small" title="Pull products from PrestaShop" style="margin-bottom: 16px">
-            <p class="muted">Imports PrestaShop products, matching existing ones by reference (SKU) and creating the rest. Combinations are imported as their parent product.</p>
+          <a-card size="small" :title="$t('Int_Pull_Products_From', { name: 'PrestaShop' })" style="margin-bottom: 16px">
+            <p class="muted">{{ $t('Presta_Pull_Desc') }}</p>
             <a-space>
               <a-button :disabled="sync.running.value" @click="runSync('prestashop/sync/products?mode=pull', {}, 'pull')">
-                <template #icon><DownloadOutlined /></template>Pull from PrestaShop
+                <template #icon><DownloadOutlined /></template>{{ $t('Int_Pull_From', { name: 'PrestaShop' }) }}
               </a-button>
-              <a-popconfirm title="Reset product links? Order history keeps its links." :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="resetMappings('product')">
-                <a-button :disabled="sync.running.value">Reset product links</a-button>
+              <a-popconfirm :title="$t('Presta_Reset_Confirm')" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="resetMappings('product')">
+                <a-button :disabled="sync.running.value">{{ $t('Int_Reset_Product_Links') }}</a-button>
               </a-popconfirm>
             </a-space>
           </a-card>
@@ -96,15 +94,15 @@
         </a-tab-pane>
 
         <!-- ============================ Stock ============================ -->
-        <a-tab-pane key="stock" tab="Stock" :disabled="!state.configured">
-          <a-card size="small" title="Push stock levels to PrestaShop" style="margin-bottom: 16px">
+        <a-tab-pane key="stock" :tab="$t('Stock')" :disabled="!state.configured">
+          <a-card size="small" :title="$t('Int_Push_Stock_Levels_To', { name: 'PrestaShop' })" style="margin-bottom: 16px">
             <p class="muted">
-              Updates the shop's stock (stock_availables) for every linked product.
-              {{ state.warehouse_id ? 'Counting stock from the selected warehouse only.' : 'Counting stock across all warehouses.' }}
+              {{ $t('Presta_Stock_Desc') }}
+              {{ state.warehouse_id ? $t('Int_Counting_Stock_Selected') : $t('Int_Counting_Stock_All') }}
             </p>
             <a-space>
               <a-button type="primary" :disabled="sync.running.value" @click="runSync('prestashop/sync/inventory', {}, 'push')">
-                <template #icon><UploadOutlined /></template>Push stock
+                <template #icon><UploadOutlined /></template>{{ $t('Int_Push_Stock') }}
               </a-button>
               <a-button v-if="sync.running.value" danger @click="sync.cancel()">{{ $t('Cancel') }}</a-button>
             </a-space>
@@ -113,24 +111,23 @@
         </a-tab-pane>
 
         <!-- ============================ Orders ============================ -->
-        <a-tab-pane key="orders" tab="Orders" :disabled="!state.configured">
-          <StatsRow :stats="stats" :items="[['orders_imported', 'Orders imported'], ['customers_mapped', 'Customers linked']]" />
-          <a-card size="small" title="Pull orders from PrestaShop" style="margin-bottom: 16px">
-            <p class="muted">
-              Imports shop orders as sales (references like <code>PS-XKBKZAB…</code>), newest first. Already-imported and
-              cancelled orders are skipped, so pulling regularly is safe. PrestaShop has no webhooks — run this after busy periods.
-            </p>
+        <a-tab-pane key="orders" :tab="$t('Orders')" :disabled="!state.configured">
+          <StatsRow :stats="stats" :items="[['orders_imported', $t('Int_Orders_Imported')], ['customers_mapped', $t('Int_Customers_Linked')]]" />
+          <a-card size="small" :title="$t('Int_Pull_Orders_From', { name: 'PrestaShop' })" style="margin-bottom: 16px">
+            <i18n-t keypath="Presta_Orders_Desc" tag="p" class="muted">
+              <template #ref><code>PS-XKBKZAB…</code></template>
+            </i18n-t>
             <a-form layout="inline" style="margin-bottom: 12px">
-              <a-form-item label="Import into warehouse">
+              <a-form-item :label="$t('Int_Import_Into_Warehouse')">
                 <a-select
                   v-model:value="ordersWarehouseId" style="min-width: 220px"
-                  :options="[{ value: null, label: 'Default (settings / first warehouse)' }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
+                  :options="[{ value: null, label: $t('Int_Default_Warehouse_Option') }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
                 />
               </a-form-item>
             </a-form>
             <a-space>
               <a-button type="primary" :disabled="sync.running.value" @click="runSync('prestashop/sync/orders', ordersWarehouseId ? { warehouse_id: ordersWarehouseId } : {}, 'pull')">
-                <template #icon><DownloadOutlined /></template>Pull orders
+                <template #icon><DownloadOutlined /></template>{{ $t('Int_Pull_Orders') }}
               </a-button>
               <a-button v-if="sync.running.value" danger @click="sync.cancel()">{{ $t('Cancel') }}</a-button>
             </a-space>
@@ -139,18 +136,18 @@
         </a-tab-pane>
 
         <!-- ============================ Logs ============================ -->
-        <a-tab-pane key="logs" tab="Logs">
+        <a-tab-pane key="logs" :tab="$t('Logs')">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap">
             <a-select
               v-model:value="logLevel" style="min-width: 160px" :options="[
-                { value: '', label: 'All levels' },
-                { value: 'info', label: 'Info' },
-                { value: 'warning', label: 'Warning' },
-                { value: 'error', label: 'Error' },
+                { value: '', label: $t('Int_All_Levels') },
+                { value: 'info', label: $t('Info') },
+                { value: 'warning', label: $t('Warning') },
+                { value: 'error', label: $t('Cr_Log_Error') },
               ]" @change="loadLogs(1)"
             />
-            <a-popconfirm title="Clear all PrestaShop logs?" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="clearLogs">
-              <a-button danger size="small">Clear logs</a-button>
+            <a-popconfirm :title="$t('Int_Clear_All_Logs_Confirm', { name: 'PrestaShop' })" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="clearLogs">
+              <a-button danger size="small">{{ $t('Clear_Logs') }}</a-button>
             </a-popconfirm>
           </div>
           <a-table
@@ -168,19 +165,30 @@
         </a-tab-pane>
 
         <!-- ============================ Guide ============================ -->
-        <a-tab-pane key="guide" tab="Guide">
+        <a-tab-pane key="guide" :tab="$t('Guide')">
           <a-card size="small" style="max-width: 860px">
             <ol class="guide">
-              <li>In your PrestaShop back office, open <strong>Advanced Parameters → Webservice</strong> and enable the webservice.</li>
-              <li>Add a new key, granting <strong>View/Add/Edit</strong> on <code>products</code> and <code>stock_availables</code>, and <strong>View</strong> on <code>orders</code> and <code>customers</code>.</li>
-              <li>Paste the store URL and the key on the Connection tab, save, and run <strong>Test connection</strong>.</li>
-              <li>Pull products first if the shop already has a catalog (matches by reference/SKU); push to create missing simple products.</li>
-              <li>Push stock whenever quantities change, and pull orders regularly — PrestaShop has no webhooks, so orders only arrive when you pull.</li>
+              <i18n-t keypath="Presta_Guide_1" tag="li">
+                <template #path><strong>Advanced Parameters → Webservice</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Presta_Guide_2" tag="li">
+                <template #vae><strong>View/Add/Edit</strong></template>
+                <template #products><code>products</code></template>
+                <template #stock><code>stock_availables</code></template>
+                <template #view><strong>View</strong></template>
+                <template #orders><code>orders</code></template>
+                <template #customers><code>customers</code></template>
+              </i18n-t>
+              <i18n-t keypath="Presta_Guide_3" tag="li">
+                <template #test><strong>{{ $t('Test_Connection') }}</strong></template>
+              </i18n-t>
+              <li>{{ $t('Presta_Guide_4') }}</li>
+              <li>{{ $t('Presta_Guide_5') }}</li>
             </ol>
             <a-alert
               type="info" show-icon style="margin-top: 8px"
-              message="Product identity is the reference (SKU)"
-              description="Stocky's product code is matched to PrestaShop's reference. Keep references consistent on both sides; combinations (variants) are matched in orders by reference but are not pushed in this version."
+              :message="$t('Presta_Identity_Title')"
+              :description="$t('Presta_Identity_Desc')"
             />
           </a-card>
         </a-tab-pane>
@@ -226,9 +234,9 @@ const sync = useBatchSync();
 
 const logColumns = [
   { title: 'ID', dataIndex: 'id', width: 70 },
-  { title: 'Action', dataIndex: 'action', width: 180 },
-  { title: 'Level', key: 'level', width: 100 },
-  { title: 'Message', dataIndex: 'message', ellipsis: true },
+  { title: t('Action'), dataIndex: 'action', width: 180 },
+  { title: t('Level'), key: 'level', width: 100 },
+  { title: t('Message'), dataIndex: 'message', ellipsis: true },
   { title: t('Date'), key: 'created_at', width: 170 },
 ];
 
@@ -282,9 +290,9 @@ async function testConnection() {
   testing.value = true;
   try {
     await http.post('prestashop/test-connection');
-    message.success('Connected to PrestaShop.');
+    message.success(t('Int_Connected_To_Dot', { name: 'PrestaShop' }));
   } catch (e) {
-    message.error(e?.data?.error || e?.data?.message || 'Connection test failed');
+    message.error(e?.data?.error || e?.data?.message || t('Connection_Test_Failed'));
   } finally {
     testing.value = false;
   }
@@ -293,7 +301,7 @@ async function testConnection() {
 async function resetMappings(entityType) {
   try {
     const res = await http.post('prestashop/reset-mappings', { entity_type: entityType });
-    message.success(`Removed ${res.deleted} links`);
+    message.success(t('Int_Removed_N_Links', { n: res.deleted }));
     loadStats();
   } catch (e) {
     message.error(e?.data?.message || t('InvalidData'));

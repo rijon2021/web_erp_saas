@@ -5,7 +5,7 @@
  * component API surface the POS template actually uses is implemented.
  * Render functions keep this dependency-light (no SFC per shim).
  */
-import { h, defineComponent, onMounted, onBeforeUnmount, ref } from 'vue';
+import { h, defineComponent, onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import { registerModal, unregisterModal } from './bv';
 import VSelectCompat from './vselect';
 import LucideIcon from './LucideIcon.vue';
@@ -294,26 +294,45 @@ export const BModal = defineComponent({
         scrollable: { type: Boolean, default: false },
         centered: { type: Boolean, default: false },
         noCloseOnBackdrop: { type: Boolean, default: false },
+        // Accepted for Bootstrap-Vue parity; the shim has no Esc handler, so
+        // Esc never closes a modal anyway. Declared so it doesn't leak as a
+        // DOM attribute.
+        noCloseOnEsc: { type: Boolean, default: false },
+        hideHeaderClose: { type: Boolean, default: false },
+        // Bootstrap-Vue's v-model (visible state). null = not bound: the
+        // modal is driven only by show()/hide() and $bvModal, as before.
+        modelValue: { type: [Boolean, null], default: null },
         bodyClass: { type: [String, Array], default: null },
         modalClass: { type: [String, Array], default: null },
         dialogClass: { type: [String, Array], default: null },
     },
-    emits: ['show', 'shown', 'hide', 'hidden'],
+    emits: ['show', 'shown', 'hide', 'hidden', 'update:modelValue'],
     setup(props, { slots, emit, expose, attrs }) {
         const visible = ref(false);
         const open = () => {
             emit('show');
+            // Re-opening an open modal must not take a second scroll lock.
+            if (!visible.value) lockBodyScroll();
             visible.value = true;
-            lockBodyScroll();
+            emit('update:modelValue', true);
             // 'shown' fires after the DOM is on screen, like Bootstrap-Vue.
             requestAnimationFrame(() => requestAnimationFrame(() => emit('shown')));
         };
         const close = () => {
             emit('hide');
+            // Events still fire when already closed (callers rely on 'hidden'
+            // to reset state), but only an open modal releases its lock.
+            if (visible.value) unlockBodyScroll();
             visible.value = false;
-            unlockBodyScroll();
+            emit('update:modelValue', false);
             emit('hidden');
         };
+        // v-model="flag": without this the prop fell through as a DOM attribute
+        // and the modal never opened (POS "Internet connection restored").
+        watch(() => props.modelValue, (v) => {
+            if (v === true && !visible.value) open();
+            else if (v === false && visible.value) close();
+        }, { immediate: true });
         onMounted(() => registerModal(props.id, { open, close }));
         onBeforeUnmount(() => {
             unregisterModal(props.id);
@@ -348,7 +367,7 @@ export const BModal = defineComponent({
                 }, h('div', { class: 'modal-content' }, [
                     props.hideHeader ? null : h('header', { class: 'modal-header' }, [
                         h('h5', { class: 'modal-title' }, props.title),
-                        h('button', { type: 'button', class: 'close', 'aria-label': 'Close', onClick: close },
+                        props.hideHeaderClose ? null : h('button', { type: 'button', class: 'close', 'aria-label': 'Close', onClick: close },
                             h('span', { 'aria-hidden': 'true' }, '×')),
                     ]),
                     h('div', { class: ['modal-body', props.bodyClass] }, slots.default?.()),

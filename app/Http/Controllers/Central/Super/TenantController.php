@@ -34,14 +34,48 @@ class TenantController extends Controller
 {
     public function index(Request $request): View
     {
-        $query = Tenant::with(['domains', 'subscription.plan']);
+        // Keep status labels honest without relying on the cron: any trial or
+        // paid period that has run out is shown as expired, not as live.
+        TenantSubscription::expireLapsed();
 
-        if ($search = $request->input('search')) {
-            $query->where('id', 'like', "%{$search}%");
+        $query = Tenant::with(['domains', 'subscription.plan', 'subscriptions.plan']);
+
+        if ($search = trim((string) $request->input('search'))) {
+            $like = '%' . addcslashes(mb_strtolower($search), '%_\\') . '%';
+            $query->where(function ($q) use ($like) {
+                // JSON values compare with a binary collation — lower-case
+                // both sides so "acme" finds "Acme Ltd".
+                $q->where('id', 'like', $like)
+                  ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.company_name'))) LIKE ?", [$like])
+                  ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.admin_email'))) LIKE ?", [$like])
+                  ->orWhereHas('domains', fn ($d) => $d->where('domain', 'like', $like));
+            });
         }
 
         if ($status = $request->input('status')) {
-            if ($status === 'inactive') {
+            $now = now();
+            if ($status === 'trial') {
+                // "Trial" is a subscription state, not a tenant status.
+                $query->whereIn('id', TenantSubscription::where('status', TenantSubscription::STATUS_TRIAL)
+                    ->where('trial_ends_at', '>', $now)->select('tenant_id'));
+            } elseif ($status === 'expiring') {
+                // Live access ending within 7 days.
+                $soon = $now->copy()->addDays(7);
+                $query->where('status', Tenant::STATUS_ACTIVE)
+                    ->whereIn('id', TenantSubscription::where(function ($q) use ($now, $soon) {
+                        $q->where(fn ($p) => $p->whereIn('status', [TenantSubscription::STATUS_ACTIVE, TenantSubscription::STATUS_CANCELLED])
+                                               ->whereBetween('ends_at', [$now, $soon]))
+                          ->orWhere(fn ($t) => $t->where('status', TenantSubscription::STATUS_TRIAL)
+                                                 ->whereBetween('trial_ends_at', [$now, $soon]));
+                    })->select('tenant_id'));
+            } elseif ($status === 'grace') {
+                // In grace and not already paying again on a newer subscription.
+                $query->whereIn('id', TenantSubscription::inGrace()->select('tenant_id'))
+                    ->whereNotIn('id', TenantSubscription::grantingAccess(false)->select('tenant_id'));
+            } elseif ($status === 'unpaid') {
+                $query->where('status', Tenant::STATUS_SUSPENDED)
+                    ->where('data->suspension_reason', Tenant::SUSPENDED_NON_PAYMENT);
+            } elseif ($status === 'inactive') {
                 $query->where('status', '!=', Tenant::STATUS_PENDING)
                     ->where(function ($q) {
                         $q->whereNull('last_activity_at')
@@ -104,7 +138,8 @@ class TenantController extends Controller
         $requiresPayment = $plan && ! $plan->isFree() && ! $plan->hasTrial();
 
         if ($requiresPayment) {
-            $rules['gateway'] = ['required', 'string', 'in:stripe,paypal,paystack,flutterwave,mollie,offline'];
+            // Same list the create form renders — keeps validation in sync as gateways are added
+            $rules['gateway'] = ['required', 'string', 'in:' . implode(',', array_keys(PaymentGatewayFactory::getAvailableGateways()))];
             $rules['payment_proof'] = ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:2048'];
         }
 
@@ -198,7 +233,7 @@ class TenantController extends Controller
 
                     if ($request->hasFile('payment_proof')) {
                         $file = $request->file('payment_proof');
-                        $filename = uniqid() . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $file->getClientOriginalName());
+                        $filename = \App\Support\SafeUpload::name(\App\Support\SafeUpload::contentExtension($file, ['jpg', 'png', 'webp', 'pdf'], 'payment_proof'));
                         $file->move(public_path('images/super/payment-proofs'), $filename);
                         $updateData['payment_proof_path'] = 'images/super/payment-proofs/' . $filename;
                     }
@@ -206,7 +241,7 @@ class TenantController extends Controller
                     $payment->update($updateData);
 
                     return redirect()->route('super.tenants.show', $tenant)
-                        ->with('success', 'Tenant created with payment confirmed. Approve to provision the workspace.');
+                        ->with('success', __('super.flash.tenant_created_paid'));
                 }
 
                 $successUrl = route('super.tenants.payment-preparing', $tenant);
@@ -219,7 +254,7 @@ class TenantController extends Controller
 
             // ── Free / Trial: no payment needed — redirect to tenant page for approval ──
             return redirect()->route('super.tenants.show', $tenant)
-                ->with('success', 'Tenant created in pending status. Approve to provision the workspace.');
+                ->with('success', __('super.flash.tenant_created_pending'));
 
         } catch (\Throwable $e) {
             Log::error("Admin tenant creation failed: {$e->getMessage()}", ['exception' => $e]);
@@ -233,7 +268,7 @@ class TenantController extends Controller
                 $tenant->delete();
             }
 
-            return back()->withInput()->with('error', 'Failed to create tenant: ' . $e->getMessage());
+            return back()->withInput()->with('error', __('super.flash.tenant_create_failed', ['error' => $e->getMessage()]));
         }
     }
 
@@ -241,11 +276,33 @@ class TenantController extends Controller
     {
         $tenant->load(['domains', 'customDomains', 'subscription.plan']);
 
+        // Pending / provisioning / failed tenants have no usable database yet:
+        // the page leads with the setup banner and skips the tenant-DB queries.
+        $setup = null;
+        $needsSetup = in_array($tenant->status, [Tenant::STATUS_PENDING, Tenant::STATUS_PROVISIONING, Tenant::STATUS_FAILED], true);
+        if ($needsSetup) {
+            $plan = $tenant->subscription?->plan;
+            $isFreeOrTrial = $plan && ($plan->isFree() || $plan->hasTrial());
+            $hasPaid = $tenant->payments()->where('status', TenantBillingPayment::STATUS_PAID)->exists();
+
+            $setup = [
+                'plan'             => $plan,
+                'free_or_trial'    => $isFreeOrTrial,
+                'paid'             => $hasPaid,
+                'payment_ok'       => $isFreeOrTrial || $hasPaid,
+                // An offline proof waiting for review — linked so the admin can confirm it.
+                'awaiting_payment' => $hasPaid ? null : $tenant->payments()
+                    ->where('status', TenantBillingPayment::STATUS_PENDING)
+                    ->latest()
+                    ->first(),
+            ];
+        }
+
         // Gather usage stats by querying the tenant's isolated database
         // Note: $tenant->run() initializes tenancy which rewrites asset() URLs.
         // If run() throws, tenancy is NOT reverted — we must restore manually.
         $usageStats = [];
-        if ($tenant->subscription?->plan) {
+        if ($tenant->subscription?->plan && ! $needsSetup) {
             try {
                 $tenant->run(function () use (&$usageStats) {
                     foreach (array_keys(Plan::AVAILABLE_LIMITS) as $key) {
@@ -265,21 +322,51 @@ class TenantController extends Controller
         // Fetch tenant users (limited to first 5 for overview)
         $tenantUsers = [];
         $tenantUserCount = 0;
-        try {
-            $tenant->run(function () use (&$tenantUsers, &$tenantUserCount) {
-                $tenantUserCount = User::count();
-                $tenantUsers = User::with('roles')->orderBy('id')->limit(5)->get();
-            });
-        } catch (\Throwable) {
-            $this->revertTenancyAssets();
+        if (! $needsSetup) {
+            try {
+                $tenant->run(function () use (&$tenantUsers, &$tenantUserCount) {
+                    $tenantUserCount = User::count();
+                    $tenantUsers = User::with('roles')->orderBy('id')->limit(5)->get();
+                });
+            } catch (\Throwable) {
+                $this->revertTenancyAssets();
+            }
         }
 
-        return view('central.super.tenants.show', compact('tenant', 'usageStats', 'tenantUsers', 'tenantUserCount'));
+        // Subscription panel (live workspaces): current plan, history, payments,
+        // admin change log and the data its one-click forms need.
+        $subscriptionPanel = null;
+        if (in_array($tenant->status, [Tenant::STATUS_ACTIVE, Tenant::STATUS_SUSPENDED, Tenant::STATUS_CANCELLED], true)) {
+            $current = $tenant->currentSubscription();
+            $current?->load('plan');
+            $latest = $tenant->subscriptions()->with('plan')->latest('id')->first();
+
+            $plans = Plan::where('is_active', true)->orderBy('price')->get();
+            if ($current?->plan && ! $plans->contains('id', $current->plan_id)) {
+                $plans->push($current->plan);
+            }
+
+            $subscriptionPanel = [
+                'current'        => $current,
+                // A newer row still waiting for payment (plan change / renewal checkout).
+                'pending_change' => ($latest && $current && $latest->id !== $current->id
+                    && in_array($latest->status, [TenantSubscription::STATUS_PENDING], true)) ? $latest : null,
+                'history'        => $tenant->subscriptions()->with('plan')->latest('id')->limit(8)->get(),
+                'payments'       => $tenant->payments()->with('plan')->latest()->limit(5)->get(),
+                'events'         => \App\Models\Central\SubscriptionEvent::available()
+                    ? \App\Models\Central\SubscriptionEvent::with('admin')->where('tenant_id', $tenant->id)->latest('id')->limit(10)->get()
+                    : collect(),
+                'events_ready'   => \App\Models\Central\SubscriptionEvent::available(),
+                'plans'          => $plans,
+            ];
+        }
+
+        return view('central.super.tenants.show', compact('tenant', 'usageStats', 'tenantUsers', 'tenantUserCount', 'setup', 'subscriptionPanel'));
     }
 
     public function edit(Tenant $tenant): View
     {
-        $tenant->load('domains');
+        $tenant->load(['domains', 'customDomains']);
 
         return view('central.super.tenants.edit', compact('tenant'));
     }
@@ -309,6 +396,17 @@ class TenantController extends Controller
         // Only update status if it actually changed.
         if ($validated['status'] !== $tenant->status) {
             $updateData['status'] = $validated['status'];
+
+            // Keep the suspension bookkeeping in step with suspend()/reactivate():
+            // a suspension set here is an admin one (never lifted by a payment),
+            // and leaving "suspended" clears any stale reason.
+            if ($validated['status'] === Tenant::STATUS_SUSPENDED) {
+                $updateData['status_before_suspension'] = $tenant->status;
+                $updateData['suspension_reason'] = Tenant::SUSPENDED_BY_ADMIN;
+            } else {
+                $updateData['suspension_reason'] = null;
+                $updateData['status_before_suspension'] = null;
+            }
         }
 
         if (array_key_exists('locale', $validated)) {
@@ -321,7 +419,7 @@ class TenantController extends Controller
 
         $tenant->update($updateData);
 
-        return redirect()->route('super.tenants.show', $tenant)->with('success', 'Tenant updated.');
+        return redirect()->route('super.tenants.show', $tenant)->with('success', __('super.flash.tenant_updated'));
     }
 
     public function suspend(Tenant $tenant): RedirectResponse
@@ -332,9 +430,11 @@ class TenantController extends Controller
             $tenant->status_before_suspension = $tenant->status;
         }
         $tenant->status = Tenant::STATUS_SUSPENDED;
+        // An admin suspension is never lifted by a payment.
+        $tenant->suspension_reason = Tenant::SUSPENDED_BY_ADMIN;
         $tenant->save();
 
-        return back()->with('success', 'Tenant suspended.');
+        return back()->with('success', __('super.flash.tenant_suspended'));
     }
 
     public function reactivate(Tenant $tenant): RedirectResponse
@@ -343,22 +443,51 @@ class TenantController extends Controller
 
         $tenant->status = $previous;
         $tenant->status_before_suspension = null;
+        $tenant->suspension_reason = null;
         $tenant->save();
 
-        return back()->with('success', 'Tenant reactivated.');
+        return back()->with('success', __('super.flash.tenant_reactivated'));
     }
 
     public function cancel(Tenant $tenant): RedirectResponse
     {
         $tenant->update(['status' => 'cancelled']);
 
-        return back()->with('success', 'Tenant cancelled.');
+        return back()->with('success', __('super.flash.tenant_cancelled'));
     }
 
-    public function approve(Request $request, Tenant $tenant): RedirectResponse
+    public function approve(Request $request, Tenant $tenant): RedirectResponse|JsonResponse
+    {
+        return $this->asyncResult($request, $this->runApprove($request, $tenant));
+    }
+
+    /**
+     * The tenant page submits Approve / Retry in the background and then polls
+     * the provisioning status. Answer such a request (Accept: application/json)
+     * with the outcome, so an early refusal (not pending, payment missing,
+     * database unreachable) shows its own message instead of a poll that
+     * waits for a status change that never comes.
+     */
+    private function asyncResult(Request $request, RedirectResponse $response): RedirectResponse|JsonResponse
+    {
+        if (! $request->expectsJson()) {
+            return $response;
+        }
+
+        $session = $request->session();
+        $error = $session->pull('error');
+        $success = $session->pull('success');
+
+        return response()->json([
+            'ok'      => $error === null,
+            'message' => $error ?? $success,
+        ], $error === null ? 200 : 422);
+    }
+
+    protected function runApprove(Request $request, Tenant $tenant): RedirectResponse
     {
         if (! $tenant->isPending()) {
-            return back()->with('error', 'This tenant is not in pending status.');
+            return back()->with('error', __('super.flash.tenant_not_pending'));
         }
 
         // Payment guard: tenant must be paid, free, or on trial
@@ -371,7 +500,7 @@ class TenantController extends Controller
                 ->exists();
 
             if (! $hasPaidPayment) {
-                return back()->with('error', 'Payment must be confirmed before approval. Mark the payment as paid first.');
+                return back()->with('error', __('super.flash.tenant_payment_first'));
             }
         }
 
@@ -408,17 +537,22 @@ class TenantController extends Controller
 
                     $pdo->exec("CREATE DATABASE `{$dbName}` CHARACTER SET {$charset} COLLATE {$collation}");
                 } catch (\Throwable $createErr) {
-                    return back()->with('error', "Database \"{$creds['database']}\" does not exist and could not be created: {$createErr->getMessage()}")
+                    return back()->with('error', __('super.flash.db_create_failed', ['name' => $creds['database'], 'error' => $createErr->getMessage()]))
                                  ->withInput();
                 }
             } else {
-                return back()->with('error', "Connection failed: {$e->getMessage()}")
+                return back()->with('error', __('super.flash.db_connection_failed', ['error' => $e->getMessage()]))
                              ->withInput();
             }
         } catch (\Throwable $e) {
-            return back()->with('error', "Connection failed: {$e->getMessage()}")
+            return back()->with('error', __('super.flash.db_connection_failed', ['error' => $e->getMessage()]))
                          ->withInput();
         }
+
+        // Leave 'pending' right away: a reload shows the provisioning state
+        // instead of the approve form (no double approve), and the previous
+        // attempt's error can't be mistaken for this attempt's result.
+        $tenant->update(['status' => Tenant::STATUS_PROVISIONING, 'provisioning_error' => null]);
 
         // Run provisioning after the HTTP response is sent (works for both shared and VPS)
         $tenantId = $tenant->id;
@@ -428,7 +562,8 @@ class TenantController extends Controller
             }
 
             try {
-                $job = new ProvisionTenantWorkspace($tenantId);
+                // No welcome email: approval sends TenantApprovedMail below.
+                $job = new ProvisionTenantWorkspace($tenantId, false, false);
                 $job->handle();
 
                 $tenant = Tenant::find($tenantId);
@@ -436,38 +571,9 @@ class TenantController extends Controller
                     return;
                 }
 
-                // Activate subscription on success
+                // Activate subscription + approval email on success
                 if ($tenant->status === Tenant::STATUS_ACTIVE) {
-                    $subscription = TenantSubscription::where('tenant_id', $tenantId)->first();
-                    if ($subscription && $subscription->status === 'pending') {
-                        // A trial row only becomes a live trial while its window
-                        // is still open — approving an old tenant must not
-                        // resurrect a lapsed trial.
-                        if ($subscription->trial_ends_at !== null) {
-                            $newStatus = $subscription->trial_ends_at->isFuture()
-                                ? TenantSubscription::STATUS_TRIAL
-                                : TenantSubscription::STATUS_EXPIRED;
-                        } else {
-                            $newStatus = TenantSubscription::STATUS_ACTIVE;
-                        }
-                        $subscription->update(['status' => $newStatus]);
-                    }
-
-                    // Send approval email
-                    try {
-                        $settings = GeneralSetting::instance();
-                        $appName = $settings->app_name ?? config('app.name');
-
-                        Mail::to($tenant->admin_email)->send(new TenantApprovedMail(
-                            $tenant->company_name ?? 'Your Company',
-                            $tenant->getTenantUrl(),
-                            $tenant->getLoginUrl(),
-                            $appName,
-                            $tenant->locale
-                        ));
-                    } catch (\Throwable $e) {
-                        Log::warning("Failed to send tenant approval email: {$e->getMessage()}");
-                    }
+                    $this->completeFirstGoLive($tenant);
                 }
             } catch (\Throwable $e) {
                 Log::error("Approve provisioning failed for tenant {$tenantId}: {$e->getMessage()}");
@@ -478,7 +584,43 @@ class TenantController extends Controller
             }
         });
 
-        return back()->with('success', 'Tenant approved. Provisioning started — refresh this page to check progress.');
+        return back()->with('success', __('super.flash.tenant_approved'));
+    }
+
+    /**
+     * A workspace just went live for the first time (approval, or a retry of
+     * a first provisioning that failed): the signup subscription's trial /
+     * paid period starts now — the customer had no access while waiting —
+     * and they get the "approved, your workspace is ready" email. Covers rows
+     * still pending, rows a payment already activated, and rows the cron
+     * expired during the wait.
+     */
+    private function completeFirstGoLive(Tenant $tenant): void
+    {
+        $subscription = TenantSubscription::where('tenant_id', $tenant->id)->oldest('id')->first();
+        if ($subscription && in_array($subscription->status, [
+            TenantSubscription::STATUS_PENDING,
+            TenantSubscription::STATUS_ACTIVE,
+            TenantSubscription::STATUS_TRIAL,
+            TenantSubscription::STATUS_EXPIRED,
+        ], true)) {
+            $subscription->startAtGoLive();
+        }
+
+        try {
+            $settings = GeneralSetting::instance();
+            $appName = $settings->app_name ?? config('app.name');
+
+            Mail::to($tenant->admin_email)->send(new TenantApprovedMail(
+                $tenant->company_name ?? 'Your Company',
+                $tenant->getTenantUrl(),
+                $tenant->getLoginUrl(),
+                $appName,
+                $tenant->locale
+            ));
+        } catch (\Throwable $e) {
+            Log::warning("Failed to send tenant approval email: {$e->getMessage()}");
+        }
     }
 
     /**
@@ -511,7 +653,7 @@ class TenantController extends Controller
         try {
             $this->attemptDatabaseConnection($creds);
 
-            return response()->json(['success' => true, 'message' => 'Connection successful.']);
+            return response()->json(['success' => true, 'message' => __('super.flash.conn_successful')]);
         } catch (\Throwable $e) {
             // Check if this is specifically "unknown database" (MySQL error 1049)
             if ($e instanceof \PDOException && $e->getCode() == 1049) {
@@ -545,7 +687,7 @@ class TenantController extends Controller
                 'source'          => 'tenant.test_connection',
             ]);
 
-            return response()->json(['success' => false, 'message' => "Connection failed: {$e->getMessage()}"]);
+            return response()->json(['success' => false, 'message' => __('super.flash.db_connection_failed', ['error' => $e->getMessage()])]);
         }
     }
 
@@ -719,9 +861,9 @@ class TenantController extends Controller
 
             $pdo->exec("CREATE DATABASE `{$dbName}` CHARACTER SET {$charset} COLLATE {$collation}");
 
-            return response()->json(['success' => true, 'message' => "Database \"{$dbName}\" created successfully."]);
+            return response()->json(['success' => true, 'message' => __('super.flash.db_created', ['name' => $dbName])]);
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => "Failed to create database: {$e->getMessage()}"]);
+            return response()->json(['success' => false, 'message' => __('super.flash.db_create_error', ['error' => $e->getMessage()])]);
         }
     }
 
@@ -731,13 +873,13 @@ class TenantController extends Controller
     public function rerunMigrations(Tenant $tenant): RedirectResponse
     {
         if (! $tenant->hasDatabaseCredentials()) {
-            return back()->with('error', 'No database credentials configured for this tenant.');
+            return back()->with('error', __('super.flash.db_no_credentials'));
         }
 
         try {
             $this->attemptDatabaseConnection($tenant->getDatabaseCredentials());
         } catch (\Throwable $e) {
-            return back()->with('error', "Cannot connect to tenant database: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_cannot_connect', ['error' => $e->getMessage()]));
         }
 
         try {
@@ -757,9 +899,9 @@ class TenantController extends Controller
                 }
             });
 
-            return back()->with('success', 'Migrations re-run successfully.');
+            return back()->with('success', __('super.flash.db_migrations_ok'));
         } catch (\Throwable $e) {
-            return back()->with('error', "Migration failed: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_migrations_failed', ['error' => $e->getMessage()]));
         }
     }
 
@@ -787,7 +929,7 @@ class TenantController extends Controller
         try {
             $this->attemptDatabaseConnection($creds);
 
-            return response()->json(['success' => true, 'message' => 'Connection successful.']);
+            return response()->json(['success' => true, 'message' => __('super.flash.conn_successful')]);
         } catch (\Throwable $e) {
             if ($e instanceof \PDOException && $e->getCode() == 1049) {
                 try {
@@ -803,7 +945,7 @@ class TenantController extends Controller
                 }
             }
 
-            return response()->json(['success' => false, 'message' => "Connection failed: {$e->getMessage()}"]);
+            return response()->json(['success' => false, 'message' => __('super.flash.db_connection_failed', ['error' => $e->getMessage()])]);
         }
     }
 
@@ -837,9 +979,9 @@ class TenantController extends Controller
 
             $pdo->exec("CREATE DATABASE `{$dbName}` CHARACTER SET {$charset} COLLATE {$collation}");
 
-            return response()->json(['success' => true, 'message' => "Database \"{$dbName}\" created successfully."]);
+            return response()->json(['success' => true, 'message' => __('super.flash.db_created', ['name' => $dbName])]);
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => "Failed to create database: {$e->getMessage()}"]);
+            return response()->json(['success' => false, 'message' => __('super.flash.db_create_error', ['error' => $e->getMessage()])]);
         }
     }
 
@@ -906,6 +1048,14 @@ class TenantController extends Controller
             'db_port'     => ['required', 'integer', 'min:1', 'max:65535'],
         ]);
 
+        // Credentials typed in by an admin are theirs, not a dedicated account
+        // created at provisioning — unless they kept that same account, in
+        // which case deleting the tenant should still drop it.
+        if ($tenant->usesDedicatedDatabaseUser()
+            && $request->input('db_username') !== $tenant->tenancy_db_username) {
+            $tenant->setInternal('dedicated_db_user', false);
+        }
+
         // Save encrypted credentials
         $tenant->setDatabaseCredentials(
             $request->input('db_host'),
@@ -919,17 +1069,42 @@ class TenantController extends Controller
         try {
             $this->attemptDatabaseConnection($tenant->getDatabaseCredentials());
         } catch (\Throwable $e) {
-            return back()->with('error', "Credentials saved but connection failed: {$e->getMessage()}")
+            return back()->with('error', __('super.flash.db_creds_saved_failed', ['error' => $e->getMessage()]))
                          ->withInput();
         }
 
-        return back()->with('success', 'Database credentials updated and connection verified.');
+        return back()->with('success', __('super.flash.db_creds_verified'));
+    }
+
+    /**
+     * Move an auto-provisioned tenant off the shared central database account
+     * onto its own MySQL user (the one new workspaces get at provisioning).
+     */
+    public function createDedicatedDatabaseUser(Tenant $tenant): RedirectResponse
+    {
+        if ($tenant->hasDatabaseCredentials()) {
+            return back()->with('error', __('super.flash.db_dedicated_not_needed'));
+        }
+
+        $database = $tenant->getEffectiveDatabaseCredentials()['database'] ?? null;
+        $service = app(\App\Services\TenantDatabaseUser::class);
+
+        if (! $database || ! $service->create($tenant, $database)) {
+            return back()->with('error', __('super.flash.db_dedicated_failed', ['error' => $service->lastError ?? '—']));
+        }
+
+        return back()->with('success', __('super.flash.db_dedicated_ok', ['user' => $tenant->tenancy_db_username]));
     }
 
     /**
      * Re-provision: wipe DB, re-run migrations, re-seed, re-create admin, re-install passport, reconfigure company, copy images.
      */
-    public function reprovision(Tenant $tenant): RedirectResponse
+    public function reprovision(Request $request, Tenant $tenant): RedirectResponse|JsonResponse
+    {
+        return $this->asyncResult($request, $this->runReprovision($tenant));
+    }
+
+    protected function runReprovision(Tenant $tenant): RedirectResponse
     {
         // Use effective credentials so this works for BOTH admin-provided
         // (shared-hosting) and auto-provisioned (VPS) tenants. hasDatabaseCredentials()
@@ -937,7 +1112,7 @@ class TenantController extends Controller
         // a failed auto-provisioned tenant whose DB the job creates itself.
         $creds = $tenant->getEffectiveDatabaseCredentials();
         if (empty($creds['database'])) {
-            return back()->with('error', 'No database configured for this tenant.');
+            return back()->with('error', __('super.flash.db_none_configured'));
         }
 
         try {
@@ -949,9 +1124,12 @@ class TenantController extends Controller
             try {
                 $this->attemptServerConnection($creds);
             } catch (\Throwable $serverError) {
-                return back()->with('error', "Cannot connect to tenant database server: {$serverError->getMessage()}");
+                return back()->with('error', __('super.flash.db_cannot_connect_server', ['error' => $serverError->getMessage()]));
             }
         }
+
+        // Decided before anything changes: has this workspace ever been live?
+        $firstGoLive = $tenant->neverWentLive();
 
         // Mark as provisioning now — the heavy work runs after the response is sent
         $tenant->update(['status' => Tenant::STATUS_PROVISIONING, 'provisioning_error' => null]);
@@ -960,7 +1138,7 @@ class TenantController extends Controller
         // This avoids web server gateway timeouts (nginx/apache) that kill the
         // PHP process when migrations + seeding take longer than ~60 seconds.
         $tenantId = $tenant->id;
-        app()->terminating(function () use ($tenantId) {
+        app()->terminating(function () use ($tenantId, $firstGoLive) {
             // Ensure the browser connection is fully closed before heavy work
             if (function_exists('fastcgi_finish_request')) {
                 fastcgi_finish_request();
@@ -970,23 +1148,20 @@ class TenantController extends Controller
                 $job = new ProvisionTenantWorkspace($tenantId, true);
                 $job->handle();
 
-                // Mirror approve(): once the workspace is live, lift the
-                // subscription out of 'pending' so billing status reflects the
-                // active tenant. Without this a re-provisioned tenant whose
-                // first provision failed would keep showing "Pending" forever.
                 $tenant = Tenant::find($tenantId);
                 if ($tenant && $tenant->status === Tenant::STATUS_ACTIVE) {
-                    $subscription = TenantSubscription::where('tenant_id', $tenantId)->first();
-                    if ($subscription && $subscription->status === TenantSubscription::STATUS_PENDING) {
-                        // Same rule as approve(): never resurrect a lapsed trial.
-                        if ($subscription->trial_ends_at !== null) {
-                            $newStatus = $subscription->trial_ends_at->isFuture()
-                                ? TenantSubscription::STATUS_TRIAL
-                                : TenantSubscription::STATUS_EXPIRED;
-                        } else {
-                            $newStatus = TenantSubscription::STATUS_ACTIVE;
+                    if ($firstGoLive) {
+                        // Retry of a first provisioning that failed (e.g. after
+                        // an approval): finish exactly like approve() — the
+                        // period starts now and the customer is told.
+                        $this->completeFirstGoLive($tenant);
+                    } else {
+                        // Re-install of a live workspace keeps its dates; only
+                        // a row still pending is lifted so billing reflects it.
+                        $subscription = TenantSubscription::where('tenant_id', $tenantId)->oldest('id')->first();
+                        if ($subscription && $subscription->status === TenantSubscription::STATUS_PENDING) {
+                            $subscription->startAtGoLive();
                         }
-                        $subscription->update(['status' => $newStatus]);
                     }
                 }
             } catch (\Throwable $e) {
@@ -998,7 +1173,7 @@ class TenantController extends Controller
             }
         });
 
-        return back()->with('success', 'Re-provisioning started. The page will show "Provisioning" status — refresh to check when it completes.');
+        return back()->with('success', __('super.flash.tenant_reprovision'));
     }
 
     /**
@@ -1007,13 +1182,13 @@ class TenantController extends Controller
     public function resetDatabase(Tenant $tenant): RedirectResponse
     {
         if (! $tenant->hasDatabaseCredentials()) {
-            return back()->with('error', 'No database credentials configured for this tenant.');
+            return back()->with('error', __('super.flash.db_no_credentials'));
         }
 
         try {
             $this->attemptDatabaseConnection($tenant->getDatabaseCredentials());
         } catch (\Throwable $e) {
-            return back()->with('error', "Cannot connect to tenant database: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_cannot_connect', ['error' => $e->getMessage()]));
         }
 
         try {
@@ -1032,9 +1207,9 @@ class TenantController extends Controller
                 ]);
             });
 
-            return back()->with('success', 'Database reset successfully. All tables dropped and migrations re-run.');
+            return back()->with('success', __('super.flash.db_reset_ok'));
         } catch (\Throwable $e) {
-            return back()->with('error', "Database reset failed: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_reset_failed', ['error' => $e->getMessage()]));
         }
     }
 
@@ -1044,13 +1219,13 @@ class TenantController extends Controller
     public function reseed(Tenant $tenant): RedirectResponse
     {
         if (! $tenant->hasDatabaseCredentials()) {
-            return back()->with('error', 'No database credentials configured for this tenant.');
+            return back()->with('error', __('super.flash.db_no_credentials'));
         }
 
         try {
             $this->attemptDatabaseConnection($tenant->getDatabaseCredentials());
         } catch (\Throwable $e) {
-            return back()->with('error', "Cannot connect to tenant database: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_cannot_connect', ['error' => $e->getMessage()]));
         }
 
         try {
@@ -1090,9 +1265,9 @@ class TenantController extends Controller
                 }
             }
 
-            return back()->with('success', 'Database re-seeded and default images restored successfully.');
+            return back()->with('success', __('super.flash.db_reseed_ok'));
         } catch (\Throwable $e) {
-            return back()->with('error', "Re-seeding failed: {$e->getMessage()}");
+            return back()->with('error', __('super.flash.db_reseed_failed', ['error' => $e->getMessage()]));
         }
     }
 
@@ -1115,6 +1290,9 @@ class TenantController extends Controller
         } catch (\Throwable $e) {
             Log::warning("Failed to drop tenant database for {$tenantId}: {$e->getMessage()}");
         }
+
+        // 1b) Drop the tenant's own MySQL account, when provisioning created one.
+        app(\App\Services\TenantDatabaseUser::class)->drop($tenant);
 
         // 2) Delete tenant storage directory
         try {
@@ -1141,6 +1319,15 @@ class TenantController extends Controller
             PendingRegistration::where('tenant_id', $tenantId)->delete();
             TenantBillingPayment::where('tenant_id', $tenantId)->delete();
             TenantSubscription::where('tenant_id', $tenantId)->delete();
+            // Add-ons (and their still-open purchase / renewal links), so the
+            // daily add-on sweep never trips over a deleted workspace.
+            if (\App\Models\Central\Addon::tablesReady()) {
+                $addonIds = \App\Models\Central\TenantAddon::where('tenant_id', $tenantId)->pluck('id');
+                \App\Models\Central\PaymentLink::whereIn('tenant_addon_id', $addonIds)
+                    ->where('status', \App\Models\Central\PaymentLink::STATUS_ACTIVE)
+                    ->update(['status' => \App\Models\Central\PaymentLink::STATUS_CANCELLED]);
+                \App\Models\Central\TenantAddon::where('tenant_id', $tenantId)->delete();
+            }
             $tenant->domains()->delete();
         } catch (\Throwable $e) {
             Log::warning("Failed to delete related records for tenant {$tenantId}: {$e->getMessage()}");
@@ -1166,7 +1353,7 @@ class TenantController extends Controller
         ]);
 
         if (! $tenant->isPending()) {
-            return back()->with('error', 'This tenant is not in pending status.');
+            return back()->with('error', __('super.flash.tenant_not_pending'));
         }
 
         $adminEmail = $tenant->admin_email;
@@ -1193,6 +1380,6 @@ class TenantController extends Controller
             Log::warning("Failed to send tenant rejection email: {$e->getMessage()}");
         }
 
-        return back()->with('success', 'Tenant rejected and notified.');
+        return back()->with('success', __('super.flash.tenant_rejected'));
     }
 }

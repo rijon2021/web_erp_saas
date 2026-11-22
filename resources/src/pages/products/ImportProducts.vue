@@ -20,24 +20,17 @@
             ref="dz"
             :file="file"
             :accept="accept"
-            title="Click or drop your Excel file here"
-            hint="Allowed formats: XLSX, XLS · Max size: 20MB"
+            :title="$t('Imp_Drop_Excel_File')"
+            :hint="$t('Imp_Allowed_Excel_20MB')"
             :disabled="uploading"
             @file="loadFile"
             @clear="clearFile()"
           />
 
-          <a-alert v-if="errorMessages.length" type="error" style="margin-top: 16px" show-icon>
-            <template #message>Import failed. Fix the issues below:</template>
-            <template #description>
-              <ul style="margin: 0; padding-left: 18px">
-                <li v-for="(err, idx) in errorMessages" :key="'err-' + idx">{{ err }}</li>
-              </ul>
-            </template>
-          </a-alert>
+          <ImportErrorList :errors="errorMessages" filename="product_import_errors" />
 
           <a-alert v-if="warningMessages.length" type="warning" style="margin-top: 16px" show-icon>
-            <template #message>Warnings</template>
+            <template #message>{{ $t('Warnings') }}</template>
             <template #description>
               <ul style="margin: 0; padding-left: 18px">
                 <li v-for="(w, idx) in warningMessages" :key="'warn-' + idx">{{ w }}</li>
@@ -49,22 +42,22 @@
 
           <div style="display: flex; justify-content: center; gap: 8px; margin-top: 20px; flex-wrap: wrap">
             <a-button type="primary" :disabled="!canSubmit || uploading" :loading="uploading" @click="submit">
-              Import now
+              {{ $t('Imp_Import_Now') }}
             </a-button>
             <a-button :href="exampleHref" target="_blank" rel="noopener">
-              <DownloadOutlined /> Download example
+              <DownloadOutlined /> {{ $t('Download_exemple') }}
             </a-button>
-            <a-button :disabled="!file || uploading" @click="clearFile()">Reset</a-button>
+            <a-button :disabled="!file || uploading" @click="clearFile()">{{ $t('Reset') }}</a-button>
           </div>
       </div>
     </a-card>
 
     <!-- Expected file format -->
-    <a-card size="small" :title="'Expected file format'">
+    <a-card size="small" :title="$t('Imp_Expected_File_Format')">
       <template #extra>
         <span style="font-size: 12px; color: rgba(var(--ink-rgb), 0.45)">
-          One row per {{ importType === 'variant' ? 'variant' : 'product' }} ·
-          <a-tag color="green" style="margin: 0">green *</a-tag> = required
+          {{ importType === 'variant' ? $t('Imp_One_Row_Per_Variant') : $t('Imp_One_Row_Per_Product') }} ·
+          <a-tag color="green" style="margin: 0">{{ $t('Imp_Green_Star') }}</a-tag> {{ $t('Imp_Equals_Required') }}
         </span>
       </template>
       <a-space wrap style="margin-bottom: 12px">
@@ -92,25 +85,28 @@
  */
 import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { notification } from 'ant-design-vue';
 import { DownloadOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import ImportErrorList from '../../components/ImportErrorList.vue';
 import ImportDropzone from '../../components/ImportDropzone.vue';
 import { uploadForm } from '../../lib/upload';
 import { start as startProgress, done as doneProgress } from '../../lib/progress';
 
 const router = useRouter();
+const { t } = useI18n();
 
 const singleEndpoint = 'products/import/single';
 const variantEndpoint = 'products/import/variants';
 const serviceEndpoint = 'products/import/service';
 
 const importType = ref('single');
-const typeOptions = [
-  { label: 'Single Products', value: 'single' },
-  { label: 'Variant Products', value: 'variant' },
-  { label: 'Service Products', value: 'service' },
-];
+const typeOptions = computed(() => [
+  { label: t('Imp_Single_Products'), value: 'single' },
+  { label: t('Imp_Variant_Products'), value: 'variant' },
+  { label: t('Imp_Service_Products'), value: 'service' },
+]);
 const file = ref(null);
 const uploading = ref(false);
 const progress = ref(0);
@@ -148,6 +144,7 @@ const variantsGuide = [
   { key: 'variant_price', label: 'variant_price', required: true },
   { key: 'variant_wholesale', label: 'variant_wholesale', required: false },
   { key: 'variant_min_price', label: 'variant_min_price', required: false },
+  { key: 'variant_options', label: 'variant_options (Color=Red|Size=S)', required: false },
 ];
 const serviceGuide = [
   { key: 'name', label: 'name', required: true },
@@ -231,10 +228,10 @@ function clearErrors() {
 function loadFile(f) {
   clearErrors();
   const msgs = [];
-  if (f.size > maxSize) msgs.push('File is too large. Please upload a file under the 20MB limit.');
+  if (f.size > maxSize) msgs.push(t('Imp_File_Too_Large_20MB'));
   const name = f.name || '';
   const ext = name.split('.').pop().toLowerCase();
-  if (['xlsx', 'xls'].indexOf(ext) === -1) msgs.push('Unsupported file type. Please upload an .xlsx or .xls file.');
+  if (['xlsx', 'xls'].indexOf(ext) === -1) msgs.push(t('Imp_Unsupported_Excel'));
   if (msgs.length) {
     errorMessages.value = msgs;
     clearFile(false);
@@ -300,7 +297,7 @@ function collectErrorsFromResponse(data) {
 
 async function submit() {
   if (!file.value) {
-    errorMessages.value = ['Please choose a file to import.'];
+    errorMessages.value = [t('Imp_Choose_File')];
     return;
   }
   clearErrors();
@@ -324,16 +321,16 @@ async function submit() {
 
     if (!ok) {
       const msgs = collectErrorsFromResponse(data);
-      errorMessages.value = msgs.length ? msgs : ['Import failed. Please review your file and try again.'];
-      toast('Check the error list and fix your file.', 'Import failed', 'danger');
+      errorMessages.value = msgs.length ? msgs : [t('Imp_Failed_Review_File')];
+      toast(t('Imp_Check_Error_List'), t('Imp_Import_Failed'), 'danger');
       return;
     }
 
-    toast('Imported successfully.', 'Success', 'success');
+    toast(t('Imp_Imported_Successfully'), t('Success'), 'success');
     router.push('/products');
   } catch (err) {
-    errorMessages.value = err && err.message ? [String(err.message)] : ['Something went wrong while uploading. Please try again.'];
-    toast('Check the error list and fix your file.', 'Import failed', 'danger');
+    errorMessages.value = err && err.message ? [String(err.message)] : [t('Imp_Upload_Went_Wrong')];
+    toast(t('Imp_Check_Error_List'), t('Imp_Import_Failed'), 'danger');
   } finally {
     doneProgress();
     uploading.value = false;

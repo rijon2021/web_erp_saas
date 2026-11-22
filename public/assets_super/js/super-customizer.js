@@ -1,5 +1,5 @@
 (function () {
-    var DEFAULT_COLOR = '#018A00';
+    var DEFAULT_COLOR = (window.SuperDefaultColor && /^#([0-9a-f]{6})$/i.test(window.SuperDefaultColor)) ? window.SuperDefaultColor : '#018A00';
     var STORAGE_KEY = 'super_primary_color';
 
     var fab = document.getElementById('superCustomizerFab');
@@ -147,6 +147,35 @@
         resetBtn.addEventListener('click', function () {
             try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
             applyColor(DEFAULT_COLOR);
+        });
+    }
+
+    // ── Sidebar layout picker (applied live by super-layout.js via window.SuperSidebar) ──
+    var layoutWrap = document.getElementById('superCustomizerLayouts');
+
+    function currentLayout() {
+        if (window.SuperSidebar) return window.SuperSidebar.getLayout();
+        var m = (document.body.className.match(/sb-(large|compact|dark)/) || [])[1];
+        return m || 'default';
+    }
+
+    function syncLayoutActive() {
+        if (!layoutWrap) return;
+        var cur = currentLayout();
+        layoutWrap.querySelectorAll('.super-customizer-layout').forEach(function (btn) {
+            btn.classList.toggle('is-active', btn.getAttribute('data-layout') === cur);
+        });
+    }
+
+    if (layoutWrap) {
+        syncLayoutActive();
+        layoutWrap.addEventListener('click', function (e) {
+            var btn = e.target.closest('.super-customizer-layout');
+            if (!btn) return;
+            var layout = btn.getAttribute('data-layout') || 'default';
+            if (!window.SuperSidebar) return; // super-layout.js always loads first
+            window.SuperSidebar.setLayout(layout);
+            syncLayoutActive();
         });
     }
 })();

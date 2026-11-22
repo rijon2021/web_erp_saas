@@ -7,11 +7,11 @@
           <ViewCurrencySelect />
           <a-button :loading="exporting" @click="doExport">
             <template #icon><FileExcelOutlined /></template>
-            {{ $t('Export') }} Excel
+            {{ $t('Export_Excel') }}
           </a-button>
           <a-button :loading="exportingPdf" @click="doExportPdf">
             <template #icon><FilePdfOutlined /></template>
-            {{ $t('Export') }} PDF
+            {{ $t('Export_PDF') }}
           </a-button>
           <a-button @click="doPrint">
             <template #icon><PrinterOutlined /></template>
@@ -314,14 +314,23 @@ async function load() {
 
 /* --------------------------- profit customizer ---------------------------- */
 // v2: payroll joined the default set, so the v1 saved selections are deliberately dropped.
-const STORAGE_KEY = 'pl_profit_builder_v2';
-const DEFAULT_ENABLED = ['sales', 'service', 'cogs', 'expenses', 'payroll'];
+// v3: sale returns joined the default set (ProfitNet is now net of returns); v2 selections
+// are carried over with sale returns switched on.
+const STORAGE_KEY = 'pl_profit_builder_v3';
+const LEGACY_STORAGE_KEY = 'pl_profit_builder_v2';
+const DEFAULT_ENABLED = ['sales', 'sale_returns', 'service', 'cogs', 'expenses', 'payroll'];
 
 const enabled = ref([...DEFAULT_ENABLED]);
 const cogsMethod = ref('fifo');
 
 try {
-  const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+  let saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+  if (!saved) {
+    saved = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || 'null');
+    if (saved && Array.isArray(saved.enabled) && !saved.enabled.includes('sale_returns')) {
+      saved.enabled = [...saved.enabled, 'sale_returns'];
+    }
+  }
   if (saved && Array.isArray(saved.enabled)) enabled.value = saved.enabled;
   if (saved && (saved.cogsMethod === 'fifo' || saved.cogsMethod === 'avg')) cogsMethod.value = saved.cogsMethod;
 } catch (e) { /* corrupted storage — keep defaults */ }
@@ -341,7 +350,8 @@ function resetBuilder() {
   cogsMethod.value = 'fifo';
 }
 
-// Default set (sales + service − COGS FIFO − expenses − payroll) reproduces the standard ProfitNet (FIFO).
+// Default set (sales − sale returns + service − COGS FIFO − expenses − payroll) reproduces the
+// standard ProfitNet (FIFO). COGS arrives already net of returned units.
 const components = computed(() => [
   { id: 'sales', sign: 1, label: t('Gross_Sales'), value: n(infos.value.sales_sum) },
   { id: 'service', sign: 1, label: t('Service_Profit'), value: n(infos.value.service_profit) },

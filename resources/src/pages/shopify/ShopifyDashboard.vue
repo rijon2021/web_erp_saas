@@ -2,17 +2,17 @@
   <div class="page">
     <PageHeader
       title="Shopify"
-      subtitle="Every connected shop, what is linked and what has been moving."
-      :breadcrumb="['Shopify', 'Dashboard']"
+      :subtitle="$t('Shp_Dash_Subtitle')"
+      :breadcrumb="['Shopify', $t('Dashboard')]"
     >
       <template #actions>
         <a-button @click="$router.push('/shopify/sync')">
           <template #icon><SyncOutlined /></template>
-          Sync centre
+          {{ $t('Page_Sync_Centre') }}
         </a-button>
         <a-button type="primary" @click="$router.push('/shopify/stores')">
           <template #icon><ShopOutlined /></template>
-          Manage stores
+          {{ $t('Shp_Manage_Stores') }}
         </a-button>
       </template>
     </PageHeader>
@@ -21,11 +21,11 @@
       <a-alert
         v-if="!loading && !data.stores_total"
         type="info" show-icon style="margin-bottom: 16px"
-        message="No Shopify store is connected yet."
-        description="Connect a shop with its Admin API access token to start syncing products, stock, customers and orders."
+        :message="$t('Shp_No_Store_Connected_Yet')"
+        :description="$t('Shp_No_Store_Connected_Desc')"
       >
         <template #action>
-          <a-button size="small" type="primary" @click="$router.push('/shopify/stores')">Connect a store</a-button>
+          <a-button size="small" type="primary" @click="$router.push('/shopify/stores')">{{ $t('Shp_Connect_A_Store') }}</a-button>
         </template>
       </a-alert>
 
@@ -34,38 +34,38 @@
           <span class="kpi-ic kpi-ic--brand"><ShopOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.stores_connected || 0 }}<span class="kpi-of">/{{ data.stores_total || 0 }}</span></span>
-            <span class="kpi-label">Stores connected</span>
-            <span v-if="data.stores_error" class="kpi-sub kpi-sub--bad">{{ data.stores_error }} with errors</span>
+            <span class="kpi-label">{{ $t('Shp_Stores_Connected') }}</span>
+            <span v-if="data.stores_error" class="kpi-sub kpi-sub--bad">{{ $t('Shp_N_With_Errors', { n: data.stores_error }) }}</span>
           </span>
         </button>
         <button type="button" class="kpi" @click="$router.push('/shopify/mappings')">
           <span class="kpi-ic kpi-ic--info"><LinkOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ number(data.linked_records || 0, 0) }}</span>
-            <span class="kpi-label">Linked records</span>
+            <span class="kpi-label">{{ $t('Shp_Linked_Records') }}</span>
           </span>
         </button>
         <div class="kpi kpi--static">
           <span class="kpi-ic kpi-ic--ok"><ReceiptTextIcon :size="18" /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ number(data.orders_imported || 0, 0) }}</span>
-            <span class="kpi-label">Orders imported</span>
+            <span class="kpi-label">{{ $t('Shp_Orders_Imported') }}</span>
           </span>
         </div>
         <button type="button" class="kpi" @click="$router.push('/shopify/sync')">
           <span class="kpi-ic kpi-ic--run"><SyncOutlined :spin="!!data.running_now" /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.runs_30d || 0 }}</span>
-            <span class="kpi-label">Syncs (30 days)</span>
-            <span v-if="data.running_now" class="kpi-sub">{{ data.running_now }} running now</span>
+            <span class="kpi-label">{{ $t('Shp_Syncs_30_Days') }}</span>
+            <span v-if="data.running_now" class="kpi-sub">{{ $t('Shp_N_Running_Now', { n: data.running_now }) }}</span>
           </span>
         </button>
         <button type="button" class="kpi" @click="$router.push('/shopify/logs?level=error')">
           <span class="kpi-ic kpi-ic--bad"><WarningOutlined /></span>
           <span class="kpi-text">
             <span class="kpi-value">{{ data.errors_7d || 0 }}</span>
-            <span class="kpi-label">Errors (7 days)</span>
-            <span v-if="data.runs_failed_30d" class="kpi-sub kpi-sub--bad">{{ data.runs_failed_30d }} failed runs</span>
+            <span class="kpi-label">{{ $t('Shp_Errors_7_Days') }}</span>
+            <span v-if="data.runs_failed_30d" class="kpi-sub kpi-sub--bad">{{ $t('Shp_N_Failed_Runs', { n: data.runs_failed_30d }) }}</span>
           </span>
         </button>
       </div>
@@ -75,17 +75,17 @@
           <ReportChart
             :data="data.activity || []"
             :fields="[
-              { key: 'records', label: 'Records synced' },
-              { key: 'runs', label: 'Runs' },
+              { key: 'records', label: $t('Shp_Records_Synced') },
+              { key: 'runs', label: $t('Shp_Runs') },
             ]"
-            title="Sync activity — last 14 days"
+            :title="$t('Shp_Sync_Activity_14d')"
             type="bar"
             x-key="d"
             :height="300"
           />
         </a-col>
         <a-col :xs="24" :xl="9">
-          <a-card size="small" title="By entity" class="panel">
+          <a-card size="small" :title="$t('Shp_By_Entity')" class="panel">
             <a-empty v-if="!data.by_entity?.length" :image="simpleImage" />
             <ul v-else class="entities">
               <li v-for="row in data.by_entity" :key="row.entity">
@@ -94,8 +94,8 @@
                   {{ entityOf(row.entity).label }}
                 </span>
                 <span class="ent-meta">
-                  <a-tag>{{ number(row.linked, 0) }} linked</a-tag>
-                  <a-tag v-if="row.failed" color="error">{{ row.failed }} failed</a-tag>
+                  <a-tag>{{ $t('Shp_N_Linked', { n: number(row.linked, 0) }) }}</a-tag>
+                  <a-tag v-if="row.failed" color="error">{{ $t('Shp_N_Failed', { n: row.failed }) }}</a-tag>
                 </span>
               </li>
             </ul>
@@ -105,17 +105,17 @@
 
       <a-row :gutter="16" style="margin-top: 16px">
         <a-col :xs="24" :xl="12">
-          <a-card size="small" title="Stores" class="panel">
+          <a-card size="small" :title="$t('Stores')" class="panel">
             <template #extra>
-              <a class="link" @click="$router.push('/shopify/stores')">Manage</a>
+              <a class="link" @click="$router.push('/shopify/stores')">{{ $t('Manage') }}</a>
             </template>
-            <a-empty v-if="!data.stores?.length" :image="simpleImage" description="Nothing connected" />
+            <a-empty v-if="!data.stores?.length" :image="simpleImage" :description="$t('Shp_Nothing_Connected')" />
             <a-list v-else size="small" :data-source="data.stores">
               <template #renderItem="{ item }">
                 <a-list-item class="row" @click="$router.push(`/shopify/stores/${item.id}`)">
                   <a-list-item-meta :title="item.name" :description="item.shop_domain" />
                   <a-space :size="4">
-                    <a-tag>{{ number(item.linked_records, 0) }} linked</a-tag>
+                    <a-tag>{{ $t('Shp_N_Linked', { n: number(item.linked_records, 0) }) }}</a-tag>
                     <a-tag :color="optionOf(STORE_STATUSES, item.status).color">
                       {{ labelOf(STORE_STATUSES, item.status) }}
                     </a-tag>
@@ -126,20 +126,20 @@
           </a-card>
         </a-col>
         <a-col :xs="24" :xl="12">
-          <a-card size="small" title="Recent syncs" class="panel">
+          <a-card size="small" :title="$t('Shp_Recent_Syncs')" class="panel">
             <template #extra>
-              <a class="link" @click="$router.push('/shopify/sync')">Sync centre</a>
+              <a class="link" @click="$router.push('/shopify/sync')">{{ $t('Page_Sync_Centre') }}</a>
             </template>
-            <a-empty v-if="!data.recent_runs?.length" :image="simpleImage" description="Nothing has run yet" />
+            <a-empty v-if="!data.recent_runs?.length" :image="simpleImage" :description="$t('Shp_Nothing_Run_Yet')" />
             <a-list v-else size="small" :data-source="data.recent_runs">
               <template #renderItem="{ item }">
                 <a-list-item>
                   <a-list-item-meta
                     :title="`${entityOf(item.entity).label} · ${labelOf(DIRECTIONS, item.direction)}`"
-                    :description="`${item.store_name || 'Store'} · ${item.started_at || ''}`"
+                    :description="`${item.store_name || $t('Store')} · ${item.started_at || ''}`"
                   />
                   <a-space :size="4">
-                    <a-tag v-if="item.dry_run">Dry run</a-tag>
+                    <a-tag v-if="item.dry_run">{{ $t('Shp_Dry_Run') }}</a-tag>
                     <a-tag :color="optionOf(RUN_STATUSES, item.status).color">
                       {{ labelOf(RUN_STATUSES, item.status) }}
                     </a-tag>
@@ -151,9 +151,9 @@
         </a-col>
       </a-row>
 
-      <a-card v-if="data.recent_errors?.length" size="small" title="Recent errors" style="margin-top: 16px">
+      <a-card v-if="data.recent_errors?.length" size="small" :title="$t('Shp_Recent_Errors')" style="margin-top: 16px">
         <template #extra>
-          <a class="link" @click="$router.push('/shopify/logs?level=error')">All logs</a>
+          <a class="link" @click="$router.push('/shopify/logs?level=error')">{{ $t('Shp_All_Logs') }}</a>
         </template>
         <a-list size="small" :data-source="data.recent_errors">
           <template #renderItem="{ item }">

@@ -8,6 +8,7 @@ use App\Models\Central\PendingRegistration;
 use App\Models\Central\Plan;
 use App\Services\CurrencyConversionService;
 use App\Services\PaymentGateways\PaymentGatewayFactory;
+use App\Support\IsoCurrencies;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -24,9 +25,13 @@ class CheckoutController extends Controller
             ->firstOrFail();
 
         $plan     = Plan::findOrFail($registration->plan_id);
-        $gateways = PaymentGatewayFactory::getAvailableGateways();
+        $gateways = $this->gatewaysForCurrency((string) $registration->currency);
 
         $settings = GeneralSetting::instance();
+        // The registration is priced in its own currency (multi-currency
+        // pricing) — show that currency on the page and in its partials.
+        $code = strtoupper((string) ($registration->currency ?: ($settings->currency_code ?? 'USD')));
+        \App\Support\DisplayCurrency::set($code !== \App\Support\SellingCurrencies::main() ? $code : null);
 
         return view('central.checkout', [
             'registration'   => $registration,
@@ -34,8 +39,8 @@ class CheckoutController extends Controller
             'cycle'          => $registration->billing_cycle,
             'amount'         => $registration->amount,
             'gateways'       => $gateways,
-            'currencyCode'   => $settings->currency_code ?? 'USD',
-            'currencySymbol' => $settings->currency_symbol ?? '$',
+            'currencyCode'   => $code,
+            'currencySymbol' => \App\Support\SellingCurrencies::symbol($code),
             'bankDetails'    => $settings->getBankDetails(),
         ]);
     }
@@ -65,7 +70,7 @@ class CheckoutController extends Controller
 
         $gateway = PaymentGatewayFactory::resolve($gatewayKey);
 
-        if (! $gateway) {
+        if (! $gateway || ! array_key_exists($gatewayKey, $this->gatewaysForCurrency((string) $registration->currency))) {
             return back()->withErrors(['gateway' => 'Selected payment gateway is not available.']);
         }
 
@@ -81,7 +86,7 @@ class CheckoutController extends Controller
                         \Illuminate\Support\Facades\File::makeDirectory($uploadDir, 0755, true);
                     }
                     $file = $request->file('payment_proof');
-                    $filename = 'proof_' . $registration->token . '_' . time() . '.' . $file->getClientOriginalExtension();
+                    $filename = 'proof_' . $registration->token . '_' . time() . '.' . \App\Support\SafeUpload::contentExtension($file, ['jpg', 'png', 'webp', 'pdf'], 'payment_proof');
                     $file->move($uploadDir, $filename);
                     $proofPath = upload_path('payment-proofs') . '/' . $filename;
                 }
@@ -92,6 +97,15 @@ class CheckoutController extends Controller
                     'payment_proof_path' => $proofPath,
                     'status'             => PendingRegistration::STATUS_PROCESSING,
                 ]);
+
+                // Confirmation to the customer + review alert to the platform admin.
+                \App\Services\EmailNotificationService::paymentProofSubmitted(
+                    (string) $registration->admin_email,
+                    $registration->company_name ?: $registration->subdomain,
+                    $registration->amount,
+                    $plan->name,
+                    'super/payments/pending-registrations'
+                );
 
                 return redirect()->route('central.checkout.offline.submitted', ['token' => $registration->token]);
             } catch (\Throwable $e) {
@@ -104,14 +118,40 @@ class CheckoutController extends Controller
 
         // ── Online payment gateways ──
 
+        // A misspelled platform currency (Super Admin > Settings > General,
+        // e.g. "DBT" instead of "BDT") can neither be converted nor charged;
+        // every gateway rejects the session. Say so instead of a generic error.
+        if (! IsoCurrencies::isValid($registration->currency)) {
+            Log::error("Checkout blocked for registration {$registration->id}: platform currency '{$registration->currency}' is not a valid ISO 4217 code. Fix it under Super Admin > Settings > General.", [
+                'gateway'    => $gatewayKey,
+                'suggestion' => IsoCurrencies::suggest($registration->currency),
+            ]);
+
+            return back()->withErrors(['payment' => __('central.CheckoutInvalidPlatformCurrency', ['code' => strtoupper((string) $registration->currency)])]);
+        }
+
         // Resolve currency conversion
         $currencyConfig = PaymentGatewayFactory::getGatewayCurrencyConfig($gatewayKey);
-        $conversion = CurrencyConversionService::resolve(
-            (float) $registration->amount,
-            $registration->currency,
-            $currencyConfig['supported_currencies'],
-            $currencyConfig['default_currency']
-        );
+
+        try {
+            $conversion = CurrencyConversionService::resolve(
+                (float) $registration->amount,
+                $registration->currency,
+                $currencyConfig['supported_currencies'],
+                $currencyConfig['default_currency']
+            );
+        } catch (\Throwable $e) {
+            // Typically an unknown/misspelled platform currency code (e.g. "DBT"
+            // instead of "BDT") that no exchange-rate provider can resolve.
+            // Surface it on the checkout page instead of a bare 500.
+            Log::error("Checkout currency conversion failed for registration {$registration->id}: {$e->getMessage()}", [
+                'system_currency'  => $registration->currency,
+                'gateway'          => $gatewayKey,
+                'gateway_currency' => $currencyConfig['default_currency'],
+            ]);
+
+            return back()->withErrors(['payment' => $e->getMessage()]);
+        }
 
         $successUrl = route('central.registration.preparing', ['token' => $registration->token]);
         $cancelUrl  = route('central.checkout', ['token' => $registration->token]) . '?cancelled=1';
@@ -154,6 +194,27 @@ class CheckoutController extends Controller
 
             return back()->withErrors(['payment' => 'Unable to initiate payment. Please try again.']);
         }
+    }
+
+    /**
+     * Gateways offered for a registration. A signup in a currency other than
+     * the main one (multi-currency pricing) is offered only the gateways that
+     * charge that currency directly — the customer pays exactly the price they
+     * saw. When none can, every gateway is offered and converts as before.
+     */
+    protected function gatewaysForCurrency(string $currency): array
+    {
+        $all = PaymentGatewayFactory::getAvailableGateways();
+        $currency = strtoupper($currency);
+        if ($currency === '' || $currency === \App\Support\SellingCurrencies::main()) {
+            return $all;
+        }
+
+        $direct = array_intersect_key($all, \App\Support\SellingCurrencies::gatewaysFor($currency));
+        // Bank transfer alone is not a real choice for an online signup unless nothing else can take it.
+        $online = array_diff_key($direct, ['offline' => true]);
+
+        return $online !== [] ? $direct : $all;
     }
 
     /**

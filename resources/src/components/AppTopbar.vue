@@ -1,7 +1,7 @@
 <template>
   <div class="topbar-inner">
     <!-- Left: sidebar toggle -->
-    <a-button type="text" class="icon-btn" aria-label="Toggle menu" @click="$emit('toggle-sidebar')">
+    <a-button type="text" class="icon-btn" :aria-label="$t('Toggle_Menu')" @click="$emit('toggle-sidebar')">
       <template #icon>
         <MenuUnfoldOutlined v-if="collapsed" />
         <MenuFoldOutlined v-else />
@@ -13,7 +13,7 @@
       <!-- POS -->
       <a-button v-if="auth.can('Pos_view')" type="primary" class="pos-btn" @click="goTo('/app/pos')">
         <template #icon><CalculatorOutlined /></template>
-        <span class="hide-sm">POS</span>
+        <span class="hide-sm">{{ $t('POS') }}</span>
       </a-button>
 
       <!-- Install PWA — only while the browser is offering installation -->
@@ -31,7 +31,7 @@
       </a-tooltip>
 
       <!-- Dark mode -->
-      <a-tooltip :title="ui.dark ? 'Light Mode' : 'Dark Mode'">
+      <a-tooltip :title="ui.dark ? $t('Light_Mode') : $t('DarkMode')">
         <a-button type="text" class="icon-btn" @click="ui.toggleDark()">
           <template #icon>
             <BulbFilled v-if="ui.dark" />
@@ -41,7 +41,7 @@
       </a-tooltip>
 
       <!-- Fullscreen (hidden on phones — not meaningful there) -->
-      <a-tooltip title="Fullscreen">
+      <a-tooltip :title="$t('Fullscreen')">
         <a-button type="text" class="icon-btn fullscreen-btn" @click="toggleFullScreen">
           <template #icon>
             <FullscreenExitOutlined v-if="isFullscreen" />
@@ -51,7 +51,7 @@
       </a-tooltip>
 
       <!-- Language -->
-      <a-dropdown v-if="auth.showLanguage" placement="bottomRight">
+      <a-dropdown v-if="auth.showLanguage" :placement="endPlacement">
         <a-button type="text" class="icon-btn"><template #icon><GlobalOutlined /></template></a-button>
         <template #overlay>
           <a-menu :selected-keys="[ui.locale]" class="lang-menu" @click="({ key }) => ui.setLocale(key)">
@@ -67,7 +67,7 @@
       </a-dropdown>
 
       <!-- Notifications -->
-      <a-dropdown v-model:open="notifOpen" placement="bottomRight" :trigger="['click']">
+      <a-dropdown v-model:open="notifOpen" :placement="endPlacement" :trigger="['click']">
         <!-- Badge wraps the icon as button CONTENT, not via the #icon slot:
              Ant sizes that slot for a bare icon and clips the count bubble.
              count 0 renders nothing, matching legacy's v-if on the badge. -->
@@ -84,20 +84,33 @@
             </div>
 
             <div class="notif-list">
-              <button
-                v-for="item in pending.items" :key="item.key"
-                type="button" class="notif-item" @click="goPending(item)"
-              >
-                <span class="notif-ic" :class="{ 'notif-ic--warn': item.severity === 'warning' }">
-                  <WarningFilled v-if="item.severity === 'warning'" />
-                  <BellOutlined v-else />
-                </span>
-                <span class="notif-body">
-                  <span class="notif-item-title">{{ item.count }} {{ $t(item.label_key) }}</span>
-                  <span class="notif-item-sub">{{ $t('Waiting_for_action') }}</span>
-                </span>
-                <RightOutlined class="notif-chev" />
-              </button>
+              <template v-for="item in pending.items" :key="item.key">
+                <button type="button" class="notif-item" @click="goPending(item)">
+                  <span class="notif-ic" :class="{ 'notif-ic--warn': item.severity === 'warning', 'notif-ic--info': item.severity === 'info' }">
+                    <ShoppingCartOutlined v-if="item.key === 'new_orders'" />
+                    <WarningFilled v-else-if="item.severity === 'warning'" />
+                    <BellOutlined v-else />
+                  </span>
+                  <span class="notif-body">
+                    <span class="notif-item-title">{{ item.count }} {{ $t(item.label_key) }}</span>
+                    <span class="notif-item-sub">{{ $t('Waiting_for_action') }}</span>
+                  </span>
+                  <RightOutlined class="notif-chev" />
+                </button>
+                <!-- Per-record rows (newest pending online orders): each opens its own page. -->
+                <button
+                  v-for="entry in item.entries || []" :key="item.key + '-' + entry.id"
+                  type="button" class="notif-item notif-entry" @click="goPending(entry)"
+                >
+                  <span class="notif-body">
+                    <span class="notif-item-title">
+                      <bdi>{{ entry.ref }}</bdi><template v-if="entry.customer"> · {{ entry.customer }}</template>
+                    </span>
+                    <span class="notif-item-sub"><bdi>{{ money(entry.total) }}</bdi> · {{ timeAgo(entry.created_at) }}</span>
+                  </span>
+                  <RightOutlined class="notif-chev" />
+                </button>
+              </template>
 
               <div v-if="!pending.items.length" class="notif-empty">
                 <span class="notif-empty-ic"><BellOutlined /></span>
@@ -111,11 +124,11 @@
 
       <!-- User -->
       <span class="topbar-divider" aria-hidden="true"></span>
-      <a-dropdown v-model:open="userMenuOpen" placement="bottomRight" :trigger="['click']">
+      <a-dropdown v-model:open="userMenuOpen" :placement="endPlacement" :trigger="['click']">
         <a-button type="text" class="user-btn">
           <a-space :size="8">
             <a-avatar :size="28" :src="auth.avatarUrl" class="user-avatar" />
-            <span class="hide-sm user-name">{{ auth.username || 'User' }}</span>
+            <span class="hide-sm user-name">{{ auth.username || $t('User') }}</span>
             <DownOutlined class="user-caret" :class="{ open: userMenuOpen }" />
           </a-space>
         </a-button>
@@ -124,7 +137,7 @@
             <div class="acct-header">
               <a-avatar :size="40" :src="auth.avatarUrl" />
               <div class="acct-id">
-                <div class="acct-name">{{ auth.username || 'User' }}</div>
+                <div class="acct-name">{{ auth.username || $t('User') }}</div>
                 <div v-if="maskedEmail" class="acct-email">{{ maskedEmail }}</div>
               </div>
             </div>
@@ -144,13 +157,13 @@
             </button>
             <button v-if="auth.can('Pos_view')" type="button" class="acct-item" @click="go('/app/pos')">
               <DesktopOutlined class="acct-ic" />
-              <span>Open POS</span>
+              <span>{{ $t('Open_POS') }}</span>
             </button>
 
             <div class="acct-sep" role="separator"></div>
 
-            <div class="acct-label">Appearance</div>
-            <div class="theme-seg" role="radiogroup" aria-label="Appearance">
+            <div class="acct-label">{{ $t('Page_Appearance') }}</div>
+            <div class="theme-seg" role="radiogroup" :aria-label="$t('Page_Appearance')">
               <button
                 type="button" role="radio" :aria-checked="ui.themeMode === 'light'"
                 :class="{ active: ui.themeMode === 'light' }" @click="ui.setThemeMode('light')"
@@ -159,7 +172,7 @@
                   <circle cx="12" cy="12" r="4" />
                   <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
                 </svg>
-                Light
+                {{ $t('Light') }}
               </button>
               <button
                 type="button" role="radio" :aria-checked="ui.themeMode === 'dark'"
@@ -168,7 +181,7 @@
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true">
                   <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
                 </svg>
-                Dark
+                {{ $t('Dark') }}
               </button>
               <button
                 type="button" role="radio" :aria-checked="ui.themeMode === 'auto'"
@@ -178,7 +191,7 @@
                   <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
                   <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" />
                 </svg>
-                Auto
+                {{ $t('Theme_Auto') }}
               </button>
             </div>
 
@@ -215,15 +228,18 @@
  * Legacy reloaded the page after a language change (a Vue 2 workaround);
  * loadLocale() fetches the new bundle reactively, so no reload here.
  */
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, h } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
+import { notification, Button } from 'ant-design-vue';
 import {
   MenuFoldOutlined, MenuUnfoldOutlined, CalculatorOutlined, BulbOutlined,
   BulbFilled, FullscreenOutlined, FullscreenExitOutlined, GlobalOutlined,
   BellOutlined, DownOutlined, PieChartOutlined, UserOutlined, SettingOutlined,
   DesktopOutlined, LogoutOutlined, WarningFilled, RightOutlined,
-  DownloadOutlined,
+  DownloadOutlined, ShoppingCartOutlined,
 } from '@ant-design/icons-vue';
+import { useFormat } from '../composables/useFormat';
 import { canInstall as pwaCanInstall, promptInstall } from '../lib/pwaInstall';
 import TodaySummary from './TodaySummary.vue';
 import { useAuthStore } from '../stores/auth';
@@ -240,6 +256,9 @@ const emit = defineEmits(['toggle-sidebar', 'logout']);
 
 const auth = useAuthStore();
 const ui = useUiStore();
+// Ant only mirrors a dropdown's DEFAULT placement in RTL; these menus sit at
+// the toolbar's end edge (left in RTL), so they must open toward the page.
+const endPlacement = computed(() => (ui.direction === 'rtl' ? 'bottomLeft' : 'bottomRight'));
 const pending = usePendingWorkStore();
 const router = useRouter();
 
@@ -261,6 +280,88 @@ function goPending(item) {
 // Refresh when the panel is opened, so counts are current the moment they
 // are looked at rather than whenever the last poll happened.
 watch(notifOpen, open => { if (open) pending.fetch(true); });
+
+const { t } = useI18n();
+const { money } = useFormat();
+
+/** "just now" / "5 min ago" / "3 h ago", then the plain date. */
+function timeAgo(iso) {
+  const ts = Date.parse(iso || '');
+  if (!ts) return '';
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return t('Notif_Just_Now');
+  if (mins < 60) return t('Notif_Minutes_Ago', { n: mins });
+  if (mins < 1440) return t('Notif_Hours_Ago', { n: Math.floor(mins / 60) });
+  return new Date(ts).toLocaleDateString();
+}
+
+// Live bell: a new online order must show up without a reload. Poll while the
+// tab is visible and catch up the moment it becomes visible again.
+const POLL_MS = 30000;
+let pollTimer = null;
+function onVisibility() { if (!document.hidden) pending.fetch(true); }
+onMounted(() => {
+  pollTimer = setInterval(() => { if (!document.hidden) pending.fetch(true); }, POLL_MS);
+  document.addEventListener('visibilitychange', onVisibility);
+});
+onBeforeUnmount(() => {
+  clearInterval(pollTimer);
+  document.removeEventListener('visibilitychange', onVisibility);
+});
+
+// New-order alert. null until the first load, so orders that were already
+// pending when the page opened don't toast — only ones that arrive after.
+let lastOrderId = null;
+watch(() => pending.items, items => {
+  if (!pending.loadedAt) return;
+  const entries = items.find(i => i.key === 'new_orders')?.entries || [];
+  const maxId = entries.reduce((m, o) => Math.max(m, Number(o.id) || 0), 0);
+  if (lastOrderId === null) { lastOrderId = maxId; return; }
+  const fresh = entries.filter(o => Number(o.id) > lastOrderId);
+  lastOrderId = Math.max(lastOrderId, maxId);
+  if (fresh.length) announceOrders(fresh);
+});
+
+function announceOrders(fresh) {
+  const one = fresh.length === 1 ? fresh[0] : null;
+  const key = 'new-online-orders';
+  const target = one ? one.route : '/app/Store/Orders?status=pending';
+  const open = () => { notification.close(key); goTo(target); };
+  notification.open({
+    key,
+    placement: ui.direction === 'rtl' ? 'topLeft' : 'topRight',
+    duration: 10,
+    icon: () => h(ShoppingCartOutlined, { style: { color: '#6d28d9' } }),
+    message: one ? t('Notif_New_Online_Order') : t('Notif_New_Online_Orders', { n: fresh.length }),
+    description: one
+      ? [one.ref, one.customer, money(one.total)].filter(Boolean).join(' · ')
+      : undefined,
+    btn: () => h(Button, { type: 'primary', size: 'small', onClick: open },
+      () => (one ? t('Notif_View_Order') : t('Notif_View_Orders'))),
+  });
+  beep();
+}
+
+/** Short two-note chime, like the kitchen display's; silent if autoplay is blocked. */
+let audioCtx = null;
+function beep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    audioCtx = audioCtx || new Ctx();
+    [[880, 0], [1320, 0.14]].forEach(([freq, at]) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      gain.gain.setValueAtTime(0.12, audioCtx.currentTime + at);
+      osc.start(audioCtx.currentTime + at);
+      osc.stop(audioCtx.currentTime + at + 0.16);
+    });
+  } catch (e) { /* autoplay policy or no WebAudio */ }
+}
 
 // ---------------- account menu ----------------
 
@@ -393,7 +494,7 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', syncFulls
 .pos-btn {
   border-radius: 999px;
   padding-inline: 14px;
-  margin-right: 4px;
+  margin-inline-end: 4px;
 }
 
 /* Thin divider separating the icon cluster from the account chip. */
@@ -479,7 +580,7 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', syncFulls
   border-radius: 9px;
   cursor: pointer;
   color: inherit;
-  text-align: left;
+  text-align: start;
   font-size: 14px;
   transition: background 0.15s ease;
 }
@@ -642,7 +743,7 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', syncFulls
   border-radius: 10px;
   cursor: pointer;
   color: inherit;
-  text-align: left;
+  text-align: start;
   font-size: 14px;
   transition: background 0.15s ease;
 }
@@ -688,6 +789,29 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', syncFulls
 .notif-item:hover .notif-chev {
   color: rgba(var(--ink-rgb), 0.5);
   transform: translateX(2px);
+}
+/* The chevron points "forward": left in RTL. */
+:global([dir="rtl"]) .notif-chev {
+  transform: scaleX(-1);
+}
+:global([dir="rtl"]) .notif-item:hover .notif-chev {
+  transform: scaleX(-1) translateX(2px);
+}
+/* Informational items (orders, messages, reviews) in brand purple. */
+.notif-ic--info {
+  color: #6d28d9;
+  background: rgba(109, 40, 217, 0.1);
+}
+/* Per-record rows sit under their summary, aligned with its text column. */
+.notif-entry {
+  padding-block: 6px;
+  padding-inline-start: 53px;
+}
+.notif-entry .notif-item-title {
+  font-size: 13px;
+}
+.notif-entry .notif-chev {
+  margin-top: 6px;
 }
 
 /* Empty state carries the same weight as a row so the panel never looks broken. */

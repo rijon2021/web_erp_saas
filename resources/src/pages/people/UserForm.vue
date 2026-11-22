@@ -106,6 +106,21 @@
                   />
                 </a-form-item>
               </a-col>
+              <!-- POS approval PIN (write-only): only roles with "Remove POS items
+                   without approval" can approve with it. -->
+              <a-col v-if="pinEnabled" :xs="24" :md="12">
+                <a-form-item :label="$t('Pv_Approval_Pin')" name="pos_pin" :extra="$t('Pv_User_Pin_Help')">
+                  <a-input-password
+                    v-model:value="form.pos_pin"
+                    inputmode="numeric" :maxlength="6" autocomplete="off"
+                    :disabled="form.remove_pos_pin"
+                    :placeholder="hasPosPin ? $t('Pv_Pin_Keep') : $t('Pv_Pin_Placeholder')"
+                  >
+                    <template #prefix><SafetyOutlined class="field-prefix" /></template>
+                  </a-input-password>
+                  <a-checkbox v-if="hasPosPin" v-model:checked="form.remove_pos_pin" style="margin-top: 6px" @change="form.pos_pin = ''; formRef?.clearValidate?.('pos_pin')">{{ $t('Pv_Remove_Pin') }}</a-checkbox>
+                </a-form-item>
+              </a-col>
             </a-row>
 
             <a-divider style="margin: 4px 0 16px" />
@@ -171,10 +186,12 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import {
   UploadOutlined, UserOutlined, IdcardOutlined, MailOutlined,
-  PhoneOutlined, LockOutlined, ShopOutlined,
+  PhoneOutlined, LockOutlined, ShopOutlined, SafetyOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import http from '../../lib/http';
+import { usePlanStore } from '../../stores/plan';
+import { uploadUrl } from '../../lib/uploadUrl';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -195,7 +212,13 @@ const form = ref({
   firstname: '', lastname: '', username: '', email: '', phone: '',
   password: '', role_id: undefined, is_all_warehouses: false,
   record_view: false, assigned_to: [],
+  pos_pin: '', remove_pos_pin: false,
 });
+
+// POS approval PIN: write-only, the server only says whether one is set.
+const plan = usePlanStore();
+const pinEnabled = computed(() => plan.featureEnabled('pos'));
+const hasPosPin = ref(false);
 
 const roleOptions = computed(() => roles.value.map(r => ({ value: r.id, label: r.name })));
 const warehouseOptions = computed(() => warehouses.value.map(w => ({ value: w.id, label: w.name })));
@@ -223,8 +246,10 @@ const rules = computed(() => ({
     { type: 'email', message: t('InvalidData') },
   ],
   // Password required only when creating; on edit blank = keep current.
-  password: isEdit.value ? [] : [{ required: true, min: 6, message: t('Field_is_required') }],
+  // Server enforces 8+ chars with upper/lower case, a number and a symbol.
+  password: isEdit.value ? [] : [{ required: true, min: 8, message: t('Field_is_required') }],
   role_id: [{ required: true, message: t('Field_is_required') }],
+  pos_pin: [{ pattern: /^\d{4,6}$/, message: t('Pv_Pin_Format') }],
 }));
 
 function beforeUpload(file) {
@@ -263,6 +288,8 @@ function buildFormData() {
   // Legacy field name differs by mode: password on create, NewPassword on edit.
   if (isEdit.value) fd.append('NewPassword', form.value.password || '');
   else fd.append('password', form.value.password);
+  if (form.value.remove_pos_pin) fd.append('remove_pos_pin', 1);
+  else if (form.value.pos_pin) fd.append('pos_pin', form.value.pos_pin);
   return fd;
 }
 
@@ -286,7 +313,10 @@ async function submit() {
     }
     router.push('/users');
   } catch (e) {
-    message.error(t('InvalidData'));
+    // Show the server's reason (weak password, taken e-mail, bad PIN, …).
+    const errors = e?.data?.errors || {};
+    const first = errors.pos_pin ?? errors.password ?? errors.NewPassword ?? errors.email ?? Object.values(errors)[0];
+    message.error((Array.isArray(first) ? first[0] : first) || t('InvalidData'));
   } finally {
     submitting.value = false;
   }
@@ -307,7 +337,9 @@ async function bootstrap() {
         is_all_warehouses: !!Number(u.is_all_warehouses),
         record_view: !!Number(u.record_view),
         assigned_to: data.assigned_warehouses || [],
+        pos_pin: '', remove_pos_pin: false,
       };
+      hasPosPin.value = !!data.has_pos_pin;
       // Show the current avatar in the profile panel (placeholder file aside);
       // picking a new file replaces this preview with a local object URL.
       if (u.avatar && u.avatar !== 'no_avatar.png') {

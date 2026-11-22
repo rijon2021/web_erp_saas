@@ -28,7 +28,7 @@
            the admin set hide_site_name). Clicking returns to the dashboard. -->
       <div class="brand" @click="goHome">
         <template v-if="auth.showSidebarLogo">
-          <img v-if="auth.logoUrl" :src="auth.logoUrl" alt="logo" class="brand-logo" :style="auth.sidebarLogoStyle" />
+          <img v-if="auth.logoUrl" :src="auth.logoUrl" :alt="$t('Logo')" class="brand-logo" :style="auth.sidebarLogoStyle" />
           <span v-else class="brand-initial">{{ auth.brandInitial }}</span>
         </template>
         <span v-if="!effectiveCollapsed && auth.companyName" class="brand-name">{{ auth.companyName }}</span>
@@ -187,6 +187,9 @@ async function logout() {
   border-inline-end: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 2px 0 8px rgba(0, 0, 0, 0.12);
 }
+[dir="rtl"] .sidebar-right-border {
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.12);
+}
 .sider :deep(.ant-layout-sider-children) {
   display: flex;
   flex-direction: column;
@@ -259,13 +262,13 @@ async function logout() {
   gap: 10px;
   padding: 16px 20px;
   cursor: pointer;
-  border-right: 1px solid #ececee;
+  border-inline-end: 1px solid #ececee;
   border-bottom: 1px solid #ececee;
 }
 /* Same tint as .topbar--dark's border; covers app dark mode AND the "dark
    sidebar in a light app" layout, both of which set sider--dark. */
 .sider--dark .brand {
-  border-right-color: rgba(253, 253, 253, 0.12);
+  border-inline-end-color: rgba(253, 253, 253, 0.12);
   border-bottom-color: rgba(253, 253, 253, 0.12);
 }
 .brand-logo {
@@ -342,7 +345,7 @@ async function logout() {
 .footer-version {
   position: absolute;
   top: 10px;
-  right: 16px;
+  inset-inline-end: 16px;
   font-size: 11px;
   opacity: 0.75;
 }
@@ -357,7 +360,7 @@ async function logout() {
 }
 .sider--mobile {
   position: fixed !important;
-  left: 0;
+  inset-inline-start: 0;
   top: 0;
   bottom: 0;
   z-index: 200;
@@ -367,6 +370,15 @@ async function logout() {
   box-shadow: 2px 0 16px rgba(0, 0, 0, 0.25);
 }
 .sider--mobile-open {
+  transform: translateX(0);
+}
+/* RTL: the sider sits on the right, so it hides off the right edge and its
+   shadow falls to the left (transforms are physical and do not flip). */
+[dir="rtl"] .sider--mobile {
+  transform: translateX(100%);
+  box-shadow: -2px 0 16px rgba(0, 0, 0, 0.25);
+}
+[dir="rtl"] .sider--mobile-open {
   transform: translateX(0);
 }
 

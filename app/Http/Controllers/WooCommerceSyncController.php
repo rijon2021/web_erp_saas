@@ -13,6 +13,7 @@ use App\Models\SyncJob;
 use App\Models\WooCommerceLog;
 use App\Models\WooCommerceSetting;
 use App\Services\WooCommerce\SyncService;
+use App\Services\WooCommerce\AutoSync as WooAutoSync;
 use App\Services\WooCommerce\Client as WooCommerceClient;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
@@ -165,9 +166,22 @@ class WooCommerceSyncController extends BaseController
 
     public function getSettings(Request $request)
     {
+        // The row carries the API consumer secret and the WordPress application
+        // password: same permission as saving it (the Integrations hub only
+        // probes this for users holding woocommerce_settings).
+        $this->authorizeForUser($request->user('api'), 'view', WooCommerceSetting::class);
+
         $settings = WooCommerceSetting::first();
 
-        return response()->json(['settings' => $settings]);
+        // The tab's "Sync tuning" card renders itself from sync_options_meta;
+        // only after the tuning columns exist, so it never offers unsaveable fields.
+        $hasTuning = Schema::hasColumn('woocommerce_settings', 'products_per_job');
+
+        return response()->json([
+            'settings' => $settings,
+            'sync_options' => $hasTuning ? WooCommerceSetting::tuning($settings) : null,
+            'sync_options_meta' => $hasTuning ? WooCommerceSetting::tuningMeta() : null,
+        ]);
     }
 
     public function saveSettings(Request $request)
@@ -182,7 +196,34 @@ class WooCommerceSyncController extends BaseController
             'wp_username' => 'nullable|string',
             'wp_app_password' => 'nullable|string',
             'sync_interval' => 'nullable|string',
+            'auto_sync_products' => 'sometimes|boolean',
+            'auto_sync_stock' => 'sometimes|boolean',
+            // Store-specific sync tuning (the tab's "Sync tuning" card), bounded
+            // by the platform limits; blank restores the default.
+            'sync_options' => 'nullable|array',
+            'sync_options.products_per_job' => 'nullable|integer|min:1|max:'.(int) config('woocommerce.tenant_limits.products_per_job'),
+            'sync_options.stock_products_per_job' => 'nullable|integer|min:1|max:'.(int) config('woocommerce.tenant_limits.stock_products_per_job'),
+            'sync_options.remote_index_page_cap' => 'nullable|integer|min:1|max:'.(int) config('woocommerce.tenant_limits.remote_index_page_cap'),
+            'sync_options.sku_search_page_cap' => 'nullable|integer|min:1|max:'.(int) config('woocommerce.tenant_limits.sku_search_page_cap'),
+            'sync_options.allow_alt_sku_on_lookup_conflict' => 'nullable|boolean',
         ]);
+
+        // Tuning is stored in its own columns, one per option.
+        $syncOptions = $data['sync_options'] ?? null;
+        unset($data['sync_options']);
+        if (is_array($syncOptions) && Schema::hasColumn('woocommerce_settings', 'products_per_job')) {
+            foreach (WooCommerceSetting::TUNING_DEFAULTS as $column => $default) {
+                if (array_key_exists($column, $syncOptions)) {
+                    $value = $syncOptions[$column];
+                    $data[$column] = ($value === null || $value === '') ? $default : $value;
+                }
+            }
+        }
+
+        // Before the columns' migration has run, saving them would fail the whole form.
+        if (! Schema::hasColumn('woocommerce_settings', 'auto_sync_stock')) {
+            unset($data['auto_sync_products'], $data['auto_sync_stock']);
+        }
 
         // Detect store change before saving
         $existing = WooCommerceSetting::first();
@@ -427,7 +468,7 @@ class WooCommerceSyncController extends BaseController
         try {
             // IMPORTANT: in "no-cron" mode we run a queue job inside this HTTP request.
             // If PHP's max_execution_time is short, the request can be killed mid-batch and appear "stuck".
-            $tickLimit = (int) env('WOO_POLL_TICK_MAX_SECONDS', 300);
+            $tickLimit = (int) config('woocommerce.poll_tick_max_seconds');
             $tickLimit = max(30, min(1800, $tickLimit));
             @ini_set('max_execution_time', (string) $tickLimit);
             if (function_exists('set_time_limit')) {
@@ -469,7 +510,7 @@ class WooCommerceSyncController extends BaseController
                     '--queue' => $queue,
                     '--sleep' => 1,
                     '--tries' => 1,
-                    '--timeout' => (int) env('QUEUE_WORKER_TIMEOUT', 1200),
+                    '--timeout' => (int) config('queue.worker_timeout'),
                 ]);
             } finally {
                 try {
@@ -563,7 +604,7 @@ class WooCommerceSyncController extends BaseController
     private function tickStockQueueOnce(array $state, string $token): void
     {
         try {
-            $tickLimit = (int) env('WOO_POLL_TICK_MAX_SECONDS', 300);
+            $tickLimit = (int) config('woocommerce.poll_tick_max_seconds');
             $tickLimit = max(30, min(1800, $tickLimit));
             @ini_set('max_execution_time', (string) $tickLimit);
             if (function_exists('set_time_limit')) {
@@ -602,7 +643,7 @@ class WooCommerceSyncController extends BaseController
                     '--queue' => $queue,
                     '--sleep' => 1,
                     '--tries' => 1,
-                    '--timeout' => (int) env('QUEUE_WORKER_TIMEOUT', 1200),
+                    '--timeout' => (int) config('queue.worker_timeout'),
                 ]);
             } finally {
                 try {
@@ -640,19 +681,19 @@ class WooCommerceSyncController extends BaseController
         // Stuck detection (same policy as products)
         if (is_array($state) && empty($state['finished'])) {
             try {
-                $stuckAfterSeconds = (int) env('WOO_SYNC_STUCK_SECONDS', 600);
+                $stuckAfterSeconds = (int) config('woocommerce.sync_stuck_seconds');
                 $stuckAfterSeconds = max(60, min(3600, $stuckAfterSeconds));
 
                 $stage = (string) ($state['stage'] ?? '');
                 $effectiveStuckSeconds = $stuckAfterSeconds;
 
                 if ($stage !== '' && str_starts_with($stage, 'queued')) {
-                    $queueWait = (int) env('WOO_SYNC_QUEUE_WAIT_SECONDS', 1800);
+                    $queueWait = (int) config('woocommerce.sync_queue_wait_seconds');
                     $queueWait = max(120, min(21600, $queueWait));
                     $effectiveStuckSeconds = max($effectiveStuckSeconds, $queueWait);
                 }
                 if ($stage === 'media') {
-                    $uploadTimeout = (int) env('WOO_WP_MEDIA_UPLOAD_TIMEOUT', 60);
+                    $uploadTimeout = (int) config('woocommerce.wp_media.upload_timeout');
                     $uploadTimeout = max(1, min(300, $uploadTimeout));
                     $effectiveStuckSeconds = max($effectiveStuckSeconds, $uploadTimeout + 60);
                 }
@@ -701,19 +742,19 @@ class WooCommerceSyncController extends BaseController
         // Stuck detection (production safety): if worker heartbeat hasn't moved, fail fast.
         if (is_array($state) && empty($state['finished'])) {
             try {
-                $stuckAfterSeconds = (int) env('WOO_SYNC_STUCK_SECONDS', 600);
+                $stuckAfterSeconds = (int) config('woocommerce.sync_stuck_seconds');
                 $stuckAfterSeconds = max(60, min(3600, $stuckAfterSeconds));
 
                 $stage = (string) ($state['stage'] ?? '');
                 $effectiveStuckSeconds = $stuckAfterSeconds;
 
                 if ($stage !== '' && str_starts_with($stage, 'queued')) {
-                    $queueWait = (int) env('WOO_SYNC_QUEUE_WAIT_SECONDS', 1800);
+                    $queueWait = (int) config('woocommerce.sync_queue_wait_seconds');
                     $queueWait = max(120, min(21600, $queueWait));
                     $effectiveStuckSeconds = max($effectiveStuckSeconds, $queueWait);
                 }
                 if ($stage === 'media') {
-                    $uploadTimeout = (int) env('WOO_WP_MEDIA_UPLOAD_TIMEOUT', 60);
+                    $uploadTimeout = (int) config('woocommerce.wp_media.upload_timeout');
                     $uploadTimeout = max(1, min(300, $uploadTimeout));
                     $effectiveStuckSeconds = max($effectiveStuckSeconds, $uploadTimeout + 60);
                 }
@@ -1129,7 +1170,7 @@ class WooCommerceSyncController extends BaseController
 
                 $page = 1;
                 $per = 100;
-                $cap = (int) env('WOO_PULL_STATS_PAGE_CAP', 200);
+                $cap = (int) config('woocommerce.pull_stats_page_cap');
                 $cap = max(1, min(1000, $cap));
 
                 $parents = 0;
@@ -1367,11 +1408,12 @@ class WooCommerceSyncController extends BaseController
 
         $sync = SyncService::fromSettings($settings);
         $orderId = (int) $request->query('order_id', 0);
-        if ($orderId > 0) {
-            $result = $sync->pullSingleOrder($orderId, (int) $request->user('api')->id, $warehouseId);
-        } else {
-            $result = $sync->pullOrders((int) $request->user('api')->id, $warehouseId);
-        }
+        $userId = (int) $request->user('api')->id;
+        // WooCommerce already took these orders off its own stock; the sales
+        // they create here must not push stock back.
+        $result = WooAutoSync::muted(fn () => $orderId > 0
+            ? $sync->pullSingleOrder($orderId, $userId, $warehouseId)
+            : $sync->pullOrders($userId, $warehouseId));
 
         return response()->json($result);
     }
@@ -1885,7 +1927,7 @@ class WooCommerceSyncController extends BaseController
 
         $page = 1;
         $per = 100;
-        $cap = (int) env('WOO_AUTOLINK_PAGE_CAP', 200);
+        $cap = (int) config('woocommerce.autolink_page_cap');
         $cap = max(1, min(2000, $cap));
 
         while ($page <= $cap) {

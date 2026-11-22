@@ -71,7 +71,12 @@ export function useBatchSync() {
     return { running, counters, batchErrors, finishedAt, hasCounters, run, cancel, reset };
 }
 
+// Getters so the labels follow the active locale.
 export const COUNTER_LABELS = {
-    processed: 'Processed', created: 'Created', updated: 'Updated',
-    failed: 'Failed', skipped: 'Skipped', imported: 'Imported',
+    get processed() { return tf('Processed', 'Processed'); },
+    get created() { return tf('Created', 'Created'); },
+    get updated() { return tf('Updated', 'Updated'); },
+    get failed() { return tf('Failed', 'Failed'); },
+    get skipped() { return tf('Skipped', 'Skipped'); },
+    get imported() { return tf('Imported', 'Imported'); },
 };

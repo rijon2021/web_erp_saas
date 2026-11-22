@@ -1,4 +1,4 @@
-code,cost,retail_price
-PROD-001,10.50,19.99
-PROD-002,5.25,12.50
-PROD-003,8.00,15.00
+code,cost,retail_price,name,category,sub_category,brand
+PROD-001,10.50,19.99,,,,
+PROD-002,,12.50,,Brakes,Brake Pads,
+PROD-003,8.00,,Oil Filter 5W-30,,,Bosch

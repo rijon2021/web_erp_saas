@@ -23,6 +23,13 @@ class EmailTemplate extends Model
     public const TRIGGER_SUPPORT_TICKET_CREATED = 'support_ticket_created';
     public const TRIGGER_SUPPORT_TICKET_REPLY   = 'support_ticket_reply';
     public const TRIGGER_SUPPORT_TICKET_STATUS  = 'support_ticket_status';
+    public const TRIGGER_PAYMENT_LINK          = 'payment_link';
+    public const TRIGGER_WORKSPACE_READY       = 'workspace_ready';
+    public const TRIGGER_PAYMENT_PROOF_RECEIVED = 'payment_proof_received';
+    public const TRIGGER_PAYMENT_PROOF_REJECTED = 'payment_proof_rejected';
+    // Sent to the platform admin (General Settings email), not the tenant.
+    public const TRIGGER_ADMIN_PAYMENT_PROOF    = 'admin_payment_proof';
+    public const TRIGGER_ADMIN_PROVISIONING_FAILED = 'admin_provisioning_failed';
 
     public const TRIGGERS = [
         self::TRIGGER_SUBSCRIPTION_EXPIRED,
@@ -38,6 +45,12 @@ class EmailTemplate extends Model
         self::TRIGGER_SUPPORT_TICKET_CREATED,
         self::TRIGGER_SUPPORT_TICKET_REPLY,
         self::TRIGGER_SUPPORT_TICKET_STATUS,
+        self::TRIGGER_PAYMENT_LINK,
+        self::TRIGGER_WORKSPACE_READY,
+        self::TRIGGER_PAYMENT_PROOF_RECEIVED,
+        self::TRIGGER_PAYMENT_PROOF_REJECTED,
+        self::TRIGGER_ADMIN_PAYMENT_PROOF,
+        self::TRIGGER_ADMIN_PROVISIONING_FAILED,
     ];
 
     public const AVAILABLE_VARIABLES = [
@@ -60,6 +73,13 @@ class EmailTemplate extends Model
         '{{ticket_status}}'    => 'Support ticket status',
         '{{ticket_message}}'   => 'Latest support ticket message',
         '{{ticket_url}}'       => 'Link to view the support ticket',
+        '{{payment_link}}'     => 'Payment link URL (payment link emails)',
+        '{{payment_title}}'    => 'Payment link title',
+        '{{payment_description}}' => 'Payment link description',
+        '{{link_expires}}'     => 'Payment link expiry date',
+        '{{review_url}}'       => 'Super admin link to review a payment (admin emails)',
+        '{{admin_url}}'        => 'Super admin link to the tenant (admin emails)',
+        '{{error_message}}'    => 'Error details (provisioning failed email)',
     ];
 
     protected $fillable = [

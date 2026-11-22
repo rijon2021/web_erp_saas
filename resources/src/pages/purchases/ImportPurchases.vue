@@ -44,14 +44,18 @@
               />
             </a-form-item>
 
+            <a-form-item :label="$t('Supplier_Invoice_No')">
+              <a-input v-model:value="purchase.supplier_invoice" :maxlength="100" />
+            </a-form-item>
+
             <a-form-item :label="$t('Status') + ' *'" v-bind="fieldProps('statut')">
               <a-select
                 v-model:value="purchase.statut"
                 :placeholder="$t('Choose_Status')"
                 :options="[
-                  { label: 'received', value: 'received' },
-                  { label: 'pending', value: 'pending' },
-                  { label: 'ordered', value: 'ordered' },
+                  { label: $t('Received'), value: 'received' },
+                  { label: $t('Pending'), value: 'pending' },
+                  { label: $t('Ordered'), value: 'ordered' },
                 ]"
               />
             </a-form-item>
@@ -94,6 +98,7 @@
             @file="handleFile"
             @clear="clearFile"
           />
+          <div style="margin-top: 8px; font-size: 12px; color: rgba(var(--ink-rgb), 0.55)">{{ $t('Imp_Purchase_Columns_Help') }}</div>
 
           <div v-if="previewLoading" style="margin-top: 16px">
             <a-spin size="small" style="margin-right: 8px" />
@@ -122,7 +127,12 @@
                 <template v-else-if="column.key === 'qty'">
                   {{ number(record.qty, 2) }} <span style="color: rgba(var(--ink-rgb), 0.45); font-size: 11px">{{ record.unit }}</span>
                 </template>
-                <template v-else-if="column.key === 'cost'">{{ number(record.cost) }}</template>
+                <template v-else-if="column.key === 'cost'">
+                  {{ number(record.cost) }}
+                  <a-tooltip v-if="!record.cost_from_file" :title="$t('Imp_Cost_From_Product')">
+                    <a-tag style="margin-left: 4px; font-size: 10px">{{ $t('Imp_Product_Cost_Tag') }}</a-tag>
+                  </a-tooltip>
+                </template>
                 <template v-else-if="column.key === 'total'">
                   <strong>{{ number(record.total) }}</strong>
                 </template>
@@ -230,6 +240,7 @@ import { useAuthStore } from '../../stores/auth';
 import { useFormat } from '../../composables/useFormat';
 import http from '../../lib/http';
 import { uploadForm } from '../../lib/upload';
+import { isDuplicateImport, confirmDuplicateImport } from '../../lib/importDuplicate';
 import { start as startProgress, done as doneProgress } from '../../lib/progress';
 
 const { t } = useI18n();
@@ -253,6 +264,7 @@ const purchase = ref({
   date: new Date().toISOString().slice(0, 10),
   statut: 'received',
   notes: '',
+  supplier_invoice: '',
   supplier_id: undefined,
   warehouse_id: undefined,
   tax_rate: 0,
@@ -342,7 +354,9 @@ async function fetchPreview() {
     previewLoading.value = false;
     const d = resp && resp.data && typeof resp.data === 'object' ? resp.data : {};
     if (resp.status >= 400 || d.status === false) {
-      previewError.value = d.msg || t('CSV_Parse_Failed') || 'Failed to parse CSV';
+      // Say which rows failed (e.g. "3.cost must be a number"), not just "Validation failed".
+      const details = d.errors ? Object.values(d.errors).flat().slice(0, 5).join(' · ') : '';
+      previewError.value = [d.msg || t('CSV_Parse_Failed') || 'Failed to parse CSV', details].filter(Boolean).join(': ');
       return;
     }
     const rows = Array.isArray(d.rows) ? d.rows : [];
@@ -466,7 +480,7 @@ function submitPurchase() {
   createPurchase();
 }
 
-async function createPurchase() {
+async function createPurchase(confirmDuplicate = false) {
   SubmitProcessing.value = true;
   startProgress();
 
@@ -476,6 +490,8 @@ async function createPurchase() {
   data.append('warehouse_id', purchase.value.warehouse_id);
   data.append('statut', purchase.value.statut);
   data.append('notes', purchase.value.notes);
+  data.append('supplier_invoice', purchase.value.supplier_invoice || '');
+  if (confirmDuplicate) data.append('confirm_duplicate', '1');
   data.append('tax_rate', purchase.value.tax_rate);
   data.append('discount', purchase.value.discount);
   data.append('shipping', purchase.value.shipping);
@@ -499,14 +515,28 @@ async function createPurchase() {
 
   try {
     const resp = await uploadForm('store_import_purchases', data);
-    if (resp.status >= 400) throw new Error('HTTP ' + resp.status);
+    const d = resp && resp.data && typeof resp.data === 'object' ? resp.data : {};
+
+    // Same lines already received from this supplier: ask before doubling.
+    if (isDuplicateImport(d)) {
+      doneProgress();
+      SubmitProcessing.value = false;
+      if (await confirmDuplicateImport(d)) await createPurchase(true);
+      return;
+    }
+    // Failures also come back as 200 + status:false — they used to read as success.
+    if (resp.status >= 400 || d.status === false || d.success === false) {
+      const reason = d.msg || d.message || (d.errors && Object.values(d.errors).flat()[0]);
+      throw new Error(reason || 'HTTP ' + resp.status);
+    }
     doneProgress();
     toast('success', t('Successfully_Imported'), t('Success'));
     SubmitProcessing.value = false;
     router.push('/purchases');
   } catch (e) {
     doneProgress();
-    toast('danger', 'An error occurred while processing the CSV file.', t('Failed'));
+    const reason = e && e.message && !/^HTTP \d+$/.test(e.message) ? e.message : t('An_error_occurred_while_processing_the_CSV_file');
+    toast('danger', reason, t('Failed'));
     SubmitProcessing.value = false;
   }
 }

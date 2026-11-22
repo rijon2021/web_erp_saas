@@ -8,6 +8,7 @@
     export-endpoint="report/stock_adjustment"
     :export-params="filterParams"
     :export-select="p => p?.data?.rows || []"
+    product-data
   >
     <template #actions>
       <!-- Multi-Currency: view amounts converted (display-only) -->
@@ -79,7 +80,7 @@ const columns = computed(() => [
   { title: t('warehouse'), dataIndex: 'warehouse', key: 'warehouse' },
   { title: t('Qty'), dataIndex: 'qty', key: 'qty', align: 'right', sum: true },
   { title: t('NetQty'), key: 'net_qty', dataIndex: 'net_qty', align: 'right', sum: true, exportValue: r => r.net_qty },
-  { title: t('Purchase_Cost'), key: 'purchase_cost', dataIndex: 'purchase_cost', align: 'right', sum: 'money', exportValue: r => money(r.purchase_cost) },
+  { title: t('Purchase_Cost'), key: 'purchase_cost', dataIndex: 'purchase_cost', align: 'right', sum: 'money', cost: true, exportValue: r => money(r.purchase_cost) },
   { title: t('Sale_Price'), key: 'sale_price', dataIndex: 'sale_price', align: 'right', sum: 'money', exportValue: r => money(r.sale_price) },
 ]);
 

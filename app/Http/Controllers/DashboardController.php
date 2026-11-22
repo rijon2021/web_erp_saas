@@ -22,14 +22,23 @@ use Carbon\Carbon;
 use DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use App\Services\DashboardCache;
 
 class DashboardController extends Controller
 {
     use CalculatesCogsAndAverageCost;
+    use \App\Traits\ScopesWarehouseAccess;
     // ----------------- dashboard_data -----------------------\\
 
     public function dashboard_data(Request $request)
     {
+        // Company KPIs (stock value, payments, top customers): same
+        // `dashboard` permission the SPA route requires, enforced server-side.
+        $role = Auth::user()?->roles()->first();
+        if (! $role || ! $role->inRole('dashboard')) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
         $user_auth = auth()->user();
         if ($user_auth->is_all_warehouses) {
             $array_warehouses_id = Warehouse::where('deleted_at', '=', null)->pluck('id')->toArray();
@@ -46,6 +55,26 @@ class DashboardController extends Controller
             $warehouse_id = 0;
         }
 
+        // The dashboard is the landing page and runs ~30 queries, several of
+        // them full-period aggregates — hold the finished payload briefly (see
+        // DashboardCache: keyed by the user's full scope, dropped as soon as a
+        // sale/purchase/payment… is written). The JSON string is cached rather
+        // than the arrays so the nested chart responses keep the exact shape
+        // the page reads (`.original`).
+        $cacheKey = DashboardCache::key(
+            (int) $user_auth->id, (bool) $user_auth->hasRecordView(), $array_warehouses_id,
+            $warehouse_id, $request->from, $request->to
+        );
+
+        $json = DashboardCache::remember($cacheKey, function () use ($request, $warehouse_id, $array_warehouses_id, $warehouses) {
+            return $this->buildDashboardData($request, $warehouse_id, $array_warehouses_id, $warehouses)->getContent();
+        });
+
+        return response($json, 200, ['Content-Type' => 'application/json']);
+    }
+
+    protected function buildDashboardData(Request $request, int $warehouse_id, array $array_warehouses_id, $warehouses)
+    {
         // Sales & Purchases chart: use header date range + warehouse filter
         $dataSales = $this->SalesChart($warehouse_id, $array_warehouses_id, $request->from, $request->to);
         $datapurchases = $this->PurchasesChart($warehouse_id, $array_warehouses_id, $request->from, $request->to);
@@ -84,13 +113,6 @@ class DashboardController extends Controller
         // New way: Check user's record_view field (user-level boolean)
         // Backward compatibility: If record_view is null, fall back to role permission check
         $view_records = $user->hasRecordView();
-        $is_all_warehouses = $user->is_all_warehouses;
-        // If the user is restricted, fetch their assigned warehouse IDs once and reuse below.
-        if (! $is_all_warehouses) {
-            $warehouse_ids = UserWarehouse::where('user_id', $user->id)
-                ->pluck('warehouse_id')
-                ->toArray();
-        }
 
         // Determine date window: either custom [from, to] or default last 7 days
         if (! empty($from) && ! empty($to)) {
@@ -156,13 +178,6 @@ class DashboardController extends Controller
         // New way: Check user's record_view field (user-level boolean)
         // Backward compatibility: If record_view is null, fall back to role permission check
         $view_records = $user->hasRecordView();
-        $is_all_warehouses = $user->is_all_warehouses;
-        // If the user is restricted, fetch their assigned warehouse IDs once and reuse below.
-        if (! $is_all_warehouses) {
-            $warehouse_ids = UserWarehouse::where('user_id', $user->id)
-                ->pluck('warehouse_id')
-                ->toArray();
-        }
 
         // Determine date window: either custom [from, to] or default last 7 days
         if (! empty($from) && ! empty($to)) {
@@ -227,13 +242,6 @@ class DashboardController extends Controller
         // New way: Check user's record_view field (user-level boolean)
         // Backward compatibility: If record_view is null, fall back to role permission check
         $view_records = $user->hasRecordView();
-        $is_all_warehouses = $user->is_all_warehouses;
-        // If the user is restricted, fetch their assigned warehouse IDs once and reuse below.
-        if (! $is_all_warehouses) {
-            $warehouse_ids = UserWarehouse::where('user_id', $user->id)
-                ->pluck('warehouse_id')
-                ->toArray();
-        }
 
         $data = Sale::whereBetween('date', [
             Carbon::now()->startOfMonth(),
@@ -272,13 +280,6 @@ class DashboardController extends Controller
         // New way: Check user's record_view field (user-level boolean)
         // Backward compatibility: If record_view is null, fall back to role permission check
         $view_records = $user->hasRecordView();
-        $is_all_warehouses = $user->is_all_warehouses;
-        // If the user is restricted, fetch their assigned warehouse IDs once and reuse below.
-        if (! $is_all_warehouses) {
-            $warehouse_ids = UserWarehouse::where('user_id', $user->id)
-                ->pluck('warehouse_id')
-                ->toArray();
-        }
 
         $products = SaleDetail::join('sales', 'sale_details.sale_id', '=', 'sales.id')
             ->join('products', 'sale_details.product_id', '=', 'products.id')
@@ -354,8 +355,9 @@ class DashboardController extends Controller
         // Stock Alerts
         $product_warehouse_data = product_warehouse::with('warehouse', 'product', 'productVariant')
             ->join('products', 'product_warehouse.product_id', '=', 'products.id')
-            ->where('manage_stock', true)
+            ->where('product_warehouse.manage_stock', true)
             ->whereRaw('qte <= stock_alert')
+            ->tap(fn ($q) => \App\Services\ComboStockService::excludeVirtualCombos($q))
             ->where('product_warehouse.deleted_at', null)
             ->where(function ($query) use ($warehouse_id, $array_warehouses_id) {
                 if ($warehouse_id !== 0) {
@@ -364,22 +366,33 @@ class DashboardController extends Controller
                     return $query->whereIn('product_warehouse.warehouse_id', $array_warehouses_id);
                 }
             })
+            // Products belong to a warehouse: hide other branches' products and
+            // their empty rows here, which otherwise fill the list.
+            ->tap(fn ($q) => $this->scopeProductsToWarehouses($q, 'products'))
+            ->tap(fn ($q) => $this->scopeStockRowsToOwnership($q))
+            // products.id / products.warehouse_id would otherwise overwrite the
+            // product_warehouse columns and break the eager-loaded relations
+            ->select('product_warehouse.*')
             ->take('5')->get();
 
         $stock_alert = [];
         if ($product_warehouse_data->isNotEmpty()) {
 
             foreach ($product_warehouse_data as $product_warehouse) {
-                if ($product_warehouse->qte <= $product_warehouse['product']->stock_alert) {
+                $product = $product_warehouse['product'];
+                if ($product === null) {
+                    continue;
+                }
+                if ($product_warehouse->qte <= $product->stock_alert) {
                     if ($product_warehouse->product_variant_id !== null) {
-                        $item['code'] = $product_warehouse['productVariant']->name.'-'.$product_warehouse['product']->code;
+                        $item['code'] = optional($product_warehouse['productVariant'])->name.'-'.$product->code;
                     } else {
-                        $item['code'] = $product_warehouse['product']->code;
+                        $item['code'] = $product->code;
                     }
                     $item['quantity'] = $product_warehouse->qte;
-                    $item['name'] = $product_warehouse['product']->name;
-                    $item['warehouse'] = $product_warehouse['warehouse']->name;
-                    $item['stock_alert'] = $product_warehouse['product']->stock_alert;
+                    $item['name'] = $product->name;
+                    $item['warehouse'] = optional($product_warehouse['warehouse'])->name;
+                    $item['stock_alert'] = $product->stock_alert;
                     $stock_alert[] = $item;
                 }
             }
@@ -427,7 +440,7 @@ class DashboardController extends Controller
 
         // --------------- return_sales
 
-        $return_sales_total = SaleReturn::where('deleted_at', '=', null)
+        $returnSalesBase = SaleReturn::where('deleted_at', '=', null)
             ->whereBetween('date', [$request->from, $request->to])
             ->where(function ($query) use ($view_records) {
                 if (! $view_records) {
@@ -440,7 +453,13 @@ class DashboardController extends Controller
                 } else {
                     return $query->whereIn('warehouse_id', $array_warehouses_id);
                 }
-            })
+            });
+
+        $return_sales_total = (clone $returnSalesBase)->sum('GrandTotal');
+
+        // Only received returns reverse a sale for profit (matches the COGS netting).
+        $receivedReturnSalesTotal = (float) (clone $returnSalesBase)
+            ->where('statut', 'received')
             ->sum('GrandTotal');
 
         // Return raw numeric value for frontend price formatting
@@ -518,7 +537,7 @@ class DashboardController extends Controller
 
         // ------------------------- today profit (ProfitNet FIFO) ------------------
         // Use same ProfitNet (FIFO) logic as the Profit & Loss report:
-        // profit_fifo = salesSum - COGS_FIFO - expenses + service job profit
+        // profit_fifo = salesSum - sale returns - COGS_FIFO - expenses + service job profit
 
         $expenses_total = Expense::where('deleted_at', '=', null)
             ->whereBetween('date', [$request->from, $request->to])
@@ -544,7 +563,7 @@ class DashboardController extends Controller
         // Profit & Loss report so both screens agree.
         $service = $this->serviceJobTotals($request->from, $request->to, (int) $warehouse_id, $array_warehouses_id);
 
-        $today_profit_numeric = $completedSalesTotal - $cogsFIFO - $expenses_total + $service['profit'];
+        $today_profit_numeric = $completedSalesTotal - $receivedReturnSalesTotal - $cogsFIFO - $expenses_total + $service['profit'];
         // Return raw numeric value for frontend price formatting
         $data['today_profit'] = $today_profit_numeric;
         $data['today_service_revenue'] = (float) $service['revenue'];
@@ -555,7 +574,7 @@ class DashboardController extends Controller
         $last_sales = [];
 
         // last sales
-        $Sales = Sale::with('details', 'client', 'facture', 'warehouse')->where('deleted_at', '=', null)
+        $Sales = Sale::with('client:id,name', 'warehouse:id,name')->where('deleted_at', '=', null)
             ->where(function ($query) use ($view_records) {
                 if (! $view_records) {
                     return $query->where('user_id', '=', Auth::user()->id);
@@ -916,8 +935,11 @@ class DashboardController extends Controller
             }
         };
 
-        // Calculate stock value by cost
-        $stockByCost = product_warehouse::join('products', 'product_warehouse.product_id', '=', 'products.id')
+        // Cost, retail and wholesale value in one pass over the same join (the
+        // three used to be separate queries differing only in the SUM).
+        $variantRow = 'products.is_variant = 1 AND product_variants.id IS NOT NULL';
+
+        $stock = product_warehouse::join('products', 'product_warehouse.product_id', '=', 'products.id')
             ->leftJoin('product_variants', function ($join) {
                 $join->on('product_warehouse.product_variant_id', '=', 'product_variants.id')
                      ->where('products.is_variant', '=', 1);
@@ -928,61 +950,26 @@ class DashboardController extends Controller
             ->where(function ($query) use ($warehouseFilter) {
                 $warehouseFilter($query);
             })
-            ->select(DB::raw('SUM(
-                CASE 
-                    WHEN products.is_variant = 1 AND product_variants.id IS NOT NULL 
+            ->select(DB::raw("
+                SUM(CASE WHEN {$variantRow}
                     THEN product_warehouse.qte * COALESCE(product_variants.cost, 0)
                     ELSE product_warehouse.qte * COALESCE(products.cost, 0)
-                END
-            ) as total_value'))
-            ->first();
-
-        // Calculate stock value by retail (price)
-        $stockByRetail = product_warehouse::join('products', 'product_warehouse.product_id', '=', 'products.id')
-            ->leftJoin('product_variants', function ($join) {
-                $join->on('product_warehouse.product_variant_id', '=', 'product_variants.id')
-                     ->where('products.is_variant', '=', 1);
-            })
-            ->where('product_warehouse.deleted_at', '=', null)
-            ->where('products.deleted_at', '=', null)
-            ->where('product_warehouse.qte', '>', 0)
-            ->where(function ($query) use ($warehouseFilter) {
-                $warehouseFilter($query);
-            })
-            ->select(DB::raw('SUM(
-                CASE 
-                    WHEN products.is_variant = 1 AND product_variants.id IS NOT NULL 
+                END) as by_cost,
+                SUM(CASE WHEN {$variantRow}
                     THEN product_warehouse.qte * COALESCE(product_variants.price, 0)
                     ELSE product_warehouse.qte * COALESCE(products.price, 0)
-                END
-            ) as total_value'))
-            ->first();
-
-        // Calculate stock value by wholesale
-        $stockByWholesale = product_warehouse::join('products', 'product_warehouse.product_id', '=', 'products.id')
-            ->leftJoin('product_variants', function ($join) {
-                $join->on('product_warehouse.product_variant_id', '=', 'product_variants.id')
-                     ->where('products.is_variant', '=', 1);
-            })
-            ->where('product_warehouse.deleted_at', '=', null)
-            ->where('products.deleted_at', '=', null)
-            ->where('product_warehouse.qte', '>', 0)
-            ->where(function ($query) use ($warehouseFilter) {
-                $warehouseFilter($query);
-            })
-            ->select(DB::raw('SUM(
-                CASE 
-                    WHEN products.is_variant = 1 AND product_variants.id IS NOT NULL 
+                END) as by_retail,
+                SUM(CASE WHEN {$variantRow}
                     THEN product_warehouse.qte * COALESCE(product_variants.wholesale, product_variants.price, 0)
                     ELSE product_warehouse.qte * COALESCE(products.wholesale_price, products.price, 0)
-                END
-            ) as total_value'))
+                END) as by_wholesale
+            "))
             ->first();
 
         return [
-            'by_cost' => (float) ($stockByCost->total_value ?? 0),
-            'by_retail' => (float) ($stockByRetail->total_value ?? 0),
-            'by_wholesale' => (float) ($stockByWholesale->total_value ?? 0),
+            'by_cost' => (float) ($stock->by_cost ?? 0),
+            'by_retail' => (float) ($stock->by_retail ?? 0),
+            'by_wholesale' => (float) ($stock->by_wholesale ?? 0),
         ];
     }
 

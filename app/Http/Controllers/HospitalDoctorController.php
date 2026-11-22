@@ -158,7 +158,7 @@ class HospitalDoctorController extends Controller
             ->map(fn ($a) => [
                 'id' => $a->id,
                 'reference' => $a->reference,
-                'scheduled_at' => optional($a->scheduled_at)->toIso8601String(),
+                'scheduled_at' => optional($a->scheduled_at)->toDateTimeLocalString(),
                 'duration_minutes' => (int) $a->duration_minutes,
                 'patient_name' => $a->patient ? $a->patient->name : '',
                 'status' => $a->status,
@@ -259,7 +259,7 @@ class HospitalDoctorController extends Controller
             mkdir($path, 0755, true);
         }
 
-        $extension = strtolower($file->getClientOriginalExtension()) ?: 'jpg';
+        $extension = \App\Support\SafeUpload::imageExtension($file, 'image');
         $filename = time() . '_' . Str::random(10) . '.' . $extension;
         $file->move($path, $filename);
 

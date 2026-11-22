@@ -51,27 +51,27 @@
     <a-divider style="margin: 8px 0 16px" />
 
     <a-space wrap>
-      <a-button :loading="fixingCategories" @click="fixProductCategories">Fix product categories</a-button>
-      <a-button :loading="autoLinking" @click="autoLinkBySku">Auto-link by SKU</a-button>
-      <a-button :loading="loadingUnmapped" @click="loadUnmapped">Unmapped report</a-button>
+      <a-button :loading="fixingCategories" @click="fixProductCategories">{{ $t('Woo_Fix_Product_Categories') }}</a-button>
+      <a-button :loading="autoLinking" @click="autoLinkBySku">{{ $t('Woo_Auto_Link_By_Sku') }}</a-button>
+      <a-button :loading="loadingUnmapped" @click="loadUnmapped">{{ $t('Woo_Unmapped_Report') }}</a-button>
     </a-space>
 
     <!-- Unmapped report -->
-    <a-modal v-model:open="unmappedModal" title="Unmapped report" :footer="null" width="860px">
+    <a-modal v-model:open="unmappedModal" :title="$t('Woo_Unmapped_Report')" :footer="null" width="860px">
       <template v-if="unmappedReport">
-        <h4>Order import failures</h4>
+        <h4>{{ $t('Woo_Order_Import_Failures') }}</h4>
         <a-table
           :columns="failureColumns" :data-source="unmappedReport.order_failures || []"
           size="small" :pagination="{ pageSize: 8 }" :row-key="(_r, i) => i"
           :locale="{ emptyText: $t('NodataAvailable') }" :scroll="{ x: 'max-content' }"
         />
-        <h4 style="margin-top: 16px">Unlinked products</h4>
+        <h4 style="margin-top: 16px">{{ $t('Woo_Unlinked_Products') }}</h4>
         <a-table
           :columns="unlinkedProductColumns" :data-source="unmappedReport.unlinked_products || []"
           size="small" :pagination="{ pageSize: 8 }" row-key="id"
           :locale="{ emptyText: $t('NodataAvailable') }"
         />
-        <h4 style="margin-top: 16px">Unlinked variants</h4>
+        <h4 style="margin-top: 16px">{{ $t('Woo_Unlinked_Variants') }}</h4>
         <a-table
           :columns="unlinkedVariantColumns" :data-source="unmappedReport.unlinked_variants || []"
           size="small" :pagination="{ pageSize: 8 }" row-key="id"
@@ -162,23 +162,23 @@ const showStopSync = computed(() => {
 const isSyncActive = computed(() => !!syncJobId.value || syncing.value);
 
 const failureColumns = [
-  { title: 'Woo Product ID', dataIndex: 'woo_product_id', key: 'woo_product_id' },
-  { title: 'Woo Variation ID', dataIndex: 'woo_variation_id', key: 'woo_variation_id' },
+  { title: t('Woo_Product_ID'), dataIndex: 'woo_product_id', key: 'woo_product_id' },
+  { title: t('Woo_Variation_ID'), dataIndex: 'woo_variation_id', key: 'woo_variation_id' },
   { title: 'SKU', dataIndex: 'sku', key: 'sku' },
-  { title: 'Failures', dataIndex: 'count', key: 'count' },
-  { title: 'Last Order', dataIndex: 'last_order_id', key: 'last_order_id' },
-  { title: 'Last Seen', dataIndex: 'last_seen_at', key: 'last_seen_at' },
+  { title: t('Woo_Failures'), dataIndex: 'count', key: 'count' },
+  { title: t('Woo_Last_Order'), dataIndex: 'last_order_id', key: 'last_order_id' },
+  { title: t('Last_Seen'), dataIndex: 'last_seen_at', key: 'last_seen_at' },
 ];
 const unlinkedProductColumns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 80 },
-  { title: 'Name', dataIndex: 'name', key: 'name' },
-  { title: 'SKU / Code', dataIndex: 'code', key: 'code' },
+  { title: t('Name'), dataIndex: 'name', key: 'name' },
+  { title: t('Woo_Sku_Code'), dataIndex: 'code', key: 'code' },
 ];
 const unlinkedVariantColumns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 80 },
-  { title: 'Product ID', dataIndex: 'product_id', key: 'product_id', width: 100 },
-  { title: 'Variant', dataIndex: 'name', key: 'name' },
-  { title: 'SKU / Code', dataIndex: 'code', key: 'code' },
+  { title: t('Woo_Local_Product_ID'), dataIndex: 'product_id', key: 'product_id', width: 100 },
+  { title: t('Variant'), dataIndex: 'name', key: 'name' },
+  { title: t('Woo_Sku_Code'), dataIndex: 'code', key: 'code' },
 ];
 
 watch(syncOnlyUnsynced, (val) => {
@@ -429,14 +429,14 @@ async function fixProductCategories() {
     if (data && data.ok) {
       const b = data.skipped_breakdown || {};
       const extra = (b.missing_category_mapping != null || b.already_categorized != null)
-        ? ` (no mapping: ${b.missing_category_mapping || 0}, already ok: ${b.already_categorized || 0})`
+        ? ' ' + t('Woo_Fix_Categories_Breakdown', { missing: b.missing_category_mapping || 0, ok: b.already_categorized || 0 })
         : '';
-      message.success(`Fixed: ${data.fixed || 0} · Skipped: ${data.skipped || 0}${extra} · Errors: ${data.errors || 0}`);
+      message.success(t('Woo_Fix_Categories_Result', { fixed: data.fixed || 0, skipped: data.skipped || 0, extra, errors: data.errors || 0 }));
     } else {
-      message.error(`Fix failed: ${data?.error || 'Unknown error'}`);
+      message.error(t('Woo_Fix_Failed', { error: data?.error || t('Woo_Unknown_Error') }));
     }
   } catch (e) {
-    message.error(`Fix failed: ${e.message || 'Network error'}`);
+    message.error(t('Woo_Fix_Failed', { error: e.message || t('Network_error') }));
   } finally {
     fixingCategories.value = false;
   }
@@ -448,14 +448,14 @@ async function autoLinkBySku() {
   try {
     const data = await http.post('woocommerce/products/auto-link');
     if (data && data.ok) {
-      message.success(`Linked products: ${data.linked_products || 0} · Linked variants: ${data.linked_variants || 0}`);
+      message.success(t('Woo_Auto_Link_Result', { products: data.linked_products || 0, variants: data.linked_variants || 0 }));
       load();
       emit('refreshed');
     } else {
-      message.error(`Auto-link failed: ${data?.error || 'Unknown error'}`);
+      message.error(t('Woo_Auto_Link_Failed', { error: data?.error || t('Woo_Unknown_Error') }));
     }
   } catch (e) {
-    message.error(`Auto-link failed: ${e.message || 'Network error'}`);
+    message.error(t('Woo_Auto_Link_Failed', { error: e.message || t('Network_error') }));
   } finally {
     autoLinking.value = false;
   }
@@ -470,10 +470,10 @@ async function loadUnmapped() {
       unmappedReport.value = data;
       unmappedModal.value = true;
     } else {
-      message.error(`Failed to load report: ${data?.error || 'Unknown error'}`);
+      message.error(t('Woo_Report_Load_Failed', { error: data?.error || t('Woo_Unknown_Error') }));
     }
   } catch (e) {
-    message.error(`Failed to load report: ${e.message || 'Network error'}`);
+    message.error(t('Woo_Report_Load_Failed', { error: e.message || t('Network_error') }));
   } finally {
     loadingUnmapped.value = false;
   }

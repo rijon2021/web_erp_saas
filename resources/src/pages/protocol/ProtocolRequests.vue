@@ -38,6 +38,10 @@
         <a-select v-model:value="type" style="width: 190px" allow-clear :placeholder="tf('Pt_Type', 'Type')" :options="typeOptions" @change="crud.reload()" />
         <a-select v-model:value="priority" style="width: 140px" allow-clear :placeholder="tf('Pt_Priority', 'Priority')" :options="priorityOptions" @change="crud.reload()" />
         <a-select v-model:value="deskId" style="width: 180px" allow-clear show-search option-filter-prop="label" :placeholder="tf('Pt_Desk', 'Desk')" :options="deskOptions" @change="crud.reload()" />
+        <!-- Client Portal → Customer Requests lands here with ?channel=portal. -->
+        <a-tag v-if="channel" color="orange" closable @close="clearChannel">
+          {{ tf('Portal_Requests_Only', 'Client portal requests only') }}
+        </a-tag>
       </a-space>
     </a-card>
 
@@ -145,8 +149,8 @@
  * scope (inbox = at my desks / assigned to me, mine = submitted by me, all),
  * status/type/priority/desk filters; POST protocol/requests (multipart).
  */
-import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { message } from 'ant-design-vue';
 import {
@@ -164,6 +168,7 @@ const { t } = useI18n();
 const tf = (key, fallback) => { const out = t(key); return out === key ? fallback : out; };
 const label = makeLabel(t);
 const router = useRouter();
+const route = useRoute();
 const auth = useAuthStore();
 
 const scope = ref('inbox');
@@ -171,6 +176,8 @@ const status = ref(undefined);
 const type = ref(undefined);
 const priority = ref(undefined);
 const deskId = ref(undefined);
+// ?channel=portal: only requests customers sent from the client portal.
+const channel = computed(() => (route.query.channel === 'portal' ? 'portal' : ''));
 const meta = ref({ desks: [], users: [], me: {} });
 const kpis = ref({});
 
@@ -190,12 +197,19 @@ const filterParams = () => ({
   type: type.value || '',
   priority: priority.value || '',
   desk_id: deskId.value || '',
+  channel: channel.value,
 });
 
 const crud = useCrudTable('protocol/requests', { rowsKey: 'requests', sortField: 'last_activity_at', sortType: 'desc', params: filterParams });
 
+watch(channel, () => crud.reload());
+function clearChannel() {
+  const { channel: _c, ...rest } = route.query;
+  router.replace({ path: route.path, query: rest });
+}
+
 const columns = computed(() => [
-  { title: 'Ref', dataIndex: 'Ref', key: 'Ref', sorter: true, width: 110 },
+  { title: t('Pt_Ref'), dataIndex: 'Ref', key: 'Ref', sorter: true, width: 110 },
   { title: tf('Pt_Subject', 'Subject'), dataIndex: 'subject', key: 'subject', sorter: true },
   { title: tf('Pt_Type', 'Type'), dataIndex: 'type', key: 'type', sorter: true, width: 150 },
   { title: tf('Pt_Priority', 'Priority'), dataIndex: 'priority', key: 'priority', sorter: true, width: 110 },
@@ -282,8 +296,9 @@ async function submit() {
 
 onMounted(async () => {
   await loadMeta();
-  // Users on no desk have an empty inbox — start them on "All".
-  if (!meta.value.me?.manage && !(meta.value.me?.desk_ids || []).length) scope.value = 'all';
+  // Users on no desk have an empty inbox — start them on "All" (and so do
+  // portal deep links: those requests may sit on any desk).
+  if (channel.value || (!meta.value.me?.manage && !(meta.value.me?.desk_ids || []).length)) scope.value = 'all';
   crud.fetchRows();
   searchClients('');
 });

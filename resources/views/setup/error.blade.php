@@ -7,7 +7,7 @@
             <i class="fa fa-times"></i>
         </div>
 
-        <p class="eyebrow">Step 4 of 4</p>
+        <p class="eyebrow">Step 5 of 5</p>
         <h1>Installation failed</h1>
         <p class="lead-text">The installer stopped because of the error below. Fix the cause, then retry — the installation always restarts from a clean state.</p>
 

@@ -1,33 +1,33 @@
 <template>
   <div class="page">
-    <PageHeader title="Wards & Beds" subtitle="Live bed board." :breadcrumb="['Hospital', 'Wards']">
+    <PageHeader :title="$t('Hm_Wards_And_Beds')" :subtitle="$t('Hm_Live_Bed_Board')" :breadcrumb="[$t('Hm_Hospital'), $t('Hm_Wards')]">
       <template #actions>
         <a-button @click="openWard(null)">
           <template #icon><PlusOutlined /></template>
-          New ward
+          {{ $t('Hm_New_Ward') }}
         </a-button>
         <a-button type="primary" :disabled="!wards.length" @click="openBed(null)">
           <template #icon><PlusOutlined /></template>
-          Add beds
+          {{ $t('Hm_Add_Beds') }}
         </a-button>
       </template>
     </PageHeader>
 
     <div class="summary">
       <div class="sum">
-        <span class="sum-label">Beds</span>
+        <span class="sum-label">{{ $t('Hm_Beds') }}</span>
         <span class="sum-value">{{ totals.total }}</span>
       </div>
       <div class="sum">
-        <span class="sum-label">Occupied</span>
+        <span class="sum-label">{{ $t('Hm_Occupied') }}</span>
         <span class="sum-value danger">{{ totals.occupied }}</span>
       </div>
       <div class="sum">
-        <span class="sum-label">Available</span>
+        <span class="sum-label">{{ $t('Hm_Available') }}</span>
         <span class="sum-value ok">{{ totals.available }}</span>
       </div>
       <div class="sum">
-        <span class="sum-label">Occupancy</span>
+        <span class="sum-label">{{ $t('Hm_Occupancy') }}</span>
         <span class="sum-value">{{ totals.rate }}%</span>
       </div>
     </div>
@@ -42,7 +42,7 @@
         </template>
         <template #extra>
           <a-space>
-            <span class="ward-rate">{{ money(ward.daily_rate) }}/night</span>
+            <span class="ward-rate">{{ $t('Hm_Amount_Per_Night', { amount: money(ward.daily_rate) }) }}</span>
             <a-tag :color="wardRate(ward) >= 90 ? 'error' : wardRate(ward) >= 70 ? 'warning' : 'success'">
               {{ occupiedIn(ward) }}/{{ ward.beds.length }}
             </a-tag>
@@ -65,51 +65,51 @@
             <span v-else class="bed-state">{{ labelOf(BED_STATUSES, bed.status) }}</span>
           </button>
         </div>
-        <a-empty v-else :image="simpleEmptyImage" description="No beds in this ward">
-          <a-button size="small" @click="openBed(ward)">Add beds</a-button>
+        <a-empty v-else :image="simpleEmptyImage" :description="$t('Hm_No_Beds_In_Ward')">
+          <a-button size="small" @click="openBed(ward)">{{ $t('Hm_Add_Beds') }}</a-button>
         </a-empty>
       </a-card>
 
       <a-card v-if="!loading && !wards.length">
-        <a-empty description="No wards configured yet">
-          <a-button type="primary" @click="openWard(null)">Create the first ward</a-button>
+        <a-empty :description="$t('Hm_No_Wards_Yet')">
+          <a-button type="primary" @click="openWard(null)">{{ $t('Hm_Create_First_Ward') }}</a-button>
         </a-empty>
       </a-card>
     </a-spin>
 
     <!-- Ward form -->
     <a-modal
-      :open="wardOpen" :title="editingWard ? 'Edit ward' : 'New ward'" :width="560"
+      :open="wardOpen" :title="editingWard ? $t('Hm_Edit_Ward') : $t('Hm_New_Ward')" :width="560"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submitWard" @cancel="wardOpen = false"
     >
       <a-form ref="wardRef" :model="wardForm" :rules="wardRules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="14">
-            <a-form-item label="Ward name *" name="name">
-              <a-input v-model:value="wardForm.name" placeholder="e.g. Male Medical" allow-clear />
+            <a-form-item :label="$t('Hm_Ward_Name') + ' *'" name="name">
+              <a-input v-model:value="wardForm.name" :placeholder="$t('Hm_Ward_Name_Placeholder')" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="10">
-            <a-form-item label="Type *" name="type">
+            <a-form-item :label="$t('Type') + ' *'" name="type">
               <a-select v-model:value="wardForm.type" :options="WARD_TYPES" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Floor">
+            <a-form-item :label="$t('Hm_Floor')">
               <a-input v-model:value="wardForm.floor" allow-clear />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Rate / night">
+            <a-form-item :label="$t('Hm_Rate_Per_Night')">
               <a-input-number v-model:value="wardForm.daily_rate" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Department">
+            <a-form-item :label="$t('Hm_Department')">
               <a-select
                 v-model:value="wardForm.department_id" allow-clear show-search
-                option-filter-prop="label" :options="departmentOptions" placeholder="None"
+                option-filter-prop="label" :options="departmentOptions" :placeholder="$t('Hm_None')"
               />
             </a-form-item>
           </a-col>
@@ -124,31 +124,31 @@
 
     <!-- Bed form -->
     <a-modal
-      :open="bedOpen" :title="editingBed ? 'Edit bed' : 'Add beds'" :width="520"
+      :open="bedOpen" :title="editingBed ? $t('Hm_Edit_Bed') : $t('Hm_Add_Beds')" :width="520"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submitBed" @cancel="bedOpen = false"
     >
       <a-form ref="bedRef" :model="bedForm" :rules="bedRules" layout="vertical">
-        <a-form-item label="Ward *" name="ward_id">
+        <a-form-item :label="$t('Hm_Ward') + ' *'" name="ward_id">
           <a-select
             v-model:value="bedForm.ward_id" :options="wardOptions" :disabled="!!editingBed"
             show-search option-filter-prop="label"
           />
         </a-form-item>
         <a-form-item
-          label="Bed number *" name="bed_number"
-          :extra="editingBed ? null : 'One number, a range like 1-12, or a comma list like A1,A2'"
+          :label="$t('Hm_Bed_Number') + ' *'" name="bed_number"
+          :extra="editingBed ? null : $t('Hm_Bed_Number_Hint')"
         >
-          <a-input v-model:value="bedForm.bed_number" placeholder="e.g. 1-12" allow-clear />
+          <a-input v-model:value="bedForm.bed_number" :placeholder="$t('Hm_Example_Value', { value: '1-12' })" allow-clear />
         </a-form-item>
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Status">
+            <a-form-item :label="$t('Status')">
               <a-select v-model:value="bedForm.status" :options="assignableBedStatuses" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Rate / night" extra="Leave empty to use the ward rate">
+            <a-form-item :label="$t('Hm_Rate_Per_Night')" :extra="$t('Hm_Bed_Rate_Hint')">
               <a-input-number v-model:value="bedForm.daily_rate" :min="0" style="width: 100%" />
             </a-form-item>
           </a-col>
@@ -178,7 +178,7 @@ import PageHeader from '../../components/PageHeader.vue';
 import { useFormat } from '../../composables/useFormat';
 import { WARD_TYPES, BED_STATUSES, labelOf } from './hospitalOptions';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { t, i18n } from '../../i18n';
 
 const router = useRouter();
 const { money } = useFormat();
@@ -281,9 +281,9 @@ async function submitWard() {
 
 function removeWard(ward) {
   Modal.confirm({
-    title: `Delete ${ward.name}?`,
+    title: i18n.global.t('Hm_Delete_Name_Confirm', { name: ward.name }),
     icon: createVNode(ExclamationCircleOutlined),
-    content: 'Its beds are deleted with it. Occupied wards cannot be deleted.',
+    content: t('Hm_Delete_Ward_Hint'),
     okText: t('Delete_confirmButtonText', 'Yes, delete it!'),
     okType: 'danger',
     cancelText: t('Delete_cancelButtonText', 'Cancel'),

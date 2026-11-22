@@ -154,19 +154,108 @@ class SystemLog extends Model
             return null;
         }
 
+        $message = mb_substr($e->getMessage() ?: get_class($e), 0, 1000);
+        $tenantId = $extra['tenant_id'] ?? null;
+        $fingerprint = self::fingerprint($e, $tenantId);
+
+        // The same failure repeating (e.g. every request of a tenant whose
+        // database is missing a table) bumps one open row instead of adding
+        // thousands of identical ones.
+        if ($existing = self::bumpOpenDuplicate($fingerprint, $tenantId)) {
+            return $existing;
+        }
+
         $defaults = [
             'type'            => self::TYPE_EXCEPTION,
             'severity'        => self::SEVERITY_CRITICAL,
-            'message'         => mb_substr($e->getMessage() ?: get_class($e), 0, 1000),
+            'message'         => $message,
             'context'         => [
-                'exception' => get_class($e),
-                'file'      => $e->getFile(),
-                'line'      => $e->getLine(),
-                'trace'     => collect(explode("\n", $e->getTraceAsString()))->take(15)->implode("\n"),
+                'exception'   => get_class($e),
+                'file'        => $e->getFile(),
+                'line'        => $e->getLine(),
+                'trace'       => collect(explode("\n", $e->getTraceAsString()))->take(15)->implode("\n"),
+                'fingerprint' => $fingerprint,
+                'occurrences' => 1,
+                'first_seen'  => now()->toDateTimeString(),
             ],
-            'suggested_cause' => null,
+            'suggested_cause' => self::suggestedCauseFor($e),
         ];
 
         return static::capture(array_merge($defaults, $extra));
+    }
+
+    /** How many times this row's failure happened (1 for rows written before grouping existed). */
+    public function occurrences(): int
+    {
+        return max(1, (int) ($this->context['occurrences'] ?? 1));
+    }
+
+    /**
+     * Identity of a failure: tenant + exception class + throw site + message
+     * with the volatile parts (numbers, bound values, connection details)
+     * stripped, so the same bug on different rows/ids groups together.
+     */
+    private static function fingerprint(Throwable $e, ?string $tenantId): string
+    {
+        $msg = (string) $e->getMessage();
+        // QueryException: "... (Connection: tenant, Host: ..., SQL: select ...)"
+        if (($cut = strpos($msg, ' (Connection:')) !== false) {
+            $msg = substr($msg, 0, $cut);
+        } elseif (($cut = strpos($msg, ' (SQL:')) !== false) {
+            $msg = substr($msg, 0, $cut);
+        }
+        $msg = preg_replace('/\d+/', '#', $msg);
+
+        return sha1(implode('|', [(string) $tenantId, get_class($e), $e->getFile(), $e->getLine(), $msg]));
+    }
+
+    private static function bumpOpenDuplicate(string $fingerprint, ?string $tenantId): ?self
+    {
+        try {
+            $existing = static::query()
+                ->where('type', self::TYPE_EXCEPTION)
+                ->where('status', self::STATUS_UNRESOLVED)
+                ->when($tenantId === null, fn ($q) => $q->whereNull('tenant_id'), fn ($q) => $q->where('tenant_id', $tenantId))
+                ->where('context->fingerprint', $fingerprint)
+                ->orderByDesc('id')
+                ->first();
+            if (! $existing) {
+                return null;
+            }
+
+            $context = $existing->context ?? [];
+            $context['occurrences'] = $existing->occurrences() + 1;
+            $context['first_seen'] ??= $existing->occurred_at?->toDateTimeString();
+            $existing->context = $context;
+            $existing->occurred_at = now(); // "Occurred" = last seen
+            $existing->save();
+
+            return $existing;
+        } catch (Throwable $ignored) {
+            return null; // fall through to a fresh row
+        }
+    }
+
+    /** Plain-language hint for the failures that have a known fix. */
+    private static function suggestedCauseFor(Throwable $e): ?string
+    {
+        $msg = (string) $e->getMessage();
+
+        if (str_contains($msg, 'SQLSTATE[42S02]') || str_contains($msg, 'SQLSTATE[42S22]')) {
+            return 'A database table or column is missing — the tenant database is behind the code. '
+                .'Run the pending migrations (Super Admin > System Update, or `php artisan migrate --force` '
+                .'then `php artisan tenants:migrate --force`), then resolve this entry.';
+        }
+        if (str_contains($msg, '[1049]') || str_contains($msg, 'Unknown database')) {
+            return 'The tenant database does not exist. Re-run provisioning for this tenant or create its database.';
+        }
+        if (str_contains($msg, '[1045]')) {
+            return 'Access denied — check the database username and password.';
+        }
+        if (str_contains($msg, '[2002]') || str_contains($msg, 'Connection refused')) {
+            return 'Cannot reach the database server. Verify host/port and that the MySQL service is running.';
+        }
+
+        return null;
     }
 }

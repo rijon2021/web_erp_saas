@@ -1,28 +1,38 @@
 /**
  * HRM shared vocabulary. Employment types and leave statuses are backend
- * values; labels are hardcoded English exactly like the legacy selects.
+ * values; labels are translated lazily (getters) so they follow the active
+ * locale.
  */
+import { i18n } from '../../i18n';
+
+const tr = (k) => i18n.global.t(k);
 
 export const EMPLOYMENT_TYPES = [
-    { value: 'full_time', label: 'Full-time' },
-    { value: 'part_time', label: 'Part-time' },
-    { value: 'self_employed', label: 'Self-employed' },
-    { value: 'freelance', label: 'Freelance' },
-    { value: 'contract', label: 'Contract' },
-    { value: 'internship', label: 'Internship' },
-    { value: 'apprenticeship', label: 'Apprenticeship' },
-    { value: 'seasonal', label: 'Seasonal' },
+    { value: 'full_time', get label() { return tr('Hrm_Full_Time'); } },
+    { value: 'part_time', get label() { return tr('Hrm_Part_Time'); } },
+    { value: 'self_employed', get label() { return tr('Hrm_Self_Employed'); } },
+    { value: 'freelance', get label() { return tr('Hrm_Freelance'); } },
+    { value: 'contract', get label() { return tr('Contract'); } },
+    { value: 'internship', get label() { return tr('Internship'); } },
+    { value: 'apprenticeship', get label() { return tr('Hrm_Apprenticeship'); } },
+    { value: 'seasonal', get label() { return tr('Hrm_Seasonal'); } },
 ];
 
 export const GENDERS = [
-    { value: 'male', label: 'Male' },
-    { value: 'female', label: 'Female' },
+    { value: 'male', get label() { return tr('Male'); } },
+    { value: 'female', get label() { return tr('Female'); } },
+];
+
+export const MARITAL_STATUSES = [
+    { value: 'married', get label() { return tr('Hrm_Married'); } },
+    { value: 'single', get label() { return tr('Hrm_Single'); } },
+    { value: 'divorced', get label() { return tr('Hrm_Divorced'); } },
 ];
 
 export const LEAVE_STATUSES = [
-    { value: 'approved', label: 'Approved' },
-    { value: 'pending', label: 'Pending' },
-    { value: 'rejected', label: 'Rejected' },
+    { value: 'approved', get label() { return tr('Approved'); } },
+    { value: 'pending', get label() { return tr('Pending'); } },
+    { value: 'rejected', get label() { return tr('Rejected'); } },
 ];
 
 const LEAVE_STATUS_COLORS = { approved: 'green', pending: 'orange', rejected: 'red' };

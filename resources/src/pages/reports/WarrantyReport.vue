@@ -92,7 +92,7 @@
         <a-tag :color="daysColor(record.days_remaining)">{{ record.days_remaining ?? '—' }}</a-tag>
       </template>
       <template v-else-if="column.key === 'status'">
-        <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
+        <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
       </template>
     </template>
   </ReportPage>
@@ -150,6 +150,8 @@ const statusOptions = computed(() => [
   { value: 'expired', label: t('Expired') },
   { value: 'no_coverage', label: tf('No_Coverage', 'No coverage') },
 ]);
+// Display label for a raw status value (falls back to the value itself).
+const statusLabel = s => statusOptions.value.find(o => o.value === s)?.label ?? s;
 
 /* -------------------------------------------------- summary KPIs + donut */
 const summary = computed(() => crud.payload.value?.summary || {});
@@ -211,7 +213,7 @@ const columns = computed(() => [
     exportValue: r => (r.guarantee_date ? date(r.guarantee_date) : ''),
   },
   { title: t('Days_Remaining'), key: 'days_remaining', dataIndex: 'days_remaining', sorter: true, align: 'right', exportValue: r => r.days_remaining ?? '' },
-  { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => r.status },
+  { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => statusLabel(r.status) },
 ]);
 
 function daysColor(days) {

@@ -1,6 +1,9 @@
 import {
     FileStack, Factory, Hammer, ShieldCheck, Calculator, Cog,
 } from 'lucide-vue-next';
+import { i18n } from '../../i18n';
+
+const tr = (k) => i18n.global.t(k);
 
 /**
  * Shared vocabulary for the manufacturing module: the values the API stores,
@@ -13,57 +16,57 @@ import {
  * the single place that knows draft comes before planned.
  */
 export const ORDER_STATUSES = [
-    { value: 'draft', label: 'Draft', color: 'default', step: 0 },
-    { value: 'planned', label: 'Planned', color: 'blue', step: 1 },
-    { value: 'released', label: 'Released', color: 'processing', step: 2 },
-    { value: 'in_progress', label: 'In progress', color: 'warning', step: 3 },
-    { value: 'completed', label: 'Completed', color: 'success', step: 4 },
-    { value: 'cancelled', label: 'Cancelled', color: 'error', step: -1 },
+    { value: 'draft', get label() { return tr('Mrp_Status_Draft'); }, color: 'default', step: 0 },
+    { value: 'planned', get label() { return tr('Mrp_Status_Planned'); }, color: 'blue', step: 1 },
+    { value: 'released', get label() { return tr('Mrp_Status_Released'); }, color: 'processing', step: 2 },
+    { value: 'in_progress', get label() { return tr('Mrp_Status_In_Progress'); }, color: 'warning', step: 3 },
+    { value: 'completed', get label() { return tr('Mrp_Status_Completed'); }, color: 'success', step: 4 },
+    { value: 'cancelled', get label() { return tr('Mrp_Status_Cancelled'); }, color: 'error', step: -1 },
 ];
 
 export const OPEN_ORDER_STATUSES = ['draft', 'planned', 'released', 'in_progress'];
 
 export const PRIORITIES = [
-    { value: 'low', label: 'Low', color: 'default' },
-    { value: 'normal', label: 'Normal', color: 'blue' },
-    { value: 'high', label: 'High', color: 'warning' },
-    { value: 'urgent', label: 'Urgent', color: 'error' },
+    { value: 'low', get label() { return tr('Mrp_Priority_Low'); }, color: 'default' },
+    { value: 'normal', get label() { return tr('Mrp_Priority_Normal'); }, color: 'blue' },
+    { value: 'high', get label() { return tr('Mrp_Priority_High'); }, color: 'warning' },
+    { value: 'urgent', get label() { return tr('Mrp_Priority_Urgent'); }, color: 'error' },
 ];
 
 export const BOM_STATUSES = [
-    { value: 'draft', label: 'Draft', color: 'default' },
-    { value: 'active', label: 'Active', color: 'success' },
-    { value: 'archived', label: 'Archived', color: 'default' },
+    { value: 'draft', get label() { return tr('Mrp_Status_Draft'); }, color: 'default' },
+    { value: 'active', get label() { return tr('Mrp_Active'); }, color: 'success' },
+    { value: 'archived', get label() { return tr('Mrp_Archived'); }, color: 'default' },
 ];
 
 export const WORK_ORDER_STATUSES = [
-    { value: 'pending', label: 'Waiting', color: 'default' },
-    { value: 'in_progress', label: 'Running', color: 'processing' },
-    { value: 'completed', label: 'Done', color: 'success' },
-    { value: 'skipped', label: 'Skipped', color: 'warning' },
+    { value: 'pending', get label() { return tr('Mrp_Wo_Waiting'); }, color: 'default' },
+    { value: 'in_progress', get label() { return tr('Mrp_Wo_Running'); }, color: 'processing' },
+    { value: 'completed', get label() { return tr('Mrp_Wo_Done'); }, color: 'success' },
+    { value: 'skipped', get label() { return tr('Mrp_Wo_Skipped'); }, color: 'warning' },
 ];
 
 export const QC_STATUSES = [
-    { value: 'pending', label: 'Pending', color: 'default' },
-    { value: 'passed', label: 'Passed', color: 'success' },
-    { value: 'partial', label: 'Partial', color: 'warning' },
-    { value: 'failed', label: 'Failed', color: 'error' },
+    { value: 'pending', get label() { return tr('Mrp_Qc_Pending'); }, color: 'default' },
+    { value: 'passed', get label() { return tr('Mrp_Qc_Passed'); }, color: 'success' },
+    { value: 'partial', get label() { return tr('Mrp_Qc_Partial'); }, color: 'warning' },
+    { value: 'failed', get label() { return tr('Mrp_Qc_Failed'); }, color: 'error' },
 ];
 
 export const QC_TYPES = [
-    { value: 'in_process', label: 'In process' },
-    { value: 'final', label: 'Final' },
+    { value: 'in_process', get label() { return tr('Mrp_Qc_In_Process'); } },
+    { value: 'final', get label() { return tr('Mrp_Qc_Final'); } },
 ];
 
 export const SUGGESTION_ACTIONS = [
-    { value: 'make', label: 'Make', color: 'purple' },
-    { value: 'buy', label: 'Buy', color: 'blue' },
+    { value: 'make', get label() { return tr('Mrp_Make'); }, color: 'purple' },
+    { value: 'buy', get label() { return tr('Mrp_Buy'); }, color: 'blue' },
 ];
 
 export const SUGGESTION_STATUSES = [
-    { value: 'pending', label: 'Pending', color: 'processing' },
-    { value: 'accepted', label: 'Accepted', color: 'success' },
-    { value: 'dismissed', label: 'Dismissed', color: 'default' },
+    { value: 'pending', get label() { return tr('Mrp_Qc_Pending'); }, color: 'processing' },
+    { value: 'accepted', get label() { return tr('Mrp_Accepted'); }, color: 'success' },
+    { value: 'dismissed', get label() { return tr('Mrp_Dismissed'); }, color: 'default' },
 ];
 
 /** Section icons, so each page reads as itself in the sidebar and headers. */

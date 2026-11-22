@@ -18,20 +18,20 @@
       <div style="max-width: 760px; margin: 0 auto">
           <a-alert
             type="info" show-icon style="margin-bottom: 16px"
-            message="Opening stock"
-            description="Adds initial quantities for existing products in the chosen warehouse. Codes must match products already in the system."
+            :message="$t('Imp_Opening_Stock_Title')"
+            :description="$t('Imp_Opening_Stock_Desc')"
           />
 
           <a-form-item
             :label="$t('warehouse') + ' *'" layout="vertical"
             :validate-status="warehouseTouched && !warehouseId ? 'error' : undefined"
-            :help="warehouseTouched && !warehouseId ? 'Please choose a warehouse.' : 'Stock will be added to this warehouse.'"
+            :help="warehouseTouched && !warehouseId ? $t('Imp_Choose_Warehouse') : $t('Imp_Stock_Added_To_Warehouse')"
           >
             <a-select
               v-model:value="warehouseId"
               style="width: 100%"
               :options="warehouseOptions"
-              :placeholder="'Choose a warehouse...'"
+              :placeholder="$t('Imp_Choose_Warehouse_Ph')"
               show-search
               option-filter-prop="label"
               allow-clear
@@ -42,24 +42,17 @@
             ref="dz"
             :file="file"
             :accept="accept"
-            title="Click or drop your Excel file here"
-            hint="Allowed formats: XLSX, XLS · Max size: 20MB"
+            :title="$t('Imp_Drop_Excel_File')"
+            :hint="$t('Imp_Allowed_Excel_20MB')"
             :disabled="uploading"
             @file="loadFile"
             @clear="clearFile()"
           />
 
-          <a-alert v-if="errorMessages.length" type="error" style="margin-top: 16px" show-icon>
-            <template #message>Import failed. Fix the issues below:</template>
-            <template #description>
-              <ul style="margin: 0; padding-left: 18px">
-                <li v-for="(err, idx) in errorMessages" :key="'err-' + idx">{{ err }}</li>
-              </ul>
-            </template>
-          </a-alert>
+          <ImportErrorList :errors="errorMessages" filename="opening_stock_errors" />
 
           <a-alert v-if="warningMessages.length" type="warning" style="margin-top: 16px" show-icon>
-            <template #message>Warnings</template>
+            <template #message>{{ $t('Warnings') }}</template>
             <template #description>
               <ul style="margin: 0; padding-left: 18px">
                 <li v-for="(w, idx) in warningMessages" :key="'warn-' + idx">{{ w }}</li>
@@ -71,20 +64,20 @@
 
           <div style="display: flex; justify-content: center; gap: 8px; margin-top: 20px; flex-wrap: wrap">
             <a-button type="primary" :disabled="uploading" :loading="uploading" @click="submit">
-              Import now
+              {{ $t('Imp_Import_Now') }}
             </a-button>
             <a-button :href="exampleHref" target="_blank" rel="noopener">
-              <DownloadOutlined /> Download example
+              <DownloadOutlined /> {{ $t('Download_exemple') }}
             </a-button>
-            <a-button :disabled="uploading" @click="resetAll">Reset</a-button>
+            <a-button :disabled="uploading" @click="resetAll">{{ $t('Reset') }}</a-button>
           </div>
       </div>
     </a-card>
 
     <!-- Expected file format -->
-    <a-card size="small" :title="'Expected file format'">
+    <a-card size="small" :title="$t('Imp_Expected_File_Format')">
       <template #extra>
-        <span style="font-size: 12px; color: rgba(var(--ink-rgb), 0.45)">All columns required</span>
+        <span style="font-size: 12px; color: rgba(var(--ink-rgb), 0.45)">{{ $t('Imp_All_Columns_Required') }}</span>
       </template>
       <a-table
         :columns="activeExample.columns" :data-source="activeExample.rows"
@@ -103,25 +96,29 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { notification } from 'ant-design-vue';
 import { DownloadOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import ImportErrorList from '../../components/ImportErrorList.vue';
 import ImportDropzone from '../../components/ImportDropzone.vue';
 import http from '../../lib/http';
 import { uploadForm } from '../../lib/upload';
+import { isDuplicateImport, confirmDuplicateImport } from '../../lib/importDuplicate';
 import { start as startProgress, done as doneProgress } from '../../lib/progress';
 
 const router = useRouter();
+const { t } = useI18n();
 
 const metaEndpoint = 'opening-stock/import/meta';
 const singleEndpoint = 'opening-stock/import/single';
 const variantEndpoint = 'opening-stock/import/variants';
 
 const importType = ref('single');
-const typeOptions = [
-  { label: 'Single Products', value: 'single' },
-  { label: 'Variant Products', value: 'variant' },
-];
+const typeOptions = computed(() => [
+  { label: t('Imp_Single_Products'), value: 'single' },
+  { label: t('Imp_Variant_Products'), value: 'variant' },
+]);
 const warehouseId = ref(null);
 const warehouseTouched = ref(false);
 const warehouses = ref([]);
@@ -178,10 +175,10 @@ function clearErrors() {
 function loadFile(f) {
   clearErrors();
   const msgs = [];
-  if (f.size > maxSize) msgs.push('File is too large. Please upload a file under the 20MB limit.');
+  if (f.size > maxSize) msgs.push(t('Imp_File_Too_Large_20MB'));
   const name = f.name || '';
   const ext = name.split('.').pop().toLowerCase();
-  if (['xlsx', 'xls'].indexOf(ext) === -1) msgs.push('Unsupported file type. Please upload an .xlsx or .xls file.');
+  if (['xlsx', 'xls'].indexOf(ext) === -1) msgs.push(t('Imp_Unsupported_Excel'));
   if (msgs.length) {
     errorMessages.value = msgs;
     clearFile(false);
@@ -234,14 +231,14 @@ function collectErrorsFromResponse(data) {
   return unique;
 }
 
-async function submit() {
+async function submit(confirmDuplicate = false) {
   warehouseTouched.value = true;
   if (!warehouseId.value) {
-    errorMessages.value = ['Please choose a warehouse.'];
+    errorMessages.value = [t('Imp_Choose_Warehouse')];
     return;
   }
   if (!file.value) {
-    errorMessages.value = ['Please choose a file to import.'];
+    errorMessages.value = [t('Imp_Choose_File')];
     return;
   }
 
@@ -254,24 +251,33 @@ async function submit() {
     const fd = new FormData();
     fd.append('warehouse_id', warehouseId.value);
     fd.append('products', file.value);
+    if (confirmDuplicate === true) fd.append('confirm_duplicate', '1');
 
     const endpoint = importType.value === 'single' ? singleEndpoint : variantEndpoint;
     const resp = await uploadForm(endpoint, fd, (p) => { progress.value = p; });
     const data = resp ? resp.data : null;
     const ok = data && typeof data === 'object' && (data.status === true || data.success === true);
 
-    if (!ok) {
-      const msgs = collectErrorsFromResponse(data && typeof data === 'object' ? data : null);
-      errorMessages.value = msgs.length ? msgs : ['Import failed. Please review your file and try again.'];
-      toast('Check the error list and fix your file.', 'Import failed', 'danger');
+    // Same rows already posted: ask, and resend only on an explicit yes.
+    if (!ok && isDuplicateImport(data)) {
+      doneProgress();
+      uploading.value = false;
+      if (await confirmDuplicateImport(data)) await submit(true);
       return;
     }
 
-    toast('Opening stock imported successfully.', 'Success', 'success');
+    if (!ok) {
+      const msgs = collectErrorsFromResponse(data && typeof data === 'object' ? data : null);
+      errorMessages.value = msgs.length ? msgs : [t('Imp_Failed_Review_File')];
+      toast(t('Imp_Check_Error_List'), t('Imp_Import_Failed'), 'danger');
+      return;
+    }
+
+    toast(t('Imp_Opening_Stock_Imported'), t('Success'), 'success');
     router.push('/products');
   } catch (err) {
-    errorMessages.value = err && err.message ? [String(err.message)] : ['Something went wrong while uploading. Please try again.'];
-    toast('Check the error list and fix your file.', 'Import failed', 'danger');
+    errorMessages.value = err && err.message ? [String(err.message)] : [t('Imp_Upload_Went_Wrong')];
+    toast(t('Imp_Check_Error_List'), t('Imp_Import_Failed'), 'danger');
   } finally {
     doneProgress();
     uploading.value = false;

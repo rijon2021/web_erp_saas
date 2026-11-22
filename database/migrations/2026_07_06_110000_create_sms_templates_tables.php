@@ -10,14 +10,22 @@ class CreateSmsTemplatesTables extends Migration
 {
     public function up(): void
     {
-        Schema::connection('central')->create('sms_templates', function (Blueprint $table) {
-            $table->id();
-            $table->string('trigger_key')->unique();
-            $table->string('name');
-            $table->text('body');
-            $table->boolean('is_active')->default(true);
-            $table->timestamps();
-        });
+        // A prior half-completed update run can leave these tables in place
+        // with no record in the migrations table; re-running must not abort.
+        if (! Schema::connection('central')->hasTable('sms_templates')) {
+            Schema::connection('central')->create('sms_templates', function (Blueprint $table) {
+                $table->id();
+                $table->string('trigger_key')->unique();
+                $table->string('name');
+                $table->text('body');
+                $table->boolean('is_active')->default(true);
+                $table->timestamps();
+            });
+        }
+
+        if (Schema::connection('central')->hasTable('sms_template_translations')) {
+            return;
+        }
 
         Schema::connection('central')->create('sms_template_translations', function (Blueprint $table) {
             $table->id();

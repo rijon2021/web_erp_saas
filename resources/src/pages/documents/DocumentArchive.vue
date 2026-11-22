@@ -1,17 +1,17 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Document Archive"
-      subtitle="Store, organise and find every business document in one place."
+      :title="$t('Document_Archive')"
+      :subtitle="$t('Document_Archive_Subtitle')"
     >
       <template #actions>
         <a-button v-if="canAdd" @click="newFolder(null)">
           <template #icon><FolderAddOutlined /></template>
-          New folder
+          {{ $t('New_Folder') }}
         </a-button>
         <a-button v-if="canAdd" type="primary" @click="openUpload">
           <template #icon><CloudUploadOutlined /></template>
-          Upload
+          {{ $t('Upload') }}
         </a-button>
       </template>
     </PageHeader>
@@ -25,18 +25,18 @@
         <span class="stat-ic stat-ic--brand"><FolderOpenOutlined /></span>
         <span class="stat-text">
           <span class="stat-value">{{ stats.total || 0 }}</span>
-          <span class="stat-label">Documents</span>
+          <span class="stat-label">{{ $t('Documents') }}</span>
         </span>
-        <span v-if="stats.added_this_month" class="stat-note">+{{ stats.added_this_month }} this month</span>
+        <span v-if="stats.added_this_month" class="stat-note">{{ $t('Doc_Plus_N_This_Month', { n: stats.added_this_month }) }}</span>
       </button>
 
       <div class="stat stat--static">
         <span class="stat-ic stat-ic--info"><DatabaseOutlined /></span>
         <span class="stat-text">
           <span class="stat-value">{{ stats.storage_label || '0 B' }}</span>
-          <span class="stat-label">Storage used</span>
+          <span class="stat-label">{{ $t('Storage_Used') }}</span>
         </span>
-        <span class="stat-note">{{ stats.folders || 0 }} folders</span>
+        <span class="stat-note">{{ $t('Doc_N_Folders', { n: stats.folders || 0 }) }}</span>
       </div>
 
       <button
@@ -46,9 +46,9 @@
         <span class="stat-ic stat-ic--warn"><ClockCircleOutlined /></span>
         <span class="stat-text">
           <span class="stat-value">{{ stats.expiring_soon || 0 }}</span>
-          <span class="stat-label">Expiring in 30 days</span>
+          <span class="stat-label">{{ $t('Expiring_In_30_Days') }}</span>
         </span>
-        <span v-if="stats.expired" class="stat-note stat-note--danger">{{ stats.expired }} expired</span>
+        <span v-if="stats.expired" class="stat-note stat-note--danger">{{ $t('Doc_N_Expired', { n: stats.expired }) }}</span>
       </button>
 
       <button
@@ -58,7 +58,7 @@
         <span class="stat-ic stat-ic--star"><StarFilled /></span>
         <span class="stat-text">
           <span class="stat-value">{{ stats.starred || 0 }}</span>
-          <span class="stat-label">Starred</span>
+          <span class="stat-label">{{ $t('Starred') }}</span>
         </span>
       </button>
     </div>
@@ -69,26 +69,26 @@
         <a-card class="rail" :body-style="{ padding: '12px' }">
           <nav class="rail-nav">
             <button type="button" class="rail-item" :class="{ active: folderId === null && scope === 'all' }" @click="showAll">
-              <InboxOutlined /><span>All documents</span>
+              <InboxOutlined /><span>{{ $t('All_Documents') }}</span>
               <span class="rail-count">{{ stats.total || 0 }}</span>
             </button>
             <button type="button" class="rail-item" :class="{ active: scope === 'starred' }" @click="setScope('starred')">
-              <StarOutlined /><span>Starred</span>
+              <StarOutlined /><span>{{ $t('Starred') }}</span>
               <span class="rail-count">{{ stats.starred || 0 }}</span>
             </button>
             <button type="button" class="rail-item" :class="{ active: scope === 'expiring' }" @click="setScope('expiring')">
-              <ClockCircleOutlined /><span>Expiring soon</span>
+              <ClockCircleOutlined /><span>{{ $t('Expiring_Soon') }}</span>
               <span class="rail-count">{{ stats.expiring_soon || 0 }}</span>
             </button>
             <button type="button" class="rail-item" :class="{ active: folderId === 'none' }" @click="selectFolder('none')">
-              <FileOutlined /><span>Uncategorised</span>
+              <FileOutlined /><span>{{ $t('Uncategorised') }}</span>
               <span class="rail-count">{{ uncategorised }}</span>
             </button>
           </nav>
 
           <div class="rail-head">
-            <span>Folders</span>
-            <a-tooltip v-if="canAdd" title="New folder">
+            <span>{{ $t('Folders') }}</span>
+            <a-tooltip v-if="canAdd" :title="$t('New_Folder')">
               <a-button size="small" type="text" @click="newFolder(null)">
                 <template #icon><PlusOutlined /></template>
               </a-button>
@@ -115,10 +115,10 @@
                   <template #overlay>
                     <a-menu @click="({ key }) => folderAction(key, node)">
                       <a-menu-item key="rename">
-                        <EditOutlined /> Rename
+                        <EditOutlined /> {{ $t('Rename') }}
                       </a-menu-item>
                       <a-menu-item v-if="canAdd" key="child">
-                        <FolderAddOutlined /> New sub-folder
+                        <FolderAddOutlined /> {{ $t('New_Sub_Folder') }}
                       </a-menu-item>
                       <a-menu-divider v-if="canDelete" />
                       <a-menu-item v-if="canDelete" key="delete" danger>
@@ -132,10 +132,10 @@
           </a-tree>
 
           <a-empty
-            v-else :image="simpleEmptyImage" description="No folders yet"
+            v-else :image="simpleEmptyImage" :description="$t('No_Folders_Yet')"
             class="rail-empty"
           >
-            <a-button v-if="canAdd" size="small" @click="newFolder(null)">Create one</a-button>
+            <a-button v-if="canAdd" size="small" @click="newFolder(null)">{{ $t('Create_One') }}</a-button>
           </a-empty>
         </a-card>
       </a-col>
@@ -146,16 +146,16 @@
           <div class="toolbar">
             <a-input-search
               v-model:value="crud.search.value"
-              placeholder="Search title, file name, reference or tag…"
+              :placeholder="$t('Search_Documents_Placeholder')"
               allow-clear class="tb-search" @search="crud.reload"
             />
             <a-select
               v-model:value="filters.kind" class="tb-item" allow-clear
-              placeholder="All types" :options="KIND_OPTIONS" @change="crud.reload"
+              :placeholder="$t('All_Types')" :options="KIND_OPTIONS" @change="crud.reload"
             />
             <a-select
               v-model:value="filters.tag" class="tb-item" allow-clear show-search
-              placeholder="All tags" :options="tagOptions" @change="crud.reload"
+              :placeholder="$t('All_Tags')" :options="tagOptions" @change="crud.reload"
             />
             <a-range-picker
               v-model:value="filters.range" class="tb-range"
@@ -177,20 +177,20 @@
             <a-tag v-for="chip in activeChips" :key="chip.key" closable @close="chip.clear()">
               {{ chip.label }}
             </a-tag>
-            <a-button type="link" size="small" @click="clearFilters">Clear all</a-button>
+            <a-button type="link" size="small" @click="clearFilters">{{ $t('Clear_All') }}</a-button>
           </div>
 
           <!-- Bulk actions -->
           <div v-if="crud.selectedIds.value.length" class="bulkbar">
-            <span class="bulk-count">{{ crud.selectedIds.value.length }} selected</span>
+            <span class="bulk-count">{{ $t('Doc_N_Selected', { n: crud.selectedIds.value.length }) }}</span>
             <a-tree-select
               v-if="canEdit"
               v-model:value="moveTarget" class="bulk-move" allow-clear
-              placeholder="Move to folder…" :tree-data="folderSelectOptions"
+              :placeholder="$t('Move_To_Folder')" :tree-data="folderSelectOptions"
               tree-default-expand-all
               :field-names="{ label: 'title', value: 'value', children: 'children' }"
             />
-            <a-button v-if="canEdit" :loading="moving" @click="moveSelected">Move</a-button>
+            <a-button v-if="canEdit" :loading="moving" @click="moveSelected">{{ $t('Move') }}</a-button>
             <a-button v-if="canDelete" danger @click="crud.removeSelected">
               <template #icon><DeleteOutlined /></template>
               {{ $t('Delete') }}
@@ -232,8 +232,8 @@
                         <a-button type="text" size="small"><template #icon><MoreOutlined /></template></a-button>
                         <template #overlay>
                           <a-menu @click="({ key }) => rowAction(key, record)">
-                            <a-menu-item key="open"><EyeOutlined /> Preview</a-menu-item>
-                            <a-menu-item key="download"><DownloadOutlined /> Download</a-menu-item>
+                            <a-menu-item key="open"><EyeOutlined /> {{ $t('Preview') }}</a-menu-item>
+                            <a-menu-item key="download"><DownloadOutlined /> {{ $t('Download') }}</a-menu-item>
                             <a-menu-item v-if="canEdit" key="edit"><EditOutlined /> {{ $t('Edit') }}</a-menu-item>
                             <a-menu-divider v-if="canDelete" />
                             <a-menu-item v-if="canDelete" key="delete" danger><DeleteOutlined /> {{ $t('Delete') }}</a-menu-item>
@@ -270,9 +270,9 @@
               <a-empty v-else :description="emptyText" class="grid-empty">
                 <a-button v-if="canAdd && !hasFilters" type="primary" @click="openUpload">
                   <template #icon><CloudUploadOutlined /></template>
-                  Upload your first document
+                  {{ $t('Upload_First_Document') }}
                 </a-button>
-                <a-button v-else-if="hasFilters" @click="clearFilters">Clear filters</a-button>
+                <a-button v-else-if="hasFilters" @click="clearFilters">{{ $t('Clear_Filters') }}</a-button>
               </a-empty>
             </a-spin>
 
@@ -347,12 +347,12 @@
 
               <template v-else-if="column.key === 'actions'">
                 <a-space :size="0">
-                  <a-tooltip title="Preview">
+                  <a-tooltip :title="$t('Preview')">
                     <a-button type="text" size="small" @click="openDocument(record)">
                       <template #icon><EyeOutlined /></template>
                     </a-button>
                   </a-tooltip>
-                  <a-tooltip title="Download">
+                  <a-tooltip :title="$t('Download')">
                     <a-button type="text" size="small" @click="downloadDocument(record)">
                       <template #icon><DownloadOutlined /></template>
                     </a-button>
@@ -441,7 +441,7 @@ import { useFormat } from '../../composables/useFormat';
 import { useAuthStore } from '../../stores/auth';
 import { kindOf, KIND_OPTIONS, timeAgo } from './documentKinds';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { t, i18n } from '../../i18n';
 
 const auth = useAuthStore();
 const { date, dateTime } = useFormat();
@@ -462,19 +462,19 @@ const filters = reactive({ kind: undefined, tag: undefined, range: null });
 const view = ref('grid');
 const sortKey = ref('newest');
 
-const VIEW_OPTIONS = [
-  { value: 'grid', label: 'Grid' },
-  { value: 'list', label: 'List' },
-];
+const VIEW_OPTIONS = computed(() => [
+  { value: 'grid', label: t('Grid') },
+  { value: 'list', label: t('List') },
+]);
 
-const SORTS = [
-  { value: 'newest', label: 'Newest first' },
-  { value: 'oldest', label: 'Oldest first' },
-  { value: 'name', label: 'Name A–Z' },
-  { value: 'name_desc', label: 'Name Z–A' },
-  { value: 'largest', label: 'Largest first' },
-  { value: 'expiry', label: 'Expiry soonest' },
-];
+const SORTS = computed(() => [
+  { value: 'newest', label: t('Newest_First') },
+  { value: 'oldest', label: t('Oldest_First') },
+  { value: 'name', label: t('Name_A_Z') },
+  { value: 'name_desc', label: t('Name_Z_A') },
+  { value: 'largest', label: t('Largest_First') },
+  { value: 'expiry', label: t('Expiry_Soonest') },
+]);
 
 const SORT_MAP = {
   newest: ['created_at', 'desc'],
@@ -519,19 +519,19 @@ const hasFilters = computed(() =>
   || !!filters.tag || !!crud.search.value || !!filters.range?.length);
 
 const emptyText = computed(() => (hasFilters.value
-  ? 'No documents match these filters.'
-  : 'The archive is empty.'));
+  ? t('No_Documents_Match_Filters')
+  : t('Archive_Is_Empty')));
 
 const activeChips = computed(() => {
   const chips = [];
   if (folderId.value === 'none') {
-    chips.push({ key: 'folder', label: 'Uncategorised', clear: () => selectFolder(null) });
+    chips.push({ key: 'folder', label: t('Uncategorised'), clear: () => selectFolder(null) });
   } else if (folderId.value !== null) {
     const folder = folders.value.find(f => f.id === folderId.value);
-    chips.push({ key: 'folder', label: `Folder: ${folder ? folder.name : folderId.value}`, clear: () => selectFolder(null) });
+    chips.push({ key: 'folder', label: i18n.global.t('Doc_Folder_Chip', { name: folder ? folder.name : folderId.value }), clear: () => selectFolder(null) });
   }
-  if (scope.value === 'starred') chips.push({ key: 'scope', label: 'Starred', clear: () => setScope('all') });
-  if (scope.value === 'expiring') chips.push({ key: 'scope', label: 'Expiring in 30 days', clear: () => setScope('all') });
+  if (scope.value === 'starred') chips.push({ key: 'scope', label: t('Starred'), clear: () => setScope('all') });
+  if (scope.value === 'expiring') chips.push({ key: 'scope', label: t('Expiring_In_30_Days'), clear: () => setScope('all') });
   if (filters.kind) {
     const kind = KIND_OPTIONS.find(k => k.value === filters.kind);
     chips.push({ key: 'kind', label: kind ? kind.label : filters.kind, clear: () => { filters.kind = undefined; crud.reload(); } });
@@ -633,11 +633,11 @@ function folderAction(action, node) {
 /** Documents survive: the backend detaches them to the root before deleting. */
 function deleteFolder(folder) {
   Modal.confirm({
-    title: `Delete “${folder.name}”?`,
+    title: i18n.global.t('Doc_Delete_Folder_Named', { name: folder.name }),
     icon: createVNode(ExclamationCircleOutlined),
     content: folder.count
-      ? `${folder.count} document${folder.count === 1 ? '' : 's'} will move to Uncategorised — nothing is deleted with the folder.`
-      : 'Sub-folders move to the top level. No documents are deleted.',
+      ? i18n.global.t(folder.count === 1 ? 'Doc_Folder_1_Doc_Move' : 'Doc_Folder_N_Docs_Move', { n: folder.count })
+      : t('Delete_Folder_Text'),
     okText: t('Delete_confirmButtonText', 'Yes, delete it!'),
     okType: 'danger',
     cancelText: t('Delete_cancelButtonText', 'Cancel'),
@@ -692,12 +692,12 @@ function refreshAll() {
 // ---------------- rows ----------------
 
 const columns = computed(() => [
-  { title: 'Document', key: 'title', dataIndex: 'title' },
-  { title: 'Folder', key: 'folder', width: 150 },
-  { title: 'Size', dataIndex: 'size_label', key: 'size', width: 100 },
-  { title: 'Tags', key: 'tags', width: 180 },
-  { title: 'Expiry', key: 'expiry', width: 150 },
-  { title: 'Added', key: 'added', width: 130 },
+  { title: t('Document'), key: 'title', dataIndex: 'title' },
+  { title: t('Folder'), key: 'folder', width: 150 },
+  { title: t('Size'), dataIndex: 'size_label', key: 'size', width: 100 },
+  { title: t('Tags'), key: 'tags', width: 180 },
+  { title: t('Expiry'), key: 'expiry', width: 150 },
+  { title: t('Added'), key: 'added', width: 130 },
   { title: '', key: 'actions', width: 140 },
 ]);
 
@@ -709,9 +709,9 @@ function tint(hex) {
 function expiryTag(record) {
   const days = record.days_to_expiry;
   if (days === null || days === undefined) return null;
-  if (days < 0) return { text: 'Expired', tone: 'danger', color: 'error' };
-  if (days === 0) return { text: 'Expires today', tone: 'danger', color: 'error' };
-  if (days <= 30) return { text: `${days}d left`, tone: 'warn', color: 'warning' };
+  if (days < 0) return { text: t('Doc_Expired_Tag'), tone: 'danger', color: 'error' };
+  if (days === 0) return { text: t('Expires_Today'), tone: 'danger', color: 'error' };
+  if (days <= 30) return { text: i18n.global.t('Doc_Days_Left_Short', { n: days }), tone: 'warn', color: 'warning' };
   return null;
 }
 
@@ -735,7 +735,7 @@ async function toggleStar(record) {
 
 function downloadDocument(record) {
   http.download(`documents/${record.id}/download`, record.file_name)
-    .catch(() => message.error('Could not download this file.'));
+    .catch(() => message.error(t('Could_Not_Download_File')));
 }
 
 function rowAction(action, record) {
@@ -757,7 +757,7 @@ async function moveSelected() {
       selectedIds: crud.selectedIds.value,
       folder_id: moveTarget.value || null,
     });
-    message.success('Moved.');
+    message.success(t('Moved_Successfully'));
     moveTarget.value = undefined;
     crud.selectedIds.value = [];
     refreshAll();

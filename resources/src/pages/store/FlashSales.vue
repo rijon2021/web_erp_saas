@@ -87,7 +87,7 @@
           <a-input v-model:value="prodQuery" :placeholder="$t('Search_products')" @input="searchProducts" />
           <div v-if="results.length" class="results-box">
             <a v-for="p in results" :key="p.id" class="result-row" @click.prevent="addProduct(p)">
-              {{ p.name }} <small style="color: rgba(var(--ink-rgb), 0.45)">({{ p.code }}) — {{ Number(p.price).toFixed(2) }}</small>
+              {{ p.name }} <small style="color: rgba(var(--ink-rgb), 0.45)">({{ p.code }}) — {{ fmtNum(p.price) }}</small>
             </a>
           </div>
         </a-form-item>
@@ -100,7 +100,7 @@
           <template #bodyCell="{ column, record, index }">
             <template v-if="column.key === 'product'">
               {{ record.name }}
-              <div style="font-size: 12px; color: rgba(var(--ink-rgb), 0.45)">{{ Number(record.price).toFixed(2) }}</div>
+              <div style="font-size: 12px; color: rgba(var(--ink-rgb), 0.45)">{{ fmtNum(record.price) }}</div>
             </template>
             <template v-else-if="column.key === 'discount_type'">
               <a-select v-model:value="record.discount_type" size="small" style="width: 100%">
@@ -127,6 +127,9 @@
 </template>
 
 <script setup>
+import { useFormat } from '../../composables/useFormat';
+// Shared money formatter (Price Format separators, precision, Hide Zero Decimals).
+const { number: fmtNum } = useFormat();
 /**
  * Flash sales — GET store/flash-sales?search → {flash_sales}; edit GET
  * store/flash-sales/{id} (flat, products normalized); product search GET

@@ -6,7 +6,7 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width,initial-scale=1.0" />
     <link rel="stylesheet" href="/css/master.css">
-    <link rel="stylesheet" href="{{ global_asset('css/auth.css') }}">
+    <link rel="stylesheet" href="{{ global_asset('css/auth.css') }}?v={{ filemtime(public_path('css/auth.css')) }}">
     <link rel="icon" href="{{ global_asset(upload_path('settings') . '/' . ($app_settings->favicon ?? 'favicon.ico')) }}">
     <title>{{ $app_settings->app_name ?? 'Stocky | Ultimate Inventory With POS' }}</title>
   </head>
@@ -43,6 +43,9 @@
             <label for="email">{{ __('E-Mail Address') }}</label>
             <input id="email" type="email" name="email" class="auth-input" value="{{ old('email') }}" required autocomplete="email" autofocus />
           </div>
+          @if (! empty($captcha))
+            @include('partials.login-captcha', ['captcha' => $captcha, 'groupClass' => 'form-group', 'shellClass' => '', 'inputClass' => 'auth-input'])
+          @endif
           <button type="submit" class="auth-btn">{{ __('Send Password Reset Link') }}</button>
         </form>
         <div class="auth-actions auth-actions--center">

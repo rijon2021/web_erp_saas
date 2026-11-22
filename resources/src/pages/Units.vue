@@ -105,10 +105,10 @@ const baseUnitOptions = computed(() =>
   (crud.payload.value?.Units_base || []).map(u => ({ value: u.id, label: u.name }))
 );
 
-const operatorOptions = [
-  { value: '*', label: '* (multiply)' },
-  { value: '/', label: '/ (divide)' },
-];
+const operatorOptions = computed(() => [
+  { value: '*', label: t('Operator_Multiply_Label') },
+  { value: '/', label: t('Operator_Divide_Label') },
+]);
 
 const columns = computed(() => [
   { title: t('Name'), dataIndex: 'name', key: 'name', sorter: true },

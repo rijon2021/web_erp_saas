@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Models\Central\EInvoicingProviderSetting;
 use Illuminate\Support\Str;
 
 class ZatcaSetting extends Model
@@ -44,7 +45,7 @@ class ZatcaSetting extends Model
             $row = static::query()->first();
             if (! $row) {
                 $row = static::query()->create([
-                    'environment' => config('zatca.default_environment', 'sandbox'),
+                    'environment' => (string) EInvoicingProviderSetting::value('zatca', 'default_environment', config('zatca.default_environment', 'sandbox')),
                     'device_serial' => (string) Str::uuid(),
                 ]);
             }

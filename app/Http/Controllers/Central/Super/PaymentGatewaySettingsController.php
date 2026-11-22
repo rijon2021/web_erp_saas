@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Central\Super;
 
 use App\Http\Controllers\Controller;
 use App\Services\PaymentGateways\PaymentGatewayFactory;
+use App\Support\IsoCurrencies;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
@@ -115,6 +116,16 @@ class PaymentGatewaySettingsController extends Controller
             array_map('trim', array_map('strtoupper', explode(',', $supportedCurrenciesRaw)))
         ));
         $defaultCurrency = strtoupper(trim($input['default_currency'] ?? ''));
+
+        // A gateway session opened with an unknown code (e.g. "DBT" for "BDT")
+        // is rejected by every provider, so refuse to save one.
+        foreach (array_merge($supportedCurrencies, $defaultCurrency !== '' ? [$defaultCurrency] : []) as $code) {
+            if (! IsoCurrencies::isValid($code)) {
+                return redirect()
+                    ->route('super.settings.payment-gateways', ['active' => $gateway])
+                    ->withErrors(['supported_currencies' => IsoCurrencies::invalidMessage($code)]);
+            }
+        }
 
         // Ensure default currency is in the supported list
         if ($defaultCurrency && ! empty($supportedCurrencies) && ! in_array($defaultCurrency, $supportedCurrencies, true)) {

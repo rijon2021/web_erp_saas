@@ -61,7 +61,7 @@ Integrations Hub card repeat `feature: 'shopify'` on every *leaf*, because the
 sidebars only run their visibility check on entries they render as links.
 Permissions are `shopify_stores` (read), `shopify_sync` (write to a shop) and
 `shopify_logs` — seeded in `PermissionsSeeder` and created for existing tenants
-by `UpdateController` / `AutoUpdateController`.
+by the platform updater (`App\Services\Updater\PlatformUpgradeTasks`).
 
 **Images.** `products.image` is a filename under the tenant's own upload folder
 (`upload_path('products')`), not a shared `public/images/products`, so the push
@@ -72,6 +72,30 @@ is not here. `SyncService::shopifyOptions()` falls back to Shopify's single
 "Variant" option carrying the variant names — which is also what the pull side
 matches on — and picks the richer service up automatically if that module is
 ever ported.
+
+**Linking an existing listing.** Same as Stocky: before creating a product the
+push looks for a listing already carrying one of its SKUs (GraphQL
+`productVariants`, exact-match checked) and adopts it; the product form's
+Shopify card and the Mappings page pair a product by hand
+(`ShopifyProductLinkController`, routes `shopify/product-links*`, inside the
+`tenant.feature:shopify` group). The only SaaS delta is on the product form:
+the card is mounted only when the plan has `shopify` and the user has
+`shopify_stores`, because its first request would otherwise open the upgrade
+prompt on every product edit.
+
+**Sync Centre runs are queued, in slices.** Same as Stocky: starting a sync
+creates the run paused (stage `queued`, its options in `shopify_sync_runs.options`)
+and dispatches `App\Jobs\Shopify\ShopifySyncJob` on the `shopify` queue; each
+job works ~45s from the run's cursor and re-queues itself. Every sync type is
+resumable (`walkRows()` / `walkPages()` in SyncService). The tenancy deltas:
+`QueueTenancyBootstrapper` carries the tenant into each job (and into the job it
+re-queues), the unique-job lock lives in the tenant-prefixed cache, `shopify` has its own
+scheduled worker in `Kernel` (same line as Stocky: `queue:work database
+--queue=shopify --stop-when-empty --max-time=55 --timeout=600`), so a big sync
+never holds up the shared worker's webhooks, and the column changes are a tenant migration
+(`database/migrations/tenant/2026_10_03_000002_make_shopify_sync_runs_resumable.php`).
+On `QUEUE_CONNECTION=sync` nothing is dispatched: the first slice runs in the
+start request and the Sync Centre page drives the rest, 20s per request.
 
 ## The predecessor
 

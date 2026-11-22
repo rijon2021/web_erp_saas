@@ -81,8 +81,8 @@ class SslcommerzGateway implements PaymentGatewayInterface
         $result = $this->createCheckoutUrl(
             amount: (float) $chargeAmount,
             currency: $payment->gateway_currency ?? $payment->currency,
-            productName: ($payment->plan->name ?? 'Subscription') . ' Plan',
-            description: ucfirst($payment->billing_cycle) . ' subscription',
+            productName: $payment->checkoutProductName(),
+            description: $payment->checkoutDescription(),
             metadata: [
                 'payment_id' => $payment->id,
                 'tenant_id'  => $payment->tenant_id,
@@ -114,7 +114,9 @@ class SslcommerzGateway implements PaymentGatewayInterface
     ): array {
         $this->loadSettings();
 
-        $tranId = 'sslc_' . bin2hex(random_bytes(16));
+        // SSLCommerz caps tran_id at 30 characters: 5-char prefix + 24 hex
+        // (96 bits of entropy) = 29 chars.
+        $tranId = 'sslc_' . bin2hex(random_bytes(12));
 
         $response = Http::asForm()->timeout(30)->post($this->baseUrl() . '/gwprocess/v4/api.php', [
             'store_id'         => $this->resolvedCredentials['store_id'] ?? '',
@@ -133,7 +135,7 @@ class SslcommerzGateway implements PaymentGatewayInterface
             'ipn_url'          => rtrim(config('app.url'), '/') . '/webhook/sslcommerz',
             'emi_option'       => 0,
             'cus_name'         => 'Subscriber',
-            'cus_email'        => 'billing@' . (parse_url(config('app.url'), PHP_URL_HOST) ?: 'example.com'),
+            'cus_email'        => mb_substr('billing@' . (parse_url(config('app.url'), PHP_URL_HOST) ?: 'example.com'), 0, 50),
             'cus_add1'         => 'N/A',
             'cus_city'         => 'N/A',
             'cus_postcode'     => 'N/A',

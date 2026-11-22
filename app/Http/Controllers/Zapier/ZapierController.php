@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Zapier;
 
 use App\Http\Controllers\Controller;
+use App\Models\Category;
 use App\Models\Client;
 use App\Models\Expense;
 use App\Models\PaymentSale;
@@ -10,9 +11,12 @@ use App\Models\Product;
 use App\Models\Quotation;
 use App\Models\Sale;
 use App\Models\Setting;
+use App\Models\Unit;
+use App\Models\Warehouse;
 use App\Models\Webhook;
 use App\Services\Webhooks\Payload;
 use App\Services\Webhooks\WebhookService;
+use App\Traits\ScopesWarehouseAccess;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +31,8 @@ use Illuminate\Validation\Rule;
  */
 class ZapierController extends Controller
 {
+    use ScopesWarehouseAccess;
+
     /** Events Zapier may subscribe to (v1 trigger set). */
     public const TRIGGER_EVENTS = [
         'sale.created',
@@ -102,6 +108,7 @@ class ZapierController extends Controller
                 ->whereNull('products.deleted_at')
                 ->where('products.stock_alert', '>', 0)
                 ->whereColumn('product_warehouse.qte', '<=', 'products.stock_alert')
+                ->tap(fn ($q) => \App\Services\ComboStockService::excludeVirtualCombos($q))
                 ->limit(3)
                 ->get(['products.id', 'products.name', 'products.code', 'products.stock_alert', 'product_warehouse.warehouse_id', 'product_warehouse.qte']);
 
@@ -191,35 +198,86 @@ class ZapierController extends Controller
             'name' => 'required|string|max:255',
             'price' => 'required|numeric|min:0',
             'cost' => 'nullable|numeric|min:0',
-            'code' => ['nullable', 'string', 'max:192', Rule::unique('products', 'code')->whereNull('deleted_at')],
+            'code' => ['nullable', 'string', 'max:192', Rule::unique('products', 'code')->whereNull('deleted_at'),
+                // One namespace with variant codes and additional barcodes, as in the product form.
+                Rule::unique('product_variants', 'code')->whereNull('deleted_at'),
+                function ($attribute, $value, $fail) {
+                    if (\App\Services\ProductBarcodes::owner(trim((string) $value))) {
+                        $fail('This code is already an additional barcode of another product.');
+                    }
+                }],
             'stock_alert' => 'nullable|numeric|min:0',
             'note' => 'nullable|string|max:1000',
+            'category' => 'nullable|string|max:192',
+            'unit' => 'nullable|string|max:192',
         ]);
 
-        $categoryId = DB::table('categories')->whereNull('deleted_at')->orderBy('id')->value('id');
-        $unitId = DB::table('units')->whereNull('deleted_at')->orderBy('id')->value('id');
+        // Category and unit by name, as the product import takes them; left
+        // out, the first category / unit is used as before.
+        $categoryName = trim((string) ($data['category'] ?? ''));
+        $categoryId = $categoryName !== ''
+            ? Category::firstOrCreate(['name' => $categoryName])->id
+            : DB::table('categories')->whereNull('deleted_at')->orderBy('id')->value('id');
+
+        $unitName = trim((string) ($data['unit'] ?? ''));
+        if ($unitName !== '') {
+            $unitId = Unit::whereNull('deleted_at')
+                ->where(fn ($q) => $q->where('ShortName', $unitName)->orWhere('name', $unitName))
+                ->value('id');
+            if (! $unitId) {
+                return response()->json(['message' => "Unit \"{$unitName}\" does not exist."], 422);
+            }
+        } else {
+            $unitId = DB::table('units')->whereNull('deleted_at')->orderBy('id')->value('id');
+        }
+
         if (! $categoryId || ! $unitId) {
             return response()->json(['message' => 'Create at least one category and unit first.'], 422);
         }
 
-        $product = Product::create([
-            'type' => 'is_single',
-            'name' => $data['name'],
-            'code' => $data['code'] ?? strtoupper('ZAP-'.substr(uniqid(), -8)),
-            'Type_barcode' => 'CODE128',
-            'price' => $data['price'],
-            'cost' => $data['cost'] ?? 0,
-            'category_id' => $categoryId,
-            'unit_id' => $unitId,
-            'unit_sale_id' => $unitId,
-            'unit_purchase_id' => $unitId,
-            'TaxNet' => 0,
-            'tax_method' => '1',
-            'stock_alert' => $data['stock_alert'] ?? 0,
-            'note' => $data['note'] ?? null,
-            'image' => 'no-image.png',
-            'is_active' => true,
-        ]);
+        $product = DB::transaction(function () use ($data, $categoryId, $unitId) {
+            $product = Product::create([
+                'warehouse_id' => $this->productHomeWarehouseFor(null, false),
+                'type' => 'is_single',
+                'name' => $data['name'],
+                'code' => $data['code'] ?? strtoupper('ZAP-'.substr(uniqid(), -8)),
+                'Type_barcode' => 'CODE128',
+                'price' => $data['price'],
+                'cost' => $data['cost'] ?? 0,
+                'category_id' => $categoryId,
+                'unit_id' => $unitId,
+                'unit_sale_id' => $unitId,
+                'unit_purchase_id' => $unitId,
+                'TaxNet' => 0,
+                'tax_method' => '1',
+                'stock_alert' => $data['stock_alert'] ?? 0,
+                'note' => $data['note'] ?? null,
+                'image' => 'no-image.png',
+                'is_active' => true,
+            ]);
+
+            // A zero-stock row in every warehouse, as the product form and the
+            // import create: purchases and sales move stock on these rows and
+            // skip the product entirely when they are missing.
+            $now = now();
+            $rows = Warehouse::whereNull('deleted_at')->pluck('id')->map(fn ($warehouseId) => [
+                'product_id' => $product->id,
+                'warehouse_id' => $warehouseId,
+                'manage_stock' => 1,
+                'qte' => 0,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ])->all();
+            if ($rows) {
+                DB::table('product_warehouse')->insert($rows);
+            }
+
+            if (\Illuminate\Support\Facades\Schema::hasTable('category_product')) {
+                $product->categories()->sync([(int) $categoryId]);
+            }
+
+            return $product;
+        });
 
         return response()->json(Payload::fromModel($product), 201);
     }

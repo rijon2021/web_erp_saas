@@ -4,7 +4,7 @@
     show-search
     :filter-option="false"
     :options="options"
-    :placeholder="placeholder"
+    :placeholder="placeholder || $t('Sc_Search_Student_By_Name_Or_Admission')"
     :loading="loading"
     :allow-clear="allowClear"
     :disabled="disabled"
@@ -16,7 +16,7 @@
     <template #notFoundContent>
       <div class="sp-empty">
         <a-spin v-if="loading" size="small" />
-        <span v-else>{{ term ? 'No student matches that.' : 'Type a name, admission number or guardian phone.' }}</span>
+        <span v-else>{{ term ? $t('Sc_No_Student_Matches') : $t('Sc_Type_To_Search_Student') }}</span>
       </div>
     </template>
   </a-select>
@@ -40,7 +40,7 @@ import http from '../../lib/http';
 const props = defineProps({
   modelValue: { type: [Number, String], default: undefined },
   initialOption: { type: Object, default: null },
-  placeholder: { type: String, default: 'Search student by name or admission number' },
+  placeholder: { type: String, default: '' },
   allowClear: { type: Boolean, default: true },
   disabled: { type: Boolean, default: false },
 });

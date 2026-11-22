@@ -52,7 +52,7 @@
             <template v-if="column.key === 'date'">{{ date(record.date) }}</template>
             <template v-else-if="MONEY_KEYS.includes(column.key)">{{ money(record[column.key]) }}</template>
             <template v-else-if="column.key === 'statut'">
-              <a-tag :color="docStatusColor(record.statut)">{{ record.statut }}</a-tag>
+              <a-tag :color="docStatusColor(record.statut)">{{ statusLabel(record.statut) }}</a-tag>
             </template>
           </template>
         </DataTable>
@@ -97,6 +97,10 @@ const { t } = useI18n();
 const { money, date } = useFormat();
 
 const MONEY_KEYS = ['GrandTotal', 'paid_amount', 'due', 'amount'];
+
+// Display label for the raw quotation status (falls back to the value itself).
+const STATUS_KEYS = { completed: 'complete', sent: 'Sent', pending: 'Pending' };
+const statusLabel = s => (STATUS_KEYS[s] ? t(STATUS_KEYS[s]) : s);
 
 const warehouseId = ref(undefined);
 const totals = ref({ sales: 0, purchases: 0 });
@@ -143,7 +147,7 @@ const tabColumns = computed(() => ({
   quotations: [
     col('date', 'date'), col('Reference', 'Ref'), col('Customer', 'client_name'),
     col('warehouse', 'warehouse_name'), moneyCol('Total', 'GrandTotal'),
-    { title: t('Status'), dataIndex: 'statut', key: 'statut', exportValue: r => r.statut },
+    { title: t('Status'), dataIndex: 'statut', key: 'statut', exportValue: r => statusLabel(r.statut) },
   ],
   returns_sale: [
     col('Reference', 'Ref'), col('Customer', 'client_name'), col('Sale', 'sale_ref'),

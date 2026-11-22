@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Central\GeneralSetting;
 use App\Models\Central\TenantSubscription;
 use App\Services\EmailNotificationService;
 use App\Tenant;
@@ -10,8 +11,8 @@ use Illuminate\Console\Command;
 class CleanupInactiveTenants extends Command
 {
     protected $signature = 'tenant:cleanup-inactive
-                            {--suspend-after-days=7 : Suspend tenants X days after subscription expires}
-                            {--delete-after-days=90 : Delete tenants inactive for X days (never activated or long abandoned)}
+                            {--suspend-after-days= : Suspend tenants X days after subscription expires (default: Settings > Subscription Reminders; 0 = never)}
+                            {--delete-after-days= : Delete tenants inactive for X days (default: Settings > Subscription Reminders; 0 = never)}
                             {--dry-run : Show what would happen without making changes}';
 
     protected $description = 'Suspend tenants with expired subscriptions and delete long-inactive/abandoned tenants';
@@ -19,15 +20,29 @@ class CleanupInactiveTenants extends Command
     public function handle(): int
     {
         $dryRun = $this->option('dry-run');
-        $suspendDays = (int) $this->option('suspend-after-days');
-        $deleteDays = (int) $this->option('delete-after-days');
+        $settings = GeneralSetting::instance();
+        $suspendDays = $this->option('suspend-after-days') !== null
+            ? (int) $this->option('suspend-after-days')
+            : $settings->suspendUnpaidAfterDays();
+        $deleteDays = $this->option('delete-after-days') !== null
+            ? (int) $this->option('delete-after-days')
+            : $settings->deleteInactiveAfterDays();
 
         if ($dryRun) {
             $this->warn('DRY RUN — no changes will be made.');
         }
 
-        $this->suspendExpired($suspendDays, $dryRun);
-        $this->deleteAbandoned($deleteDays, $dryRun);
+        if ($suspendDays > 0) {
+            $this->suspendExpired($suspendDays, $dryRun);
+        } else {
+            $this->info('--- Auto-suspend is off ---');
+        }
+
+        if ($deleteDays > 0) {
+            $this->deleteAbandoned($deleteDays, $dryRun);
+        } else {
+            $this->info('--- Auto-delete is off ---');
+        }
 
         $this->info('Cleanup complete.');
 
@@ -41,17 +56,20 @@ class CleanupInactiveTenants extends Command
     {
         $this->info("--- Checking for tenants to suspend (expired > {$days} days) ---");
 
+        // Judge ALL of the tenant's rows, not just "an expired one": every
+        // converted trial leaves an old expired row behind, which used to
+        // trigger a suspension on day 0 of a lapse (or while a cancelled
+        // subscription was still inside its paid period).
+        $cutoff = now()->subDays($days);
         $tenants = Tenant::where('status', Tenant::STATUS_ACTIVE)
-            ->whereHas('subscription', function ($q) use ($days) {
-                $q->where('status', TenantSubscription::STATUS_EXPIRED)
-                  ->where('ends_at', '<', now()->subDays($days));
-            })
-            ->whereDoesntHave('subscription', function ($q) {
-                $q->whereIn('status', [
-                    TenantSubscription::STATUS_ACTIVE,
-                    TenantSubscription::STATUS_TRIAL,
-                ]);
-            })
+            // Nothing grants access now — grace included.
+            ->whereDoesntHave('subscriptions', fn ($q) => $q->grantingAccess())
+            // It had a period that ended…
+            ->whereHas('subscriptions', fn ($q) => $q->where(fn ($e) => $e->whereNotNull('ends_at')->orWhereNotNull('trial_ends_at')))
+            // …and none of its periods ended within the last N days.
+            ->whereDoesntHave('subscriptions', fn ($q) => $q->where(fn ($e) => $e->where('ends_at', '>=', $cutoff)->orWhere('trial_ends_at', '>=', $cutoff)))
+            // A payment waiting for review (e.g. a bank proof) is not "unpaid".
+            ->whereDoesntHave('payments', fn ($q) => $q->where('status', \App\Models\Central\TenantBillingPayment::STATUS_PENDING))
             ->with('domains')
             ->get();
 
@@ -68,6 +86,9 @@ class CleanupInactiveTenants extends Command
                 // Snapshot pre-suspension status so an admin reactivate() restores the real prior state.
                 $tenant->status_before_suspension = $tenant->status;
                 $tenant->status = Tenant::STATUS_SUSPENDED;
+                // Non-payment: the owner can still sign in and pay, and
+                // paying lifts the suspension (Tenant::liftNonPaymentSuspension).
+                $tenant->suspension_reason = Tenant::SUSPENDED_NON_PAYMENT;
                 $tenant->save();
             }
         }
@@ -95,6 +116,12 @@ class CleanupInactiveTenants extends Command
                 // Or last activity was long ago
                 ->orWhere('last_activity_at', '<', $cutoff);
             })
+            // …AND it has been in this state that long: a prepaid tenant that
+            // stopped using the app months ago and was suspended yesterday
+            // must not be deleted on the next run. updated_at moves on the
+            // suspension (and on any later subscription change), so it is a
+            // safe lower bound for "suspended/cancelled/failed since".
+            ->where('updated_at', '<', $cutoff)
             // Only delete suspended/cancelled/failed tenants, not active ones
             ->whereIn('status', [
                 Tenant::STATUS_SUSPENDED,

@@ -88,6 +88,15 @@
           {{ __('messages.DontHaveAccountQ') }}
           <a href="{{ route('store.register.show', ['redirect' => $redirect]) }}" class="text-accent-500 hover:underline font-medium">{{ __('messages.CreateOne') }}</a>
         </div>
+
+        @if(\App\Models\StoreSetting::guestCheckoutEnabled())
+          <div class="mt-4">
+            <div class="text-center text-xs text-fg-muted mb-2">{{ __('messages.OrCheckoutAsGuest') }}</div>
+            <a href="{{ route('checkout') }}" class="btn btn-outline btn-block">
+              <x-store.icon name="bag" class="w-4 h-4" />{{ __('messages.ContinueAsGuest') }}
+            </a>
+          </div>
+        @endif
       </div>
     </div>
 

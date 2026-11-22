@@ -1,14 +1,14 @@
 <template>
   <div class="page">
-    <PageHeader title="Enrolment" subtitle="Class placement and end-of-year promotion." :breadcrumb="['School', 'Enrolment']">
+    <PageHeader :title="$t('Sc_Enrolment')" :subtitle="$t('Sc_Enrolment_Subtitle')" :breadcrumb="[$t('Sc_School'), $t('Sc_Enrolment')]">
       <template #actions>
         <a-button @click="promoteOpen = true">
           <template #icon><RiseOutlined /></template>
-          Promote class
+          {{ $t('Sc_Promote_Class') }}
         </a-button>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
-          Enrol student
+          {{ $t('Sc_Enrol_Student') }}
         </a-button>
       </template>
     </PageHeader>
@@ -16,7 +16,7 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search student or admission no.…"
+          v-model:value="crud.search.value" :placeholder="$t('Sc_Search_Student_Or_Admission')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
@@ -25,17 +25,17 @@
         />
         <a-select
           v-model:value="filters.class_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All classes"
+          option-filter-prop="label" :placeholder="$t('Sc_All_Classes')"
           :options="classOptions" @change="onClassChange"
         />
         <a-select
           v-model:value="filters.section_id" class="tb-item-sm" allow-clear show-search
-          option-filter-prop="label" placeholder="Section"
+          option-filter-prop="label" :placeholder="$t('Sc_Section')"
           :options="sectionOptions" @change="crud.reload"
         />
         <a-select
           v-model:value="filters.status" class="tb-item-sm" allow-clear
-          placeholder="Status" :options="ENROLLMENT_STATUSES" @change="crud.reload"
+          :placeholder="$t('Status')" :options="ENROLLMENT_STATUSES" @change="crud.reload"
         />
       </div>
     </a-card>
@@ -79,24 +79,24 @@
 
     <!-- Enrol / move -->
     <a-modal
-      :open="formOpen" :title="editing ? 'Move student' : 'Enrol student'" :width="560"
+      :open="formOpen" :title="editing ? $t('Sc_Move_Student') : $t('Sc_Enrol_Student')" :width="560"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
-        <a-form-item v-if="!editing" label="Student *" name="student_id">
+        <a-form-item v-if="!editing" :label="$t('Sc_Student') + ' *'" name="student_id">
           <StudentPicker v-model="form.student_id" />
         </a-form-item>
         <p v-else class="target">{{ editing.student_name }} · {{ editing.admission_number }}</p>
 
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item v-if="!editing" label="Academic year *" name="academic_year_id">
+            <a-form-item v-if="!editing" :label="$t('Sc_Academic_Year') + ' *'" name="academic_year_id">
               <a-select v-model:value="form.academic_year_id" :options="yearOptions" show-search option-filter-prop="label" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Class *" name="class_id">
+            <a-form-item :label="$t('Sc_Class') + ' *'" name="class_id">
               <a-select
                 v-model:value="form.class_id" show-search option-filter-prop="label"
                 :options="classOptions" @change="form.section_id = undefined"
@@ -104,20 +104,20 @@
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="12">
-            <a-form-item label="Section">
+            <a-form-item :label="$t('Sc_Section')">
               <a-select
                 v-model:value="form.section_id" allow-clear show-search option-filter-prop="label"
-                :options="formSectionOptions" :disabled="!form.class_id" placeholder="Any"
+                :options="formSectionOptions" :disabled="!form.class_id" :placeholder="$t('Sc_Any')"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="12">
-            <a-form-item label="Roll number">
+            <a-form-item :label="$t('Sc_Roll_Number')">
               <a-input v-model:value="form.roll_number" allow-clear />
             </a-form-item>
           </a-col>
           <a-col v-if="editing" :span="24">
-            <a-form-item label="Status *" name="status">
+            <a-form-item :label="$t('Status') + ' *'" name="status">
               <a-select v-model:value="form.status" :options="ENROLLMENT_STATUSES" />
             </a-form-item>
           </a-col>
@@ -127,29 +127,29 @@
 
     <!-- Promotion -->
     <a-modal
-      :open="promoteOpen" title="Promote a class" :width="620"
-      :confirm-loading="promoting" ok-text="Promote" :cancel-text="$t('Cancel')"
+      :open="promoteOpen" :title="$t('Sc_Promote_A_Class')" :width="620"
+      :confirm-loading="promoting" :ok-text="$t('Sc_Promote')" :cancel-text="$t('Cancel')"
       @ok="submitPromote" @cancel="promoteOpen = false"
     >
       <a-alert
         type="info" show-icon banner
-        message="The old enrolment is marked promoted and a new one is created for the next year. Nothing is overwritten, and running this twice is safe — students who already have an enrolment in the target year are skipped."
+        :message="$t('Sc_Promote_Hint')"
         style="margin-bottom: 16px"
       />
       <a-form layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="From year">
+            <a-form-item :label="$t('Sc_From_Year')">
               <a-select v-model:value="promote.from_year_id" :options="yearOptions" show-search option-filter-prop="label" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="To year">
+            <a-form-item :label="$t('Sc_To_Year')">
               <a-select v-model:value="promote.to_year_id" :options="yearOptions" show-search option-filter-prop="label" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="From class">
+            <a-form-item :label="$t('Sc_From_Class')">
               <a-select
                 v-model:value="promote.class_id" :options="classOptions" show-search
                 option-filter-prop="label" @change="suggestTargetClass"
@@ -157,15 +157,15 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Into class" extra="Suggested by class level">
+            <a-form-item :label="$t('Sc_Into_Class')" :extra="$t('Sc_Suggested_By_Level')">
               <a-select v-model:value="promote.to_class_id" :options="classOptions" show-search option-filter-prop="label" />
             </a-form-item>
           </a-col>
           <a-col :span="24">
-            <a-form-item label="Into section">
+            <a-form-item :label="$t('Sc_Into_Section')">
               <a-select
                 v-model:value="promote.to_section_id" allow-clear show-search option-filter-prop="label"
-                :options="promoteSectionOptions" :disabled="!promote.to_class_id" placeholder="Any"
+                :options="promoteSectionOptions" :disabled="!promote.to_class_id" :placeholder="$t('Sc_Any')"
               />
             </a-form-item>
           </a-col>
@@ -193,8 +193,9 @@ import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { ENROLLMENT_STATUSES, labelOf, optionOf } from './schoolOptions';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const { date } = useFormat();
 
 const filters = reactive({
@@ -213,7 +214,7 @@ const crud = useCrudTable('school/enrollments', {
 
 const meta = ref({});
 const yearOptions = computed(() => (meta.value.academic_years || []).map(y => ({
-  value: y.id, label: y.is_current ? `${y.name} (current)` : y.name,
+  value: y.id, label: y.is_current ? t('Sc_Year_Name_Current', { name: y.name }) : y.name,
 })));
 const classOptions = computed(() => (meta.value.classes || []).map(c => ({ value: c.id, label: c.name })));
 const sectionOptions = computed(() => (meta.value.sections || [])
@@ -232,12 +233,12 @@ function onClassChange() {
 }
 
 const columns = computed(() => [
-  { title: 'Student', key: 'student', dataIndex: 'student_name' },
-  { title: 'Year', dataIndex: 'year_name', key: 'year_name', width: 140 },
-  { title: 'Class', key: 'class', width: 180 },
-  { title: 'Roll', dataIndex: 'roll_number', key: 'roll_number', width: 90 },
-  { title: 'Enrolled', key: 'enrolled_on', dataIndex: 'enrolled_on', width: 130 },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 130 },
+  { title: t('Sc_Student'), key: 'student', dataIndex: 'student_name' },
+  { title: t('Sc_Year'), dataIndex: 'year_name', key: 'year_name', width: 140 },
+  { title: t('Sc_Class'), key: 'class', width: 180 },
+  { title: t('Sc_Roll'), dataIndex: 'roll_number', key: 'roll_number', width: 90 },
+  { title: t('Sc_Enrolled'), key: 'enrolled_on', dataIndex: 'enrolled_on', width: 130 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 130 },
   { title: '', key: 'actions', width: 90 },
 ]);
 
@@ -326,14 +327,14 @@ function suggestTargetClass() {
 
 async function submitPromote() {
   if (!promote.from_year_id || !promote.to_year_id || !promote.class_id || !promote.to_class_id) {
-    message.warning('Choose the years and classes first.');
+    message.warning(t('Sc_Choose_Years_And_Classes'));
     return;
   }
 
   promoting.value = true;
   try {
     const data = await http.post('school/enrollments/promote', { ...promote });
-    message.success(`Promoted ${data.promoted}, repeated ${data.repeated}, skipped ${data.skipped}.`);
+    message.success(t('Sc_Promote_Result', { promoted: data.promoted, repeated: data.repeated, skipped: data.skipped }));
     promoteOpen.value = false;
     crud.fetchRows();
   } catch (e) {

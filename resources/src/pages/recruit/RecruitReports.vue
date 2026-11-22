@@ -94,6 +94,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
+import { recruitLabel } from './recruitLabels';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -129,7 +130,7 @@ const trendColumns = computed(() => [
   { title: t('Rejected'), dataIndex: 'rejected', key: 'rejected', align: 'right' },
 ]);
 
-function formatLabel(v) { return v ? String(v).replace(/_/g, ' ') : '-'; }
+function formatLabel(v) { return recruitLabel(v); }
 
 async function fetchReports() {
   isLoading.value = true;

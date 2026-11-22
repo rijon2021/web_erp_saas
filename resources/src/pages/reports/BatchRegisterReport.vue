@@ -8,6 +8,7 @@
     export-endpoint="report/batches/register"
     :export-params="filterParams"
     export-rows-key="batches"
+    product-data
   >
     <template #actions>
       <!-- Multi-Currency: view amounts converted (display-only) -->
@@ -58,7 +59,7 @@
       <template v-else-if="column.key === 'unit_cost'">{{ money(record.unit_cost) }}</template>
       <template v-else-if="column.key === 'value'">{{ money(record.value) }}</template>
       <template v-else-if="column.key === 'status'">
-        <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
+        <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
       </template>
       <template v-else-if="column.key === 'actions'">
         <a-tooltip :title="$t('Reports')">
@@ -78,6 +79,7 @@ import { EyeOutlined } from '@ant-design/icons-vue';
 import ReportPage from '../../components/ReportPage.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
+import { t as tf } from '../../i18n';
 import DateRangePicker from '../../components/DateRangePicker.vue';
 import ViewCurrencySelect from '../../components/ViewCurrencySelect.vue';
 
@@ -134,13 +136,16 @@ const columns = computed(() => [
   { title: t('Mfg_Date'), key: 'mfg_date', dataIndex: 'mfg_date', sorter: true, exportValue: r => (r.mfg_date ? date(r.mfg_date) : '') },
   { title: t('Expiry_Date'), key: 'expiry_date', dataIndex: 'expiry_date', sorter: true, exportValue: r => (r.expiry_date ? date(r.expiry_date) : '') },
   { title: t('Quantity'), dataIndex: 'qty', key: 'qty', align: 'right', sum: true },
-  { title: t('Unit_Cost'), key: 'unit_cost', dataIndex: 'unit_cost', align: 'right', exportValue: r => money(r.unit_cost) },
-  { title: t('Value'), key: 'value', dataIndex: 'value', align: 'right', sum: 'money', exportValue: r => money(r.value) },
-  { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => r.status },
+  { title: t('Unit_Cost'), key: 'unit_cost', dataIndex: 'unit_cost', align: 'right', cost: true, exportValue: r => money(r.unit_cost) },
+  { title: t('Value'), key: 'value', dataIndex: 'value', align: 'right', sum: 'money', cost: true, exportValue: r => money(r.value) },
+  { title: t('Status'), key: 'status', dataIndex: 'status', exportValue: r => statusLabel(r.status) },
   { title: t('Purchase_Ref'), dataIndex: 'origin_purchase_ref', key: 'origin_purchase_ref' },
   { title: t('Supplier'), dataIndex: 'origin_supplier_name', key: 'origin_supplier_name' },
   { title: t('Action'), key: 'actions', align: 'center', width: 80, exportable: false },
 ]);
+
+// Raw batch status (active / quarantined / expired / written_off) → label.
+const statusLabel = s => (s ? tf(`Batch_Status_${s}`, s) : '');
 
 function statusColor(s) {
   const v = String(s || '').toLowerCase();

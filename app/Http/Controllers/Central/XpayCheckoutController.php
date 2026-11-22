@@ -202,7 +202,8 @@ class XpayCheckoutController extends Controller
                 'model'         => $payment,
                 'paid'          => $payment->isPaid(),
                 'xpay'          => $meta['xpay'] ?? [],
-                'plan_name'     => $payment->plan?->name ?? 'Subscription',
+                // Payment-link attempts have no plan — show the link title.
+                'plan_name'     => $payment->plan?->name ?? ($meta['checkout_name'] ?? 'Subscription'),
                 'cycle'         => $payment->billing_cycle,
                 'amount'        => (float) ($payment->gateway_amount ?? $payment->amount),
                 'currency'      => strtoupper((string) ($payment->gateway_currency ?: $payment->currency)),

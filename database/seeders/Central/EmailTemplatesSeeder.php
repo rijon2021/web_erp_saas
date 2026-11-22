@@ -88,6 +88,8 @@ class EmailTemplatesSeeder extends Seeder
                 'subject'     => 'Ticket {{ticket_number}} is now {{ticket_status}}',
                 'body_html'   => $this->supportTicketStatusTemplate(),
             ],
+            $this->paymentLinkTemplateRow(),
+            ...$this->billingNotificationTemplateRows(),
         ];
 
         foreach ($templates as $tpl) {
@@ -96,6 +98,200 @@ class EmailTemplatesSeeder extends Seeder
                 $tpl
             );
         }
+    }
+
+    /**
+     * Payment link email (super admin > Payments > Payment Links). Public so
+     * the 2026_10_08 migration can insert it on installs seeded before it existed.
+     */
+    public function paymentLinkTemplateRow(): array
+    {
+        return [
+            'trigger_key' => EmailTemplate::TRIGGER_PAYMENT_LINK,
+            'name'        => 'Payment Link',
+            'subject'     => 'Payment request of {{amount}} — {{payment_title}}',
+            'body_html'   => $this->paymentLinkTemplate(),
+        ];
+    }
+
+    /**
+     * Welcome, bank-proof and admin-alert emails (2026-10-10). Public so the
+     * 2026_10_10_000004 migration can insert them on existing installs.
+     */
+    public function billingNotificationTemplateRows(): array
+    {
+        return [
+            [
+                'trigger_key' => EmailTemplate::TRIGGER_WORKSPACE_READY,
+                'name'        => 'Workspace Ready (Welcome)',
+                'subject'     => 'Welcome to {{app_name}} — your workspace is ready',
+                'body_html'   => $this->workspaceReadyTemplate(),
+            ],
+            [
+                'trigger_key' => EmailTemplate::TRIGGER_PAYMENT_PROOF_RECEIVED,
+                'name'        => 'Bank Transfer Proof Received',
+                'subject'     => 'We received your payment proof of {{amount}}',
+                'body_html'   => $this->paymentProofReceivedTemplate(),
+            ],
+            [
+                'trigger_key' => EmailTemplate::TRIGGER_PAYMENT_PROOF_REJECTED,
+                'name'        => 'Bank Transfer Proof Rejected',
+                'subject'     => 'We could not confirm your payment of {{amount}}',
+                'body_html'   => $this->paymentProofRejectedTemplate(),
+            ],
+            [
+                'trigger_key' => EmailTemplate::TRIGGER_ADMIN_PAYMENT_PROOF,
+                'name'        => 'Admin: New Bank Transfer Proof',
+                'subject'     => 'New payment proof to review — {{user_name}} ({{amount}})',
+                'body_html'   => $this->adminPaymentProofTemplate(),
+            ],
+            [
+                'trigger_key' => EmailTemplate::TRIGGER_ADMIN_PROVISIONING_FAILED,
+                'name'        => 'Admin: Provisioning Failed',
+                'subject'     => 'Provisioning failed for {{user_name}}',
+                'body_html'   => $this->adminProvisioningFailedTemplate(),
+            ],
+        ];
+    }
+
+    protected function workspaceReadyTemplate(): string
+    {
+        $content = <<<'BODY'
+<h2 style="margin:0 0 16px; font-size:20px; color:#1e293b;">Welcome aboard!</h2>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+Hi <strong>{{user_name}}</strong>,
+</p>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+Your workspace is ready. Sign in with <strong>{{user_email}}</strong> and the password you chose when you signed up.
+</p>
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:24px;">
+<tr>
+<td style="padding:12px 16px; background:#f0fdf4; border-radius:8px; border:1px solid #bbf7d0;">
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+<tr><td style="padding:4px 0; font-size:14px; color:#64748b; width:120px;">Workspace:</td><td style="padding:4px 0; font-size:14px; color:#1e293b; font-weight:600;"><a href="{{tenant_url}}" style="color:#10b981; text-decoration:none;">{{tenant_url}}</a></td></tr>
+<tr><td style="padding:4px 0; font-size:14px; color:#64748b;">Plan:</td><td style="padding:4px 0; font-size:14px; color:#1e293b; font-weight:600;">{{plan_name}}</td></tr>
+</table>
+</td>
+</tr>
+</table>
+<table role="presentation" cellpadding="0" cellspacing="0">
+<tr>
+<td style="border-radius:8px; background:#10b981;">
+<a href="{{login_url}}" style="display:inline-block; padding:14px 32px; color:#ffffff; text-decoration:none; font-weight:600; font-size:15px;">Sign in</a>
+</td>
+</tr>
+</table>
+<p style="margin:24px 0 0; font-size:13px; color:#94a3b8; line-height:1.6;">
+Forgot your password? Use "Forgot password" on the sign-in page.
+</p>
+BODY;
+        return $this->baseWrapper($content, '#10b981');
+    }
+
+    protected function paymentProofReceivedTemplate(): string
+    {
+        $content = <<<'BODY'
+<h2 style="margin:0 0 16px; font-size:20px; color:#1e293b;">Payment proof received</h2>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+Hi <strong>{{user_name}}</strong>,
+</p>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+Thank you — we received your bank transfer proof of <strong>{{amount}}</strong> for the <strong>{{plan_name}}</strong> plan.
+</p>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+Our team will check it and confirm by email. No further action is needed from you.
+</p>
+BODY;
+        return $this->baseWrapper($content, '#6366f1');
+    }
+
+    protected function paymentProofRejectedTemplate(): string
+    {
+        $content = <<<'BODY'
+<h2 style="margin:0 0 16px; font-size:20px; color:#1e293b;">We could not confirm your payment</h2>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+Hi <strong>{{user_name}}</strong>,
+</p>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+We were unable to confirm your bank transfer of <strong>{{amount}}</strong> for the <strong>{{plan_name}}</strong> plan, so it has not been applied.
+</p>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+Please check the transfer details and sign up again, or reply to this email if you think this is a mistake.
+</p>
+<p style="margin:0; font-size:15px; color:#475569; line-height:1.6;">
+<a href="{{resubscribe_url}}" style="color:#ef4444; font-weight:600;">Start again</a>
+</p>
+BODY;
+        return $this->baseWrapper($content, '#ef4444');
+    }
+
+    protected function adminPaymentProofTemplate(): string
+    {
+        $content = <<<'BODY'
+<h2 style="margin:0 0 16px; font-size:20px; color:#1e293b;">New payment proof to review</h2>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+<strong>{{user_name}}</strong> ({{user_email}}) submitted a bank transfer proof of <strong>{{amount}}</strong> for the <strong>{{plan_name}}</strong> plan.
+</p>
+<table role="presentation" cellpadding="0" cellspacing="0">
+<tr>
+<td style="border-radius:8px; background:#0ea5e9;">
+<a href="{{review_url}}" style="display:inline-block; padding:14px 32px; color:#ffffff; text-decoration:none; font-weight:600; font-size:15px;">Review payment</a>
+</td>
+</tr>
+</table>
+BODY;
+        return $this->baseWrapper($content, '#0ea5e9');
+    }
+
+    protected function adminProvisioningFailedTemplate(): string
+    {
+        $content = <<<'BODY'
+<h2 style="margin:0 0 16px; font-size:20px; color:#1e293b;">Provisioning failed</h2>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+The workspace for <strong>{{user_name}}</strong> ({{subdomain}}) could not be set up. The customer cannot sign in until it is fixed.
+</p>
+<p style="margin:0 0 16px; font-size:13px; color:#7f1d1d; line-height:1.5; background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:12px 14px; word-break:break-word;">
+{{error_message}}
+</p>
+<table role="presentation" cellpadding="0" cellspacing="0">
+<tr>
+<td style="border-radius:8px; background:#ef4444;">
+<a href="{{admin_url}}" style="display:inline-block; padding:14px 32px; color:#ffffff; text-decoration:none; font-weight:600; font-size:15px;">Open tenant</a>
+</td>
+</tr>
+</table>
+BODY;
+        return $this->baseWrapper($content, '#ef4444');
+    }
+
+    protected function paymentLinkTemplate(): string
+    {
+        $content = <<<'BODY'
+<h2 style="margin:0 0 16px; font-size:20px; color:#1e293b;">Payment Request</h2>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+Hi <strong>{{user_name}}</strong>,
+</p>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+You have a payment request of <strong>{{amount}}</strong> for <strong>{{payment_title}}</strong>.
+</p>
+<p style="margin:0 0 16px; font-size:15px; color:#475569; line-height:1.6;">
+{{payment_description}}
+</p>
+<p style="margin:0 0 24px; font-size:14px; color:#64748b; line-height:1.6;">
+Link valid until: <strong>{{link_expires}}</strong>
+</p>
+<table role="presentation" cellpadding="0" cellspacing="0">
+<tr>
+<td style="border-radius:8px; background:#6366f1;">
+<a href="{{payment_link}}" style="display:inline-block; padding:14px 32px; color:#ffffff; text-decoration:none; font-weight:600; font-size:15px;">Pay Now</a>
+</td>
+</tr>
+</table>
+<p style="margin:24px 0 0; font-size:13px; color:#94a3b8; line-height:1.6; word-break:break-all;">
+If the button does not work, open this link: {{payment_link}}
+</p>
+BODY;
+        return $this->baseWrapper($content, '#6366f1');
     }
 
     protected function baseWrapper(string $content, string $accentColor = '#6366f1'): string

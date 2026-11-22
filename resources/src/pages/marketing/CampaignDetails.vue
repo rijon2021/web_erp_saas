@@ -19,7 +19,7 @@
                 </a-space>
               </div>
               <a-space>
-                <a-button v-if="campaignSendable(campaign.status)" type="primary" @click="sendCampaign">
+                <a-button v-if="campaignSendable(campaign.status, campaign.is_stuck)" type="primary" @click="sendCampaign">
                   <template #icon><SendOutlined /></template>
                   {{ $t('Send_Now') }}
                 </a-button>
@@ -36,7 +36,13 @@
               <a-descriptions-item v-if="campaign.type === 'email' && campaign.subject" :label="$t('Email_Subject')">
                 {{ campaign.subject }}
               </a-descriptions-item>
-              <a-descriptions-item :label="$t('Message_Content')">
+              <a-descriptions-item v-if="campaign.type === 'whatsapp' && campaign.wa_template_name" :label="$t('Mk_WA_Template')">
+                <code>{{ campaign.wa_template_name }}</code> · {{ campaign.wa_template_language || 'en_US' }}
+                <div v-for="(p, i) in (campaign.wa_template_params || [])" :key="i" class="msg-param">
+                  <code>{{ placeholderLabel(i) }}</code> {{ p }}
+                </div>
+              </a-descriptions-item>
+              <a-descriptions-item v-if="campaign.message_content || !campaign.wa_template_name" :label="$t('Message_Content')">
                 <pre class="msg-content">{{ campaign.message_content }}</pre>
               </a-descriptions-item>
               <a-descriptions-item v-if="campaign.attachment" :label="$t('Upload_Attachment')">
@@ -111,6 +117,8 @@ const router = useRouter();
 
 const loading = ref(true);
 const campaign = ref(null);
+// "{{1}}" built in script: a literal one inside a mustache ends it early.
+const placeholderLabel = i => `{{${i + 1}}}`;
 const recipients = ref([]);
 
 const recipientColumns = computed(() => [
@@ -166,6 +174,10 @@ onMounted(load);
   white-space: pre-wrap;
   margin: 0;
   font-family: inherit;
+}
+.msg-param {
+  font-size: 12px;
+  margin-top: 4px;
 }
 .stat-row {
   display: flex;

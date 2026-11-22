@@ -73,7 +73,22 @@ class ReportQuestionService
             })
             ->sum('amount');
 
-        $profit = $revenue - $cogsFIFO - $expenses;
+        // Received sale returns reverse revenue; COGS above is already net of them.
+        $saleReturns = DB::table('sale_returns')
+            ->whereNull('deleted_at')
+            ->where('statut', 'received')
+            ->whereBetween('date', [$dateFrom, $dateTo])
+            ->when($warehouseId, function ($q) use ($warehouseId) {
+                return $q->where('warehouse_id', $warehouseId);
+            }, function ($q) use ($warehouseIds) {
+                return $q->whereIn('warehouse_id', $warehouseIds);
+            })
+            ->when(!$viewRecords, function ($q) use ($user) {
+                return $q->where('user_id', $user->id);
+            })
+            ->sum('GrandTotal');
+
+        $profit = $revenue - $saleReturns - $cogsFIFO - $expenses;
 
         return [
             'transactions' => $transactions,
@@ -218,7 +233,39 @@ class ReportQuestionService
     }
 
     /**
-     * Generate insights by comparing two periods
+     * The period-over-period changes behind the insights, as data: one item per
+     * metric that moved by more than 0.01. The SPA renders these through its
+     * translation keys (Ai_Insight_*), so the text follows the user's language;
+     * generateInsights() renders the same items as the legacy English sentence.
+     *
+     * @return array<int, array{metric: string, direction: string, from: float, to: float, delta: float, pct: float}>
+     */
+    public function insightItems(array $currentData, array $compareData): array
+    {
+        $items = [];
+        foreach (['profit', 'revenue', 'discount'] as $metric) {
+            $current = (float) ($currentData[$metric] ?? 0);
+            $previous = (float) ($compareData[$metric] ?? 0);
+            $delta = $current - $previous;
+            if (abs($delta) <= 0.01) {
+                continue;
+            }
+            $items[] = [
+                'metric' => $metric,
+                'direction' => $delta > 0 ? 'increased' : 'decreased',
+                'from' => round($previous, 2),
+                'to' => round($current, 2),
+                'delta' => round($delta, 2),
+                'pct' => $previous != 0 ? round(abs(($delta / abs($previous)) * 100), 1) : 0.0,
+            ];
+        }
+
+        return $items;
+    }
+
+    /**
+     * Generate insights by comparing two periods (English sentence; kept for
+     * API consumers that read the plain `insights` string).
      *
      * @param array $currentData
      * @param array $compareData
@@ -226,54 +273,30 @@ class ReportQuestionService
      */
     public function generateInsights(array $currentData, array $compareData): string
     {
-        // Placeholder for AI integration - simple comparison for now
-        $currentProfit = $currentData['profit'] ?? 0;
-        $compareProfit = $compareData['profit'] ?? 0;
-        $profitDelta = $currentProfit - $compareProfit;
-        $profitPercentChange = $compareProfit != 0 ? (($profitDelta / abs($compareProfit)) * 100) : 0;
-
-        $currentRevenue = $currentData['revenue'] ?? 0;
-        $compareRevenue = $compareData['revenue'] ?? 0;
-        $revenueDelta = $currentRevenue - $compareRevenue;
-
-        $currentDiscount = $currentData['discount'] ?? 0;
-        $compareDiscount = $compareData['discount'] ?? 0;
-        $discountDelta = $currentDiscount - $compareDiscount;
-
         $insights = [];
-        
-        if (abs($profitDelta) > 0.01) {
-            $direction = $profitDelta > 0 ? 'increased' : 'decreased';
-            $insights[] = sprintf(
-                "Profit %s from %s to %s (change: %s, %.1f%%)",
-                $direction,
-                number_format($compareProfit, 2),
-                number_format($currentProfit, 2),
-                number_format($profitDelta, 2),
-                abs($profitPercentChange)
-            );
-        }
-
-        if (abs($revenueDelta) > 0.01) {
-            $insights[] = sprintf(
-                "Revenue changed by %s (from %s to %s)",
-                number_format($revenueDelta, 2),
-                number_format($compareRevenue, 2),
-                number_format($currentRevenue, 2)
-            );
-        }
-
-        if (abs($discountDelta) > 0.01) {
-            $insights[] = sprintf(
-                "Discount changed by %s (from %s to %s)",
-                number_format($discountDelta, 2),
-                number_format($compareDiscount, 2),
-                number_format($currentDiscount, 2)
-            );
+        foreach ($this->insightItems($currentData, $compareData) as $item) {
+            if ($item['metric'] === 'profit') {
+                $insights[] = sprintf(
+                    'Profit %s from %s to %s (change: %s, %.1f%%)',
+                    $item['direction'],
+                    number_format($item['from'], 2),
+                    number_format($item['to'], 2),
+                    number_format($item['delta'], 2),
+                    $item['pct']
+                );
+            } else {
+                $insights[] = sprintf(
+                    '%s changed by %s (from %s to %s)',
+                    ucfirst($item['metric']),
+                    number_format($item['delta'], 2),
+                    number_format($item['from'], 2),
+                    number_format($item['to'], 2)
+                );
+            }
         }
 
         if (empty($insights)) {
-            return "No significant changes detected between periods.";
+            return 'No significant changes detected between periods.';
         }
 
         return implode('. ', $insights) . '.';

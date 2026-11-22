@@ -101,6 +101,7 @@ const movementColumns = computed(() => [
   { title: t('Action'), dataIndex: 'action', key: 'action' },
   { title: t('Serial_Status'), key: 'status_change' },
   { title: t('Reference'), key: 'reference' },
+  { title: t('Notes'), dataIndex: 'notes', key: 'notes' },
   { title: t('User'), dataIndex: 'user_name', key: 'user_name' },
 ]);
 

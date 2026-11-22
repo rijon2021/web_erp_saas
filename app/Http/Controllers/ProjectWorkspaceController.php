@@ -11,6 +11,7 @@ use App\Models\Task;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 
 /**
  * The Projects Management workspace: dashboard, shared option lists and the
@@ -200,7 +201,18 @@ class ProjectWorkspaceController extends Controller
     /** Selects every workspace form needs, in one call. */
     public function meta(Request $request)
     {
-        $this->authorizeForUser($request->user('api'), 'view', Project::class);
+        // The Reports, Milestones and Timesheets pages each have their own
+        // permission but all fill their project filter from here, so any of
+        // them is enough (a reports-only role used to get an empty dropdown).
+        $user = $request->user('api');
+        $gate = Gate::forUser($user);
+        $allowed = $user && ($gate->allows('view', Project::class)
+            || $gate->allows('report', Project::class)
+            || $gate->allows('view', ProjectMilestone::class)
+            || $gate->allows('view', ProjectTimeLog::class));
+        if (! $allowed) {
+            $this->authorizeForUser($user, 'view', Project::class);
+        }
 
         return response()->json([
             'projects' => Project::whereNull('deleted_at')->orderBy('title')
@@ -399,9 +411,26 @@ class ProjectWorkspaceController extends Controller
             : $descendingDefault;
 
         if ($rows->count() && array_key_exists($sortField, $rows->first())) {
-            $rows = $descending
-                ? $rows->sortByDesc($sortField, SORT_NATURAL | SORT_FLAG_CASE)
-                : $rows->sortBy($sortField, SORT_NATURAL | SORT_FLAG_CASE);
+            $values = $rows->pluck($sortField)->reject(fn ($v) => $v === null);
+            $numeric = $values->isNotEmpty() && $values->every(fn ($v) => is_numeric($v));
+
+            if ($numeric) {
+                // SORT_NATURAL compares numbers as text (2.25 > 2.5, -3 < -10);
+                // compare as numbers instead, with empty values always last.
+                $rows = $rows->sort(function ($a, $b) use ($sortField, $descending) {
+                    $x = $a[$sortField];
+                    $y = $b[$sortField];
+                    if ($x === null || $y === null) {
+                        return ($x === null) <=> ($y === null);
+                    }
+
+                    return $descending ? (float) $y <=> (float) $x : (float) $x <=> (float) $y;
+                });
+            } else {
+                $rows = $descending
+                    ? $rows->sortByDesc($sortField, SORT_NATURAL | SORT_FLAG_CASE)
+                    : $rows->sortBy($sortField, SORT_NATURAL | SORT_FLAG_CASE);
+            }
         }
         $rows = $rows->values();
 

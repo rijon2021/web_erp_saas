@@ -13,6 +13,8 @@ class PaymentPurchase extends Model
 
     protected $fillable = [
         'purchase_id', 'date', 'montant', 'change', 'Ref', 'payment_method_id', 'user_id', 'notes', 'account_id',
+        // Set when the payment was funded from the supplier wallet (see SupplierWalletService).
+        'wallet_transaction_id',
     ];
 
     protected $casts = [

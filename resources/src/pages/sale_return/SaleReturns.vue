@@ -11,15 +11,21 @@
             <template #icon><FileExcelOutlined /></template>
             EXCEL
           </a-button>
+          <a-tooltip :title="$t('Export_Items_Help')">
+            <a-button :loading="exporting === 'lines'" @click="exportList('lines')">
+              <template #icon><FileExcelOutlined /></template>
+              {{ $t('Export_Items') }}
+            </a-button>
+          </a-tooltip>
         </a-space>
       </template>
     </PageHeader>
 
     <a-card size="small" style="margin-bottom: 16px">
       <a-row :gutter="[16, 8]">
-        <a-col :xs="12" :md="8" :xl="4">
+        <a-col :xs="24" :md="16" :xl="8">
           <div class="filter-label">{{ $t('date') }}</div>
-          <a-date-picker v-model:value="filters.date" value-format="YYYY-MM-DD" style="width: 100%" @change="crud.reload()" />
+          <DateRangePicker v-model:value="range" allow-clear style="width: 100%" @change="crud.reload()" />
         </a-col>
         <a-col :xs="12" :md="8" :xl="5">
           <div class="filter-label">{{ $t('Customer') }}</div>
@@ -51,6 +57,16 @@
             v-model:value="filters.payment_statut" style="width: 100%" allow-clear
             :placeholder="$t('PaymentStatus')" :options="paymentStatusOptions" @change="crud.reload()"
           />
+        </a-col>
+      </a-row>
+    </a-card>
+
+    <!-- Totals for the whole filtered set, not just the page on screen. -->
+    <a-card v-if="summary" size="small" style="margin-bottom: 16px">
+      <a-row :gutter="[16, 12]">
+        <a-col v-for="s in summaryTiles" :key="s.label" :xs="12" :md="6">
+          <div class="filter-label">{{ s.label }}</div>
+          <div class="summary-value" :style="s.style">{{ s.value }}</div>
         </a-col>
       </a-row>
     </a-card>
@@ -136,6 +152,7 @@
       :account-options="accountOptions"
       :saving="paySaving"
       :max-due="payMaxDue"
+      :customer-wallet="returnWallet.info.value"
       @submit="submitPayment"
     />
   </div>
@@ -163,13 +180,16 @@ import {
 import dayjs from 'dayjs';
 import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
+import DateRangePicker from '../../components/DateRangePicker.vue';
 import ReturnPaymentsModal from '../../components/ReturnPaymentsModal.vue';
 import ReturnPaymentFormModal from '../../components/ReturnPaymentFormModal.vue';
+import { useCustomerWalletTender, customerWalletError } from '../../composables/useCustomerWallet';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import { useAuthStore } from '../../stores/auth';
 import { payStatusColor } from '../../lib/statusColors';
 import { exportExcel, exportPdf } from '../../lib/exporters';
+import { exportDocumentLines } from '../../lib/documentLinesExport';
 import { PAYMENT_STATUSES, statusKey } from '../sales/saleVocab';
 import http from '../../lib/http';
 
@@ -179,13 +199,17 @@ const auth = useAuthStore();
 const router = useRouter();
 
 const filters = ref({
-  date: null, client_id: undefined, sale_id: undefined,
+  client_id: undefined, sale_id: undefined,
   warehouse_id: undefined, payment_statut: undefined,
 });
+// [start, end] dayjs pair; either bound may be empty and the backend then
+// leaves that side open.
+const range = ref(null);
 
 const filterParams = () => ({
   Ref: '',
-  date: filters.value.date || '',
+  ...(range.value?.[0] ? { from: range.value[0].format('YYYY-MM-DD') } : {}),
+  ...(range.value?.[1] ? { to: range.value[1].format('YYYY-MM-DD') } : {}),
   sale_id: filters.value.sale_id || '',
   client_id: filters.value.client_id || '',
   statut: '',
@@ -198,6 +222,20 @@ const crud = useCrudTable('returns/sale', {
   params: filterParams,
 });
 crud.fetchRows();
+
+// Backend aggregates over the filtered set. Absent on an older backend, in
+// which case the tile row simply does not render.
+const summary = computed(() => crud.payload.value?.summary || null);
+const summaryTiles = computed(() => {
+  const s = summary.value;
+  if (!s) return [];
+  return [
+    { label: t('Returns'), value: s.count },
+    { label: t('Total'), value: money(s.total) },
+    { label: t('Paid'), value: money(s.paid) },
+    { label: t('Due'), value: money(s.due), style: Number(s.due) > 0 ? { color: '#ff4d4f' } : undefined },
+  ];
+});
 
 const customerOptions = computed(() =>
   (crud.payload.value?.customers || []).map(c => ({ value: c.id, label: c.name }))
@@ -244,7 +282,8 @@ async function exportList(kind) {
       ...filterParams(),
     });
     const rows = data.sale_Return || [];
-    if (kind === 'xlsx') await exportExcel('sale_returns', columns.value, rows);
+    if (kind === 'lines') await exportDocumentLines('sale_returns', rows, 'sale_returns_items');
+    else if (kind === 'xlsx') await exportExcel('sale_returns', columns.value, rows);
     else await exportPdf(t('SalesReturn'), columns.value, rows);
   } catch (e) {
     message.error(t('InvalidData'));
@@ -301,11 +340,19 @@ const payEditing = ref(null);
 const paySaving = ref(false);
 const payForm = ref({});
 
+// Customer Wallet: refunding with the wallet tender credits the customer's store credit.
+const returnWallet = useCustomerWalletTender();
+function loadReturnWallet(ret) {
+  returnWallet.reset();
+  if (ret?.client_id) returnWallet.load(ret.client_id);
+}
+
 function openAddPayment(record) {
   if (record.payment_status === 'paid') {
     message.warning(t('PaymentComplete'));
     return;
   }
+  loadReturnWallet(record);
   payEditing.value = null;
   payForm.value = {
     date: dayjs().format('YYYY-MM-DD'),
@@ -319,6 +366,7 @@ function openAddPayment(record) {
 }
 
 function openEditPayment(payment) {
+  loadReturnWallet(activeReturn.value);
   payEditing.value = payment;
   payForm.value = {
     date: payment.date,
@@ -365,7 +413,7 @@ async function submitPayment() {
     received_amount: (Number(f.received_amount) || 0).toFixed(2),
     change: change.toFixed(2),
     payment_method_id: f.payment_method_id,
-    account_id: f.account_id || null,
+    account_id: returnWallet.isWalletMethod(f.payment_method_id) ? null : (f.account_id || null),
     notes: f.notes,
   };
   try {
@@ -380,7 +428,7 @@ async function submitPayment() {
     crud.fetchRows();
     if (paymentsOpen.value) await loadPayments(activeReturn.value.id);
   } catch (e) {
-    message.error(e?.data?.message || t('InvalidData'));
+    message.error(customerWalletError(e));
   } finally {
     paySaving.value = false;
   }
@@ -392,5 +440,10 @@ async function submitPayment() {
   margin-bottom: 4px;
   color: rgba(var(--ink-rgb), 0.55);
   font-size: 13px;
+}
+.summary-value {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 </style>

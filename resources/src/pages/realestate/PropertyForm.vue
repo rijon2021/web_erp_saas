@@ -149,7 +149,7 @@
       <!-- RIGHT COLUMN -->
       <a-col :xs="24" :lg="8">
         <a-card size="small" :title="$t('Featured_Image')" style="margin-bottom: 16px">
-          <img v-if="featuredPreview" :src="featuredPreview" style="max-height: 180px; max-width: 100%; border-radius: 8px; margin-bottom: 10px" />
+          <img v-if="featuredPreview" :src="featuredPreview" @error="onImageError" style="max-height: 180px; max-width: 100%; border-radius: 8px; margin-bottom: 10px" />
           <a-upload
             :file-list="[]" :before-upload="() => false" :max-count="1"
             accept="image/*" @change="onFeaturedChange"
@@ -164,7 +164,7 @@
         <a-card size="small" :title="$t('Gallery')" style="margin-bottom: 16px">
           <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px">
             <div v-for="(g, i) in existingGallery" :key="'e' + i" class="gallery-tile">
-              <img :src="'/' + g" />
+              <img :src="publicUrl(g)" @error="onImageError" />
               <a-button size="small" danger shape="circle" class="gallery-x" @click="existingGallery.splice(i, 1)">×</a-button>
             </div>
             <div v-for="(g, i) in galleryPreviews" :key="'n' + i" class="gallery-tile">
@@ -234,6 +234,7 @@ import { UploadOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import http from '../../lib/http';
 import { uploadForm } from '../../lib/upload';
+import { publicUrl, onImageError } from '../../lib/uploadUrl';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -353,7 +354,7 @@ onMounted(async () => {
         seo_keywords: p.seo_keywords || '',
       };
       existingGallery.value = Array.isArray(p.gallery) ? p.gallery.slice() : [];
-      if (p.featured_image) featuredPreview.value = `/${p.featured_image}`;
+      if (p.featured_image) featuredPreview.value = publicUrl(p.featured_image);
     }
   } catch (e) {
     message.error(t('InvalidData'));
@@ -376,7 +377,7 @@ onMounted(async () => {
 .gallery-x {
   position: absolute;
   top: -8px;
-  right: -8px;
+  inset-inline-end: -8px;
   min-width: 22px;
   width: 22px;
   height: 22px;

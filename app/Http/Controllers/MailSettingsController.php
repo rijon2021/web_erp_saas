@@ -68,7 +68,7 @@ class MailSettingsController extends BaseController
         }
 
         try {
-            Mail::raw('This is a test email to verify your mail configuration in Stocky.', function ($message) use ($to, $settings, $server) {
+            Mail::raw('This is a test email to verify your mail configuration.', function ($message) use ($to, $settings, $server) {
                 $message->to($to)
                     ->subject('Test Mail Configuration');
 
@@ -80,14 +80,18 @@ class MailSettingsController extends BaseController
                 if ($fromEmail) {
                     $fromName = ($server && $server->sender_name) 
                         ? $server->sender_name 
-                        : ($settings && $settings->CompanyName ? $settings->CompanyName : 'Stocky');
+                        : ($settings && $settings->CompanyName ? $settings->CompanyName : (trim(explode('|', (string) ($settings->app_name ?? ''))[0]) ?: config('app.name', 'POS')));
                     $message->from($fromEmail, $fromName);
                 }
             });
 
             return $this->sendResponse(null, 'Test email sent successfully to '.$to);
-        } catch (\Exception $e) {
-            return $this->sendError('Failed to send test email.', $e->getMessage());
+        } catch (\Throwable $e) {
+            // Hand the transport's own reason back (bad credentials, refused
+            // connection, TLS mismatch...) so the admin can fix the setting.
+            $detail = trim($e->getMessage()) ?: class_basename($e);
+
+            return $this->sendError('Failed to send test email: '.$detail, $detail);
         }
     }
 }

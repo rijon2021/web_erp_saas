@@ -162,9 +162,10 @@ Then start a sync from the UI and watch it progress (it advances roughly once pe
 cron fires).
 
 ### Tuning for shared hosting
-If batches get killed by short PHP limits, lower the batch size so each batch finishes faster:
+If batches get killed by short PHP limits, lower the batch size so each batch finishes faster.
+Batch size is set per tenant (WooCommerce → Settings tab → Sync tuning → *Products per batch*);
+the worker timeout is server-wide, in `.env`:
 ```env
-WOO_PRODUCTS_PER_JOB=3
 QUEUE_WORKER_TIMEOUT=600
 ```
 
@@ -200,7 +201,7 @@ This is handy for a manual catch-up, or to schedule a periodic full sync via cro
 | Sync stalls at `queued_next_batch` | No worker on the woo queues | Set up Option A or B; confirm `--queue` includes `woocommerce-sync,woocommerce-stock`. |
 | `stuck: no worker heartbeat for Ns` | Worker not running / watching wrong queues | `supervisorctl status`; check the queue list. |
 | New code/behaviour not taking effect | Long-running worker still on old code | `php artisan queue:restart` (or restart Supervisor). |
-| Batches killed mid-run on shared hosting | PHP time/memory limits | Lower `WOO_PRODUCTS_PER_JOB`; raise `QUEUE_WORKER_TIMEOUT`. |
+| Batches killed mid-run on shared hosting | PHP time/memory limits | Lower *Products per batch* (Woo Settings tab → Sync tuning); raise `QUEUE_WORKER_TIMEOUT`. |
 | Jobs pile up but never run | Wrong `QUEUE_CONNECTION`, or `jobs` table missing | Ensure `QUEUE_CONNECTION=database` and the table exists. |
 
 Inspect what's queued / failed:

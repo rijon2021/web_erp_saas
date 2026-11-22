@@ -66,6 +66,15 @@
                     <span class="text-muted">{{ __('billing.BillingCycle') }}</span>
                     <span class="fw-bold" id="displayCycle">{{ ucfirst($cycle) }}</span>
                 </div>
+                {{-- Add-ons renewed together with this plan (per billing cycle). --}}
+                @foreach(($addonLines ?? []) as $lineCycle => $lines)
+                    @foreach($lines as $line)
+                        <div class="d-flex justify-content-between mb-2" data-addon-cycle="{{ $lineCycle }}" @if($lineCycle !== $cycle) style="display:none" @endif>
+                            <span class="text-muted"><i class="bi bi-puzzle me-1"></i>{{ $line['name'] }}</span>
+                            <span class="fw-bold">{{ $currencySymbol }}{{ number_format($line['amount'], 2) }}</span>
+                        </div>
+                    @endforeach
+                @endforeach
                 <hr class="billing-hr">
                 <div class="d-flex justify-content-between mb-2">
                     <span class="text-muted">{{ __('billing.Subtotal') }}</span>
@@ -89,6 +98,13 @@
                     @else
                         <strong>{{ __('billing.Downgrade') }}:</strong> {{ __('billing.DowngradeNotice') }}
                     @endif
+                    @if(! $subscription->plan?->isFree() && ! $subscription->isOnTrial())
+                        <span class="d-block mt-1">{{ __('billing.CarryOverNotice') }}</span>
+                    @endif
+                </div>
+                @elseif($subscription && $subscription->isActive() && (int) $subscription->plan_id === (int) $plan->id)
+                <div class="mt-3 p-3 billing-upgrade-notice">
+                    <i class="bi bi-arrow-repeat me-1"></i>{{ __('billing.RenewEarlyHint') }}
                 </div>
                 @endif
 
@@ -117,13 +133,17 @@
         <form method="POST" action="{{ route('billing.process', $plan->id) }}" id="checkoutForm" enctype="multipart/form-data">
             @csrf
 
-            {{-- Billing cycle selector --}}
+            {{-- Billing cycle selector. With one cycle on offer there is nothing
+                 to pick, so the card is replaced by a hidden field. --}}
+            @php $cycles = $billingCycles ?? ['monthly', 'yearly']; @endphp
+            @if (count($cycles) > 1)
             <div class="billing-card mb-4">
                 <div class="billing-card-header">
                     <i class="bi bi-calendar3 me-2 text-muted"></i>{{ __('billing.BillingCycle') }}
                 </div>
                 <div class="billing-card-body">
                     <div class="d-flex gap-3">
+                        @if (in_array('monthly', $cycles))
                         <label class="cycle-option flex-fill {{ $cycle === 'monthly' ? 'selected' : '' }}">
                             <input type="radio" name="billing_cycle" value="monthly" {{ $cycle === 'monthly' ? 'checked' : '' }} class="d-none cycle-radio">
                             <div class="cycle-card">
@@ -134,6 +154,8 @@
                                 <span class="fw-bold billing-cycle-price">{{ $currencySymbol }}{{ number_format($plan->price, 2) }}</span>
                             </div>
                         </label>
+                        @endif
+                        @if (in_array('yearly', $cycles))
                         <label class="cycle-option flex-fill {{ $cycle === 'yearly' ? 'selected' : '' }}">
                             <input type="radio" name="billing_cycle" value="yearly" {{ $cycle === 'yearly' ? 'checked' : '' }} class="d-none cycle-radio">
                             <div class="cycle-card">
@@ -149,9 +171,13 @@
                                 <span class="fw-bold billing-cycle-price">{{ $currencySymbol }}{{ number_format($plan->getPriceForCycle('yearly'), 2) }}</span>
                             </div>
                         </label>
+                        @endif
                     </div>
                 </div>
             </div>
+            @else
+            <input type="hidden" name="billing_cycle" value="{{ $cycles[0] }}">
+            @endif
 
             {{-- Payment gateway selector --}}
             <div class="billing-card mb-4">
@@ -302,7 +328,11 @@
 @push('scripts')
 <script>
 window.CheckoutData = {
-    prices: { monthly: {{ $plan->price }}, yearly: {{ $plan->getPriceForCycle('yearly') }} },
+    // Plan price plus the add-ons renewed with it, per cycle.
+    prices: {
+        monthly: {{ (float) $plan->price + array_sum(array_column($addonLines['monthly'] ?? [], 'amount')) }},
+        yearly: {{ (float) $plan->getPriceForCycle('yearly') + array_sum(array_column($addonLines['yearly'] ?? [], 'amount')) }}
+    },
     currencySymbol: @json($currencySymbol),
     currencyCode: @json($currencyCode),
     trans: {
@@ -315,6 +345,14 @@ window.CheckoutData = {
         redirecting: @json(__('billing.RedirectingToPayment')),
     },
 };
+// Show the add-on lines of the chosen cycle only.
+document.querySelectorAll('input[name="billing_cycle"]').forEach(function (radio) {
+    radio.addEventListener('change', function () {
+        document.querySelectorAll('[data-addon-cycle]').forEach(function (row) {
+            row.style.display = row.getAttribute('data-addon-cycle') === radio.value ? '' : 'none';
+        });
+    });
+});
 </script>
 <script src="{{ global_asset('assets_super/js/checkout.js') }}"></script>
 @endpush

@@ -1,9 +1,9 @@
 <template>
   <div class="page">
     <PageHeader
-      title="Academic Setup"
-      subtitle="Years, classes, sections and subjects — configure these first."
-      :breadcrumb="['School', 'Academics']"
+      :title="$t('Sc_Academic_Setup')"
+      :subtitle="$t('Sc_Academic_Setup_Hint')"
+      :breadcrumb="[$t('Sc_School'), $t('Sc_Academics')]"
     >
       <template #actions>
         <a-button type="primary" @click="openForm(null)">
@@ -15,20 +15,20 @@
 
     <a-card size="small">
       <a-tabs v-model:activeKey="tab" @change="load">
-        <a-tab-pane key="years" tab="Academic years" />
-        <a-tab-pane key="classes" tab="Classes" />
-        <a-tab-pane key="sections" tab="Sections" />
-        <a-tab-pane key="subjects" tab="Subjects" />
+        <a-tab-pane key="years" :tab="$t('Sc_Academic_Years')" />
+        <a-tab-pane key="classes" :tab="$t('Sc_Classes')" />
+        <a-tab-pane key="sections" :tab="$t('Sc_Sections')" />
+        <a-tab-pane key="subjects" :tab="$t('Sc_Subjects')" />
       </a-tabs>
 
       <div v-if="tab !== 'years'" class="toolbar">
         <a-input-search
-          v-model:value="search" placeholder="Search…" allow-clear class="tb-search" @search="load"
+          v-model:value="search" :placeholder="$t('Sc_Search_Ellipsis')" allow-clear class="tb-search" @search="load"
         />
         <a-select
           v-if="tab === 'sections' || tab === 'subjects'"
           v-model:value="classFilter" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All classes"
+          option-filter-prop="label" :placeholder="$t('Sc_All_Classes')"
           :options="classOptions" @change="load"
         />
       </div>
@@ -39,15 +39,15 @@
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'is_current'">
-            <a-tag v-if="record.is_current" color="success">Current</a-tag>
-            <a-button v-else size="small" type="link" @click="makeCurrent(record)">Make current</a-button>
+            <a-tag v-if="record.is_current" color="success">{{ $t('Sc_Current') }}</a-tag>
+            <a-button v-else size="small" type="link" @click="makeCurrent(record)">{{ $t('Sc_Make_Current') }}</a-button>
           </template>
           <template v-else-if="column.key === 'dates'">
             {{ date(record.start_date) }} → {{ date(record.end_date) }}
           </template>
           <template v-else-if="column.key === 'is_active'">
             <a-tag :color="record.is_active ? 'success' : 'default'">
-              {{ record.is_active ? 'Active' : 'Inactive' }}
+              {{ record.is_active ? $t('Sc_Active') : $t('Sc_Inactive') }}
             </a-tag>
           </template>
           <template v-else-if="column.key === 'type'">
@@ -58,15 +58,15 @@
           <template v-else-if="column.key === 'occupancy'">
             <span v-if="record.capacity">
               {{ record.students }} / {{ record.capacity }}
-              <a-tag v-if="record.is_full" color="error" class="tag-tight">Full</a-tag>
+              <a-tag v-if="record.is_full" color="error" class="tag-tight">{{ $t('Sc_Full') }}</a-tag>
             </span>
             <span v-else>{{ record.students }}</span>
           </template>
           <template v-else-if="column.key === 'contains'">
             <a-space :size="4">
-              <a-tag>{{ record.sections }} sections</a-tag>
-              <a-tag>{{ record.subjects }} subjects</a-tag>
-              <a-tag color="purple">{{ record.students }} students</a-tag>
+              <a-tag>{{ $t('Sc_N_Sections', { n: record.sections }) }}</a-tag>
+              <a-tag>{{ $t('Sc_N_Subjects', { n: record.subjects }) }}</a-tag>
+              <a-tag color="purple">{{ $t('Sc_N_Students', { n: record.students }) }}</a-tag>
             </a-space>
           </template>
           <template v-else-if="column.key === 'actions'">
@@ -100,24 +100,24 @@
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <template v-if="tab === 'years'">
-          <a-form-item label="Name *" name="name">
-            <a-input v-model:value="form.name" placeholder="e.g. 2026 / 2027" allow-clear />
+          <a-form-item :label="$t('Name') + ' *'" name="name">
+            <a-input v-model:value="form.name" :placeholder="$t('Sc_Year_Name_Placeholder')" allow-clear />
           </a-form-item>
           <a-row :gutter="16">
             <a-col :span="12">
-              <a-form-item label="Starts *" name="start_date">
+              <a-form-item :label="$t('Sc_Starts') + ' *'" name="start_date">
                 <a-date-picker v-model:value="form.start_date" style="width: 100%" value-format="YYYY-MM-DD" />
               </a-form-item>
             </a-col>
             <a-col :span="12">
-              <a-form-item label="Ends *" name="end_date">
+              <a-form-item :label="$t('Sc_Ends') + ' *'" name="end_date">
                 <a-date-picker v-model:value="form.end_date" style="width: 100%" value-format="YYYY-MM-DD" />
               </a-form-item>
             </a-col>
           </a-row>
           <a-form-item style="margin-bottom: 0">
             <a-checkbox v-model:checked="form.is_current">
-              Current year — everything defaults to it
+              {{ $t('Sc_Current_Year_Hint') }}
             </a-checkbox>
           </a-form-item>
         </template>
@@ -125,17 +125,17 @@
         <template v-else-if="tab === 'classes'">
           <a-row :gutter="16">
             <a-col :xs="24" :md="14">
-              <a-form-item label="Name *" name="name">
-                <a-input v-model:value="form.name" placeholder="e.g. Grade 5" allow-clear />
+              <a-form-item :label="$t('Name') + ' *'" name="name">
+                <a-input v-model:value="form.name" :placeholder="$t('Sc_Class_Name_Placeholder')" allow-clear />
               </a-form-item>
             </a-col>
             <a-col :xs="12" :md="10">
-              <a-form-item label="Code">
+              <a-form-item :label="$t('Code')">
                 <a-input v-model:value="form.code" allow-clear />
               </a-form-item>
             </a-col>
             <a-col :xs="12" :md="8">
-              <a-form-item label="Level" extra="Used for promotion order">
+              <a-form-item :label="$t('Sc_Level')" :extra="$t('Sc_Level_Hint')">
                 <a-input-number v-model:value="form.level" :min="0" style="width: 100%" />
               </a-form-item>
             </a-col>
@@ -144,87 +144,87 @@
             <a-textarea v-model:value="form.description" :rows="2" />
           </a-form-item>
           <a-form-item style="margin-bottom: 0">
-            <a-checkbox v-model:checked="form.is_active">Active</a-checkbox>
+            <a-checkbox v-model:checked="form.is_active">{{ $t('Sc_Active') }}</a-checkbox>
           </a-form-item>
         </template>
 
         <template v-else-if="tab === 'sections'">
           <a-row :gutter="16">
             <a-col :xs="24" :md="12">
-              <a-form-item label="Class *" name="class_id">
+              <a-form-item :label="$t('Sc_Class') + ' *'" name="class_id">
                 <a-select
                   v-model:value="form.class_id" show-search option-filter-prop="label"
-                  :options="classOptions" placeholder="Select a class"
+                  :options="classOptions" :placeholder="$t('Sc_Select_A_Class')"
                 />
               </a-form-item>
             </a-col>
             <a-col :xs="12" :md="12">
-              <a-form-item label="Section name *" name="name">
-                <a-input v-model:value="form.name" placeholder="e.g. A" allow-clear />
+              <a-form-item :label="$t('Sc_Section_Name') + ' *'" name="name">
+                <a-input v-model:value="form.name" :placeholder="$t('Sc_Section_Name_Placeholder')" allow-clear />
               </a-form-item>
             </a-col>
             <a-col :xs="12" :md="8">
-              <a-form-item label="Capacity">
+              <a-form-item :label="$t('Sc_Capacity')">
                 <a-input-number v-model:value="form.capacity" :min="1" style="width: 100%" />
               </a-form-item>
             </a-col>
             <a-col :xs="12" :md="8">
-              <a-form-item label="Room">
+              <a-form-item :label="$t('Sc_Room')">
                 <a-input v-model:value="form.room" allow-clear />
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="8">
-              <a-form-item label="Form teacher">
+              <a-form-item :label="$t('Sc_Form_Teacher')">
                 <a-select
                   v-model:value="form.teacher_id" allow-clear show-search
-                  option-filter-prop="label" :options="teacherOptions" placeholder="None"
+                  option-filter-prop="label" :options="teacherOptions" :placeholder="$t('Sc_None')"
                 />
               </a-form-item>
             </a-col>
           </a-row>
           <a-form-item style="margin-bottom: 0">
-            <a-checkbox v-model:checked="form.is_active">Active</a-checkbox>
+            <a-checkbox v-model:checked="form.is_active">{{ $t('Sc_Active') }}</a-checkbox>
           </a-form-item>
         </template>
 
         <template v-else>
           <a-row :gutter="16">
             <a-col :xs="24" :md="14">
-              <a-form-item label="Subject *" name="name">
-                <a-input v-model:value="form.name" placeholder="e.g. Mathematics" allow-clear />
+              <a-form-item :label="$t('Sc_Subject') + ' *'" name="name">
+                <a-input v-model:value="form.name" :placeholder="$t('Sc_Subject_Name_Placeholder')" allow-clear />
               </a-form-item>
             </a-col>
             <a-col :xs="12" :md="10">
-              <a-form-item label="Code">
+              <a-form-item :label="$t('Code')">
                 <a-input v-model:value="form.code" allow-clear />
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="12">
-              <a-form-item label="Class">
+              <a-form-item :label="$t('Sc_Class')">
                 <a-select
                   v-model:value="form.class_id" allow-clear show-search option-filter-prop="label"
-                  :options="classOptions" placeholder="All classes"
+                  :options="classOptions" :placeholder="$t('Sc_All_Classes')"
                 />
               </a-form-item>
             </a-col>
             <a-col :xs="12" :md="12">
-              <a-form-item label="Type *" name="type">
+              <a-form-item :label="$t('Type') + ' *'" name="type">
                 <a-select v-model:value="form.type" :options="SUBJECT_TYPES" />
               </a-form-item>
             </a-col>
             <a-col :xs="12" :md="12">
-              <a-form-item label="Credit" extra="Weight when averaging a term">
+              <a-form-item :label="$t('Sc_Credit')" :extra="$t('Sc_Credit_Hint')">
                 <a-input-number v-model:value="form.credit" :min="0" :step="0.5" style="width: 100%" />
               </a-form-item>
             </a-col>
             <a-col :xs="12" :md="12">
-              <a-form-item label="Pass mark %" extra="Used to seed exam pass marks">
+              <a-form-item :label="$t('Sc_Pass_Mark_Percent')" :extra="$t('Sc_Pass_Mark_Hint')">
                 <a-input-number v-model:value="form.pass_mark" :min="0" :max="100" style="width: 100%" />
               </a-form-item>
             </a-col>
           </a-row>
           <a-form-item style="margin-bottom: 0">
-            <a-checkbox v-model:checked="form.is_active">Active</a-checkbox>
+            <a-checkbox v-model:checked="form.is_active">{{ $t('Sc_Active') }}</a-checkbox>
           </a-form-item>
         </template>
       </a-form>
@@ -248,8 +248,9 @@ import PageHeader from '../../components/PageHeader.vue';
 import { useFormat } from '../../composables/useFormat';
 import { SUBJECT_TYPES, labelOf, optionOf } from './schoolOptions';
 import http from '../../lib/http';
-import { t } from '../../i18n';
+import { useI18n } from 'vue-i18n';
 
+const { t } = useI18n();
 const { date } = useFormat();
 const simpleEmptyImage = Empty.PRESENTED_IMAGE_SIMPLE;
 
@@ -264,51 +265,51 @@ const classOptions = computed(() => (meta.value.classes || []).map(c => ({ value
 const teacherOptions = computed(() => (meta.value.teachers || []).map(x => ({ value: x.id, label: x.name })));
 
 const ENDPOINTS = {
-  years: { url: 'school/years', key: 'academic_years', label: 'New year', title: 'academic year' },
-  classes: { url: 'school/classes', key: 'classes', label: 'New class', title: 'class' },
-  sections: { url: 'school/sections', key: 'sections', label: 'New section', title: 'section' },
-  subjects: { url: 'school/subjects', key: 'subjects', label: 'New subject', title: 'subject' },
+  years: { url: 'school/years', key: 'academic_years', label: 'Sc_New_Year', empty: 'Sc_No_Years_Yet', newTitle: 'Sc_New_Academic_Year', editTitle: 'Sc_Edit_Academic_Year' },
+  classes: { url: 'school/classes', key: 'classes', label: 'Sc_New_Class', empty: 'Sc_No_Classes_Yet', newTitle: 'Sc_New_Class', editTitle: 'Sc_Edit_Class' },
+  sections: { url: 'school/sections', key: 'sections', label: 'Sc_New_Section', empty: 'Sc_No_Sections_Yet', newTitle: 'Sc_New_Section', editTitle: 'Sc_Edit_Section' },
+  subjects: { url: 'school/subjects', key: 'subjects', label: 'Sc_New_Subject', empty: 'Sc_No_Subjects_Yet', newTitle: 'Sc_New_Subject', editTitle: 'Sc_Edit_Subject' },
 };
 
 const current = computed(() => ENDPOINTS[tab.value]);
-const addLabel = computed(() => current.value.label);
-const emptyText = computed(() => `No ${current.value.title}s yet`);
+const addLabel = computed(() => t(current.value.label));
+const emptyText = computed(() => t(current.value.empty));
 const modalTitle = computed(() =>
-  `${editing.value ? 'Edit' : 'New'} ${current.value.title}`);
+  t(editing.value ? current.value.editTitle : current.value.newTitle));
 
 const COLUMNS = {
   years: [
-    { title: 'Year', dataIndex: 'name', key: 'name' },
-    { title: 'Runs', key: 'dates', width: 240 },
-    { title: 'Students', dataIndex: 'students', key: 'students', width: 110 },
+    { title: t('Sc_Year'), dataIndex: 'name', key: 'name' },
+    { title: t('Sc_Runs'), key: 'dates', width: 240 },
+    { title: t('Sc_Students'), dataIndex: 'students', key: 'students', width: 110 },
     { title: '', key: 'is_current', width: 150 },
     { title: '', key: 'actions', width: 90 },
   ],
   classes: [
-    { title: 'Class', dataIndex: 'name', key: 'name' },
-    { title: 'Code', dataIndex: 'code', key: 'code', width: 110 },
-    { title: 'Level', dataIndex: 'level', key: 'level', width: 90 },
-    { title: 'Contains', key: 'contains', width: 300 },
-    { title: 'Status', key: 'is_active', dataIndex: 'is_active', width: 110 },
+    { title: t('Sc_Class'), dataIndex: 'name', key: 'name' },
+    { title: t('Code'), dataIndex: 'code', key: 'code', width: 110 },
+    { title: t('Sc_Level'), dataIndex: 'level', key: 'level', width: 90 },
+    { title: t('Sc_Contains'), key: 'contains', width: 300 },
+    { title: t('Status'), key: 'is_active', dataIndex: 'is_active', width: 110 },
     { title: '', key: 'actions', width: 90 },
   ],
   sections: [
-    { title: 'Class', dataIndex: 'class_name', key: 'class_name', width: 150 },
-    { title: 'Section', dataIndex: 'name', key: 'name', width: 120 },
-    { title: 'Occupancy', key: 'occupancy', width: 160 },
-    { title: 'Room', dataIndex: 'room', key: 'room', width: 110 },
-    { title: 'Form teacher', dataIndex: 'teacher_name', key: 'teacher_name' },
-    { title: 'Status', key: 'is_active', dataIndex: 'is_active', width: 110 },
+    { title: t('Sc_Class'), dataIndex: 'class_name', key: 'class_name', width: 150 },
+    { title: t('Sc_Section'), dataIndex: 'name', key: 'name', width: 120 },
+    { title: t('Sc_Occupancy'), key: 'occupancy', width: 160 },
+    { title: t('Sc_Room'), dataIndex: 'room', key: 'room', width: 110 },
+    { title: t('Sc_Form_Teacher'), dataIndex: 'teacher_name', key: 'teacher_name' },
+    { title: t('Status'), key: 'is_active', dataIndex: 'is_active', width: 110 },
     { title: '', key: 'actions', width: 90 },
   ],
   subjects: [
-    { title: 'Subject', dataIndex: 'name', key: 'name' },
-    { title: 'Code', dataIndex: 'code', key: 'code', width: 110 },
-    { title: 'Class', dataIndex: 'class_name', key: 'class_name', width: 150 },
-    { title: 'Type', key: 'type', dataIndex: 'type', width: 120 },
-    { title: 'Credit', dataIndex: 'credit', key: 'credit', width: 90 },
-    { title: 'Pass %', dataIndex: 'pass_mark', key: 'pass_mark', width: 90 },
-    { title: 'Status', key: 'is_active', dataIndex: 'is_active', width: 110 },
+    { title: t('Sc_Subject'), dataIndex: 'name', key: 'name' },
+    { title: t('Code'), dataIndex: 'code', key: 'code', width: 110 },
+    { title: t('Sc_Class'), dataIndex: 'class_name', key: 'class_name', width: 150 },
+    { title: t('Type'), key: 'type', dataIndex: 'type', width: 120 },
+    { title: t('Sc_Credit'), dataIndex: 'credit', key: 'credit', width: 90 },
+    { title: t('Sc_Pass_Percent'), dataIndex: 'pass_mark', key: 'pass_mark', width: 90 },
+    { title: t('Status'), key: 'is_active', dataIndex: 'is_active', width: 110 },
     { title: '', key: 'actions', width: 90 },
   ],
 };
@@ -396,7 +397,7 @@ async function submit() {
 async function makeCurrent(record) {
   try {
     await http.put(`school/years/${record.id}`, { ...record, is_current: true });
-    message.success(`${record.name} is now the current year.`);
+    message.success(t('Sc_Name_Is_Now_Current', { name: record.name }));
     load();
     loadMeta();
   } catch (e) {
@@ -406,9 +407,9 @@ async function makeCurrent(record) {
 
 function remove(record) {
   Modal.confirm({
-    title: `Delete ${record.name}?`,
+    title: t('Sc_Delete_Name_Confirm', { name: record.name }),
     icon: createVNode(ExclamationCircleOutlined),
-    content: 'Records still holding students are refused — nothing is deleted silently.',
+    content: t('Sc_Delete_Refused_Hint'),
     okText: t('Delete_confirmButtonText', 'Yes, delete it!'),
     okType: 'danger',
     cancelText: t('Delete_cancelButtonText', 'Cancel'),

@@ -6,7 +6,7 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width,initial-scale=1.0" />
     <link rel="stylesheet" href="/css/master.css">
-    <link rel="stylesheet" href="{{ global_asset('css/auth.css') }}">
+    <link rel="stylesheet" href="{{ global_asset('css/auth.css') }}?v={{ filemtime(public_path('css/auth.css')) }}">
     <link rel="icon" href="{{ global_asset(upload_path('settings') . '/' . ($app_settings->favicon ?? 'favicon.ico')) }}">
     <title>{{ $app_settings->app_name ?? 'Stocky | Ultimate Inventory With POS' }}</title>
   </head>

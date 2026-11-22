@@ -6,6 +6,12 @@
   $me = Auth::guard('store')->user();
   $updateUrl = store_base_url('account');
   $ordersUrl = store_base_url('account/orders');
+  // Customer Wallet page link: signed in, routes present, feature on.
+  $walletNav = $me && Route::has('account.wallet')
+      && app(\App\Services\CustomerWallet\CustomerWalletService::class)->enabled();
+  // Software License Keys page link: the shopper holds at least one key.
+  $licenseNav = $me && Route::has('account.licenses')
+      && \App\Http\Controllers\Api\Store\LicenseStoreController::hasKeys($me->client_id ?? null);
 @endphp
 
 <section class="border-b border-line-subtle"
@@ -16,9 +22,21 @@
       <h1 class="section-title mt-1">{{ __('messages.MyAccount') }}</h1>
       <div class="text-fg-muted text-sm mt-1">{{ __('messages.ManageProfileAndOrders') }}</div>
     </div>
+    @if(($s->theme ?? 'default') === 'rental' && Route::has('account.rentals'))
+      {{-- Rental theme: bookings instead of shop orders. --}}
+      <a href="{{ route('account.rentals') }}" class="btn btn-outline">
+        <x-store.icon name="calendar" class="w-4 h-4" />{{ __('messages.RntMyBookings') }}
+      </a>
+    @elseif(($s->theme ?? 'default') === 'booking' && Route::has('account.appointments'))
+      {{-- Booking theme: bookings instead of shop orders. --}}
+      <a href="{{ route('account.appointments') }}" class="btn btn-outline">
+        <x-store.icon name="calendar" class="w-4 h-4" />{{ __('messages.BkmMyBookings') }}
+      </a>
+    @else
     <a href="{{ $ordersUrl }}" class="btn btn-outline">
       <x-store.icon name="receipt" class="w-4 h-4" />{{ __('messages.MyOrders') }}
     </a>
+    @endif
   </div>
 </section>
 
@@ -145,6 +163,16 @@
               <a href="{{ route('account.returns') }}" class="btn btn-outline">
                 <x-store.icon name="rotate-ccw" class="w-4 h-4" />{{ __('messages.MyReturns') }}
               </a>
+              @if($walletNav)
+              <a href="{{ route('account.wallet') }}" class="btn btn-outline">
+                <x-store.icon name="wallet" class="w-4 h-4" />{{ __('messages.MyWallet') }}
+              </a>
+              @endif
+              @if($licenseNav)
+              <a href="{{ route('account.licenses') }}" class="btn btn-outline">
+                <x-store.icon name="key" class="w-4 h-4" />{{ __('messages.License_My_Licenses') }}
+              </a>
+              @endif
             </div>
           </form>
         </div>

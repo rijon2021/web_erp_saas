@@ -20,7 +20,7 @@
           <a-col :xs="24" :md="8">
             <a-form-item :label="$t('Online_Store')" :extra="$t('Online_Store_Enabled_Help')">
               <a-switch v-model:checked="form.enabled" />
-              <span style="margin-left: 8px">{{ form.enabled ? 'Enabled' : 'Disabled' }}</span>
+              <span style="margin-left: 8px">{{ form.enabled ? $t('Enabled') : $t('Disabled') }}</span>
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
@@ -34,13 +34,28 @@
                 <a-select-option value="default">{{ $t('Default_Store_Theme') }}</a-select-option>
                 <a-select-option value="real_estate">{{ $t('Real_Estate_Theme') }}</a-select-option>
                 <a-select-option value="electronics">{{ $t('Electronics_Theme') }}</a-select-option>
+                <a-select-option value="electronics_premium" :disabled="!premiumAllowed('electronics_premium') && form.theme !== 'electronics_premium'">
+                  <CrownOutlined style="color: #d48806" /> {{ $t('Electronics_Premium_Theme') }}<template v-if="!premiumAllowed('electronics_premium')"> ({{ premiumBuyable('electronics_premium') ? $t('Premium_Theme_Buy_Addon') : $t('Premium_Theme_Not_In_Plan') }})</template>
+                </a-select-option>
                 <a-select-option value="toys">{{ $t('Toys_Theme') }}</a-select-option>
                 <a-select-option value="grocery">{{ $t('Grocery_Theme') }}</a-select-option>
+                <a-select-option value="fashion">{{ $t('Fashion_Theme') }}</a-select-option>
+                <a-select-option value="cars">{{ $t('Car_Dealership_Theme') }}</a-select-option>
+                <a-select-option value="restaurant">{{ $t('Restaurant_Theme') }}</a-select-option>
+                <a-select-option value="rental" :disabled="!rentalTheme.available && form.theme !== 'rental'">
+                  {{ $t('Rental_Theme') }}<template v-if="!rentalTheme.available"> ({{ $t('Rental_Theme_Needs_Module') }})</template>
+                </a-select-option>
+                <a-select-option value="booking" :disabled="!bookingTheme.available && form.theme !== 'booking'">
+                  {{ $t('Bkm_Theme') }}<template v-if="!bookingTheme.available"> ({{ $t('Bkm_Theme_Needs_Module') }})</template>
+                </a-select-option>
               </a-select>
+              <router-link v-if="premiumBuyLink" :to="premiumBuyLink" class="premium-buy-link">
+                <CrownOutlined style="color: #d48806" /> {{ $t('Premium_Theme_Buy_Link') }}
+              </router-link>
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item :label="$t('Currency')" extra="⚠️ Changing currency will affect both system and online store">
+            <a-form-item :label="$t('Currency')" :extra="'⚠️ ' + $t('Store_Currency_Change_Warning')">
               <a-select
                 v-model:value="form.default_currency_id" :placeholder="$t('Choose_Currency')"
                 :options="currencies.map(c => ({ label: `${c.name} (${c.symbol})`, value: Number(c.id) }))"
@@ -64,7 +79,7 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item :label="$t('Warehouses')">
+            <a-form-item :label="$t('Warehouses')" :help="$t('Store_Warehouses_Help')">
               <a-checkbox v-model:checked="form.store_all_warehouses" style="margin-bottom: 6px">
                 {{ $t('All_Warehouses') }}
               </a-checkbox>
@@ -77,8 +92,11 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item :label="$t('Font_Family')">
-              <a-input v-model:value="form.font_family" />
+            <a-form-item :label="$t('Font_Family')" :help="$t('Store_Font_Help')">
+              <a-select
+                v-model:value="form.font_family" :options="fontFamilyOptions"
+                show-search option-filter-prop="label" style="width: 100%"
+              />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
@@ -123,24 +141,24 @@
 
         <a-divider orientation="left">{{ $t('Registration_Access_Control') }}</a-divider>
         <a-row :gutter="[16, 8]">
-          <a-col :xs="24" :md="6">
+          <a-col :xs="24" :md="8">
             <a-form-item :label="$t('Public_Registration')" :extra="$t('Public_Registration_Help')">
               <a-switch v-model:checked="form.registration_enabled" />
             </a-form-item>
           </a-col>
-          <a-col :xs="24" :md="6">
+          <a-col :xs="24" :md="8">
             <a-form-item :label="$t('Require_Invite_Code')" :extra="$t('Require_Invite_Code_Help')">
               <a-switch v-model:checked="form.require_invite_code" />
             </a-form-item>
           </a-col>
-          <a-col :xs="24" :md="6">
+          <a-col :xs="24" :md="8">
             <a-form-item :label="$t('Require_Admin_Approval')" :extra="$t('Require_Admin_Approval_Help')">
               <a-switch v-model:checked="form.require_admin_approval" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="6">
-            <a-form-item :label="$t('Require_Email_Verification')" :extra="$t('Require_Email_Verification_Help')">
-              <a-switch v-model:checked="form.require_email_verification" />
+            <a-form-item :label="$t('Guest_Checkout')" :extra="$t('Guest_Checkout_Help')">
+              <a-switch v-model:checked="form.guest_checkout_enabled" />
             </a-form-item>
           </a-col>
         </a-row>
@@ -428,6 +446,158 @@
           </a-card>
         </a-tab-pane>
 
+        <!-- ===== Electronics Premium theme (plan-gated) ===== -->
+        <a-tab-pane key="electronics_premium" v-if="form.theme === 'electronics_premium'">
+          <template #tab><span class="stab"><CrownOutlined /> {{ $t('Electronics_Premium_Theme') }}</span></template>
+          <a-card size="small" :bordered="false">
+            <a-alert v-if="!premiumAllowed('electronics_premium')" type="warning" show-icon style="margin-bottom: 16px"
+                     :message="$t('Premium_Theme_Fallback_Title')" :description="$t('Premium_Theme_Fallback_Text')" />
+            <a-alert type="info" show-icon style="margin-bottom: 16px" :message="$t('Electronics_Premium_Theme_Hint')" />
+
+            <h4 class="el-sub">{{ $t('Homepage_Sections') }}</h4>
+            <a-row :gutter="[12, 8]" style="margin-bottom: 16px">
+              <a-col v-for="sec in PREMIUM_SECTIONS" :key="sec" :xs="12" :md="8" :lg="6">
+                <a-checkbox v-model:checked="px.sections[sec]">{{ $t('PxSection_' + sec) }}</a-checkbox>
+              </a-col>
+            </a-row>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Px_Deals_Count')"><a-input-number v-model:value="px.limits.deals" :min="1" :max="24" style="width: 100%" /></a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Px_Picks_Count')"><a-input-number v-model:value="px.limits.picks" :min="1" :max="24" style="width: 100%" /></a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Category_Tiles')"><a-input-number v-model:value="px.limits.categories" :min="1" :max="24" style="width: 100%" /></a-form-item></a-col>
+            </a-row>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Newsletter_Title')"><a-input v-model:value="px.newsletter_title" :placeholder="pxDefaults.newsletter_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Newsletter_Subtitle')"><a-input v-model:value="px.newsletter_subtitle" :placeholder="pxDefaults.newsletter_subtitle" /></a-form-item></a-col>
+            </a-row>
+            <a-form-item :label="$t('Px_Filter_Specs')" :extra="premiumThemes.specs_ready ? $t('Px_Filter_Specs_Help') : $t('Px_Specs_Not_Ready')">
+              <a-select v-model:value="px.filter_specs" mode="tags" :max-tag-count="6" :disabled="!premiumThemes.specs_ready"
+                        :placeholder="premiumThemes.spec_labels.length ? premiumThemes.spec_labels.join(', ') : $t('Px_Filter_Specs_Auto')"
+                        :options="premiumThemes.spec_labels.map(l => ({ label: l, value: l }))" style="width: 100%" />
+            </a-form-item>
+            <a-space size="large" style="margin-bottom: 20px">
+              <a-checkbox v-model:checked="px.payment_icons">{{ $t('Show_Payment_Icons') }}</a-checkbox>
+              <a-checkbox v-model:checked="px.show_theme_toggle">{{ $t('Allow_Dark_Mode_Toggle') }}</a-checkbox>
+            </a-space>
+
+            <!-- Hero slides -->
+            <div class="el-head">
+              <h4 class="el-sub">{{ $t('Hero_Slides') }}</h4>
+              <a-button size="small" :disabled="px.slides.length >= 6" @click="thAdd('electronics_premium', 'slides')"><PlusOutlined /> {{ $t('Add_Slide') }}</a-button>
+            </div>
+            <div class="muted" style="margin-bottom: 8px">{{ $t('Px_Slides_Hint') }}</div>
+            <!-- Slider look: full-image (edge to edge) or split (text beside a framed image) -->
+            <a-row :gutter="12" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="6">
+                <a-form-item :label="$t('Px_Hero_Style')" :extra="px.hero_style === 'full' ? $t('Px_Hero_Style_Full_Help') : $t('Px_Hero_Style_Split_Help')">
+                  <a-select v-model:value="px.hero_style" :options="PX_HERO_STYLES.map(v => ({ value: v, label: $t('Px_Hero_Style_' + v) }))" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="12" :md="6">
+                <a-form-item :label="$t('Px_Hero_Height')">
+                  <a-select v-model:value="px.hero_height" :disabled="px.hero_style !== 'full'" :options="PX_HERO_HEIGHTS.map(v => ({ value: v, label: $t('Px_Hero_Height_' + v) }))" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="12" :md="6">
+                <a-form-item :label="$t('Px_Hero_Width')">
+                  <a-select v-model:value="px.hero_width" :disabled="px.hero_style !== 'full'" :options="PX_HERO_WIDTHS.map(v => ({ value: v, label: $t('Px_Hero_Width_' + v) }))" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="12" :md="6">
+                <a-form-item :label="$t('Px_Hero_Interval')" :extra="$t('Px_Hero_Interval_Help')">
+                  <a-input-number v-model:value="px.hero_interval" :min="0" :max="20" style="width: 100%" />
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-alert v-if="px.hero_style === 'full'" type="info" show-icon style="margin-bottom: 12px" :message="$t('Px_Hero_Image_Tip')" />
+            <div v-for="(row, i) in px.slides" :key="'ps' + i" class="el-row">
+              <div class="el-row-head">
+                <strong>{{ $t('Slide') }} {{ i + 1 }}</strong>
+                <a-space>
+                  <a-button size="small" :disabled="i === 0" @click="thMove('electronics_premium', 'slides', i, -1)">↑</a-button>
+                  <a-button size="small" :disabled="i === px.slides.length - 1" @click="thMove('electronics_premium', 'slides', i, 1)">↓</a-button>
+                  <a-button size="small" danger @click="thRemove('electronics_premium', 'slides', i)"><DeleteOutlined /></a-button>
+                </a-space>
+              </div>
+              <a-row :gutter="12">
+                <a-col :xs="24" :md="8"><a-form-item :label="$t('Kicker')"><a-input v-model:value="row.kicker" /></a-form-item></a-col>
+                <a-col :xs="24" :md="16"><a-form-item :label="$t('Title')"><a-input v-model:value="row.title" /></a-form-item></a-col>
+                <a-col :xs="24"><a-form-item :label="$t('Subtitle')"><a-input v-model:value="row.subtitle" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Primary_Button')"><a-input v-model:value="row.primary_text" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Link')"><a-input v-model:value="row.primary_url" placeholder="/shop" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Secondary_Button')"><a-input v-model:value="row.secondary_text" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Link')"><a-input v-model:value="row.secondary_url" placeholder="/compare" /></a-form-item></a-col>
+                <a-col :xs="24" :md="12"><a-form-item :label="$t('Px_Video_Link')" :extra="$t('Px_Video_Link_Help')"><a-input v-model:value="row.video_url" placeholder="https://www.youtube.com/watch?v=…" allow-clear /></a-form-item></a-col>
+                <a-col :xs="24" :md="12"><a-form-item :label="$t('Image')" style="margin-bottom: 0">
+                  <div class="el-image-row">
+                    <a-input v-model:value="row.image" :placeholder="$t('Paste_image_link')" allow-clear />
+                    <a-upload :file-list="[]" :before-upload="() => false" :max-count="1" accept="image/*" @change="e => thPick('electronics_premium', 'slides', i, e)"><a-button><UploadOutlined /> {{ $t('Upload') }}</a-button></a-upload>
+                    <img v-if="thPreview('electronics_premium', 'slides', i, row)" :src="thPreview('electronics_premium', 'slides', i, row)" class="el-thumb" />
+                  </div>
+                </a-form-item></a-col>
+                <!-- Full-image look of this slide -->
+                <template v-if="px.hero_style === 'full'">
+                  <a-col :xs="8"><a-form-item :label="$t('Px_Slide_Align')">
+                    <a-select v-model:value="row.align" :options="PX_SLIDE_ALIGNS.map(v => ({ value: v, label: $t('Px_Align_' + v) }))" />
+                  </a-form-item></a-col>
+                  <a-col :xs="8"><a-form-item :label="$t('Px_Slide_Focus')" :extra="$t('Px_Slide_Focus_Help')">
+                    <a-select v-model:value="row.focus" :options="PX_SLIDE_FOCUS.map(v => ({ value: v, label: $t('Px_Focus_' + v) }))" />
+                  </a-form-item></a-col>
+                  <a-col :xs="8"><a-form-item :label="$t('Px_Slide_Overlay')" :extra="$t('Px_Slide_Overlay_Help')">
+                    <a-select v-model:value="row.overlay" :options="PX_SLIDE_OVERLAYS.map(v => ({ value: v, label: $t('Px_Overlay_' + v) }))" />
+                  </a-form-item></a-col>
+                </template>
+              </a-row>
+            </div>
+
+            <!-- Side tiles -->
+            <div class="el-head">
+              <h4 class="el-sub">{{ $t('Px_Side_Tiles') }}</h4>
+              <a-button size="small" :disabled="px.banners.length >= 2" @click="thAdd('electronics_premium', 'banners')"><PlusOutlined /> {{ $t('Add') }}</a-button>
+            </div>
+            <div class="muted" style="margin-bottom: 8px">{{ $t('Px_Side_Tiles_Hint') }}</div>
+            <div v-for="(row, i) in px.banners" :key="'pb' + i" class="el-row">
+              <div class="el-row-head">
+                <strong>{{ $t('Tile') }} {{ i + 1 }}</strong>
+                <a-space>
+                  <a-button size="small" :disabled="i === 0" @click="thMove('electronics_premium', 'banners', i, -1)">↑</a-button>
+                  <a-button size="small" :disabled="i === px.banners.length - 1" @click="thMove('electronics_premium', 'banners', i, 1)">↓</a-button>
+                  <a-button size="small" danger @click="thRemove('electronics_premium', 'banners', i)"><DeleteOutlined /></a-button>
+                </a-space>
+              </div>
+              <a-row :gutter="12">
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Px_Badge')"><a-input v-model:value="row.badge" placeholder="-25%" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Kicker')"><a-input v-model:value="row.kicker" /></a-form-item></a-col>
+                <a-col :xs="24" :md="12"><a-form-item :label="$t('Title')"><a-input v-model:value="row.title" /></a-form-item></a-col>
+                <a-col :xs="24"><a-form-item :label="$t('Subtitle')"><a-input v-model:value="row.subtitle" /></a-form-item></a-col>
+                <a-col :xs="12" :md="8"><a-form-item :label="$t('Button_Text')"><a-input v-model:value="row.button_text" /></a-form-item></a-col>
+                <a-col :xs="12" :md="8"><a-form-item :label="$t('Link')"><a-input v-model:value="row.url" placeholder="/shop?category=1" /></a-form-item></a-col>
+                <a-col :xs="24"><a-form-item :label="$t('Image')" style="margin-bottom: 0">
+                  <div class="el-image-row">
+                    <a-input v-model:value="row.image" :placeholder="$t('Paste_image_link')" allow-clear />
+                    <a-upload :file-list="[]" :before-upload="() => false" :max-count="1" accept="image/*" @change="e => thPick('electronics_premium', 'banners', i, e)"><a-button><UploadOutlined /> {{ $t('Upload') }}</a-button></a-upload>
+                    <img v-if="thPreview('electronics_premium', 'banners', i, row)" :src="thPreview('electronics_premium', 'banners', i, row)" class="el-thumb" />
+                  </div>
+                </a-form-item></a-col>
+              </a-row>
+            </div>
+
+            <!-- Trust strip -->
+            <div class="el-head">
+              <h4 class="el-sub">{{ $t('Trust_Strip') }}</h4>
+              <a-button size="small" :disabled="px.trust.length >= 6" @click="thAdd('electronics_premium', 'trust')"><PlusOutlined /> {{ $t('Add') }}</a-button>
+            </div>
+            <div v-if="!px.trust.length" class="muted" style="margin-bottom: 8px">
+              {{ $t('Px_Trust_Default_Hint') }} {{ pxDefaults.trust.map(r => r.title).join(' · ') }}
+            </div>
+            <a-row v-for="(row, i) in px.trust" :key="'pt' + i" :gutter="12" align="middle" class="el-line">
+              <a-col :xs="8" :md="5"><a-select v-model:value="row.icon" style="width: 100%"><a-select-option v-for="ic in PREMIUM_ICONS" :key="ic" :value="ic">{{ ic }}</a-select-option></a-select></a-col>
+              <a-col :xs="16" :md="8"><a-input v-model:value="row.title" :placeholder="$t('Title')" /></a-col>
+              <a-col :xs="20" :md="9"><a-input v-model:value="row.subtitle" :placeholder="$t('Subtitle')" /></a-col>
+              <a-col :xs="4" :md="2"><a-button size="small" danger @click="thRemove('electronics_premium', 'trust', i)"><DeleteOutlined /></a-button></a-col>
+            </a-row>
+          </a-card>
+        </a-tab-pane>
+
         <!-- ===== Toys & Baby theme ===== -->
         <a-tab-pane key="toys" v-if="form.theme === 'toys'">
           <template #tab><span class="stab"><SmileOutlined /> {{ $t('Toys_Theme') }}</span></template>
@@ -477,7 +647,7 @@
                 <a-col :xs="24" :md="6"><a-form-item :label="$t('Kicker')"><a-input v-model:value="row.kicker" /></a-form-item></a-col>
                 <a-col :xs="24" :md="6"><a-form-item :label="$t('Title')"><a-input v-model:value="row.title" /></a-form-item></a-col>
                 <a-col :xs="24" :md="6"><a-form-item :label="$t('Title_Accent_Line')"><a-input v-model:value="row.title_accent" /></a-form-item></a-col>
-                <a-col :xs="24" :md="6"><a-form-item :label="$t('Badge')"><a-input v-model:value="row.badge" placeholder="Up to 40% OFF" /></a-form-item></a-col>
+                <a-col :xs="24" :md="6"><a-form-item :label="$t('Badge')"><a-input v-model:value="row.badge" :placeholder="$t('Store_Badge_Placeholder_40')" /></a-form-item></a-col>
                 <a-col :xs="24"><a-form-item :label="$t('Subtitle')"><a-input v-model:value="row.subtitle" /></a-form-item></a-col>
                 <a-col :xs="12" :md="6"><a-form-item :label="$t('Primary_Button')"><a-input v-model:value="row.primary_text" /></a-form-item></a-col>
                 <a-col :xs="12" :md="6"><a-form-item :label="$t('Link')"><a-input v-model:value="row.primary_url" placeholder="/shop" /></a-form-item></a-col>
@@ -505,7 +675,7 @@
                 <strong>{{ $t('Tile') }} {{ i + 1 }}</strong>
                 <a-space>
                   <a-select v-model:value="row.color" size="small" style="width: 120px">
-                    <a-select-option v-for="(c, ci) in PASTELS" :key="ci" :value="String(ci)"><span :style="{ display: 'inline-block', width: '12px', height: '12px', borderRadius: '3px', background: c.bg, border: '1px solid ' + c.fg, marginRight: '6px' }"></span>{{ c.name }}</a-select-option>
+                    <a-select-option v-for="(c, ci) in PASTELS" :key="ci" :value="String(ci)"><span :style="{ display: 'inline-block', width: '12px', height: '12px', borderRadius: '3px', background: c.bg, border: '1px solid ' + c.fg, marginRight: '6px' }"></span>{{ $t(c.name) }}</a-select-option>
                   </a-select>
                   <a-button size="small" danger @click="thRemove('toys', 'tiles', i)"><DeleteOutlined /></a-button>
                 </a-space>
@@ -589,7 +759,7 @@
               <a-row :gutter="12">
                 <a-col :xs="24" :md="6"><a-form-item :label="$t('Kicker')"><a-input v-model:value="row.kicker" /></a-form-item></a-col>
                 <a-col :xs="24" :md="12"><a-form-item :label="$t('Title')"><a-input v-model:value="row.title" /></a-form-item></a-col>
-                <a-col :xs="24" :md="6"><a-form-item :label="$t('Badge')"><a-input v-model:value="row.badge" placeholder="Up to 30% off" /></a-form-item></a-col>
+                <a-col :xs="24" :md="6"><a-form-item :label="$t('Badge')"><a-input v-model:value="row.badge" :placeholder="$t('Store_Badge_Placeholder_30')" /></a-form-item></a-col>
                 <a-col :xs="24"><a-form-item :label="$t('Subtitle')"><a-input v-model:value="row.subtitle" /></a-form-item></a-col>
                 <a-col :xs="12" :md="6"><a-form-item :label="$t('Primary_Button')"><a-input v-model:value="row.primary_text" /></a-form-item></a-col>
                 <a-col :xs="12" :md="6"><a-form-item :label="$t('Link')"><a-input v-model:value="row.primary_url" placeholder="/shop" /></a-form-item></a-col>
@@ -615,7 +785,7 @@
                 <strong>{{ $t('Tile') }} {{ i + 1 }}</strong>
                 <a-space>
                   <a-select v-model:value="row.tone" size="small" style="width: 110px">
-                    <a-select-option v-for="tn in GROCERY_TONES" :key="tn" :value="tn">{{ tn }}</a-select-option>
+                    <a-select-option v-for="tn in GROCERY_TONES" :key="tn" :value="tn">{{ $t(TONE_KEYS[tn] || tn) }}</a-select-option>
                   </a-select>
                   <a-button size="small" :disabled="i === 0" @click="thMove('grocery', 'tiles', i, -1)">↑</a-button>
                   <a-button size="small" :disabled="i === gr.tiles.length - 1" @click="thMove('grocery', 'tiles', i, 1)">↓</a-button>
@@ -650,6 +820,457 @@
           </a-card>
         </a-tab-pane>
 
+        <!-- ===== Fashion & Apparel theme ===== -->
+        <a-tab-pane key="fashion" v-if="form.theme === 'fashion'">
+          <template #tab><span class="stab"><SkinOutlined /> {{ $t('Fashion_Theme') }}</span></template>
+          <a-card size="small" :bordered="false">
+            <a-alert type="info" show-icon style="margin-bottom: 16px" :message="$t('Fashion_Theme_Hint')" />
+
+            <h4 class="el-sub">{{ $t('Homepage_Sections') }}</h4>
+            <a-row :gutter="[12, 8]" style="margin-bottom: 16px">
+              <a-col v-for="sec in FASHION_SECTIONS" :key="sec" :xs="12" :md="8" :lg="6">
+                <a-checkbox v-model:checked="fa.sections[sec]">{{ $t('FaSection_' + sec) }}</a-checkbox>
+              </a-col>
+            </a-row>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('New_Arrivals')"><a-input-number v-model:value="fa.limits.new_arrivals" :min="1" :max="24" style="width: 100%" /></a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Sale')"><a-input-number v-model:value="fa.limits.sale" :min="1" :max="24" style="width: 100%" /></a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Best_Sellers')"><a-input-number v-model:value="fa.limits.popular" :min="1" :max="24" style="width: 100%" /></a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Category_Tiles')"><a-input-number v-model:value="fa.limits.categories" :min="1" :max="12" style="width: 100%" /></a-form-item></a-col>
+            </a-row>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Announcement_Bar_Text')"><a-input v-model:value="fa.announcement_text" /></a-form-item></a-col>
+              <a-col :xs="24" :md="6"><a-form-item :label="$t('New_Arrivals_Title')"><a-input v-model:value="fa.new_arrivals_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="6"><a-form-item :label="$t('Best_Sellers_Title')"><a-input v-model:value="fa.popular_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="6"><a-form-item :label="$t('Sale_Kicker')"><a-input v-model:value="fa.sale_kicker" /></a-form-item></a-col>
+              <a-col :xs="24" :md="6"><a-form-item :label="$t('Sale_Title')"><a-input v-model:value="fa.sale_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="6"><a-form-item :label="$t('Newsletter_Title')"><a-input v-model:value="fa.newsletter_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="6"><a-form-item :label="$t('Newsletter_Subtitle')"><a-input v-model:value="fa.newsletter_subtitle" /></a-form-item></a-col>
+            </a-row>
+            <a-space size="large" wrap style="margin-bottom: 20px">
+              <a-checkbox v-model:checked="fa.show_card_sizes">{{ $t('Show_Sizes_On_Cards') }}</a-checkbox>
+              <a-checkbox v-model:checked="fa.quick_add">{{ $t('Card_Quick_Add') }}</a-checkbox>
+              <a-checkbox v-model:checked="fa.payment_icons">{{ $t('Show_Payment_Icons') }}</a-checkbox>
+              <a-checkbox v-model:checked="fa.show_theme_toggle">{{ $t('Allow_Dark_Mode_Toggle') }}</a-checkbox>
+            </a-space>
+            <div class="muted" style="margin-bottom: 20px">{{ $t('Fashion_Sizes_Hint') }}</div>
+
+            <div class="el-head">
+              <h4 class="el-sub">{{ $t('Hero_Slides') }}</h4>
+              <a-button size="small" @click="thAdd('fashion', 'slides')"><PlusOutlined /> {{ $t('Add_Slide') }}</a-button>
+            </div>
+            <div v-for="(row, i) in fa.slides" :key="'fs' + i" class="el-row">
+              <div class="el-row-head">
+                <strong>{{ $t('Slide') }} {{ i + 1 }}</strong>
+                <a-space>
+                  <a-button size="small" :disabled="i === 0" @click="thMove('fashion', 'slides', i, -1)">↑</a-button>
+                  <a-button size="small" :disabled="i === fa.slides.length - 1" @click="thMove('fashion', 'slides', i, 1)">↓</a-button>
+                  <a-button size="small" danger @click="thRemove('fashion', 'slides', i)"><DeleteOutlined /></a-button>
+                </a-space>
+              </div>
+              <a-row :gutter="12">
+                <a-col :xs="24" :md="8"><a-form-item :label="$t('Kicker')"><a-input v-model:value="row.kicker" /></a-form-item></a-col>
+                <a-col :xs="24" :md="16"><a-form-item :label="$t('Title')"><a-input v-model:value="row.title" /></a-form-item></a-col>
+                <a-col :xs="24"><a-form-item :label="$t('Subtitle')"><a-input v-model:value="row.subtitle" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Primary_Button')"><a-input v-model:value="row.primary_text" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Link')"><a-input v-model:value="row.primary_url" placeholder="/shop" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Secondary_Button')"><a-input v-model:value="row.secondary_text" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Link')"><a-input v-model:value="row.secondary_url" placeholder="/shop?sort=latest" /></a-form-item></a-col>
+                <a-col :xs="24"><a-form-item :label="$t('Image')" style="margin-bottom: 0">
+                  <div class="el-image-row">
+                    <a-input v-model:value="row.image" :placeholder="$t('Paste_image_link')" allow-clear />
+                    <a-upload :file-list="[]" :before-upload="() => false" :max-count="1" accept="image/*" @change="e => thPick('fashion', 'slides', i, e)"><a-button><UploadOutlined /> {{ $t('Upload') }}</a-button></a-upload>
+                    <img v-if="thPreview('fashion', 'slides', i, row)" :src="thPreview('fashion', 'slides', i, row)" class="el-thumb" />
+                  </div>
+                </a-form-item></a-col>
+              </a-row>
+            </div>
+
+            <div class="el-head">
+              <h4 class="el-sub">{{ $t('Category_Tiles') }}</h4>
+              <a-button size="small" @click="thAdd('fashion', 'tiles')"><PlusOutlined /> {{ $t('Add') }}</a-button>
+            </div>
+            <a-checkbox v-model:checked="fa.auto_category_tiles" style="margin-bottom: 10px">{{ $t('Fashion_Category_Tiles_Auto') }}</a-checkbox>
+            <div class="muted" style="margin-bottom: 8px">{{ $t('Fashion_Tiles_Hint') }}</div>
+              <div v-for="(row, i) in fa.tiles" :key="'ft' + i" class="el-row">
+                <div class="el-row-head">
+                  <strong>{{ $t('Tile') }} {{ i + 1 }}</strong>
+                  <a-space>
+                    <a-button size="small" :disabled="i === 0" @click="thMove('fashion', 'tiles', i, -1)">↑</a-button>
+                    <a-button size="small" :disabled="i === fa.tiles.length - 1" @click="thMove('fashion', 'tiles', i, 1)">↓</a-button>
+                    <a-button size="small" danger @click="thRemove('fashion', 'tiles', i)"><DeleteOutlined /></a-button>
+                  </a-space>
+                </div>
+                <a-row :gutter="12">
+                  <a-col :xs="12" :md="8"><a-form-item :label="$t('Title')"><a-input v-model:value="row.title" /></a-form-item></a-col>
+                  <a-col :xs="12" :md="8"><a-form-item :label="$t('Subtitle')"><a-input v-model:value="row.subtitle" /></a-form-item></a-col>
+                  <a-col :xs="24" :md="8"><a-form-item :label="$t('Link')"><a-input v-model:value="row.url" placeholder="/shop?category=1" /></a-form-item></a-col>
+                  <a-col :xs="24"><a-form-item :label="$t('Image')" style="margin-bottom: 0">
+                    <div class="el-image-row">
+                      <a-input v-model:value="row.image" :placeholder="$t('Paste_image_link')" allow-clear />
+                      <a-upload :file-list="[]" :before-upload="() => false" :max-count="1" accept="image/*" @change="e => thPick('fashion', 'tiles', i, e)"><a-button><UploadOutlined /> {{ $t('Upload') }}</a-button></a-upload>
+                      <img v-if="thPreview('fashion', 'tiles', i, row)" :src="thPreview('fashion', 'tiles', i, row)" class="el-thumb" />
+                    </div>
+                  </a-form-item></a-col>
+                </a-row>
+              </div>
+
+            <div class="el-head">
+              <h4 class="el-sub">{{ $t('Lookbook_Banners') }}</h4>
+              <a-button size="small" @click="thAdd('fashion', 'banners')"><PlusOutlined /> {{ $t('Add') }}</a-button>
+            </div>
+            <div v-for="(row, i) in fa.banners" :key="'fb' + i" class="el-row">
+              <div class="el-row-head">
+                <strong>{{ $t('Banner') }} {{ i + 1 }}</strong>
+                <a-space>
+                  <a-button size="small" :disabled="i === 0" @click="thMove('fashion', 'banners', i, -1)">↑</a-button>
+                  <a-button size="small" :disabled="i === fa.banners.length - 1" @click="thMove('fashion', 'banners', i, 1)">↓</a-button>
+                  <a-button size="small" danger @click="thRemove('fashion', 'banners', i)"><DeleteOutlined /></a-button>
+                </a-space>
+              </div>
+              <a-row :gutter="12">
+                <a-col :xs="24" :md="8"><a-form-item :label="$t('Kicker')"><a-input v-model:value="row.kicker" /></a-form-item></a-col>
+                <a-col :xs="24" :md="16"><a-form-item :label="$t('Title')"><a-input v-model:value="row.title" /></a-form-item></a-col>
+                <a-col :xs="24"><a-form-item :label="$t('Subtitle')"><a-input v-model:value="row.subtitle" /></a-form-item></a-col>
+                <a-col :xs="12" :md="8"><a-form-item :label="$t('Button_Text')"><a-input v-model:value="row.button_text" /></a-form-item></a-col>
+                <a-col :xs="12" :md="8"><a-form-item :label="$t('Link')"><a-input v-model:value="row.url" placeholder="/shop" /></a-form-item></a-col>
+                <a-col :xs="24"><a-form-item :label="$t('Image')" style="margin-bottom: 0">
+                  <div class="el-image-row">
+                    <a-input v-model:value="row.image" :placeholder="$t('Paste_image_link')" allow-clear />
+                    <a-upload :file-list="[]" :before-upload="() => false" :max-count="1" accept="image/*" @change="e => thPick('fashion', 'banners', i, e)"><a-button><UploadOutlined /> {{ $t('Upload') }}</a-button></a-upload>
+                    <img v-if="thPreview('fashion', 'banners', i, row)" :src="thPreview('fashion', 'banners', i, row)" class="el-thumb" />
+                  </div>
+                </a-form-item></a-col>
+              </a-row>
+            </div>
+
+            <div class="el-head">
+              <h4 class="el-sub">{{ $t('Trust_Strip') }}</h4>
+              <a-button size="small" @click="thAdd('fashion', 'trust')"><PlusOutlined /> {{ $t('Add') }}</a-button>
+            </div>
+            <a-row v-for="(row, i) in fa.trust" :key="'fr' + i" :gutter="12" align="middle" class="el-line">
+              <a-col :xs="8" :md="5"><a-select v-model:value="row.icon" style="width: 100%"><a-select-option v-for="ic in FASHION_ICONS" :key="ic" :value="ic">{{ ic }}</a-select-option></a-select></a-col>
+              <a-col :xs="16" :md="8"><a-input v-model:value="row.title" :placeholder="$t('Title')" /></a-col>
+              <a-col :xs="20" :md="9"><a-input v-model:value="row.subtitle" :placeholder="$t('Subtitle')" /></a-col>
+              <a-col :xs="4" :md="2"><a-button size="small" danger @click="thRemove('fashion', 'trust', i)"><DeleteOutlined /></a-button></a-col>
+            </a-row>
+          </a-card>
+        </a-tab-pane>
+
+        <!-- ===== Restaurant theme ===== -->
+        <a-tab-pane key="restaurant" v-if="form.theme === 'restaurant'">
+          <template #tab><span class="stab"><CoffeeOutlined /> {{ $t('Restaurant_Theme') }}</span></template>
+          <a-card size="small" :bordered="false">
+            <a-alert type="info" show-icon style="margin-bottom: 16px" :message="$t('Restaurant_Theme_Hint')" />
+
+            <h4 class="el-sub">{{ $t('Homepage_Sections') }}</h4>
+            <a-row :gutter="[12, 8]" style="margin-bottom: 16px">
+              <a-col v-for="sec in RS_SECTIONS" :key="sec" :xs="12" :md="8" :lg="6">
+                <a-checkbox v-model:checked="rs.sections[sec]">{{ $t('RsSection_' + sec) }}</a-checkbox>
+              </a-col>
+            </a-row>
+
+            <h4 class="el-sub">{{ $t('Rs_Photos') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col v-for="(slot, i) in [$t('Rs_Hero_Photo'), $t('Rs_About_Photo')]" :key="i" :xs="24" :md="12">
+                <a-form-item :label="slot" :extra="i === 0 ? $t('Rs_Hero_Photo_Hint') : ''">
+                  <a-space>
+                    <a-upload :file-list="[]" :before-upload="() => false" :max-count="1" accept="image/*" @change="e => thPick('restaurant', 'banners', i, e)"><a-button><UploadOutlined /> {{ $t('Upload') }}</a-button></a-upload>
+                    <a-button v-if="thPreview('restaurant', 'banners', i, rs.banners[i])" danger @click="rsClearPhoto(i)"><DeleteOutlined /></a-button>
+                  </a-space>
+                  <div><img v-if="thPreview('restaurant', 'banners', i, rs.banners[i])" :src="thPreview('restaurant', 'banners', i, rs.banners[i])" class="el-thumb" style="margin-top: 8px" /></div>
+                </a-form-item>
+              </a-col>
+            </a-row>
+
+            <h4 class="el-sub">{{ $t('Rs_Texts') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Announcement_Bar_Text')"><a-input v-model:value="rs.announcement_text" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Hero_Kicker')"><a-input v-model:value="rs.hero_kicker" :placeholder="$t('Rs_Hero_Kicker_Example')" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Hero_Title')"><a-input v-model:value="rs.hero_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Hero_Subtitle')"><a-input v-model:value="rs.hero_subtitle" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Menu_Title')"><a-input v-model:value="rs.menu_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Menu_Subtitle')"><a-input v-model:value="rs.menu_subtitle" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Booking_Title')"><a-input v-model:value="rs.booking_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Booking_Text')"><a-input v-model:value="rs.booking_text" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_About_Title')"><a-input v-model:value="rs.about_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_About_Text')" :extra="$t('Rs_About_Text_Hint')"><a-textarea v-model:value="rs.about_text" :rows="4" /></a-form-item></a-col>
+            </a-row>
+
+            <h4 class="el-sub">{{ $t('Rs_Visit') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Opening_Hours')" :extra="$t('Cars_Opening_Hours_Hint')"><a-textarea v-model:value="rs.opening_hours" :rows="4" :placeholder="$t('Rs_Opening_Hours_Example')" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12">
+                <a-form-item :label="$t('Cars_WhatsApp')" :extra="$t('Cars_WhatsApp_Hint')"><a-input v-model:value="rs.whatsapp" placeholder="15551234567" /></a-form-item>
+                <a-form-item :label="$t('Rs_Map_Url')" :extra="$t('Rs_Map_Url_Hint')"><a-input v-model:value="rs.map_url" placeholder="https://maps.google.com/..." /></a-form-item>
+              </a-col>
+            </a-row>
+            <a-space size="large" wrap style="margin-bottom: 12px">
+              <a-checkbox v-model:checked="rs.show_photos">{{ $t('Rs_Show_Photos') }}</a-checkbox>
+              <a-checkbox v-model:checked="rs.show_dietary_filters">{{ $t('Rs_Show_Diet_Filters') }}</a-checkbox>
+              <a-checkbox v-model:checked="rs.payment_icons">{{ $t('Show_Payment_Icons') }}</a-checkbox>
+              <a-checkbox v-model:checked="rs.show_theme_toggle">{{ $t('Allow_Dark_Mode_Toggle') }}</a-checkbox>
+            </a-space>
+            <div class="muted">{{ $t('Rs_Restaurant_Settings_Hint') }}</div>
+          </a-card>
+        </a-tab-pane>
+
+        <!-- ===== Rental theme ===== -->
+        <a-tab-pane key="rental" v-if="form.theme === 'rental'">
+          <template #tab><span class="stab"><KeyOutlined /> {{ $t('Rental_Theme') }}</span></template>
+          <a-card size="small" :bordered="false">
+            <a-alert v-if="!rentalTheme.available" type="warning" show-icon style="margin-bottom: 16px" :message="$t('Rental_Theme_Unavailable')" />
+            <a-alert v-else type="info" show-icon style="margin-bottom: 16px" :message="$t('Rental_Theme_Hint')">
+              <template #description>
+                {{ $t('Rental_Theme_Types') }}
+                <a-tag v-for="tp in rentalTheme.types" :key="tp" style="margin-inline-end: 4px">{{ rnTypeLabel(tp) }}</a-tag>
+                — <router-link to="/rental/settings">{{ $t('Rental_Theme_Change_Types') }}</router-link>
+              </template>
+            </a-alert>
+
+            <h4 class="el-sub">{{ $t('Homepage_Sections') }}</h4>
+            <a-row :gutter="[12, 8]" style="margin-bottom: 16px">
+              <a-col v-for="sec in RN_SECTIONS" :key="sec" :xs="12" :md="8" :lg="6">
+                <a-checkbox v-model:checked="rn.sections[sec]">{{ $t('RnSection_' + sec) }}</a-checkbox>
+              </a-col>
+            </a-row>
+
+            <h4 class="el-sub">{{ $t('Rs_Photos') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col v-for="(slot, i) in [$t('Rs_Hero_Photo'), $t('Rs_About_Photo')]" :key="i" :xs="24" :md="12">
+                <a-form-item :label="slot" :extra="i === 0 ? $t('Rn_Hero_Photo_Hint') : ''">
+                  <a-space>
+                    <a-upload :file-list="[]" :before-upload="() => false" :max-count="1" accept="image/*" @change="e => thPick('rental', 'banners', i, e)"><a-button><UploadOutlined /> {{ $t('Upload') }}</a-button></a-upload>
+                    <a-button v-if="thPreview('rental', 'banners', i, rn.banners[i])" danger @click="rnClearPhoto(i)"><DeleteOutlined /></a-button>
+                  </a-space>
+                  <div><img v-if="thPreview('rental', 'banners', i, rn.banners[i])" :src="thPreview('rental', 'banners', i, rn.banners[i])" class="el-thumb" style="margin-top: 8px" /></div>
+                </a-form-item>
+              </a-col>
+            </a-row>
+
+            <h4 class="el-sub">{{ $t('Rs_Texts') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Announcement_Bar_Text')"><a-input v-model:value="rn.announcement_text" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Hero_Kicker')"><a-input v-model:value="rn.hero_kicker" :placeholder="$t('Rn_Hero_Kicker_Example')" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Hero_Title')"><a-input v-model:value="rn.hero_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Hero_Subtitle')"><a-input v-model:value="rn.hero_subtitle" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rn_Featured_Title')"><a-input v-model:value="rn.featured_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12">
+                <a-form-item :label="$t('Rn_Featured_Count')">
+                  <a-input-number v-model:value="rn.limits.featured" :min="1" :max="24" :precision="0" style="width: 100%" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_About_Title')"><a-input v-model:value="rn.about_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_About_Text')" :extra="$t('Rs_About_Text_Hint')"><a-textarea v-model:value="rn.about_text" :rows="4" /></a-form-item></a-col>
+            </a-row>
+
+            <div class="el-head">
+              <h4 class="el-sub">{{ $t('Trust_Strip') }}</h4>
+              <a-button size="small" @click="thAdd('rental', 'trust')"><PlusOutlined /> {{ $t('Add') }}</a-button>
+            </div>
+            <a-row v-for="(row, i) in rn.trust" :key="'rnt' + i" :gutter="12" align="middle" class="el-line">
+              <a-col :xs="8" :md="5"><a-select v-model:value="row.icon" style="width: 100%"><a-select-option v-for="ic in RN_ICONS" :key="ic" :value="ic">{{ ic }}</a-select-option></a-select></a-col>
+              <a-col :xs="16" :md="8"><a-input v-model:value="row.title" :placeholder="$t('Title')" /></a-col>
+              <a-col :xs="20" :md="9"><a-input v-model:value="row.subtitle" :placeholder="$t('Subtitle')" /></a-col>
+              <a-col :xs="4" :md="2"><a-button size="small" danger @click="thRemove('rental', 'trust', i)"><DeleteOutlined /></a-button></a-col>
+            </a-row>
+
+            <h4 class="el-sub" style="margin-top: 16px">{{ $t('Rs_Visit') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Opening_Hours')" :extra="$t('Cars_Opening_Hours_Hint')"><a-textarea v-model:value="rn.opening_hours" :rows="4" :placeholder="$t('Rs_Opening_Hours_Example')" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12">
+                <a-form-item :label="$t('Cars_WhatsApp')" :extra="$t('Cars_WhatsApp_Hint')"><a-input v-model:value="rn.whatsapp" placeholder="15551234567" /></a-form-item>
+                <a-form-item :label="$t('Rs_Map_Url')" :extra="$t('Rs_Map_Url_Hint')"><a-input v-model:value="rn.map_url" placeholder="https://maps.google.com/..." /></a-form-item>
+              </a-col>
+            </a-row>
+            <a-space size="large" wrap style="margin-bottom: 12px">
+              <a-checkbox v-model:checked="rn.show_deposit">{{ $t('Rn_Show_Deposit') }}</a-checkbox>
+              <a-checkbox v-model:checked="rn.payment_icons">{{ $t('Show_Payment_Icons') }}</a-checkbox>
+              <a-checkbox v-model:checked="rn.show_theme_toggle">{{ $t('Allow_Dark_Mode_Toggle') }}</a-checkbox>
+            </a-space>
+            <div class="muted">{{ $t('Rn_Booking_Settings_Hint') }}</div>
+          </a-card>
+        </a-tab-pane>
+
+        <!-- ===== Booking theme ===== -->
+        <a-tab-pane key="booking" v-if="form.theme === 'booking'">
+          <template #tab><span class="stab"><CalendarOutlined /> {{ $t('Bkm_Theme') }}</span></template>
+          <a-card size="small" :bordered="false">
+            <a-alert v-if="!bookingTheme.available" type="warning" show-icon style="margin-bottom: 16px" :message="$t('Bkm_Theme_Unavailable')" />
+            <a-alert v-else type="info" show-icon style="margin-bottom: 16px" :message="$t('Bkm_Theme_Hint')">
+              <template #description>
+                <router-link to="/bookings/services">{{ $t('Bkm_Services') }}</router-link> ·
+                <router-link to="/bookings/staff">{{ $t('Bkm_Staff_Hours') }}</router-link> ·
+                <router-link to="/bookings/settings">{{ $t('Bkm_Settings') }}</router-link>
+              </template>
+            </a-alert>
+
+            <h4 class="el-sub">{{ $t('Homepage_Sections') }}</h4>
+            <a-row :gutter="[12, 8]" style="margin-bottom: 16px">
+              <a-col v-for="sec in BK_SECTIONS" :key="sec" :xs="12" :md="8" :lg="6">
+                <a-checkbox v-model:checked="bk.sections[sec]">{{ $t('Bkm_Section_' + sec) }}</a-checkbox>
+              </a-col>
+            </a-row>
+
+            <h4 class="el-sub">{{ $t('Rs_Photos') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col v-for="(slot, i) in [$t('Rs_Hero_Photo'), $t('Rs_About_Photo')]" :key="i" :xs="24" :md="12">
+                <a-form-item :label="slot" :extra="i === 0 ? $t('Bkm_Hero_Photo_Hint') : ''">
+                  <a-space>
+                    <a-upload :file-list="[]" :before-upload="() => false" :max-count="1" accept="image/*" @change="e => thPick('booking', 'banners', i, e)"><a-button><UploadOutlined /> {{ $t('Upload') }}</a-button></a-upload>
+                    <a-button v-if="thPreview('booking', 'banners', i, bk.banners[i])" danger @click="bkClearPhoto(i)"><DeleteOutlined /></a-button>
+                  </a-space>
+                  <div><img v-if="thPreview('booking', 'banners', i, bk.banners[i])" :src="thPreview('booking', 'banners', i, bk.banners[i])" class="el-thumb" style="margin-top: 8px" /></div>
+                </a-form-item>
+              </a-col>
+            </a-row>
+
+            <h4 class="el-sub">{{ $t('Rs_Texts') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Announcement_Bar_Text')"><a-input v-model:value="bk.announcement_text" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Hero_Kicker')" :extra="$t('Bkm_Hero_Kicker_Hint')"><a-input v-model:value="bk.hero_kicker" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Hero_Title')"><a-input v-model:value="bk.hero_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_Hero_Subtitle')"><a-input v-model:value="bk.hero_subtitle" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Bkm_Services_Title')"><a-input v-model:value="bk.services_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Bkm_Team_Title')"><a-input v-model:value="bk.team_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_About_Title')"><a-input v-model:value="bk.about_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Rs_About_Text')" :extra="$t('Rs_About_Text_Hint')"><a-textarea v-model:value="bk.about_text" :rows="4" /></a-form-item></a-col>
+            </a-row>
+
+            <h4 class="el-sub">{{ $t('Rs_Visit') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Opening_Hours')" :extra="$t('Bkm_Opening_Hours_Hint')"><a-textarea v-model:value="bk.opening_hours" :rows="4" :placeholder="$t('Rs_Opening_Hours_Example')" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12">
+                <a-form-item :label="$t('Cars_WhatsApp')" :extra="$t('Cars_WhatsApp_Hint')"><a-input v-model:value="bk.whatsapp" placeholder="15551234567" /></a-form-item>
+                <a-form-item :label="$t('Rs_Map_Url')" :extra="$t('Rs_Map_Url_Hint')"><a-input v-model:value="bk.map_url" placeholder="https://maps.google.com/..." /></a-form-item>
+              </a-col>
+            </a-row>
+            <a-space size="large" wrap style="margin-bottom: 12px">
+              <a-checkbox v-model:checked="bk.show_prices">{{ $t('Bkm_Show_Prices') }}</a-checkbox>
+              <a-checkbox v-model:checked="bk.payment_icons">{{ $t('Show_Payment_Icons') }}</a-checkbox>
+              <a-checkbox v-model:checked="bk.show_theme_toggle">{{ $t('Allow_Dark_Mode_Toggle') }}</a-checkbox>
+            </a-space>
+            <div class="muted">{{ $t('Bkm_Theme_Settings_Hint') }}</div>
+          </a-card>
+        </a-tab-pane>
+
+        <!-- ===== Car Dealership theme ===== -->
+        <a-tab-pane key="cars" v-if="form.theme === 'cars'">
+          <template #tab><span class="stab"><CarOutlined /> {{ $t('Car_Dealership_Theme') }}</span></template>
+          <a-card size="small" :bordered="false">
+            <a-alert type="info" show-icon style="margin-bottom: 16px" :message="$t('Cars_Theme_Hint')" />
+
+            <h4 class="el-sub">{{ $t('Homepage_Sections') }}</h4>
+            <a-row :gutter="[12, 8]" style="margin-bottom: 16px">
+              <a-col v-for="sec in CARS_SECTIONS" :key="sec" :xs="12" :md="8" :lg="6">
+                <a-checkbox v-model:checked="cd.sections[sec]">{{ $t('CdSection_' + sec) }}</a-checkbox>
+              </a-col>
+            </a-row>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Cars_Featured_Count')"><a-input-number v-model:value="cd.limits.featured" :min="1" :max="24" style="width: 100%" /></a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Cars_Latest_Count')"><a-input-number v-model:value="cd.limits.latest" :min="1" :max="24" style="width: 100%" /></a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Cars_Makes_Count')"><a-input-number v-model:value="cd.limits.makes" :min="1" :max="24" style="width: 100%" /></a-form-item></a-col>
+            </a-row>
+
+            <h4 class="el-sub">{{ $t('Cars_Texts') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Announcement_Bar_Text')"><a-input v-model:value="cd.announcement_text" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Hero_Title')" :extra="$t('Cars_Hero_Title_Hint')"><a-input v-model:value="cd.hero_title" /></a-form-item></a-col>
+              <a-col :xs="24"><a-form-item :label="$t('Cars_Hero_Subtitle')"><a-input v-model:value="cd.hero_subtitle" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Featured_Title')"><a-input v-model:value="cd.featured_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Latest_Title')"><a-input v-model:value="cd.latest_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Finance_Title')"><a-input v-model:value="cd.finance_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Trade_Title')"><a-input v-model:value="cd.trade_title" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Finance_Text')"><a-textarea v-model:value="cd.finance_text" :rows="2" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Trade_Text')"><a-textarea v-model:value="cd.trade_text" :rows="2" /></a-form-item></a-col>
+            </a-row>
+
+            <h4 class="el-sub">{{ $t('Cars_Finance_Settings') }}</h4>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Cars_Apr')"><a-input-number v-model:value="cd.apr" :min="0" :max="99" :step="0.1" addon-after="%" style="width: 100%" /></a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Cars_Default_Term')">
+                <a-select v-model:value="cd.default_term"><a-select-option v-for="t in CARS_TERMS" :key="t" :value="t">{{ $t('Cars_Months', { n: t }) }}</a-select-option></a-select>
+              </a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Cars_Deposit_Percent')"><a-input-number v-model:value="cd.deposit_percent" :min="0" :max="90" addon-after="%" style="width: 100%" /></a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Cars_Mileage_Unit')">
+                <a-select v-model:value="cd.mileage_unit"><a-select-option value="km">{{ $t('Cars_Kilometres') }}</a-select-option><a-select-option value="mi">{{ $t('Cars_Miles') }}</a-select-option></a-select>
+              </a-form-item></a-col>
+              <a-col :xs="24"><a-form-item :label="$t('Cars_Finance_Disclaimer')"><a-input v-model:value="cd.finance_disclaimer" /></a-form-item></a-col>
+            </a-row>
+            <a-checkbox v-model:checked="cd.show_monthly_on_cards" style="margin-bottom: 20px">{{ $t('Cars_Show_Monthly') }}</a-checkbox>
+
+            <h4 class="el-sub">{{ $t('Cars_Selling') }}</h4>
+            <a-space direction="vertical" style="margin-bottom: 12px">
+              <a-checkbox v-model:checked="cd.allow_online_purchase">{{ $t('Cars_Allow_Purchase') }}</a-checkbox>
+              <a-checkbox v-model:checked="cd.enable_reserve">{{ $t('Cars_Enable_Reserve') }}</a-checkbox>
+            </a-space>
+            <a-row v-if="cd.enable_reserve" :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Reserve_Product')" :extra="$t('Cars_Reserve_Product_Hint')">
+                <a-select
+                  v-model:value="cd.reserve_product_id" show-search allow-clear :placeholder="$t('Search_products')"
+                  :options="productOptions.map(p => ({ label: p.name, value: p.id }))"
+                  :filter-option="false" @search="onProductSearch"
+                />
+              </a-form-item></a-col>
+              <a-col :xs="12" :md="6"><a-form-item :label="$t('Cars_Reserve_Days')"><a-input-number v-model:value="cd.reserve_days" :min="1" :max="60" style="width: 100%" /></a-form-item></a-col>
+            </a-row>
+            <a-row :gutter="16" style="margin-bottom: 8px">
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_WhatsApp')" :extra="$t('Cars_WhatsApp_Hint')"><a-input v-model:value="cd.whatsapp" placeholder="15551234567" /></a-form-item></a-col>
+              <a-col :xs="24" :md="12"><a-form-item :label="$t('Cars_Opening_Hours')" :extra="$t('Cars_Opening_Hours_Hint')"><a-textarea v-model:value="cd.opening_hours" :rows="3" /></a-form-item></a-col>
+            </a-row>
+            <a-space size="large" wrap style="margin-bottom: 20px">
+              <a-checkbox v-model:checked="cd.notify_owner">{{ $t('Cars_Notify_Owner') }}</a-checkbox>
+              <a-checkbox v-model:checked="cd.crm_capture">{{ $t('Cars_Crm_Capture') }}</a-checkbox>
+              <a-checkbox v-model:checked="cd.payment_icons">{{ $t('Show_Payment_Icons') }}</a-checkbox>
+              <a-checkbox v-model:checked="cd.show_theme_toggle">{{ $t('Allow_Dark_Mode_Toggle') }}</a-checkbox>
+            </a-space>
+            <div class="muted" style="margin-bottom: 20px">{{ $t('Cars_Vehicle_Details_Hint') }}</div>
+
+            <div class="el-head">
+              <h4 class="el-sub">{{ $t('Hero_Slides') }}</h4>
+              <a-button size="small" @click="thAdd('cars', 'slides')"><PlusOutlined /> {{ $t('Add_Slide') }}</a-button>
+            </div>
+            <div class="muted" style="margin-bottom: 8px">{{ $t('Cars_Slides_Hint') }}</div>
+            <div v-for="(row, i) in cd.slides" :key="'cs' + i" class="el-row">
+              <div class="el-row-head">
+                <strong>{{ $t('Slide') }} {{ i + 1 }}</strong>
+                <a-space>
+                  <a-button size="small" :disabled="i === 0" @click="thMove('cars', 'slides', i, -1)">↑</a-button>
+                  <a-button size="small" :disabled="i === cd.slides.length - 1" @click="thMove('cars', 'slides', i, 1)">↓</a-button>
+                  <a-button size="small" danger @click="thRemove('cars', 'slides', i)"><DeleteOutlined /></a-button>
+                </a-space>
+              </div>
+              <a-row :gutter="12">
+                <a-col :xs="24" :md="8"><a-form-item :label="$t('Kicker')"><a-input v-model:value="row.kicker" /></a-form-item></a-col>
+                <a-col :xs="24" :md="16"><a-form-item :label="$t('Title')"><a-input v-model:value="row.title" /></a-form-item></a-col>
+                <a-col :xs="24"><a-form-item :label="$t('Subtitle')"><a-input v-model:value="row.subtitle" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Primary_Button')"><a-input v-model:value="row.primary_text" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Link')"><a-input v-model:value="row.primary_url" placeholder="/shop" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Secondary_Button')"><a-input v-model:value="row.secondary_text" /></a-form-item></a-col>
+                <a-col :xs="12" :md="6"><a-form-item :label="$t('Link')"><a-input v-model:value="row.secondary_url" placeholder="/shop?condition=used" /></a-form-item></a-col>
+                <a-col :xs="24"><a-form-item :label="$t('Image')" style="margin-bottom: 0">
+                  <div class="el-image-row">
+                    <a-input v-model:value="row.image" :placeholder="$t('Paste_image_link')" allow-clear />
+                    <a-upload :file-list="[]" :before-upload="() => false" :max-count="1" accept="image/*" @change="e => thPick('cars', 'slides', i, e)"><a-button><UploadOutlined /> {{ $t('Upload') }}</a-button></a-upload>
+                    <img v-if="thPreview('cars', 'slides', i, row)" :src="thPreview('cars', 'slides', i, row)" class="el-thumb" />
+                  </div>
+                </a-form-item></a-col>
+              </a-row>
+            </div>
+
+            <div class="el-head">
+              <h4 class="el-sub">{{ $t('Trust_Strip') }}</h4>
+              <a-button size="small" @click="thAdd('cars', 'trust')"><PlusOutlined /> {{ $t('Add') }}</a-button>
+            </div>
+            <a-row v-for="(row, i) in cd.trust" :key="'cr' + i" :gutter="12" align="middle" class="el-line">
+              <a-col :xs="8" :md="5"><a-select v-model:value="row.icon" style="width: 100%"><a-select-option v-for="ic in CARS_ICONS" :key="ic" :value="ic">{{ ic }}</a-select-option></a-select></a-col>
+              <a-col :xs="16" :md="8"><a-input v-model:value="row.title" :placeholder="$t('Title')" /></a-col>
+              <a-col :xs="20" :md="9"><a-input v-model:value="row.subtitle" :placeholder="$t('Subtitle')" /></a-col>
+              <a-col :xs="4" :md="2"><a-button size="small" danger @click="thRemove('cars', 'trust', i)"><DeleteOutlined /></a-button></a-col>
+            </a-row>
+          </a-card>
+        </a-tab-pane>
+
         <!-- ===== SEO ===== -->
         <a-tab-pane key="seo">
           <template #tab><span class="stab"><SearchOutlined /> SEO</span></template>
@@ -676,6 +1297,29 @@
             </a-form-item>
           </a-col>
         </a-row>
+          </a-card>
+        </a-tab-pane>
+
+        <!-- ===== Tracking & Analytics ===== -->
+        <a-tab-pane key="tracking">
+          <template #tab><span class="stab"><LineChartOutlined /> {{ $t('Trk_Tab') }}</span></template>
+          <a-card size="small" :bordered="false">
+            <a-alert type="info" show-icon :message="$t('Trk_Intro')" style="margin-bottom: 16px" />
+            <a-row :gutter="16">
+              <a-col :xs="24" :md="12">
+                <a-form-item :label="$t('Trk_Google_Tag_ID')" :extra="$t('Trk_Google_Help')"
+                  :validate-status="trackingErrors.google ? 'error' : ''" :help="trackingErrors.google || undefined">
+                  <a-input v-model:value="form.google_tag_id" placeholder="G-XXXXXXXXXX, AW-XXXXXXXXX" allow-clear />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="12">
+                <a-form-item :label="$t('Trk_Meta_Pixel_ID')" :extra="$t('Trk_Meta_Help')"
+                  :validate-status="trackingErrors.meta ? 'error' : ''" :help="trackingErrors.meta || undefined">
+                  <a-input v-model:value="form.meta_pixel_id" placeholder="123456789012345" allow-clear />
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-alert v-if="form.cookie_consent_enabled" type="warning" show-icon :message="$t('Trk_Consent_Note')" />
           </a-card>
         </a-tab-pane>
 
@@ -719,8 +1363,8 @@
         </template>
         <a-empty v-if="!form.social_links.length" :description="$t('No_items')" />
         <div v-for="(link, i) in form.social_links" :key="'soc-' + i" class="social-row">
-          <a-input v-model:value="link.platform" placeholder="Platform (e.g. facebook)" style="flex: 1" />
-          <a-input v-model:value="link.url" placeholder="URL (https://…)" style="flex: 2" />
+          <a-input v-model:value="link.platform" :placeholder="$t('Store_Social_Platform_Placeholder')" style="flex: 1" />
+          <a-input v-model:value="link.url" :placeholder="$t('Store_Social_Url_Placeholder')" style="flex: 2" />
           <a-button danger @click="form.social_links.splice(i, 1)">
             <template #icon><DeleteOutlined /></template>
           </a-button>
@@ -823,12 +1467,13 @@ import { useI18n } from 'vue-i18n';
 import {
   PlusOutlined, DeleteOutlined, UploadOutlined, ShopOutlined, PhoneOutlined,
   BgColorsOutlined, PictureOutlined, SearchOutlined, LayoutOutlined,
-  ShareAltOutlined, AppstoreOutlined, LaptopOutlined, SmileOutlined, ShoppingCartOutlined,
+  ShareAltOutlined, AppstoreOutlined, LaptopOutlined, SmileOutlined, ShoppingCartOutlined, SkinOutlined, CarOutlined, CoffeeOutlined,
+  KeyOutlined, CalendarOutlined, CrownOutlined, LineChartOutlined,
 } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import TranslatableInput from '../../components/TranslatableInput.vue';
 import http from '../../lib/http';
-import { uploadForm } from '../../lib/upload';
+import { buildFontOptions } from '../../lib/fontOptions';
 
 const { t } = useI18n();
 
@@ -904,8 +1549,18 @@ function elNormalize(raw) {
 function elAdd(list) { el.value[list].push(EL_BLANK[list]()); }
 function elRemove(list, i) {
   el.value[list].splice(i, 1);
-  delete files.value[`theme_image__${list}__${i}`];
-  delete elFilePreviews.value[`${list}:${i}`];
+  shiftPendingUploads(`theme_image__${list}__`, elFilePreviews, `${list}:`, i);
+}
+// Pending uploads are keyed by row index: drop row i's and move later rows' up one.
+function shiftPendingUploads(fileBase, previews, previewBase, i) {
+  [[files.value, fileBase], [previews.value, previewBase]].forEach(([map, base]) => {
+    Object.keys(map)
+      .filter(k => k.startsWith(base))
+      .map(k => [k, Number(k.slice(base.length))])
+      .filter(([, n]) => n >= i)
+      .sort((a, b) => a[1] - b[1])
+      .forEach(([k, n]) => { if (n > i) map[base + (n - 1)] = map[k]; delete map[k]; });
+  });
 }
 function elMove(list, i, dir) {
   const j = i + dir;
@@ -935,10 +1590,11 @@ function elPreview(list, i, row) {
 const TOYS_SECTIONS = ['categories', 'tiles', 'popular', 'new_arrivals', 'deals', 'trust', 'newsletter', 'testimonials'];
 const TOYS_ICONS = ['truck', 'shield-check', 'refresh', 'headset', 'clock', 'check-circle', 'gift', 'star', 'heart', 'smile', 'baby', 'package', 'phone', 'mail'];
 const PASTELS = [
-  { name: 'Lavender', bg: '#ece9fb', fg: '#6c5ce7' }, { name: 'Pink', bg: '#fde4e8', fg: '#e0557a' },
-  { name: 'Mint', bg: '#dff3ea', fg: '#2f9e6e' }, { name: 'Yellow', bg: '#fff2cc', fg: '#d99a06' },
-  { name: 'Peach', bg: '#ffe6da', fg: '#e2703a' }, { name: 'Sky', bg: '#dcedfb', fg: '#2b7dc9' },
-  { name: 'Lilac', bg: '#f4e6f9', fg: '#9b4dcc' }, { name: 'Green', bg: '#e6f4e6', fg: '#3f9a3f' },
+  // `name` is a translation key (display only; tiles store the index).
+  { name: 'Store_Color_Lavender', bg: '#ece9fb', fg: '#6c5ce7' }, { name: 'Store_Color_Pink', bg: '#fde4e8', fg: '#e0557a' },
+  { name: 'Store_Color_Mint', bg: '#dff3ea', fg: '#2f9e6e' }, { name: 'Store_Color_Yellow', bg: '#fff2cc', fg: '#d99a06' },
+  { name: 'Store_Color_Peach', bg: '#ffe6da', fg: '#e2703a' }, { name: 'Store_Color_Sky', bg: '#dcedfb', fg: '#2b7dc9' },
+  { name: 'Store_Color_Lilac', bg: '#f4e6f9', fg: '#9b4dcc' }, { name: 'Store_Color_Green', bg: '#e6f4e6', fg: '#3f9a3f' },
 ];
 const TY_BLANK = {
   slides: () => ({ kicker: '', title: '', title_accent: '', subtitle: '', image: '', badge: '', primary_text: 'Shop Now', primary_url: '/shop', secondary_text: '', secondary_url: '' }),
@@ -978,6 +1634,7 @@ function tyNormalize(raw) {
 const GROCERY_SECTIONS = ['categories', 'deals', 'popular', 'tiles', 'aisles', 'buy_again', 'trust', 'brands', 'newsletter'];
 const GROCERY_ICONS = ['truck', 'leaf', 'refresh', 'shield-check', 'clock', 'check-circle', 'gift', 'star', 'headset', 'package', 'phone', 'mail', 'basket'];
 const GROCERY_TONES = ['green', 'orange', 'blue', 'red', 'yellow'];
+const TONE_KEYS = { green: 'Store_Color_Green', orange: 'Store_Color_Orange', blue: 'Store_Color_Blue', red: 'Store_Color_Red', yellow: 'Store_Color_Yellow' };
 const GR_BLANK = {
   slides: () => ({ kicker: '', title: '', subtitle: '', image: '', badge: '', primary_text: 'Shop Now', primary_url: '/shop', secondary_text: '', secondary_url: '' }),
   tiles: () => ({ title: '', subtitle: '', button_text: 'Shop Now', url: '/shop', image: '', tone: 'green' }),
@@ -1013,14 +1670,286 @@ function grNormalize(raw) {
   return base;
 }
 
+/* ---------- Fashion theme options (theme_options.fashion) ---------- */
+const FASHION_SECTIONS = ['categories', 'new_arrivals', 'editorial', 'sale', 'popular', 'trust', 'newsletter', 'brands'];
+const FASHION_ICONS = ['truck', 'refresh', 'ruler', 'lock', 'shield-check', 'gift', 'star', 'headset', 'package', 'clock', 'check-circle', 'heart', 'phone', 'mail'];
+const FA_BLANK = {
+  slides: () => ({ kicker: '', title: '', subtitle: '', image: '', primary_text: 'Shop now', primary_url: '/shop', secondary_text: '', secondary_url: '' }),
+  tiles: () => ({ title: '', subtitle: '', url: '/shop', image: '' }),
+  banners: () => ({ kicker: '', title: '', subtitle: '', image: '', button_text: 'Shop the look', url: '/shop' }),
+  trust: () => ({ icon: 'check-circle', title: '', subtitle: '' }),
+};
+function faDefaults() {
+  const sections = {};
+  FASHION_SECTIONS.forEach(k => { sections[k] = true; });
+  return {
+    slides: [], tiles: [], banners: [], trust: [], sections,
+    limits: { new_arrivals: 8, sale: 4, popular: 4, categories: 4 },
+    announcement_text: '', new_arrivals_title: '', sale_kicker: '', sale_title: '', popular_title: '', newsletter_title: '', newsletter_subtitle: '',
+    auto_category_tiles: true, show_card_sizes: true, quick_add: true, payment_icons: true, show_theme_toggle: false,
+  };
+}
+const fa = ref(faDefaults());
+function faNormalize(raw) {
+  const base = faDefaults();
+  const x = (typeof raw === 'string' ? tryParseJson(raw) : raw) || {};
+  const src = x.fashion && typeof x.fashion === 'object' ? x.fashion : {};
+  ['slides', 'tiles', 'banners', 'trust'].forEach(list => {
+    base[list] = Array.isArray(src[list]) ? src[list].map(r => ({ ...FA_BLANK[list](), ...(r || {}) })) : [];
+  });
+  if (src.sections && typeof src.sections === 'object') {
+    FASHION_SECTIONS.forEach(k => { if (k in src.sections) base.sections[k] = normalizeBool(src.sections[k]); });
+  }
+  if (src.limits && typeof src.limits === 'object') {
+    Object.keys(base.limits).forEach(k => { if (src.limits[k] != null && src.limits[k] !== '') base.limits[k] = Number(src.limits[k]); });
+  }
+  ['announcement_text', 'new_arrivals_title', 'sale_kicker', 'sale_title', 'popular_title', 'newsletter_title', 'newsletter_subtitle'].forEach(k => { if (src[k] != null) base[k] = String(src[k]); });
+  ['auto_category_tiles', 'show_card_sizes', 'quick_add', 'payment_icons', 'show_theme_toggle'].forEach(k => { if (k in src) base[k] = normalizeBool(src[k]); });
+  return base;
+}
+
+/* ---------- Electronics Premium theme options (theme_options.electronics_premium) ---------- */
+const PREMIUM_SECTIONS = ['trust', 'deals', 'categories', 'picks', 'compare', 'brands', 'recent', 'newsletter'];
+const PREMIUM_ICONS = ['truck', 'shield-check', 'check-circle', 'clock', 'message', 'gift', 'refresh', 'credit-card', 'star', 'lightning', 'package', 'user', 'phone', 'mail'];
+// Full-image hero choices (PremiumElectronicsTheme::HERO_* / SLIDE_*).
+const PX_HERO_STYLES = ['full', 'split'];
+const PX_HERO_HEIGHTS = ['medium', 'large', 'screen'];
+const PX_HERO_WIDTHS = ['edge', 'contained'];
+const PX_SLIDE_ALIGNS = ['left', 'center', 'right'];
+const PX_SLIDE_FOCUS = ['center', 'left', 'right', 'top', 'bottom'];
+const PX_SLIDE_OVERLAYS = ['none', 'light', 'medium', 'strong'];
+const PX_BLANK = {
+  slides: () => ({ kicker: '', title: '', subtitle: '', image: '', video_url: '', primary_text: 'Shop now', primary_url: '/shop', secondary_text: '', secondary_url: '', align: 'left', focus: 'center', overlay: 'medium' }),
+  banners: () => ({ kicker: '', title: '', subtitle: '', button_text: 'Shop now', url: '/shop', image: '', badge: '' }),
+  trust: () => ({ icon: 'check-circle', title: '', subtitle: '' }),
+};
+function pxBase() {
+  const sections = {};
+  PREMIUM_SECTIONS.forEach(k => { sections[k] = true; });
+  return {
+    slides: [], banners: [], trust: [], sections,
+    limits: { deals: 4, picks: 10, categories: 8 },
+    newsletter_title: '', newsletter_subtitle: '', filter_specs: [], payment_icons: true, show_theme_toggle: true,
+    hero_style: 'full', hero_height: 'large', hero_width: 'edge', hero_interval: 7,
+  };
+}
+const px = ref(pxBase());
+// Server defaults (translated trust strip + newsletter texts) shown as placeholders.
+const pxDefaults = ref({ newsletter_title: '', newsletter_subtitle: '', trust: [] });
+const premiumThemes = ref({ available: false, keys: [], specs_ready: false, spec_labels: [], allowed: [], purchasable: [] });
+// A premium theme is usable when the plan includes premium themes or it was
+// bought as an add-on; buyable ones link to Billing → Add-ons.
+const premiumAllowed = key => (premiumThemes.value.allowed || []).includes(key);
+const premiumBuyable = key => !premiumAllowed(key) && (premiumThemes.value.purchasable || []).includes(key);
+const premiumBuyLink = computed(() => {
+  const key = (premiumThemes.value.purchasable || []).find(k => !premiumAllowed(k));
+  return key ? `/subscription/addons?feature=${encodeURIComponent('theme:' + key)}` : null;
+});
+function pxNormalize(raw) {
+  const base = pxBase();
+  const x = (typeof raw === 'string' ? tryParseJson(raw) : raw) || {};
+  const src = x.electronics_premium && typeof x.electronics_premium === 'object' ? x.electronics_premium : {};
+  ['slides', 'banners', 'trust'].forEach(list => {
+    base[list] = Array.isArray(src[list]) ? src[list].map(r => ({ ...PX_BLANK[list](), ...(r || {}) })) : [];
+  });
+  // An empty trust list keeps the store's default strip (translated per visitor),
+  // so it is not pre-filled here — the tab shows those defaults as a hint.
+  if (src.sections && typeof src.sections === 'object') {
+    PREMIUM_SECTIONS.forEach(k => { if (k in src.sections) base.sections[k] = normalizeBool(src.sections[k]); });
+  }
+  if (src.limits && typeof src.limits === 'object') {
+    Object.keys(base.limits).forEach(k => { if (src.limits[k] != null && src.limits[k] !== '') base.limits[k] = Number(src.limits[k]); });
+  }
+  ['newsletter_title', 'newsletter_subtitle'].forEach(k => { if (src[k] != null) base[k] = String(src[k]); });
+  if (Array.isArray(src.filter_specs)) base.filter_specs = src.filter_specs.map(String).filter(Boolean).slice(0, 6);
+  if ('payment_icons' in src) base.payment_icons = normalizeBool(src.payment_icons);
+  if ('show_theme_toggle' in src) base.show_theme_toggle = normalizeBool(src.show_theme_toggle);
+  // Hero slider look (full-image by default).
+  if (PX_HERO_STYLES.includes(src.hero_style)) base.hero_style = src.hero_style;
+  if (PX_HERO_HEIGHTS.includes(src.hero_height)) base.hero_height = src.hero_height;
+  if (PX_HERO_WIDTHS.includes(src.hero_width)) base.hero_width = src.hero_width;
+  if (src.hero_interval != null && src.hero_interval !== '' && !Number.isNaN(Number(src.hero_interval))) base.hero_interval = Math.max(0, Math.min(20, Number(src.hero_interval)));
+  return base;
+}
+
+/* ---------- Car Dealership theme options (theme_options.cars) ---------- */
+const CARS_SECTIONS = ['search', 'body_types', 'featured', 'latest', 'makes', 'finance', 'trade_in', 'trust', 'visit'];
+const CARS_ICONS = ['check-circle', 'shield-check', 'refresh', 'credit-card', 'wallet', 'truck', 'clock', 'star', 'headset', 'award', 'key', 'car', 'gauge', 'phone', 'map-pin', 'lock'];
+const CARS_TERMS = [24, 36, 48, 60, 72, 84];
+const CD_BLANK = {
+  slides: () => ({ kicker: '', title: '', subtitle: '', image: '', primary_text: 'Browse inventory', primary_url: '/shop', secondary_text: '', secondary_url: '' }),
+  trust: () => ({ icon: 'check-circle', title: '', subtitle: '' }),
+};
+const CD_TEXTS = ['announcement_text', 'hero_title', 'hero_subtitle', 'featured_title', 'latest_title', 'finance_title', 'finance_text', 'finance_disclaimer', 'trade_title', 'trade_text', 'opening_hours', 'whatsapp'];
+const CD_FLAGS = ['show_monthly_on_cards', 'allow_online_purchase', 'enable_reserve', 'notify_owner', 'crm_capture', 'payment_icons', 'show_theme_toggle'];
+function cdDefaults() {
+  const sections = {};
+  CARS_SECTIONS.forEach(k => { sections[k] = true; });
+  const base = {
+    slides: [], trust: [], sections,
+    limits: { featured: 8, latest: 8, makes: 12 },
+    mileage_unit: 'km', apr: 9.9, default_term: 60, deposit_percent: 10,
+    reserve_product_id: undefined, reserve_days: 7,
+    show_monthly_on_cards: true, allow_online_purchase: false, enable_reserve: false,
+    notify_owner: true, crm_capture: true, payment_icons: false, show_theme_toggle: false,
+  };
+  CD_TEXTS.forEach(k => { base[k] = ''; });
+  return base;
+}
+const cd = ref(cdDefaults());
+// `defaults` = CarsTheme::defaults() from the settings payload, so texts the
+// owner never saved show their effective value instead of a blank.
+function cdNormalize(raw, defaults) {
+  const base = cdDefaults();
+  const d = defaults && typeof defaults === 'object' ? defaults : {};
+  CD_TEXTS.forEach(k => { if (typeof d[k] === 'string') base[k] = d[k]; });
+  const x = (typeof raw === 'string' ? tryParseJson(raw) : raw) || {};
+  const src = x.cars && typeof x.cars === 'object' ? x.cars : {};
+  ['slides', 'trust'].forEach(list => {
+    const rows = Array.isArray(src[list]) && (src[list].length || list !== 'trust') ? src[list] : (Array.isArray(d[list]) ? d[list] : []);
+    base[list] = rows.map(r => ({ ...CD_BLANK[list](), ...(r || {}) }));
+  });
+  if (src.sections && typeof src.sections === 'object') {
+    CARS_SECTIONS.forEach(k => { if (k in src.sections) base.sections[k] = normalizeBool(src.sections[k]); });
+  }
+  if (src.limits && typeof src.limits === 'object') {
+    Object.keys(base.limits).forEach(k => { if (src.limits[k] != null && src.limits[k] !== '') base.limits[k] = Number(src.limits[k]); });
+  }
+  CD_TEXTS.forEach(k => { if (src[k] != null) base[k] = String(src[k]); });
+  CD_FLAGS.forEach(k => { if (k in src) base[k] = normalizeBool(src[k]); });
+  if (src.mileage_unit === 'mi' || src.mileage_unit === 'km') base.mileage_unit = src.mileage_unit;
+  ['apr', 'deposit_percent', 'reserve_days'].forEach(k => { if (src[k] != null && src[k] !== '') base[k] = Number(src[k]); });
+  if (CARS_TERMS.includes(Number(src.default_term))) base.default_term = Number(src.default_term);
+  base.reserve_product_id = src.reserve_product_id ? Number(src.reserve_product_id) : undefined;
+  return base;
+}
+
+/* ---------- Restaurant theme options (theme_options.restaurant) ---------- */
+const RS_SECTIONS = ['hero', 'menu', 'booking', 'about', 'visit'];
+const RS_TEXTS = ['announcement_text', 'hero_kicker', 'hero_title', 'hero_subtitle', 'menu_title', 'menu_subtitle', 'booking_title', 'booking_text', 'about_title', 'about_text', 'opening_hours', 'map_url', 'whatsapp'];
+const RS_FLAGS = ['show_dietary_filters', 'show_photos', 'payment_icons', 'show_theme_toggle'];
+// banners[0] = hero photo, banners[1] = about photo (uploads go through the shared banners list).
+const RS_BLANK = { banners: () => ({ image: '' }) };
+function rsDefaults() {
+  const sections = {};
+  RS_SECTIONS.forEach(k => { sections[k] = true; });
+  const base = { sections, banners: [{ image: '' }, { image: '' }], show_dietary_filters: true, show_photos: true, payment_icons: false, show_theme_toggle: false };
+  RS_TEXTS.forEach(k => { base[k] = ''; });
+  return base;
+}
+const rs = ref(rsDefaults());
+// `defaults` = RestaurantTheme::defaults() from the settings payload (effective texts instead of blanks).
+function rsNormalize(raw, defaults) {
+  const base = rsDefaults();
+  const d = defaults && typeof defaults === 'object' ? defaults : {};
+  RS_TEXTS.forEach(k => { if (typeof d[k] === 'string') base[k] = d[k]; });
+  const x = (typeof raw === 'string' ? tryParseJson(raw) : raw) || {};
+  const src = x.restaurant && typeof x.restaurant === 'object' ? x.restaurant : {};
+  if (src.sections && typeof src.sections === 'object') {
+    RS_SECTIONS.forEach(k => { if (k in src.sections) base.sections[k] = normalizeBool(src.sections[k]); });
+  }
+  RS_TEXTS.forEach(k => { if (src[k] != null) base[k] = String(src[k]); });
+  RS_FLAGS.forEach(k => { if (k in src) base[k] = normalizeBool(src[k]); });
+  [0, 1].forEach(i => { base.banners[i].image = String((Array.isArray(src.banners) && src.banners[i] && src.banners[i].image) || ''); });
+  return base;
+}
+function rsClearPhoto(i) {
+  rs.value.banners[i].image = '';
+  delete files.value[`theme_image__restaurant__banners__${i}`];
+  delete thFilePreviews.value[`restaurant:banners:${i}`];
+}
+
+/* ---------- Rental theme options (theme_options.rental) ---------- */
+// Listings are the Rental module's items; which business types show comes from Rental Settings.
+const rentalTheme = ref({ available: false, types: [] });
+const RN_SECTIONS = ['categories', 'featured', 'how', 'trust', 'about', 'visit'];
+const RN_TEXTS = ['announcement_text', 'hero_kicker', 'hero_title', 'hero_subtitle', 'featured_title', 'about_title', 'about_text', 'opening_hours', 'map_url', 'whatsapp'];
+const RN_FLAGS = ['show_deposit', 'payment_icons', 'show_theme_toggle'];
+const RN_ICONS = ['check-circle', 'shield-check', 'clock', 'wallet', 'truck', 'key', 'star', 'headset', 'calendar', 'map-pin', 'zap', 'award'];
+// banners[0] = hero photo, banners[1] = about photo (uploads go through the shared banners list).
+const RN_BLANK = { banners: () => ({ image: '' }), trust: () => ({ icon: 'check-circle', title: '', subtitle: '' }) };
+function rnDefaults() {
+  const sections = {};
+  RN_SECTIONS.forEach(k => { sections[k] = true; });
+  const base = { sections, banners: [{ image: '' }, { image: '' }], trust: [], limits: { featured: 8 }, show_deposit: true, payment_icons: false, show_theme_toggle: false };
+  RN_TEXTS.forEach(k => { base[k] = ''; });
+  return base;
+}
+const rn = ref(rnDefaults());
+// `defaults` = RentalTheme::defaults() from the settings payload (texts follow the business type).
+function rnNormalize(raw, defaults) {
+  const base = rnDefaults();
+  const d = defaults && typeof defaults === 'object' ? defaults : {};
+  RN_TEXTS.forEach(k => { if (typeof d[k] === 'string') base[k] = d[k]; });
+  if (Array.isArray(d.trust)) base.trust = d.trust.map(r => ({ icon: r.icon || 'check-circle', title: r.title || '', subtitle: r.subtitle || '' }));
+  const x = (typeof raw === 'string' ? tryParseJson(raw) : raw) || {};
+  const src = x.rental && typeof x.rental === 'object' ? x.rental : {};
+  if (src.sections && typeof src.sections === 'object') {
+    RN_SECTIONS.forEach(k => { if (k in src.sections) base.sections[k] = normalizeBool(src.sections[k]); });
+  }
+  RN_TEXTS.forEach(k => { if (src[k] != null) base[k] = String(src[k]); });
+  RN_FLAGS.forEach(k => { if (k in src) base[k] = normalizeBool(src[k]); });
+  if (Array.isArray(src.trust) && src.trust.length) base.trust = src.trust.map(r => ({ icon: r.icon || 'check-circle', title: r.title || '', subtitle: r.subtitle || '' }));
+  if (src.limits && src.limits.featured != null && src.limits.featured !== '') base.limits.featured = Number(src.limits.featured);
+  [0, 1].forEach(i => { base.banners[i].image = String((Array.isArray(src.banners) && src.banners[i] && src.banners[i].image) || ''); });
+  return base;
+}
+function rnClearPhoto(i) {
+  rn.value.banners[i].image = '';
+  delete files.value[`theme_image__rental__banners__${i}`];
+  delete thFilePreviews.value[`rental:banners:${i}`];
+}
+const RN_TYPE_LABELS = { vehicle: ['Rental_Type_Vehicle', 'Vehicle'], equipment: ['Rental_Type_Equipment', 'Equipment'], property: ['Rental_Type_Property', 'Property'], other: ['Rental_Type_Other', 'Other'] };
+function rnTypeLabel(type) {
+  const [k, f] = RN_TYPE_LABELS[type] || [type, type];
+  const out = t(k);
+  return out && out !== k ? out : f;
+}
+
+/* ---------- Booking theme options (theme_options.booking) ---------- */
+// Services, team and booking rules come from Booking Management; this tab is presentation only.
+const bookingTheme = ref({ available: false, types: [] });
+const BK_SECTIONS = ['services', 'how', 'team', 'about', 'visit'];
+const BK_TEXTS = ['announcement_text', 'hero_kicker', 'hero_title', 'hero_subtitle', 'services_title', 'team_title', 'about_title', 'about_text', 'opening_hours', 'map_url', 'whatsapp'];
+const BK_FLAGS = ['show_prices', 'payment_icons', 'show_theme_toggle'];
+// banners[0] = hero photo, banners[1] = about photo (uploads go through the shared banners list).
+const BK_BLANK = { banners: () => ({ image: '' }) };
+function bkDefaults() {
+  const sections = {};
+  BK_SECTIONS.forEach(k => { sections[k] = true; });
+  const base = { sections, banners: [{ image: '' }, { image: '' }], show_prices: true, payment_icons: false, show_theme_toggle: false };
+  BK_TEXTS.forEach(k => { base[k] = ''; });
+  return base;
+}
+const bk = ref(bkDefaults());
+// `defaults` = BookingTheme::defaults() from the settings payload (texts follow the business type).
+function bkNormalize(raw, defaults) {
+  const base = bkDefaults();
+  const d = defaults && typeof defaults === 'object' ? defaults : {};
+  BK_TEXTS.forEach(k => { if (typeof d[k] === 'string') base[k] = d[k]; });
+  const x = (typeof raw === 'string' ? tryParseJson(raw) : raw) || {};
+  const src = x.booking && typeof x.booking === 'object' ? x.booking : {};
+  if (src.sections && typeof src.sections === 'object') {
+    BK_SECTIONS.forEach(k => { if (k in src.sections) base.sections[k] = normalizeBool(src.sections[k]); });
+  }
+  BK_TEXTS.forEach(k => { if (src[k] != null) base[k] = String(src[k]); });
+  BK_FLAGS.forEach(k => { if (k in src) base[k] = normalizeBool(src[k]); });
+  [0, 1].forEach(i => { base.banners[i].image = String((Array.isArray(src.banners) && src.banners[i] && src.banners[i].image) || ''); });
+  return base;
+}
+function bkClearPhoto(i) {
+  bk.value.banners[i].image = '';
+  delete files.value[`theme_image__booking__banners__${i}`];
+  delete thFilePreviews.value[`booking:banners:${i}`];
+}
+
 // Generic list helpers keyed by theme. Uploads post as theme_image__<theme>__<list>__<i>.
-const THEME_STATE = { toys: { ref: ty, blank: TY_BLANK }, grocery: { ref: gr, blank: GR_BLANK } };
+const THEME_STATE = { toys: { ref: ty, blank: TY_BLANK }, grocery: { ref: gr, blank: GR_BLANK }, fashion: { ref: fa, blank: FA_BLANK }, cars: { ref: cd, blank: CD_BLANK }, restaurant: { ref: rs, blank: RS_BLANK }, rental: { ref: rn, blank: RN_BLANK }, booking: { ref: bk, blank: BK_BLANK }, electronics_premium: { ref: px, blank: PX_BLANK } };
 const thFilePreviews = ref({});
 function thAdd(theme, list) { THEME_STATE[theme].ref.value[list].push(THEME_STATE[theme].blank[list]()); }
 function thRemove(theme, list, i) {
   THEME_STATE[theme].ref.value[list].splice(i, 1);
-  delete files.value[`theme_image__${theme}__${list}__${i}`];
-  delete thFilePreviews.value[`${theme}:${list}:${i}`];
+  shiftPendingUploads(`theme_image__${theme}__${list}__`, thFilePreviews, `${theme}:${list}:`, i);
 }
 function thMove(theme, list, i, dir) {
   const rows = THEME_STATE[theme].ref.value[list];
@@ -1058,7 +1987,7 @@ const form = ref({
   registration_enabled: true,
   require_invite_code: false,
   require_admin_approval: false,
-  require_email_verification: true,
+  guest_checkout_enabled: false,
   allow_cancellations: true,
   return_window_days: 14,
   auto_approve_reviews: false,
@@ -1097,8 +2026,8 @@ const form = ref({
   show_stock: true,
   menus: { header: [], footer_shop: [], footer_support: [] },
   social_links: [],
-  custom_css: '',
-  custom_js: '',
+  google_tag_id: '',
+  meta_pixel_id: '',
   store_url_path: '',
   store_use_root_domain: false,
 });
@@ -1265,6 +2194,14 @@ function buildHomeRows() {
   homeRows.value = rows;
 }
 
+/* ---------- fonts ---------- */
+// Grouped Google + system font options (served as font_options by the API).
+// A legacy free-text stack saved before the dropdown existed stays selectable.
+const fontOptionsPayload = ref(null);
+const fontFamilyOptions = computed(() => buildFontOptions(fontOptionsPayload.value, t, {
+  current: form.value.font_family,
+}));
+
 /* ---------- IO ---------- */
 async function fetch() {
   try {
@@ -1275,6 +2212,7 @@ async function fetch() {
     warehouses.value = Array.isArray(payload.warehouses) ? payload.warehouses : [];
     currencies.value = Array.isArray(payload.currencies) ? payload.currencies : [];
     pendingCustomersCount.value = payload.pending_customers_count || 0;
+    fontOptionsPayload.value = payload.font_options || null;
 
     const curated = Array.isArray(payload.curated_products) ? payload.curated_products : [];
     productOptions.value = curated.map(p => ({ id: p.id, name: p.name }));
@@ -1284,7 +2222,7 @@ async function fetch() {
     merged.registration_enabled = normalizeBool(s && (s.registration_enabled ?? true));
     merged.require_invite_code = normalizeBool(s && (s.require_invite_code ?? false));
     merged.require_admin_approval = normalizeBool(s && (s.require_admin_approval ?? false));
-    merged.require_email_verification = normalizeBool(s && (s.require_email_verification ?? true));
+    merged.guest_checkout_enabled = normalizeBool(s && (s.guest_checkout_enabled ?? false));
     merged.allow_cancellations = normalizeBool(s && (s.allow_cancellations ?? true));
     merged.return_window_days = Number((s && s.return_window_days) ?? 14);
     merged.auto_approve_reviews = normalizeBool(s && (s.auto_approve_reviews ?? false));
@@ -1298,6 +2236,30 @@ async function fetch() {
     elFilePreviews.value = {};
     ty.value = tyNormalize(s && s.theme_options);
     gr.value = grNormalize(s && s.theme_options);
+    fa.value = faNormalize(s && s.theme_options);
+    cd.value = cdNormalize(s && s.theme_options, payload.theme_defaults && payload.theme_defaults.cars);
+    rs.value = rsNormalize(s && s.theme_options, payload.theme_defaults && payload.theme_defaults.restaurant);
+    rn.value = rnNormalize(s && s.theme_options, payload.theme_defaults && payload.theme_defaults.rental);
+    rentalTheme.value = payload.rental_theme && typeof payload.rental_theme === 'object'
+      ? { available: !!payload.rental_theme.available, types: payload.rental_theme.types || [] }
+      : { available: false, types: [] };
+    bk.value = bkNormalize(s && s.theme_options, payload.theme_defaults && payload.theme_defaults.booking);
+    bookingTheme.value = payload.booking_theme && typeof payload.booking_theme === 'object'
+      ? { available: !!payload.booking_theme.available, types: payload.booking_theme.types || [] }
+      : { available: false, types: [] };
+    const pxDef = (payload.theme_defaults && payload.theme_defaults.electronics_premium) || {};
+    pxDefaults.value = { newsletter_title: pxDef.newsletter_title || '', newsletter_subtitle: pxDef.newsletter_subtitle || '', trust: pxDef.trust || [] };
+    px.value = pxNormalize(s && s.theme_options);
+    const pt = payload.premium_themes && typeof payload.premium_themes === 'object' ? payload.premium_themes : {};
+    premiumThemes.value = {
+      available: !!pt.available,
+      keys: Array.isArray(pt.keys) ? pt.keys : [],
+      specs_ready: !!pt.specs_ready,
+      spec_labels: Array.isArray(pt.spec_labels) ? pt.spec_labels : [],
+      // Per theme: usable (plan or bought add-on) / for sale as an add-on.
+      allowed: Array.isArray(pt.allowed) ? pt.allowed : (pt.available ? (pt.keys || []) : []),
+      purchasable: Array.isArray(pt.purchasable) ? pt.purchasable : [],
+    };
     thFilePreviews.value = {};
 
     const lineupRaw = s && s.homepage_lineup;
@@ -1384,6 +2346,35 @@ function validateStoreUrlPath() {
   return !RESERVED_STORE_PATHS.includes(segments[0]);
 }
 
+// Name the actual problem (rejected image, invalid field) instead of a
+// generic toast — a pending upload stays queued until the page reloads.
+// Tracking & Analytics: comma-separated IDs, mirrored server-side in
+// App\Support\StoreTracking (same patterns, max 5 per field).
+const TRK_MAX_IDS = 5;
+function trkTokens(v) {
+  return String(v || '').split(/[\s,;]+/).map(x => x.trim()).filter(Boolean);
+}
+const trackingErrors = computed(() => {
+  // Upper-case the ID only; an Ads conversion label after "/" is case-sensitive.
+  const g = trkTokens(form.value.google_tag_id).map(x => {
+    const i = x.indexOf('/');
+    return i === -1 ? x.toUpperCase() : x.slice(0, i).toUpperCase() + x.slice(i);
+  });
+  const m = trkTokens(form.value.meta_pixel_id);
+  const errs = { google: '', meta: '' };
+  if (g.some(id => !/^((G|AW|GT|DC|GTM)-[A-Z0-9]{4,20}|AW-\d{4,20}\/[A-Za-z0-9_-]{4,40})$/.test(id))) errs.google = t('Trk_Invalid_Google');
+  else if (g.length > TRK_MAX_IDS) errs.google = t('Trk_Too_Many');
+  if (m.some(id => !/^\d{8,20}$/.test(id))) errs.meta = t('Trk_Invalid_Meta');
+  else if (m.length > TRK_MAX_IDS) errs.meta = t('Trk_Too_Many');
+  return errs;
+});
+
+function saveErrorMessage(e) {
+  if (e?.status === 413) return t('Store_Settings_Upload_Too_Large', 'The selected images are too large for the server to accept. Choose smaller images and save again.');
+  const errors = e?.data?.errors;
+  return (errors && Object.values(errors)[0]?.[0]) || e?.data?.message || t('InvalidData', 'Something went wrong');
+}
+
 async function save() {
   if (!form.value.store_all_warehouses && !(form.value.warehouse_ids || []).length) {
     message.error(t('Choose_Warehouse'));
@@ -1391,6 +2382,10 @@ async function save() {
   }
   if (!validateStoreUrlPath()) {
     message.error(t('Store_URL_Path_Invalid'));
+    return;
+  }
+  if (trackingErrors.value.google || trackingErrors.value.meta) {
+    message.error(trackingErrors.value.google || trackingErrors.value.meta);
     return;
   }
   saving.value = true;
@@ -1424,7 +2419,7 @@ async function save() {
       ? Number(form.value.display_currency_id) : null;
 
     // 2b) Electronics theme options travel as one JSON map keyed by theme.
-    form.value.theme_options = { electronics: el.value, toys: ty.value, grocery: gr.value };
+    form.value.theme_options = { electronics: el.value, toys: ty.value, grocery: gr.value, fashion: fa.value, cars: { ...cd.value, reserve_product_id: cd.value.reserve_product_id || null }, restaurant: rs.value, rental: rn.value, booking: bk.value, electronics_premium: px.value };
 
     // 3) FormData: booleans 1/0, JSON fields stringified, null → ''
     const fd = new FormData();
@@ -1447,17 +2442,14 @@ async function save() {
       if (files.value[fk]) fd.append(fk, files.value[fk]);
     });
 
-    // 5) POST multipart
-    const { status } = await uploadForm('admin/store/settings', fd);
-    if (status >= 200 && status < 300) {
-      message.success(t('Successfully_Updated'));
-      await fetch();
-      files.value = {};
-    } else {
-      message.error(t('InvalidData'));
-    }
+    // 5) POST multipart through the shared client, so an expired session
+    // redirects to login instead of failing silently.
+    await http.postForm('admin/store/settings', fd);
+    message.success(t('Successfully_Updated'));
+    await fetch();
+    files.value = {};
   } catch (e) {
-    message.error(t('InvalidData'));
+    message.error(saveErrorMessage(e), 6);
   } finally {
     saving.value = false;
   }
@@ -1467,6 +2459,7 @@ onMounted(fetch);
 </script>
 
 <style scoped>
+.premium-buy-link { display: inline-block; margin-top: 6px; font-size: 13px; }
 .color-input {
   width: 100%;
   height: 32px;

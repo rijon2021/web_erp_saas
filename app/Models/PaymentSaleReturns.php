@@ -2,17 +2,20 @@
 
 namespace App\Models;
 
+use App\Traits\HasShareToken;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class PaymentSaleReturns extends Model
 {
-    use SoftDeletes;
+    use HasShareToken, SoftDeletes;
+
+    const SHARE_TYPE = 'payment_return_sale';
 
     protected $dates = ['deleted_at'];
 
     protected $fillable = [
-        'sale_return_id', 'date', 'montant', 'change', 'Ref', 'payment_method_id', 'user_id', 'notes', 'account_id',
+        'sale_return_id', 'date', 'montant', 'change', 'Ref', 'payment_method_id', 'user_id', 'notes', 'account_id', 'wallet_transaction_id',
     ];
 
     protected $casts = [

@@ -98,15 +98,17 @@
       </div>
 
       <!-- ============ Profit ============ -->
+      <!-- COGS, profit and margins are cost-derived: roles with
+           hide_product_cost keep only the tax/expense footer, retitled. -->
       <section class="ts-ledger ts-ledger--profit">
         <header class="ts-ledger-head">
           <span class="ts-ledger-icon"><RiseOutlined /></span>
-          {{ $t('Profit') }}
+          {{ auth.canSeeCost ? $t('Profit') : $t('Expenses') }}
         </header>
-        <div class="ts-line">
+        <div v-if="auth.canSeeCost" class="ts-line">
           <span>{{ $t('Cost_Of_Goods_Sold') }}</span><b>{{ money(num(profit.cogs)) }}</b>
         </div>
-        <div class="ts-margin">
+        <div v-if="auth.canSeeCost" class="ts-margin">
           <div class="ts-margin-top">
             <span>{{ $t('Gross_Profit') }}</span><b>{{ money(num(profit.gross)) }}</b>
           </div>
@@ -115,7 +117,7 @@
           </div>
           <div class="ts-margin-pct">{{ num(profit.gross_pct) }}% {{ $t('Of_Sales') }}</div>
         </div>
-        <div class="ts-margin">
+        <div v-if="auth.canSeeCost" class="ts-margin">
           <div class="ts-margin-top">
             <span>{{ $t('Net_Profit') }}</span><b>{{ money(num(profit.net)) }}</b>
           </div>
@@ -124,7 +126,7 @@
           </div>
           <div class="ts-margin-pct">{{ num(profit.net_pct) }}% {{ $t('Of_Sales') }}</div>
         </div>
-        <div class="ts-foot">
+        <div class="ts-foot" :class="{ 'ts-foot--solo': !auth.canSeeCost }">
           <span>{{ $t('Tax_Collected') }} <b>{{ money(num(profit.tax_collected)) }}</b></span>
           <span>{{ $t('Tax_Paid') }} <b>{{ money(num(profit.tax_paid)) }}</b></span>
           <span>{{ $t('Expenses') }} <b>{{ money(num(profit.expenses)) }}</b></span>
@@ -169,9 +171,10 @@
           <span class="ts-ledger-icon"><InboxOutlined /></span>
           {{ $t('Stock') }}
         </header>
-        <div class="ts-line"><span>{{ $t('On_Hand_At_Cost') }}</span><b>{{ money(num(stock.at_cost)) }}</b></div>
+        <!-- At-cost value and the margin (retail − cost) reveal cost. -->
+        <div v-if="auth.canSeeCost" class="ts-line"><span>{{ $t('On_Hand_At_Cost') }}</span><b>{{ money(num(stock.at_cost)) }}</b></div>
         <div class="ts-line"><span>{{ $t('On_Hand_At_Retail') }}</span><b>{{ money(num(stock.at_retail)) }}</b></div>
-        <div class="ts-line"><span>{{ $t('Potential_Margin') }}</span><b>{{ money(num(stock.margin)) }}</b></div>
+        <div v-if="auth.canSeeCost" class="ts-line"><span>{{ $t('Potential_Margin') }}</span><b>{{ money(num(stock.margin)) }}</b></div>
         <div class="ts-line ts-line--dim"><span>{{ $t('Units_In_Stock') }}</span><b>{{ num(stock.units).toLocaleString() }}</b></div>
         <div class="ts-line ts-line--dim"><span>{{ $t('OutOfStock') }}</span><b>{{ num(stock.out_of_stock) }}</b></div>
       </section>
@@ -219,6 +222,7 @@ import {
   WarningOutlined, TeamOutlined,
 } from '@ant-design/icons-vue';
 import { useFormat } from '../composables/useFormat';
+import { useAuthStore } from '../stores/auth';
 import http from '../lib/http';
 
 const props = defineProps({ open: { type: Boolean, default: false } });
@@ -226,6 +230,7 @@ defineEmits(['close']);
 
 const { money, date } = useFormat();
 const { t } = useI18n();
+const auth = useAuthStore();
 
 const loading = ref(false);
 const loaded = ref(false);
@@ -382,7 +387,7 @@ watch(() => props.open, v => { if (v && !loaded.value) load(); });
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  margin-right: 6px;
+  margin-inline-end: 6px;
   vertical-align: 1px;
 }
 .ts-dot--in { background: #10b981; }
@@ -502,6 +507,8 @@ watch(() => props.open, v => { if (v && !loaded.value) load(); });
   color: rgba(var(--ink-rgb), 0.5);
 }
 .ts-foot b { font-weight: 600; color: rgba(var(--ink-rgb), 0.75); }
+/* Only row left under the header: no second rule. */
+.ts-foot--solo { border-top: none; margin-top: 0; }
 
 /* Payments table */
 .ts-paytable-wrap { overflow-x: auto; }
@@ -516,17 +523,17 @@ watch(() => props.open, v => { if (v && !loaded.value) load(); });
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: rgba(var(--ink-rgb), 0.4);
-  text-align: right;
+  text-align: end;
   padding: 8px 6px 6px;
 }
 .ts-paytable td {
-  text-align: right;
+  text-align: end;
   padding: 7px 6px;
   border-top: 1px solid #f5f5f7;
 }
 .ts-paytable td:first-child,
 .ts-paytable th:first-child {
-  text-align: left;
+  text-align: start;
   font-family: inherit;
 }
 .ts-strong { font-weight: 700; }

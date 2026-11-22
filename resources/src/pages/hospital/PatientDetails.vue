@@ -1,9 +1,9 @@
 <template>
   <div class="page">
     <PageHeader
-      :title="patient ? patient.name : 'Patient'"
+      :title="patient ? patient.name : $t('Hm_Patient')"
       :subtitle="patient ? subtitle : ''"
-      :breadcrumb="['Hospital', 'Patients', patient ? patient.mrn : '']"
+      :breadcrumb="[$t('Hm_Hospital'), $t('Hm_Patients'), patient ? patient.mrn : '']"
     >
       <template #actions>
         <a-button @click="$router.push('/hospital/patients')">
@@ -23,15 +23,15 @@
       <!-- Clinical alerts come first: they change what a clinician does next. -->
       <a-alert
         v-if="patient.allergies" type="error" show-icon class="alert"
-        :message="`Allergies: ${patient.allergies}`"
+        :message="`${$t('Hm_Allergies')}: ${patient.allergies}`"
       />
       <a-alert
         v-if="patient.chronic_conditions" type="warning" show-icon class="alert"
-        :message="`Chronic: ${patient.chronic_conditions}`"
+        :message="`${$t('Hm_Chronic')}: ${patient.chronic_conditions}`"
       />
       <a-alert
         v-if="patient.current_admission" type="info" show-icon class="alert"
-        :message="`Currently admitted — ${patient.current_admission.ward_name || 'ward'} / ${patient.current_admission.bed_number || '—'}, ${patient.current_admission.nights} night(s)`"
+        :message="`${$t('Hm_Currently_Admitted')} — ${patient.current_admission.ward_name || $t('Hm_Ward')} / ${patient.current_admission.bed_number || '—'}, ${patient.current_admission.nights} ${$t('Hm_Nights_Lc')}`"
       />
 
       <a-row :gutter="16">
@@ -51,55 +51,55 @@
             </div>
 
             <a-descriptions :column="1" size="small" class="id-desc">
-              <a-descriptions-item label="Age">{{ patient.age !== null ? patient.age : '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Gender">{{ labelOf(GENDERS, patient.gender) }}</a-descriptions-item>
-              <a-descriptions-item label="Born">{{ patient.date_of_birth ? date(patient.date_of_birth) : '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Phone">{{ patient.phone || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Email">{{ patient.email || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Address">{{ [patient.address, patient.city].filter(Boolean).join(', ') || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="National ID">{{ patient.national_id || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Age')">{{ patient.age !== null ? patient.age : '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Gender')">{{ labelOf(GENDERS, patient.gender) }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Born')">{{ patient.date_of_birth ? date(patient.date_of_birth) : '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Phone')">{{ patient.phone || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Email')">{{ patient.email || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Address')">{{ [patient.address, patient.city].filter(Boolean).join(', ') || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_National_ID')">{{ patient.national_id || '—' }}</a-descriptions-item>
             </a-descriptions>
           </a-card>
 
-          <a-card size="small" title="Emergency contact" style="margin-bottom: 16px">
+          <a-card size="small" :title="$t('Hm_Emergency_Contact')" style="margin-bottom: 16px">
             <a-descriptions v-if="patient.emergency_contact_name" :column="1" size="small">
-              <a-descriptions-item label="Name">{{ patient.emergency_contact_name }}</a-descriptions-item>
-              <a-descriptions-item label="Phone">{{ patient.emergency_contact_phone || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Relation">{{ patient.emergency_contact_relation || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Name')">{{ patient.emergency_contact_name }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Phone')">{{ patient.emergency_contact_phone || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Relationship')">{{ patient.emergency_contact_relation || '—' }}</a-descriptions-item>
             </a-descriptions>
-            <a-empty v-else :image="simpleEmptyImage" description="None recorded" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Hm_None_Recorded')" />
           </a-card>
 
-          <a-card size="small" title="Insurance">
+          <a-card size="small" :title="$t('Hm_Insurance')">
             <a-descriptions v-if="patient.insurance_provider || patient.insurance_number" :column="1" size="small">
-              <a-descriptions-item label="Provider">{{ patient.insurance_provider || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Policy">{{ patient.insurance_number || '—' }}</a-descriptions-item>
-              <a-descriptions-item label="Expires">
+              <a-descriptions-item :label="$t('Hm_Provider')">{{ patient.insurance_provider || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Policy')">{{ patient.insurance_number || '—' }}</a-descriptions-item>
+              <a-descriptions-item :label="$t('Hm_Expires')">
                 <span :class="{ danger: insuranceExpired }">
                   {{ patient.insurance_expiry ? date(patient.insurance_expiry) : '—' }}
                 </span>
               </a-descriptions-item>
             </a-descriptions>
-            <a-empty v-else :image="simpleEmptyImage" description="No policy on file" />
+            <a-empty v-else :image="simpleEmptyImage" :description="$t('Hm_No_Policy_On_File')" />
           </a-card>
         </a-col>
 
         <a-col :xs="24" :lg="16">
           <div class="stats">
             <div class="stat">
-              <span class="stat-label">Consultations</span>
+              <span class="stat-label">{{ $t('Hm_Consultations') }}</span>
               <span class="stat-value">{{ stats.visits || 0 }}</span>
             </div>
             <div class="stat">
-              <span class="stat-label">Admissions</span>
+              <span class="stat-label">{{ $t('Hm_Admissions') }}</span>
               <span class="stat-value">{{ stats.admissions || 0 }}</span>
             </div>
             <div class="stat">
-              <span class="stat-label">Billed</span>
+              <span class="stat-label">{{ $t('Hm_Billed') }}</span>
               <span class="stat-value">{{ money(stats.billed || 0) }}</span>
             </div>
             <div class="stat" :class="{ 'stat--danger': (stats.due || 0) > 0 }">
-              <span class="stat-label">Outstanding</span>
+              <span class="stat-label">{{ $t('Hm_Outstanding') }}</span>
               <span class="stat-value">{{ money(stats.due || 0) }}</span>
             </div>
           </div>
@@ -107,7 +107,7 @@
           <a-card size="small">
             <a-tabs v-model:activeKey="tab">
               <a-tab-pane key="visits">
-                <template #tab>Consultations <a-badge :count="stats.visits || 0" :number-style="badge" /></template>
+                <template #tab>{{ $t('Hm_Consultations') }} <a-badge :count="stats.visits || 0" :number-style="badge" /></template>
                 <a-table
                   :columns="visitColumns" :data-source="timeline.visits || []" :loading="tabLoading"
                   :row-key="r => r.id" :pagination="false" :scroll="{ x: 'max-content' }" size="small"
@@ -120,16 +120,16 @@
                     <template v-else-if="column.key === 'fee'">{{ money(record.fee) }}</template>
                     <template v-else-if="column.key === 'open'">
                       <a-button type="link" size="small" @click="$router.push(`/hospital/visits/${record.id}/edit`)">
-                        Open
+                        {{ $t('Hm_Open') }}
                       </a-button>
                     </template>
                   </template>
-                  <template #emptyText><a-empty :image="simpleEmptyImage" description="No consultations yet" /></template>
+                  <template #emptyText><a-empty :image="simpleEmptyImage" :description="$t('Hm_No_Consultations_Yet')" /></template>
                 </a-table>
               </a-tab-pane>
 
               <a-tab-pane key="appointments">
-                <template #tab>Appointments <a-badge :count="stats.appointments || 0" :number-style="badge" /></template>
+                <template #tab>{{ $t('Hm_Appointments') }} <a-badge :count="stats.appointments || 0" :number-style="badge" /></template>
                 <a-table
                   :columns="appointmentColumns" :data-source="timeline.appointments || []" :loading="tabLoading"
                   :row-key="r => r.id" :pagination="false" :scroll="{ x: 'max-content' }" size="small"
@@ -143,12 +143,12 @@
                     </template>
                     <template v-else-if="column.key === 'type'">{{ labelOf(APPOINTMENT_TYPES, record.type) }}</template>
                   </template>
-                  <template #emptyText><a-empty :image="simpleEmptyImage" description="No appointments" /></template>
+                  <template #emptyText><a-empty :image="simpleEmptyImage" :description="$t('Hm_No_Appointments')" /></template>
                 </a-table>
               </a-tab-pane>
 
               <a-tab-pane key="admissions">
-                <template #tab>Admissions <a-badge :count="stats.admissions || 0" :number-style="badge" /></template>
+                <template #tab>{{ $t('Hm_Admissions') }} <a-badge :count="stats.admissions || 0" :number-style="badge" /></template>
                 <a-table
                   :columns="admissionColumns" :data-source="timeline.admissions || []" :loading="tabLoading"
                   :row-key="r => r.id" :pagination="false" :scroll="{ x: 'max-content' }" size="small"
@@ -164,12 +164,12 @@
                       </a-tag>
                     </template>
                   </template>
-                  <template #emptyText><a-empty :image="simpleEmptyImage" description="Never admitted" /></template>
+                  <template #emptyText><a-empty :image="simpleEmptyImage" :description="$t('Hm_Never_Admitted')" /></template>
                 </a-table>
               </a-tab-pane>
 
               <a-tab-pane key="prescriptions">
-                <template #tab>Prescriptions</template>
+                <template #tab>{{ $t('Hm_Prescriptions') }}</template>
                 <div v-if="(timeline.prescriptions || []).length" class="rx-list">
                   <a-card v-for="rx in timeline.prescriptions" :key="rx.id" size="small" class="rx">
                     <template #title>
@@ -187,11 +187,11 @@
                     </ul>
                   </a-card>
                 </div>
-                <a-empty v-else :image="simpleEmptyImage" description="Nothing prescribed yet" style="padding: 24px 0" />
+                <a-empty v-else :image="simpleEmptyImage" :description="$t('Hm_Nothing_Prescribed_Yet')" style="padding: 24px 0" />
               </a-tab-pane>
 
               <a-tab-pane key="lab">
-                <template #tab>Lab <a-badge :count="stats.lab_orders || 0" :number-style="badge" /></template>
+                <template #tab>{{ $t('Hm_Lab') }} <a-badge :count="stats.lab_orders || 0" :number-style="badge" /></template>
                 <a-table
                   :columns="labColumns" :data-source="timeline.lab_orders || []" :loading="tabLoading"
                   :row-key="r => r.id" :pagination="false" :scroll="{ x: 'max-content' }" size="small"
@@ -209,12 +209,12 @@
                     </template>
                     <template v-else-if="column.key === 'total'">{{ money(record.total) }}</template>
                   </template>
-                  <template #emptyText><a-empty :image="simpleEmptyImage" description="No lab orders" /></template>
+                  <template #emptyText><a-empty :image="simpleEmptyImage" :description="$t('Hm_No_Lab_Orders')" /></template>
                 </a-table>
               </a-tab-pane>
 
               <a-tab-pane key="billing">
-                <template #tab>Billing</template>
+                <template #tab>{{ $t('Hm_Billing') }}</template>
                 <a-table
                   :columns="invoiceColumns" :data-source="timeline.invoices || []" :loading="tabLoading"
                   :row-key="r => r.id" :pagination="false" :scroll="{ x: 'max-content' }" size="small"
@@ -231,8 +231,15 @@
                         {{ labelOf(INVOICE_STATUSES, record.status) }}
                       </a-tag>
                     </template>
+                    <template v-else-if="column.key === 'actions'">
+                      <a-tooltip :title="$t('Hm_Print_Invoice')">
+                        <a-button type="text" size="small" @click="printInvoice(record)">
+                          <template #icon><PrinterOutlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                    </template>
                   </template>
-                  <template #emptyText><a-empty :image="simpleEmptyImage" description="Nothing billed" /></template>
+                  <template #emptyText><a-empty :image="simpleEmptyImage" :description="$t('Hm_Nothing_Billed')" /></template>
                 </a-table>
               </a-tab-pane>
             </a-tabs>
@@ -241,7 +248,7 @@
       </a-row>
     </template>
 
-    <a-empty v-else description="Patient not found" style="padding: 64px 0" />
+    <a-empty v-else :description="$t('Hm_Patient_Not_Found')" style="padding: 64px 0" />
   </div>
 </template>
 
@@ -256,7 +263,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { message, Empty } from 'ant-design-vue';
-import { EditOutlined, ArrowLeftOutlined } from '@ant-design/icons-vue';
+import { EditOutlined, ArrowLeftOutlined, PrinterOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
 import { useFormat } from '../../composables/useFormat';
 import { useAuthStore } from '../../stores/auth';
@@ -264,6 +271,7 @@ import {
   GENDERS, PATIENT_STATUSES, VISIT_TYPES, APPOINTMENT_TYPES, APPOINTMENT_STATUSES,
   ADMISSION_STATUSES, LAB_STATUSES, INVOICE_STATUSES, labelOf, optionOf,
 } from './hospitalOptions';
+import { printInvoice } from './invoicePdf';
 import http from '../../lib/http';
 import { t } from '../../i18n';
 
@@ -288,7 +296,7 @@ const subtitle = computed(() => {
   const p = patient.value;
   if (!p) return '';
   return [
-    p.age !== null ? `${p.age} yrs` : null,
+    p.age !== null ? `${p.age} ${t('Hm_Yrs')}` : null,
     labelOf(GENDERS, p.gender),
     p.blood_group,
     p.phone,
@@ -301,44 +309,45 @@ const insuranceExpired = computed(() => {
 });
 
 const visitColumns = [
-  { title: 'Date', key: 'visit_date', dataIndex: 'visit_date', width: 160 },
-  { title: 'Ref', dataIndex: 'reference', key: 'reference', width: 150 },
-  { title: 'Type', key: 'type', dataIndex: 'type', width: 110 },
-  { title: 'Doctor', dataIndex: 'doctor_name', key: 'doctor_name', width: 150 },
-  { title: 'Diagnosis', dataIndex: 'diagnosis', key: 'diagnosis' },
-  { title: 'BP', dataIndex: 'blood_pressure', key: 'bp', width: 90 },
-  { title: 'Fee', key: 'fee', dataIndex: 'fee', width: 110 },
+  { title: t('Date'), key: 'visit_date', dataIndex: 'visit_date', width: 160 },
+  { title: t('Reference'), dataIndex: 'reference', key: 'reference', width: 150 },
+  { title: t('Type'), key: 'type', dataIndex: 'type', width: 110 },
+  { title: t('Hm_Doctor'), dataIndex: 'doctor_name', key: 'doctor_name', width: 150 },
+  { title: t('Hm_Diagnosis'), dataIndex: 'diagnosis', key: 'diagnosis' },
+  { title: t('Hm_BP'), dataIndex: 'blood_pressure', key: 'bp', width: 90 },
+  { title: t('Hm_Fee'), key: 'fee', dataIndex: 'fee', width: 110 },
   { title: '', key: 'open', width: 80 },
 ];
 const appointmentColumns = [
-  { title: 'When', key: 'scheduled_at', dataIndex: 'scheduled_at', width: 170 },
-  { title: 'Ref', dataIndex: 'reference', key: 'reference', width: 150 },
-  { title: 'Doctor', dataIndex: 'doctor_name', key: 'doctor_name' },
-  { title: 'Type', key: 'type', dataIndex: 'type', width: 130 },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 120 },
+  { title: t('Hm_When'), key: 'scheduled_at', dataIndex: 'scheduled_at', width: 170 },
+  { title: t('Reference'), dataIndex: 'reference', key: 'reference', width: 150 },
+  { title: t('Hm_Doctor'), dataIndex: 'doctor_name', key: 'doctor_name' },
+  { title: t('Type'), key: 'type', dataIndex: 'type', width: 130 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 120 },
 ];
 const admissionColumns = [
-  { title: 'Admitted', key: 'admitted_at', dataIndex: 'admitted_at', width: 170 },
-  { title: 'Discharged', key: 'discharged_at', dataIndex: 'discharged_at', width: 170 },
-  { title: 'Ward', dataIndex: 'ward_name', key: 'ward_name' },
-  { title: 'Bed', dataIndex: 'bed_number', key: 'bed_number', width: 90 },
-  { title: 'Nights', dataIndex: 'nights', key: 'nights', width: 80 },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 130 },
+  { title: t('Hm_Admitted'), key: 'admitted_at', dataIndex: 'admitted_at', width: 170 },
+  { title: t('Hm_Discharged'), key: 'discharged_at', dataIndex: 'discharged_at', width: 170 },
+  { title: t('Hm_Ward'), dataIndex: 'ward_name', key: 'ward_name' },
+  { title: t('Hm_Bed'), dataIndex: 'bed_number', key: 'bed_number', width: 90 },
+  { title: t('Hm_Nights'), dataIndex: 'nights', key: 'nights', width: 80 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 130 },
 ];
 const labColumns = [
-  { title: 'Ordered', key: 'ordered_at', dataIndex: 'ordered_at', width: 170 },
-  { title: 'Ref', dataIndex: 'reference', key: 'reference', width: 150 },
-  { title: 'Tests', key: 'tests', dataIndex: 'tests' },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 150 },
-  { title: 'Total', key: 'total', dataIndex: 'total', width: 110 },
+  { title: t('Hm_Ordered'), key: 'ordered_at', dataIndex: 'ordered_at', width: 170 },
+  { title: t('Reference'), dataIndex: 'reference', key: 'reference', width: 150 },
+  { title: t('Hm_Tests'), key: 'tests', dataIndex: 'tests' },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 150 },
+  { title: t('Total'), key: 'total', dataIndex: 'total', width: 110 },
 ];
 const invoiceColumns = [
-  { title: 'Date', key: 'invoice_date', dataIndex: 'invoice_date', width: 130 },
-  { title: 'Ref', dataIndex: 'reference', key: 'reference', width: 150 },
-  { title: 'Total', key: 'total', dataIndex: 'total', width: 120 },
-  { title: 'Paid', key: 'paid', dataIndex: 'paid', width: 120 },
-  { title: 'Due', key: 'due', dataIndex: 'due', width: 120 },
-  { title: 'Status', key: 'status', dataIndex: 'status', width: 130 },
+  { title: t('Date'), key: 'invoice_date', dataIndex: 'invoice_date', width: 130 },
+  { title: t('Reference'), dataIndex: 'reference', key: 'reference', width: 150 },
+  { title: t('Total'), key: 'total', dataIndex: 'total', width: 120 },
+  { title: t('Paid'), key: 'paid', dataIndex: 'paid', width: 120 },
+  { title: t('Due'), key: 'due', dataIndex: 'due', width: 120 },
+  { title: t('Status'), key: 'status', dataIndex: 'status', width: 130 },
+  { title: '', key: 'actions', width: 60 },
 ];
 
 function initials(name) {

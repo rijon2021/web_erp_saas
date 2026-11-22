@@ -281,3 +281,143 @@
 * Fixed **per-tenant cache isolation** on the file cache driver, where cached values were previously written to and read from different directories
 * Updated the documentation with improved **clarity and setup guidance**
 * Resolved multiple minor bugs to improve **performance, stability, and reliability**
+
+
+
+# Version 1.5
+
+## 🚀 Super Admin
+
++ **Important — activate your licence right after updating.** From this version the platform requires an active licence: an installation that is not activated is locked for administrators and tenants alike (tenants see a neutral "temporarily unavailable" page), and only Super Admin → Settings → Licence, the system updater and the super admin login stay reachable. Existing installations have no licence stored yet, so the platform locks as soon as the update finishes until you activate it — do this immediately after updating. Payment-gateway and channel webhooks keep working while locked, so no payments are lost.
++ Added licence activation: the installer has a Licence step (ui-lib.com licence key or Envato purchase code + email; if ui-lib.com cannot be reached you can continue, and the platform runs for 14 days before it locks), and Super Admin → Settings → Licence shows the licence details, support status and domains, lets you move the licence ("Deactivate there" / "Deactivate on this domain"), re-check it, and activate again with the stored key after a lapse. The licence is re-checked about once a day from the super admin panel itself — no cron job is needed. If ui-lib.com cannot be reached, or the licence is only not active on this domain yet (for example after moving the installation), everything keeps working for 14 days (`UILIB_GRACE_DAYS` in `.env`), with a countdown shown to super admins; a refund or revoked licence locks at once.
+
+### ✨ New Features
+
+* Automatic Update: upload the release ZIP from Settings → System Update to back up, update and migrate the platform and every tenant in one step, with automatic rollback if anything fails.
+* Payment link for a specific tenant with a custom amount.
+* Force logout all users of a tenant.
+* New Super Admin Security Settings.
+* Login CAPTCHA with built-in CAPTCHA, Google reCAPTCHA, Cloudflare Turnstile and hCaptcha.
+* Configurable failed-login attempt lockout.
+* Live CAPTCHA key validation before saving.
+* Emergency security reset command for Super Admin and tenant logins.
+* Landing page mode – use the built-in landing page, redirect to your own website, or disable it
+* New E-Invoicing settings for Angola AGT (software credentials, signing key, QR content).
+
+## 🚀 Tenant
+
+### ✨ New Features & Improvements
+
+* Added AI Assistant as the plan feature "AI Assistant", using each tenant's own Claude (Anthropic), ChatGPT (OpenAI) or Gemini (Google) API key: chat with your business data, daily dashboard insights, AI product descriptions (single and bulk), and supplier invoice scanning on new purchases. Choose the provider and model in AI Assistant › Settings; each provider keeps its own key, and conversations continue after switching.
+
+* New: Rental Management.
+* New: CRM (Leads & Sales Pipeline)
+* New: Audit Log — tracks who created, edited or deleted records (with before/after values) and staff sign-ins.
+* Added a Fashion & Apparel online-store theme, with sizes listed on product cards, size-chart guides on product pages, and size and colour filters on the shop page.
+* Added a Car Dealership online-store theme: vehicle details on products (make, model, year, mileage…), an inventory page with make/model/year/mileage/body/fuel/gearbox filters, vehicle pages with a finance calculator, enquiry, test-drive, trade-in and reservation requests, and a new Store → Vehicle Leads page.
+* New: Restaurant Management — floor plan and tables, menu with add-ons and dish details, waiter order screen with courses and seats, kitchen display by station, bills with service charge, tips, discounts, rounding and split payments (each payment is a normal POS sale), table reservations with a walk-in waitlist, QR table ordering, online table booking, online orders sent to the kitchen, a restaurant dashboard with sales, dish, void, staff, kitchen and reservation reports, and a Guide page with a live setup checklist.
+* Added a Restaurant online-store theme: the homepage is your menu, with dish add-ons, dietary filters and online table booking.
+* Rental Management: choose your business type (vehicles, equipment, properties, other) in Rental Settings — the item form, categories and filters then show only those types, with each type's own properties (transmission, seats, fuel… / power source, capacity, delivery…), plus one-click suggested categories.
+* Added a Rental online-store theme: your rental items with live availability calendars and instant price quotes, filters and booking forms that match your business type (driver and pick-up details for vehicles, delivery and site details for equipment), booking requests that land in Rental › Reservations to confirm or convert, email updates and a booking status page for customers, and "My bookings" in the customer account.
+* Booking Management upgraded: business types with their own booking fields, services with length, buffers, seats and staff, bookable staff with working hours, days off and HRM leave, a Requests inbox to confirm, decline or suggest another time, a Day view with "Complete & charge" through the POS, booking emails, reminders and WhatsApp messages, online deposits (Stripe, PayPal, Paystack, Flutterwave, Moyasar, MyFatoorah), a dashboard and reports, CRM capture, "My bookings" in the client portal and a Guide page.
+* Added a Booking online-store theme: a booking form on the home page with live free times, "Pick a time" or "Send a request", services, team and opening hours, deposit payment, a booking status page for customers and "My appointments" in the customer account.
+* New: Printful print-on-demand integration — import your Printful products (variants and mockups, always in stock), send web orders to Printful automatically when confirmed or paid, or by hand (as drafts or confirmed), offer Printful shipping rates at checkout, and get status, costs and tracking back through webhooks.
+* Fixed — confirming a web order no longer fails with "Insufficient stock" for products set to Always in stock.
+* Fixed — pulling products from Salla no longer fails.
+* New: manager approval to remove POS items — when switched on in POS Settings, cashiers need a manager's PIN to remove an item, lower a quantity, clear the cart or delete a held draft; managers set their PIN on their profile, and every removal is listed in Sales › POS Voided Items.
+* New: weighing-scale settings — System Settings › Weighing scale lets you describe the labels your counter scales print (prefix, item code, digits to skip, weight or price, decimals, check digit), with several label formats side by side, a live test box, and a Scale PLU field on products; used by the POS, Create Sale and Create Transfer. Price labels are charged exactly as printed. Existing setups keep reading labels exactly as before.
+* Fixed — product lists on Create Sale, Create Transfer and Print Barcode showed the base-unit price instead of the sale-unit price for products without a discount.
+* Fixed — in the POS, clicking a product after scanning a weighed item no longer adds it with the scanned weight.
+* New: POS Devices (plan feature "POS Devices (Card Terminals)") — connect card terminals and fiscal cash registers to the POS, starting with the Ingenico IDE280. Add each device in Sales › POS Devices with its payment method, merchant and terminal IDs, and either a local bridge on the cashier computer or your provider's cloud API; on the POS, "Charge on device" sends the amount (or the full fiscal receipt with VAT departments, and installments) and the sale completes only once the device approves. Charges are voided automatically if the checkout is closed, and the Transactions tab lists every payment, refund and void, flags cards charged without a sale, and refunds or voids them.
+* Added Guest Checkout: customers can now place orders without creating an account.
+* Fixed — Error Logs: the report now shows real application errors from the server logs, with a full details and stack-trace view.
+* New Security Settings under System Settings.
+* Login CAPTCHA.
+* Failed-attempt lockout.
+* Inactivity auto-logout.
+* One active session per user.
+* Sign-in activity log.
+* New Courier Integration module.
+* Courier Accounts management.
+* Courier connection testing and default account selection.
+* Manual / Other Courier support.
+* Courier settings for returns, COD, charges and status checks.
+* New courier management permissions.
+* Courier booking and tracking.
+* Bulk courier booking.
+* AfterShip and 17TRACK tracking integration.
+* New Courier Shipments page.
+* Shipment tracking timeline.
+* Manual shipment status and COD updates.
+* Printable shipping labels with tracking barcodes.
+* Returned parcel review and automatic restocking.
+* Automatic COD payout and courier charge recording.
+* Pakistan courier integrations: PostEx, Leopards, TCS, Trax, M&P, Call Courier and Daewoo FastEx.
+* Pakistan courier airway bills and shipping slips.
+* Automatic COD settlement detection for supported Pakistan couriers.
+* Courier webhook and scheduled status updates.
+* BlueEx tracking support.
+* Shipping aggregator integrations.
+* EasyPost and Shippo integration.
+* Shiprocket integration.
+* Sendcloud integration.
+* OTO and Torod integration.
+* EasyParcel integration.
+* Biteship integration.
+* Shiplogic integration.
+* Sendbox integration.
+* Courier rate comparison.
+* Default courier selection by cheapest, fastest or preferred carrier.
+* Full postal address support.
+* Default parcel size configuration.
+* Carrier labels and label voiding.
+* Automatic customs details for international shipments.
+* Shipping aggregator webhook status updates.
+* Gulf and Egypt courier integrations.
+* Aramex, SMSA Express, J&T Express, Naqel Express, Quiqup, Bosta and Mylerz integration.
+* Courier city, area and zone selection.
+* Courier booking cancellation.
+* Bangladesh, India and Southeast Asia courier integrations.
+* Steadfast, Pathao, RedX, eCourier, Delhivery, Shadowfax, Ninja Van, Flash Express and Lalamove integration.
+* Courier area selection for supported couriers.
+* Courier webhook status updates.
+* Automatic COD payout detection for supported couriers.
+* Courier labels for supported couriers.
+* Courier booking cancellation for supported couriers.
+* Map-point delivery with latitude and longitude.
+* Lalamove instant delivery price quotes.
+* DHL Express, FedEx and UPS integration.
+* International shipping rates and customs labels.
+* Courier tracking and cancellation support.
+* FedEx and UPS push status updates.
+* Customer shipment notifications via SMS, email and WhatsApp.
+* Customizable customer notification messages.
+* Online store shipment tracking page.
+* Courier performance reports.
+* Customer return-risk badge.
+* New Courier Logs page.
+* New Courier Guide page.
+* Courier setup checklist and webhook information.
+* Courier Integration enabled for existing plans.
+* Configurable Courier Account limits per plan.
+* Plan-based courier log retention.
+* Returned parcel re-shipping support.
+* Enhanced tracking page privacy.
+* Webhook signature validation.
+* Protection against backward shipment status updates.
+* Automatic COD payout detection after delivery.
+* Duplicate timeline prevention.
+* Duplicate booking prevention.
+* Duplicate restocking prevention.
+* New: Angola AGT e-invoicing (FR/FT invoices, NC credit notes, AGT series, QR code).
+* New: DR Congo DGI facture normalisée (NIF/RCCM/Id. Nat. on invoices; e-MCF certification pending DGI API access).
+* Invoices communicated to AGT or certified by the DGI can no longer be edited or deleted.
+* New: Shiip courier integration (Nigeria) — book GIG, DHL, Kwik, Redstar and more, paid from your Shiip wallet.
+* New: Shipbubble courier integration (Nigeria) — compare and book couriers paid from your Shipbubble wallet, with cash on delivery and live status updates.
+* New: live shipping rates at checkout can come from Shipbubble as well as Shippo — choose the provider and account per shipping method.
+* New: Topship courier integration (Nigeria) — domestic and international services paid from your Topship wallet, drop-off or pickup, Topship labels; also available for live shipping rates at checkout.
+* New: Custom Domain — tenants on a plan with the "Custom Domains" feature can connect their own domain (shop.example.com) from Settings › Custom Domain: add the domain, follow the CNAME / A / TXT instructions shown, click Check DNS, then set it as primary; the number of domains per plan is set by the new "Custom Domains" plan limit.
+* New: Supplier Wallet
+* New: Customer Wallet
+* Different Prices per Store
+* New: Software License Keys — sell third-party keys (upload or CSV/Excel import, one key per unit sold, delivered by email, My Licenses page, client portal and optionally the POS receipt) or generate your own with expiry, activation limits, domain/device locks, renew/suspend/revoke and a signed licensing API.

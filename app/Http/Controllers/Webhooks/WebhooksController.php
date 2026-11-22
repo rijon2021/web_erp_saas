@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Webhooks;
 
 use App\Http\Controllers\BaseController;
 use App\Jobs\Webhooks\WebhookDeliveryJob;
+use App\Models\Setting;
 use App\Models\Webhook;
 use App\Models\WebhookDelivery;
 use App\Models\WebhookIncomingLog;
@@ -131,7 +132,7 @@ class WebhooksController extends BaseController
 
         $payload = [
             'test' => true,
-            'message' => 'This is a test event from Stocky.',
+            'message' => 'This is a test event from '.$this->tenantAppName().'.',
             'timestamp' => now()->toIso8601String(),
             'user_id' => optional($request->user('api'))->id,
         ];
@@ -241,5 +242,18 @@ class WebhooksController extends BaseController
         $this->authorizeForUser($request->user('api'), 'viewAny', Webhook::class);
         $log = WebhookIncomingLog::findOrFail($id);
         return response()->json(['log' => $log]);
+    }
+
+    /** The tenant's app name (the part before "|"), or a neutral fallback. */
+    private function tenantAppName(): string
+    {
+        try {
+            $raw = (string) (Setting::where('deleted_at', null)->value('app_name') ?? '');
+        } catch (\Throwable) {
+            $raw = '';
+        }
+        $name = trim(explode('|', $raw)[0]);
+
+        return $name !== '' ? $name : 'your POS';
     }
 }

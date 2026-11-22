@@ -10,6 +10,7 @@ use App\Models\WhatsappUsage;
 class TenantLimitsService
 {
     protected ?Plan $plan = null;
+    protected ?Plan $basePlan = null;
     protected ?TenantSubscription $subscription = null;
     protected bool $resolved = false;
 
@@ -37,9 +38,22 @@ class TenantLimitsService
             ->latest()
             ->first();
 
-        $this->plan = $this->subscription?->plan;
+        $this->basePlan = $this->subscription?->plan;
+        // The effective plan: the subscription's plan plus the add-ons this
+        // tenant bought. Every feature gate reads this one object, so a bought
+        // module unlocks routes, sidebar, permissions and themes alike.
+        $grants = \App\Models\Central\TenantAddon::activeGrantsFor((string) $tenant->id);
+        $this->plan = $this->basePlan?->withAddonFeatures($grants['keys'], $grants['limits']);
 
         return $this->subscription;
+    }
+
+    /** The subscription's plan WITHOUT add-ons (what the tenant pays for). */
+    public function getBasePlan(): ?Plan
+    {
+        $this->resolveSubscription();
+
+        return $this->basePlan;
     }
 
     protected function resolvePlan(): ?Plan
@@ -76,6 +90,15 @@ class TenantLimitsService
         $meta = Plan::AVAILABLE_LIMITS[$limitKey] ?? null;
         if (! $meta) {
             return 0;
+        }
+
+        // custom_domains is a central table keyed by tenant, not a tenant-DB model.
+        if ($limitKey === 'max_custom_domains') {
+            try {
+                return tenant() ? \App\Models\Central\CustomDomain::where('tenant_id', tenant()->id)->count() : 0;
+            } catch (\Throwable $e) {
+                return 0;
+            }
         }
 
         // Monthly-reset counters are tracked separately, not by counting rows.
@@ -190,6 +213,8 @@ class TenantLimitsService
         }
 
         $limits = [];
+        // Add-on keys this plan may buy (features, themes, limit packs).
+        $forSale = array_flip(\App\Models\Central\Addon::saleKeysForPlan($this->basePlan));
 
         foreach (Plan::AVAILABLE_LIMITS as $key => $meta) {
             $max = $plan->getLimit($key);
@@ -215,16 +240,24 @@ class TenantLimitsService
                 'max'        => $unlimited ? null : $max,
                 'unlimited'  => $unlimited,
                 'percentage' => $percentage,
+                // Extra units from limit packs, and whether more can be bought.
+                'addon_units' => (int) ($plan->addonLimits[$key] ?? 0),
+                'purchasable' => ! $unlimited && isset($forSale[\App\Models\Central\Addon::LIMIT_PREFIX . $key]),
             ];
         }
 
         $features = [];
+        // Features the plan lacks but the tenant may buy as an add-on: the
+        // sidebar shows those modules locked, linking to Billing → Add-ons.
 
         foreach (Plan::AVAILABLE_FEATURES as $key => $meta) {
+            $enabled = $plan->hasFeature($key);
             $features[$key] = [
-                'label'   => $meta['label'],
-                'icon'    => $this->mapIcon($meta['icon']),
-                'enabled' => $plan->hasFeature($key),
+                'label'       => $meta['label'],
+                'icon'        => $this->mapIcon($meta['icon']),
+                'enabled'     => $enabled,
+                'addon'       => $plan->featureFromAddon($key),
+                'purchasable' => ! $enabled && isset($forSale[$key]),
             ];
         }
 
@@ -233,6 +266,8 @@ class TenantLimitsService
             'plan_name' => $plan->name,
             'limits'    => $limits,
             'features'  => $features,
+            // Billing → Add-ons menu entry (Super admin → Settings → Features).
+            'addons_enabled' => \App\Models\Central\Addon::marketplaceOn(),
         ];
     }
 
@@ -249,6 +284,19 @@ class TenantLimitsService
         }
 
         $setting = GeneralSetting::instance();
+
+        // Grace period: always shown, whatever the reminder channels — the
+        // workspace is about to be locked and the owner must know why.
+        if ($sub->inGracePeriod()) {
+            $graceEnds = $sub->graceEndsAt();
+            $days = (int) now()->startOfDay()->diffInDays($graceEnds->copy()->startOfDay(), false);
+            $payload = $this->bannerPayload('grace', 'danger', max(0, $days), $graceEnds, $sub->plan?->name ?? '');
+            // Re-shows every day even if dismissed.
+            $payload['ref'] = now()->toDateString();
+            $payload['read_only'] = $setting->subscriptionGraceMode() === 'read_only';
+
+            return $payload;
+        }
 
         if (! $setting->reminderChannelEnabled('banner')) {
             return null;

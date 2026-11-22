@@ -237,7 +237,7 @@ class RealEstateDemoSeeder extends Seeder
         $s->forceFill([
             'theme' => 'real_estate',
             'hero_image_path' => $heroIsDefault ? self::img('modern_pool', 1800) : $hero,
-            'store_name' => in_array($s->store_name, [null, '', 'StoreX', 'TechNova', 'LittleJoy', 'HavenHomes', 'FreshMart'], true) ? 'HavenHomes' : $s->store_name,
+            'store_name' => in_array($s->store_name, [null, '', 'StoreX', 'TechNova', 'LittleJoy', 'HavenHomes', 'FreshMart', 'Atelier'], true) ? 'HavenHomes' : $s->store_name,
             'primary_color' => '#0f766e',
             'secondary_color' => '#c9a24d',
             'hero_title' => 'Find a place you will love to call home',

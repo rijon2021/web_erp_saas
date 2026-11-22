@@ -62,7 +62,7 @@
                     @endif
                     <tr>
                         <td class="supinv-meta-label">{{ __('super.invoice_pdf.cycle') }}</td>
-                        <td class="supinv-meta-value">{{ ucfirst($payment->billing_cycle) }}</td>
+                        <td class="supinv-meta-value">{{ $payment->payment_link_id ? __('super.payment_links.one_time') : ucfirst($payment->billing_cycle) }}</td>
                     </tr>
                 </table>
             </div>
@@ -79,11 +79,11 @@
             <tbody>
                 <tr>
                     <td>
-                        <strong>{{ $payment->plan->name ?? __('super.invoice_pdf.subscription') }} {{ __('super.invoice_pdf.plan') }}</strong>
+                        <strong>@if($payment->payment_link_id){{ $payment->metadata['checkout_name'] ?? __('super.payment_links.title') }}@else{{ $payment->plan->name ?? __('super.invoice_pdf.subscription') }} {{ __('super.invoice_pdf.plan') }}@endif</strong>
                         <br><span class="supinv-item-note">{{ __('super.invoice_pdf.sub_payment') }}</span>
                     </td>
-                    <td>{{ ucfirst($payment->billing_cycle) }}</td>
-                    <td class="supinv-text-right">{{ $currencySymbol }}{{ number_format($payment->amount, 2) }}</td>
+                    <td>{{ $payment->payment_link_id ? __('super.payment_links.one_time') : ucfirst($payment->billing_cycle) }}</td>
+                    <td class="supinv-text-right">{{ $payment->formatMoney($payment->amount, false) }}</td>
                 </tr>
             </tbody>
         </table>
@@ -91,17 +91,17 @@
         <table class="supinv-totals">
             <tr>
                 <td class="supinv-totals-muted">{{ __('super.invoice_pdf.subtotal') }}</td>
-                <td class="supinv-text-right">{{ $currencySymbol }}{{ number_format($payment->amount, 2) }}</td>
+                <td class="supinv-text-right">{{ $payment->formatMoney($payment->amount, false) }}</td>
             </tr>
             @if($payment->tax > 0)
             <tr>
                 <td class="supinv-totals-muted">{{ __('super.invoice_pdf.tax') }}</td>
-                <td class="supinv-text-right">{{ $currencySymbol }}{{ number_format($payment->tax, 2) }}</td>
+                <td class="supinv-text-right">{{ $payment->formatMoney($payment->tax, false) }}</td>
             </tr>
             @endif
             <tr class="supinv-totals-total-row">
                 <td>{{ __('super.invoice_pdf.total') }} ({{ $payment->currency }})</td>
-                <td class="supinv-text-right">{{ $currencySymbol }}{{ number_format($payment->total, 2) }}</td>
+                <td class="supinv-text-right">{{ $payment->formatMoney($payment->total, false) }}</td>
             </tr>
         </table>
 

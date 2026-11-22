@@ -119,6 +119,7 @@ class AutoSync
         $run = ShopifySyncRun::where('store_id', $store->id)
             ->where('entity', $entity)
             ->where('status', 'running')
+            ->bulk()
             ->orderByDesc('id')
             ->first();
 

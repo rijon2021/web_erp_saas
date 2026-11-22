@@ -7,15 +7,15 @@
       <template #actions>
         <a-button :loading="pdfLoading" @click="previewContractPdf">
           <template #icon><EyeOutlined /></template>
-          Preview PDF
+          {{ $t('Ct_Preview_PDF') }}
         </a-button>
         <a-button type="primary" @click="downloadContractPdf">
           <template #icon><DownloadOutlined /></template>
-          Download PDF
+          {{ $t('Download_PDF') }}
         </a-button>
         <a-button v-if="canEdit && contract" @click="$router.push(`/contracts/${contract.id}/edit`)">
           <template #icon><EditOutlined /></template>
-          Edit Contract
+          {{ $t('Edit_Contract') }}
         </a-button>
       </template>
     </PageHeader>
@@ -42,7 +42,7 @@
               <a-tag v-if="contractTypeLabel(contract.type)">{{ contractTypeLabel(contract.type) }}</a-tag>
               <a-tag v-if="contract.hide_from_customer && contract.party_type !== 'employee'">
                 <template #icon><EyeInvisibleOutlined /></template>
-                Hidden from customer
+                {{ $t('Ct_Hidden_From_Customer') }}
               </a-tag>
             </div>
             <h2 class="hero-subject">{{ contract.subject }}</h2>
@@ -56,22 +56,22 @@
                 </span>
               </div>
               <div v-if="contract.project_name" class="meta-item">
-                <span class="meta-label">Project</span>
+                <span class="meta-label">{{ $t('Project') }}</span>
                 <span class="meta-value">{{ contract.project_name }}</span>
               </div>
               <div class="meta-item">
-                <span class="meta-label">Start</span>
+                <span class="meta-label">{{ $t('Ct_Start') }}</span>
                 <span class="meta-value">{{ date(contract.start_date) }}</span>
               </div>
               <div class="meta-item">
-                <span class="meta-label">End</span>
+                <span class="meta-label">{{ $t('Ct_End') }}</span>
                 <span class="meta-value">{{ date(contract.end_date) }}</span>
               </div>
             </div>
           </div>
 
           <div class="hero-value">
-            <span class="meta-label">Value</span>
+            <span class="meta-label">{{ $t('Value') }}</span>
             <span class="value-figure">{{ money(contract.value) }}</span>
           </div>
         </div>
@@ -89,7 +89,7 @@
           type="success" show-icon style="margin-top: 16px"
         >
           <template #icon><SafetyCertificateOutlined /></template>
-          <template #message>Signed{{ contract.signer_name ? ` by ${contract.signer_name}` : '' }}</template>
+          <template #message>{{ contract.signer_name ? $t('Ct_Signed_By', { name: contract.signer_name }) : $t('Ct_Signed') }}</template>
           <template #description>
             {{ dateTime(contract.signed_at) }}<span v-if="contract.signed_ip"> — IP {{ contract.signed_ip }}</span>
           </template>
@@ -98,25 +98,25 @@
 
       <a-tabs v-model:activeKey="tab">
         <a-tab-pane key="contract">
-          <template #tab><span class="tab"><FileTextOutlined />Contract</span></template>
+          <template #tab><span class="tab"><FileTextOutlined />{{ $t('Contract') }}</span></template>
           <a-card size="small">
             <!-- Sanitised: contract descriptions are authored HTML. -->
             <div v-if="contract.description" class="doc-sheet">
               <div class="rich" v-html="safeDescription"></div>
             </div>
-            <a-empty v-else description="No description yet." style="padding: 48px 0" />
+            <a-empty v-else :description="$t('Ct_No_Description_Yet')" style="padding: 48px 0" />
           </a-card>
         </a-tab-pane>
 
         <a-tab-pane key="attachments">
           <template #tab>
-            <span class="tab"><PaperClipOutlined />Attachments<span v-if="counts.attachments" class="tab-count">{{ counts.attachments }}</span></span>
+            <span class="tab"><PaperClipOutlined />{{ $t('Attachments') }}<span v-if="counts.attachments" class="tab-count">{{ counts.attachments }}</span></span>
           </template>
           <a-card size="small">
             <a-upload
               v-if="canEdit" :file-list="[]" :before-upload="uploadAttachment" style="display: block; margin-bottom: 16px"
             >
-              <a-button><template #icon><PlusOutlined /></template>Upload attachment</a-button>
+              <a-button><template #icon><PlusOutlined /></template>{{ $t('Upload_Attachment') }}</a-button>
             </a-upload>
             <div v-if="counts.attachments" class="file-list">
               <div v-for="item in contract.attachments" :key="item.id" class="file-row">
@@ -125,30 +125,30 @@
                 <a-space>
                   <a-button size="small" @click="downloadAttachment(item)">
                     <template #icon><DownloadOutlined /></template>
-                    Download
+                    {{ $t('Download') }}
                   </a-button>
                   <a-popconfirm
-                    v-if="canEdit" title="Delete this attachment?"
+                    v-if="canEdit" :title="$t('Ct_Delete_Attachment_Confirm')"
                     @confirm="deleteAttachment(item.id)"
                   >
-                    <a-button size="small" danger>Delete</a-button>
+                    <a-button size="small" danger>{{ $t('Delete') }}</a-button>
                   </a-popconfirm>
                 </a-space>
               </div>
             </div>
-            <a-empty v-else description="No attachments yet." style="padding: 32px 0" />
+            <a-empty v-else :description="$t('Ct_No_Attachments_Yet')" style="padding: 32px 0" />
           </a-card>
         </a-tab-pane>
 
         <a-tab-pane key="comments">
           <template #tab>
-            <span class="tab"><MessageOutlined />Comments<span v-if="counts.comments" class="tab-count">{{ counts.comments }}</span></span>
+            <span class="tab"><MessageOutlined />{{ $t('Ct_Comments') }}<span v-if="counts.comments" class="tab-count">{{ counts.comments }}</span></span>
           </template>
           <a-card size="small">
             <div class="composer">
-              <a-textarea v-model:value="newComment" :rows="2" placeholder="Write a comment..." />
+              <a-textarea v-model:value="newComment" :rows="2" :placeholder="$t('Ct_Write_Comment')" />
               <div class="composer-actions">
-                <a-button type="primary" :disabled="!newComment.trim()" @click="addComment">Post comment</a-button>
+                <a-button type="primary" :disabled="!newComment.trim()" @click="addComment">{{ $t('Ct_Post_Comment') }}</a-button>
               </div>
             </div>
             <div v-if="counts.comments" class="thread">
@@ -169,42 +169,42 @@
                 </div>
               </div>
             </div>
-            <a-empty v-else description="No comments yet." style="padding: 32px 0" />
+            <a-empty v-else :description="$t('Ct_No_Comments_Yet')" style="padding: 32px 0" />
           </a-card>
         </a-tab-pane>
 
         <a-tab-pane key="renewals">
           <template #tab>
-            <span class="tab"><HistoryOutlined />Renewal History<span v-if="counts.renewals" class="tab-count">{{ counts.renewals }}</span></span>
+            <span class="tab"><HistoryOutlined />{{ $t('Ct_Renewal_History') }}<span v-if="counts.renewals" class="tab-count">{{ counts.renewals }}</span></span>
           </template>
           <a-card size="small">
             <a-space v-if="canEdit" wrap style="margin-bottom: 20px">
-              <a-date-picker v-model:value="renewalForm.renewal_date" value-format="YYYY-MM-DD" placeholder="Renewal date" />
-              <a-date-picker v-model:value="renewalForm.new_end_date" value-format="YYYY-MM-DD" placeholder="New end date" />
-              <a-input v-model:value="renewalForm.notes" placeholder="Notes (optional)" style="width: 220px" />
-              <a-button type="primary" @click="addRenewal">Add renewal</a-button>
+              <a-date-picker v-model:value="renewalForm.renewal_date" value-format="YYYY-MM-DD" :placeholder="$t('Ct_Renewal_Date')" />
+              <a-date-picker v-model:value="renewalForm.new_end_date" value-format="YYYY-MM-DD" :placeholder="$t('Ct_New_End_Date')" />
+              <a-input v-model:value="renewalForm.notes" :placeholder="$t('Ct_Notes_Optional')" style="width: 220px" />
+              <a-button type="primary" @click="addRenewal">{{ $t('Ct_Add_Renewal') }}</a-button>
             </a-space>
             <a-timeline v-if="counts.renewals" style="margin-top: 8px">
               <a-timeline-item v-for="item in contract.renewals" :key="item.id" color="#7c3aed">
                 <strong>{{ date(item.renewal_date) }}</strong>
-                <span class="muted" style="font-size: 14px"> — extended to </span>
+                <span class="muted" style="font-size: 14px"> — {{ $t('Ct_Extended_To') }} </span>
                 <strong>{{ date(item.new_end_date) }}</strong>
                 <div v-if="item.notes" class="muted" style="margin-top: 2px">{{ item.notes }}</div>
               </a-timeline-item>
             </a-timeline>
-            <a-empty v-else description="No renewals yet." style="padding: 32px 0" />
+            <a-empty v-else :description="$t('Ct_No_Renewals_Yet')" style="padding: 32px 0" />
           </a-card>
         </a-tab-pane>
 
         <a-tab-pane key="tasks">
           <template #tab>
-            <span class="tab"><CheckSquareOutlined />Tasks<span v-if="counts.tasks" class="tab-count">{{ counts.tasks }}</span></span>
+            <span class="tab"><CheckSquareOutlined />{{ $t('Tasks') }}<span v-if="counts.tasks" class="tab-count">{{ counts.tasks }}</span></span>
           </template>
           <a-card size="small">
             <a-space v-if="canEdit" wrap style="margin-bottom: 12px">
-              <a-input v-model:value="taskForm.title" placeholder="Task title" style="width: 260px" />
+              <a-input v-model:value="taskForm.title" :placeholder="$t('Ct_Task_Title')" style="width: 260px" />
               <a-date-picker v-model:value="taskForm.due_date" value-format="YYYY-MM-DD" />
-              <a-button type="primary" @click="addTask">Add task</a-button>
+              <a-button type="primary" @click="addTask">{{ $t('Page_Add_Task') }}</a-button>
             </a-space>
             <a-table
               :columns="taskColumns" :data-source="contract.tasks || []"
@@ -218,23 +218,23 @@
                   <a-tag :color="record.status === 'completed' ? 'success' : 'default'">{{ record.status }}</a-tag>
                 </template>
                 <template v-else-if="column.key === 'actions'">
-                  <a-button v-if="canEdit" size="small" danger @click="deleteChild('tasks', record.id)">Delete</a-button>
+                  <a-button v-if="canEdit" size="small" danger @click="deleteChild('tasks', record.id)">{{ $t('Delete') }}</a-button>
                 </template>
               </template>
-              <template #emptyText><a-empty description="No tasks yet." style="padding: 24px 0" /></template>
+              <template #emptyText><a-empty :description="$t('Ct_No_Tasks_Yet')" style="padding: 24px 0" /></template>
             </a-table>
           </a-card>
         </a-tab-pane>
 
         <a-tab-pane key="notes">
           <template #tab>
-            <span class="tab"><FormOutlined />Notes<span v-if="counts.notes" class="tab-count">{{ counts.notes }}</span></span>
+            <span class="tab"><FormOutlined />{{ $t('Notes') }}<span v-if="counts.notes" class="tab-count">{{ counts.notes }}</span></span>
           </template>
           <a-card size="small">
             <div class="composer">
-              <a-textarea v-model:value="newNote" :rows="2" placeholder="Add a note..." />
+              <a-textarea v-model:value="newNote" :rows="2" :placeholder="$t('Ct_Add_Note_Placeholder')" />
               <div class="composer-actions">
-                <a-button type="primary" :disabled="!newNote.trim()" @click="addNote">Add note</a-button>
+                <a-button type="primary" :disabled="!newNote.trim()" @click="addNote">{{ $t('Ct_Add_Note') }}</a-button>
               </div>
             </div>
             <div v-if="counts.notes" class="thread">
@@ -255,24 +255,24 @@
                 </div>
               </div>
             </div>
-            <a-empty v-else description="No notes yet." style="padding: 32px 0" />
+            <a-empty v-else :description="$t('Ct_No_Notes_Yet')" style="padding: 32px 0" />
           </a-card>
         </a-tab-pane>
 
         <a-tab-pane key="templates">
-          <template #tab><span class="tab"><SnippetsOutlined />Templates</span></template>
+          <template #tab><span class="tab"><SnippetsOutlined />{{ $t('Templates') }}</span></template>
           <a-card size="small">
             <a-alert
               type="info" style="margin-bottom: 12px"
-              message="Use merge fields in templates: {contract_number}, {customer_name}, {start_date}, {end_date}, {contract_value}, etc."
+              :message="$t('Ct_Merge_Fields_Hint', MERGE_HINT_FIELDS)"
             />
-            <a-button type="link" style="padding: 0" @click="loadMergeFields">View available merge fields</a-button>
+            <a-button type="link" style="padding: 0" @click="loadMergeFields">{{ $t('Ct_View_Merge_Fields') }}</a-button>
             <div v-if="mergeFields.length" class="merge-list">
               <div v-for="f in mergeFields" :key="f.key" class="muted">{{ f.key }} — {{ f.label }}</div>
             </div>
 
             <a-button v-if="canEdit" type="primary" size="small" style="margin: 12px 0" @click="newTemplate">
-              + New template
+              + {{ $t('New_Template') }}
             </a-button>
 
             <a-table
@@ -282,29 +282,31 @@
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'actions'">
                   <a-space v-if="canEdit">
-                    <a-button type="link" size="small" @click="editTemplate(record)">Edit</a-button>
-                    <a-popconfirm title="Delete this template?" @confirm="deleteTemplate(record.id)">
-                      <a-button type="link" size="small" danger>Delete</a-button>
+                    <a-button type="link" size="small" @click="editTemplate(record)">{{ $t('Edit') }}</a-button>
+                    <a-popconfirm :title="$t('Ct_Delete_Template_Confirm')" @confirm="deleteTemplate(record.id)">
+                      <a-button type="link" size="small" danger>{{ $t('Delete') }}</a-button>
                     </a-popconfirm>
                   </a-space>
                 </template>
               </template>
             </a-table>
-            <p v-else class="muted">No templates yet. Click <em>New template</em> to create one.</p>
+            <i18n-t v-else keypath="Ct_No_Templates_Hint" tag="p" class="muted">
+              <template #action><em>{{ $t('New_Template') }}</em></template>
+            </i18n-t>
 
             <a-divider />
-            <h4>Preview against this contract</h4>
+            <h4>{{ $t('Ct_Preview_Against_Contract') }}</h4>
             <a-select
-              v-model:value="selectedTemplateId" style="width: 280px" placeholder="Select a template"
+              v-model:value="selectedTemplateId" style="width: 280px" :placeholder="$t('Ct_Select_Template')"
               :options="templates.map(t2 => ({ value: t2.id, label: t2.name }))"
               @change="loadTemplatePreview"
             />
             <a-space v-if="selectedTemplateId" style="margin-left: 12px">
               <a-button size="small" :loading="pdfLoading" @click="previewTemplatePdf">
-                <template #icon><EyeOutlined /></template>Preview as PDF
+                <template #icon><EyeOutlined /></template>{{ $t('Ct_Preview_As_PDF') }}
               </a-button>
               <a-button size="small" @click="downloadTemplatePdf">
-                <template #icon><DownloadOutlined /></template>Download PDF
+                <template #icon><DownloadOutlined /></template>{{ $t('Download_PDF') }}
               </a-button>
             </a-space>
             <!-- Rendered server-side from author-controlled templates; sanitised
@@ -316,22 +318,22 @@
     </template>
 
     <a-modal
-      v-model:open="templateModal" :title="templateForm.id ? 'Edit template' : 'New template'"
-      width="800px" ok-text="Save" @ok="saveTemplate"
+      v-model:open="templateModal" :title="templateForm.id ? $t('Edit_Template') : $t('New_Template')"
+      width="800px" :ok-text="$t('Save')" @ok="saveTemplate"
     >
       <a-form layout="vertical">
-        <a-form-item label="Name *">
-          <a-input v-model:value="templateForm.name" placeholder="e.g. Standard service contract" />
+        <a-form-item :label="$t('Name') + ' *'">
+          <a-input v-model:value="templateForm.name" :placeholder="$t('Ct_Template_Name_Placeholder')" />
         </a-form-item>
-        <a-form-item label="Content (HTML supported, use merge fields like {customer_name})">
+        <a-form-item :label="$t('Ct_Template_Content_Label', { customer_name: '{customer_name}' })">
           <a-textarea v-model:value="templateForm.content" :rows="12" />
         </a-form-item>
       </a-form>
     </a-modal>
 
     <a-modal v-model:open="pdfModal" :title="pdfTitle" width="900px" :footer="null" @cancel="closePdf">
-      <iframe v-if="pdfUrl" :src="pdfUrl" style="width: 100%; height: 70vh; border: 0" title="PDF preview"></iframe>
-      <div v-else class="muted" style="padding: 48px; text-align: center">Loading preview...</div>
+      <iframe v-if="pdfUrl" :src="pdfUrl" style="width: 100%; height: 70vh; border: 0" :title="$t('Ct_PDF_Preview')"></iframe>
+      <div v-else class="muted" style="padding: 48px; text-align: center">{{ $t('Ct_Loading_Preview') }}</div>
     </a-modal>
   </div>
 </template>
@@ -343,8 +345,7 @@
  * generation surface, which is why this page stayed on legacy longest.
  *
  * Legacy is almost entirely un-internationalised — five $t() calls in 465
- * lines — so the English labels are kept verbatim rather than inventing keys
- * that do not exist in the translations table.
+ * lines; the labels here go through Ct_* keys.
  *
  * Two deliberate deviations:
  * - type/status render through contractVocab (labels + Ant colours) instead of
@@ -391,6 +392,11 @@ const partyName = computed(() => {
 });
 const safeDescription = computed(() => DOMPurify.sanitize(contract.value?.description || ''));
 
+/** Merge-field tokens are passed back in as params so the hint shows them literally. */
+const MERGE_HINT_FIELDS = Object.fromEntries(
+  ['contract_number', 'customer_name', 'start_date', 'end_date', 'contract_value'].map(k => [k, `{${k}}`])
+);
+
 const counts = computed(() => {
   const c = contract.value || {};
   return {
@@ -412,12 +418,16 @@ const lifecycle = computed(() => {
   const total = end.diff(start, 'day') || 1;
   const percent = Math.min(100, Math.max(0, Math.round((now.diff(start, 'day') / total) * 100)));
   const daysLeft = end.startOf('day').diff(now.startOf('day'), 'day');
-  if (daysLeft < 0) return { percent, tone: 'over', text: `Ended ${Math.abs(daysLeft)} day${Math.abs(daysLeft) === 1 ? '' : 's'} ago` };
+  if (daysLeft < 0) {
+    const n = Math.abs(daysLeft);
+    return { percent, tone: 'over', text: t(n === 1 ? 'Ct_Ended_Day_Ago' : 'Ct_Ended_Days_Ago', { n }) };
+  }
   if (now.isBefore(start)) {
     const until = start.startOf('day').diff(now.startOf('day'), 'day');
-    return { percent, tone: 'ok', text: `Starts in ${until} day${until === 1 ? '' : 's'}` };
+    return { percent, tone: 'ok', text: t(until === 1 ? 'Ct_Starts_In_Day' : 'Ct_Starts_In_Days', { n: until }) };
   }
-  return { percent, tone: 'ok', text: daysLeft === 0 ? 'Ends today' : `${daysLeft} day${daysLeft === 1 ? '' : 's'} remaining` };
+  if (daysLeft === 0) return { percent, tone: 'ok', text: t('Ct_Ends_Today') };
+  return { percent, tone: 'ok', text: t(daysLeft === 1 ? 'Ct_Day_Remaining' : 'Ct_Days_Remaining', { n: daysLeft }) };
 });
 
 const AVATAR_COLORS = ['#7c3aed', '#1677ff', '#13c2c2', '#fa8c16', '#eb2f96', '#52c41a'];
@@ -443,15 +453,15 @@ const isOverdue = task => task.status !== 'completed' && task.due_date
   && dayjs(task.due_date).isBefore(dayjs(), 'day');
 
 const taskColumns = computed(() => [
-  { title: 'Title', dataIndex: 'title', key: 'title' },
-  { title: 'Due', dataIndex: 'due_date', key: 'due_date' },
-  { title: 'Status', dataIndex: 'status', key: 'status' },
+  { title: t('Title'), dataIndex: 'title', key: 'title' },
+  { title: t('Due'), dataIndex: 'due_date', key: 'due_date' },
+  { title: t('Status'), dataIndex: 'status', key: 'status' },
   { title: '', key: 'actions', width: 90 },
 ]);
-const templateColumns = [
-  { title: 'Name', dataIndex: 'name', key: 'name' },
+const templateColumns = computed(() => [
+  { title: t('Name'), dataIndex: 'name', key: 'name' },
   { title: '', key: 'actions', width: 140 },
-];
+]);
 
 async function fetchContract() {
   try {
@@ -514,14 +524,14 @@ const deleteChild = (kind, id) => mutate(() => http.delete(`${base()}/${kind}/${
 function uploadAttachment(file) {
   const fd = new FormData();
   fd.append('file', file);
-  mutate(() => http.postForm(`${base()}/attachments`, fd), 'Uploaded');
+  mutate(() => http.postForm(`${base()}/attachments`, fd), t('Uploaded'));
   return false;
 }
 async function downloadAttachment(a) {
   try {
     await http.download(`${base()}/attachments/${a.id}/download`, a.file_name);
   } catch (e) {
-    message.error('Download failed');
+    message.error(t('Ct_Download_Failed'));
   }
 }
 const deleteAttachment = id => mutate(() => http.delete(`${base()}/attachments/${id}`));
@@ -569,32 +579,32 @@ function editTemplate(row) {
 }
 async function saveTemplate() {
   if (!templateForm.value.name.trim()) {
-    message.warning('Template name is required.');
+    message.warning(t('Ct_Template_Name_Required'));
     return;
   }
   const body = { name: templateForm.value.name, content: templateForm.value.content };
   try {
     if (templateForm.value.id) await http.put(`contracts-templates/${templateForm.value.id}`, body);
     else await http.post('contracts-templates', body);
-    message.success('Template saved.');
+    message.success(t('Ct_Template_Saved'));
     templateModal.value = false;
     await fetchTemplates();
   } catch (e) {
     const errors = e?.data?.errors;
-    message.error(e?.data?.message || (errors && Object.values(errors).flat()[0]) || 'Failed to save template.');
+    message.error(e?.data?.message || (errors && Object.values(errors).flat()[0]) || t('Ct_Failed_Save_Template'));
   }
 }
 async function deleteTemplate(id) {
   try {
     await http.delete(`contracts-templates/${id}`);
-    message.success('Template deleted.');
+    message.success(t('Ct_Template_Deleted'));
     if (selectedTemplateId.value === id) {
       selectedTemplateId.value = null;
       templatePreview.value = '';
     }
     await fetchTemplates();
   } catch (e) {
-    message.error('Delete failed.');
+    message.error(t('Delete_failed'));
   }
 }
 
@@ -602,7 +612,7 @@ async function deleteTemplate(id) {
 
 const pdfModal = ref(false);
 const pdfUrl = ref('');
-const pdfTitle = ref('PDF preview');
+const pdfTitle = ref(t('Ct_PDF_Preview'));
 const pdfLoading = ref(false);
 
 function revokePdf() {
@@ -625,7 +635,7 @@ async function openPreview(url, title) {
     const b = await http.blob(url);
     pdfUrl.value = window.URL.createObjectURL(b);
   } catch (e) {
-    message.error('Preview failed');
+    message.error(t('Ct_Preview_Failed'));
     pdfModal.value = false;
   } finally {
     pdfLoading.value = false;
@@ -634,17 +644,17 @@ async function openPreview(url, title) {
 
 const previewContractPdf = () => openPreview(
   `${base()}/pdf?preview=1`,
-  `Contract ${contract.value?.contract_number || ''} — preview`
+  t('Ct_Contract_Preview_Title', { number: contract.value?.contract_number || '' })
 );
 const downloadContractPdf = () => http
   .download(`${base()}/pdf`, `Contract_${contract.value?.contract_number || route.params.id}.pdf`)
-  .catch(() => message.error('Download failed'));
+  .catch(() => message.error(t('Ct_Download_Failed')));
 
 const previewTemplatePdf = () => {
   const tpl = templates.value.find(x => x.id === selectedTemplateId.value);
   return openPreview(
     `${base()}/templates/${selectedTemplateId.value}/pdf?preview=1`,
-    tpl ? `Template: ${tpl.name} — preview` : 'Template preview'
+    tpl ? t('Ct_Template_Preview_Title', { name: tpl.name }) : t('Ct_Template_Preview')
   );
 };
 const downloadTemplatePdf = () => {
@@ -655,7 +665,7 @@ const downloadTemplatePdf = () => {
       `${base()}/templates/${selectedTemplateId.value}/pdf`,
       `Template_${safeName}_${contract.value?.contract_number || route.params.id}.pdf`
     )
-    .catch(() => message.error('Download failed'));
+    .catch(() => message.error(t('Ct_Download_Failed')));
 };
 
 // Legacy captured the id once and never refetched; the router reuses this

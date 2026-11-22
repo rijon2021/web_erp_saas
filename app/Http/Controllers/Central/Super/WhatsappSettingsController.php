@@ -52,7 +52,7 @@ class WhatsappSettingsController extends Controller
             'whatsapp_default_templates' => $templates,
         ]);
 
-        return back()->with('success', 'WhatsApp settings saved successfully.');
+        return back()->with('success', __('super.flash.whatsapp_saved'));
     }
 
     /**

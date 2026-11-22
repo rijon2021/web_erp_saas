@@ -14,6 +14,7 @@ use App\Models\User;
 use App\Models\UserWarehouse;
 use App\Models\Warehouse;
 use App\Services\BatchService;
+use App\Services\SerialNumberService;
 use App\utils\helpers;
 use ArPHP\I18N\Arabic;
 use Carbon\Carbon;
@@ -137,6 +138,9 @@ class TransferController extends BaseController
     {
         $this->authorizeForUser($request->user('api'), 'create', Transfer::class);
 
+        // Virtual combo stock: combos have no stock of their own to move.
+        app(\App\Services\ComboStockService::class)->assertNoVirtualCombos((array) $request->input('details', []));
+
         request()->validate([
             'transfer.from_warehouse' => 'required',
             'transfer.to_warehouse' => 'required',
@@ -183,7 +187,7 @@ class TransferController extends BaseController
                             ->where('warehouse_id', $request->transfer['from_warehouse'])
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse_from) {
                             if ($unit->operator == '/') {
@@ -199,7 +203,7 @@ class TransferController extends BaseController
                             ->where('warehouse_id', $request->transfer['to_warehouse'])
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse_to) {
                             if ($unit->operator == '/') {
@@ -215,7 +219,7 @@ class TransferController extends BaseController
                         // --------- eliminate the quantity ''from_warehouse''--------------\\
                         $product_warehouse_from = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $request->transfer['from_warehouse'])
-                            ->where('product_id', $value['product_id'])->first();
+                            ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse_from) {
                             if ($unit->operator == '/') {
@@ -229,7 +233,7 @@ class TransferController extends BaseController
                         // --------- ADD the quantity ''TO_warehouse''------------------\\
                         $product_warehouse_to = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $request->transfer['to_warehouse'])
-                            ->where('product_id', $value['product_id'])->first();
+                            ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse_to) {
                             if ($unit->operator == '/') {
@@ -249,7 +253,7 @@ class TransferController extends BaseController
                             ->where('warehouse_id', $request->transfer['from_warehouse'])
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse_from) {
                             if ($unit->operator == '/') {
@@ -264,7 +268,7 @@ class TransferController extends BaseController
 
                         $product_warehouse_from = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $request->transfer['from_warehouse'])
-                            ->where('product_id', $value['product_id'])->first();
+                            ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                         if ($unit && $product_warehouse_from) {
                             if ($unit->operator == '/') {
@@ -306,6 +310,16 @@ class TransferController extends BaseController
                 }
             }
 
+            // Pharmacy: keep the picked batches on each line — a new transfer is
+            // pending approval, so they are applied by approve(), not here.
+            app(BatchService::class)->rememberTransferPicks(array_values($data), array_values($persistedDetails));
+
+            // Serial / IMEI: save the picked units; they move with the stock
+            // (i.e. once the transfer is approved, not while it is pending).
+            $serialService = app(SerialNumberService::class);
+            $serialService->saveTransferSelection($order, array_values($data), array_values($persistedDetails));
+            $serialService->applyTransferSerials($order);
+
         }, 10);
 
         return response()->json(['success' => true]);
@@ -317,6 +331,9 @@ class TransferController extends BaseController
     {
 
         $this->authorizeForUser($request->user('api'), 'update', Transfer::class);
+
+        // Virtual combo stock: combos have no stock of their own to move.
+        app(\App\Services\ComboStockService::class)->assertNoVirtualCombos((array) $request->input('details', []));
 
         request()->validate([
             'transfer.to_warehouse' => 'required',
@@ -355,6 +372,11 @@ class TransferController extends BaseController
                 $new_products_id[] = $new_detail['id'];
             }
 
+            // Serial / IMEI: bring units this transfer moved back to the source
+            // first, so the re-saved selection validates against source stock.
+            $serialService = app(SerialNumberService::class);
+            $serialService->reverseTransferSerials($current_Transfer);
+
             // Pharmacy: reverse old batch movements before the warehouse-stock reversal
             // below so the per-batch ledger ends up consistent. Only matters when the
             // current transfer is one that actually touched stock (approved + not pending).
@@ -389,7 +411,7 @@ class TransferController extends BaseController
                                 ->where('warehouse_id', $current_Transfer->from_warehouse_id)
                                 ->where('product_id', $value['product_id'])
                                 ->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $warehouse_from_variant) {
                                 if ($unit->operator == '/') {
@@ -404,7 +426,7 @@ class TransferController extends BaseController
                                 ->where('warehouse_id', $current_Transfer->to_warehouse_id)
                                 ->where('product_id', $value['product_id'])
                                 ->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $warehouse_To_variant) {
                                 if ($unit->operator == '/') {
@@ -418,7 +440,7 @@ class TransferController extends BaseController
                         } else {
                             $warehouse_from = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_Transfer->from_warehouse_id)
-                                ->where('product_id', $value['product_id'])->first();
+                                ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                             if ($unit && $warehouse_from) {
                                 if ($unit->operator == '/') {
@@ -431,7 +453,7 @@ class TransferController extends BaseController
 
                             $warehouse_To = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_Transfer->to_warehouse_id)
-                                ->where('product_id', $value['product_id'])->first();
+                                ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                             if ($unit && $warehouse_To) {
                                 if ($unit->operator == '/') {
@@ -450,7 +472,7 @@ class TransferController extends BaseController
                                 ->where('warehouse_id', $current_Transfer->from_warehouse_id)
                                 ->where('product_id', $value['product_id'])
                                 ->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $Sent_variant_To) {
                                 if ($unit->operator == '/') {
@@ -463,7 +485,7 @@ class TransferController extends BaseController
                         } else {
                             $Sent_variant_From = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_Transfer->from_warehouse_id)
-                                ->where('product_id', $value['product_id'])->first();
+                                ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                             if ($unit && $Sent_variant_From) {
                                 if ($unit->operator == '/') {
@@ -489,7 +511,9 @@ class TransferController extends BaseController
             $newPersistedDetails = [];
             foreach ($data as $key => $product_detail) {
 
-                if ($product_detail['no_unit'] !== 0) {
+                // The Vue 3 form doesn't post no_unit (it always sends a resolved
+                // purchase_unit_id), so a missing key means "has a unit".
+                if (($product_detail['no_unit'] ?? 1) !== 0) {
                     $unit = Unit::where('id', $product_detail['purchase_unit_id'])->first();
                     if ($isApproved && $Trans['statut'] == 'completed') {
                         if ($product_detail['product_variant_id'] !== null) {
@@ -499,7 +523,7 @@ class TransferController extends BaseController
                                 ->where('warehouse_id', $Trans['from_warehouse'])
                                 ->where('product_id', $product_detail['product_id'])
                                 ->where('product_variant_id', $product_detail['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse_from) {
                                 if ($unit->operator == '/') {
@@ -515,7 +539,7 @@ class TransferController extends BaseController
                                 ->where('warehouse_id', $Trans['to_warehouse'])
                                 ->where('product_id', $product_detail['product_id'])
                                 ->where('product_variant_id', $product_detail['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse_to) {
                                 if ($unit->operator == '/') {
@@ -531,7 +555,7 @@ class TransferController extends BaseController
                             // --------- eliminate the quantity ''from_warehouse''--------------\\
                             $product_warehouse_from = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $Trans['from_warehouse'])
-                                ->where('product_id', $product_detail['product_id'])->first();
+                                ->where('product_id', $product_detail['product_id'])->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse_from) {
                                 if ($unit->operator == '/') {
@@ -545,7 +569,7 @@ class TransferController extends BaseController
                             // --------- ADD the quantity ''TO_warehouse''------------------\\
                             $product_warehouse_to = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $Trans['to_warehouse'])
-                                ->where('product_id', $product_detail['product_id'])->first();
+                                ->where('product_id', $product_detail['product_id'])->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse_to) {
                                 if ($unit->operator == '/') {
@@ -565,7 +589,7 @@ class TransferController extends BaseController
                                 ->where('warehouse_id', $Trans['from_warehouse'])
                                 ->where('product_id', $product_detail['product_id'])
                                 ->where('product_variant_id', $product_detail['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse_from) {
                                 if ($unit->operator == '/') {
@@ -580,7 +604,7 @@ class TransferController extends BaseController
 
                             $product_warehouse_from = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $Trans['from_warehouse'])
-                                ->where('product_id', $product_detail['product_id'])->first();
+                                ->where('product_id', $product_detail['product_id'])->lockForUpdate()->first();
 
                             if ($unit && $product_warehouse_from) {
                                 if ($unit->operator == '/') {
@@ -629,26 +653,36 @@ class TransferController extends BaseController
                 'GrandTotal' => $request['GrandTotal'],
             ]);
 
+            // Keep input + persisted in lockstep so no_unit==0 rows don't misalign indices.
+            $alignedInput = [];
+            $alignedPersisted = [];
+            foreach ($data as $key => $product_detail) {
+                if (isset($newPersistedDetails[$key])) {
+                    $alignedInput[] = $product_detail;
+                    $alignedPersisted[] = $newPersistedDetails[$key];
+                }
+            }
+
+            // Pharmacy: keep the picks on each line, so a transfer still pending
+            // approval applies them when it is approved.
+            $batchService->rememberTransferPicks($alignedInput, $alignedPersisted);
+
             // Pharmacy: re-apply per-batch movements now that TransferDetail rows exist.
             // Only when the new state actually touches stock (approved + completed/sent).
-            // Keep input + persisted in lockstep so no_unit==0 rows don't misalign indices.
             if ($batchService->isSupported()
                 && $isApproved
                 && in_array($Trans['statut'], ['completed', 'sent'], true)) {
-                $alignedInput = [];
-                $alignedPersisted = [];
-                foreach ($data as $key => $product_detail) {
-                    if (isset($newPersistedDetails[$key])) {
-                        $alignedInput[] = $product_detail;
-                        $alignedPersisted[] = $newPersistedDetails[$key];
-                    }
-                }
                 $batchService->applyForTransferWithAutoFallback(
                     $current_Transfer->fresh(),
                     $alignedInput,
                     $alignedPersisted
                 );
             }
+
+            // Serial / IMEI: re-save the selection and move it per the new state.
+            $updatedTransfer = $current_Transfer->fresh();
+            $serialService->saveTransferSelection($updatedTransfer, $alignedInput, $alignedPersisted);
+            $serialService->applyTransferSerials($updatedTransfer);
 
         }, 10);
 
@@ -682,6 +716,11 @@ class TransferController extends BaseController
             // Only already-approved transfers affect stock when being deleted.
             $isApproved = $current_Transfer->isApproved();
 
+            // Serial / IMEI: send moved units back to the source, drop the selection.
+            $serialService = app(SerialNumberService::class);
+            $serialService->reverseTransferSerials($current_Transfer);
+            $serialService->deleteTransferSelection($current_Transfer);
+
             // Pharmacy: reverse batch movements before warehouse-stock reversal so the
             // per-batch ledger mirrors the warehouse change.
             $batchService = app(BatchService::class);
@@ -710,7 +749,7 @@ class TransferController extends BaseController
                             ->where('warehouse_id', $current_Transfer->from_warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $warehouse_from_variant) {
                             if ($unit->operator == '/') {
@@ -725,7 +764,7 @@ class TransferController extends BaseController
                             ->where('warehouse_id', $current_Transfer->to_warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $warehouse_To_variant) {
                             if ($unit->operator == '/') {
@@ -739,7 +778,7 @@ class TransferController extends BaseController
                     } else {
                         $warehouse_from = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $current_Transfer->from_warehouse_id)
-                            ->where('product_id', $value['product_id'])->first();
+                            ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                         if ($unit && $warehouse_from) {
                             if ($unit->operator == '/') {
@@ -752,7 +791,7 @@ class TransferController extends BaseController
 
                         $warehouse_To = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $current_Transfer->to_warehouse_id)
-                            ->where('product_id', $value['product_id'])->first();
+                            ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                         if ($unit && $warehouse_To) {
                             if ($unit->operator == '/') {
@@ -771,7 +810,7 @@ class TransferController extends BaseController
                             ->where('warehouse_id', $current_Transfer->from_warehouse_id)
                             ->where('product_id', $value['product_id'])
                             ->where('product_variant_id', $value['product_variant_id'])
-                            ->first();
+                            ->lockForUpdate()->first();
 
                         if ($unit && $Sent_variant_To) {
                             if ($unit->operator == '/') {
@@ -784,7 +823,7 @@ class TransferController extends BaseController
                     } else {
                         $Sent_variant_From = product_warehouse::where('deleted_at', '=', null)
                             ->where('warehouse_id', $current_Transfer->from_warehouse_id)
-                            ->where('product_id', $value['product_id'])->first();
+                            ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                         if ($unit && $Sent_variant_From) {
                             if ($unit->operator == '/') {
@@ -839,6 +878,11 @@ class TransferController extends BaseController
                 // Only already-approved transfers affect stock when being deleted.
                 $isApproved = $current_Transfer->isApproved();
 
+                // Serial / IMEI: send moved units back to the source, drop the selection.
+                $serialService = app(SerialNumberService::class);
+                $serialService->reverseTransferSerials($current_Transfer);
+                $serialService->deleteTransferSelection($current_Transfer);
+
                 // Pharmacy: reverse batch movements before warehouse-stock reversal so
                 // the per-batch ledger mirrors the warehouse change. Without this the
                 // bulk-delete path would orphan transfer_detail_batches rows and drift
@@ -869,7 +913,7 @@ class TransferController extends BaseController
                                 ->where('warehouse_id', $current_Transfer->from_warehouse_id)
                                 ->where('product_id', $value['product_id'])
                                 ->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $warehouse_from_variant) {
                                 if ($unit->operator == '/') {
@@ -884,7 +928,7 @@ class TransferController extends BaseController
                                 ->where('warehouse_id', $current_Transfer->to_warehouse_id)
                                 ->where('product_id', $value['product_id'])
                                 ->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $warehouse_To_variant) {
                                 if ($unit->operator == '/') {
@@ -898,7 +942,7 @@ class TransferController extends BaseController
                         } else {
                             $warehouse_from = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_Transfer->from_warehouse_id)
-                                ->where('product_id', $value['product_id'])->first();
+                                ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                             if ($unit && $warehouse_from) {
                                 if ($unit->operator == '/') {
@@ -911,7 +955,7 @@ class TransferController extends BaseController
 
                             $warehouse_To = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_Transfer->to_warehouse_id)
-                                ->where('product_id', $value['product_id'])->first();
+                                ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                             if ($unit && $warehouse_To) {
                                 if ($unit->operator == '/') {
@@ -930,7 +974,7 @@ class TransferController extends BaseController
                                 ->where('warehouse_id', $current_Transfer->from_warehouse_id)
                                 ->where('product_id', $value['product_id'])
                                 ->where('product_variant_id', $value['product_variant_id'])
-                                ->first();
+                                ->lockForUpdate()->first();
 
                             if ($unit && $Sent_variant_To) {
                                 if ($unit->operator == '/') {
@@ -943,7 +987,7 @@ class TransferController extends BaseController
                         } else {
                             $Sent_variant_From = product_warehouse::where('deleted_at', '=', null)
                                 ->where('warehouse_id', $current_Transfer->from_warehouse_id)
-                                ->where('product_id', $value['product_id'])->first();
+                                ->where('product_id', $value['product_id'])->lockForUpdate()->first();
 
                             if ($unit && $Sent_variant_From) {
                                 if ($unit->operator == '/') {
@@ -991,6 +1035,47 @@ class TransferController extends BaseController
         return response()->json([
             'supported' => $batchService->isSupported(),
             'batches' => $batchService->availableBatchesForSale($productId, $variantId, $warehouseId),
+        ]);
+    }
+
+    // ------ serials_for_transfer ---------------\\
+    //
+    // Serial / IMEI units the transfer picker may offer from the SOURCE warehouse.
+    // Query params: product_id, warehouse_id, product_variant_id (optional),
+    // transfer_id (on edit, so the line's saved serials stay selectable; the
+    // transfer's own source warehouse is then used instead of warehouse_id).
+
+    public function serials_for_transfer(Request $request, SerialNumberService $serialService)
+    {
+        $transferId = $request->filled('transfer_id') ? (int) $request->transfer_id : null;
+        $warehouseId = (int) $request->warehouse_id;
+
+        if ($transferId) {
+            // Editing: anyone who may edit the transfer may pick its serials,
+            // including a user assigned only to the destination warehouse
+            // (the same either-side rule update() applies). Only the
+            // transfer's own source warehouse can be listed this way.
+            $this->authorizeForUser($request->user('api'), 'update', Transfer::class);
+            $transfer = Transfer::whereNull('deleted_at')->findOrFail($transferId);
+            $this->abortIfDocumentWarehouseDenied($transfer);
+            if (! $request->user('api')->hasRecordView()) {
+                $this->authorizeForUser($request->user('api'), 'check_record', $transfer);
+            }
+            $warehouseId = (int) $transfer->from_warehouse_id;
+        } else {
+            $this->authorizeForUser($request->user('api'), 'create', Transfer::class);
+            if ($warehouseId) {
+                $this->abortIfWarehouseDenied($warehouseId);
+            }
+        }
+
+        $variantId = $request->filled('product_variant_id') && (int) $request->product_variant_id > 0
+            ? (int) $request->product_variant_id
+            : null;
+
+        return response()->json([
+            // in_kit=1: a kit line's component units, held in kits at the source.
+            'serials' => $serialService->availableSerialsForTransfer((int) $request->product_id, $variantId, $warehouseId, $transferId, $request->boolean('in_kit')),
         ]);
     }
 
@@ -1103,6 +1188,8 @@ class TransferController extends BaseController
         }
 
         $transfer['statut'] = $Transfer_data->statut;
+        // The form needs it to tell whether saved batches already left the source.
+        $transfer['approval_status'] = $Transfer_data->approval_status;
         $transfer['notes'] = $Transfer_data->notes;
         $transfer['date'] = $Transfer_data->date;
         $transfer['tax_rate'] = $Transfer_data->tax_rate;
@@ -1110,7 +1197,15 @@ class TransferController extends BaseController
         $transfer['discount'] = $Transfer_data->discount;
         $transfer['shipping'] = $Transfer_data->shipping;
 
-        $batchesByDetail = app(BatchService::class)->batchesForTransferDetails($Transfer_data['details']);
+        // Applied batches, else the picks kept while the transfer is pending.
+        $batchesByDetail = app(BatchService::class)->batchesForTransferDetails($Transfer_data['details'])
+            + app(BatchService::class)->pickedBatchesForTransferDetails($Transfer_data['details']);
+        $serialService = app(SerialNumberService::class);
+        $serialsByDetail = $serialService->serialsByTransferDetail($Transfer_data['details']);
+        // Kit (combo) lines carry their tracked components' in-kit units.
+        $serialComponentsByCombo = $serialService->comboSerialComponents(
+            collect($Transfer_data['details'])->pluck('product_id')->all()
+        );
 
         $detail_id = 0;
         foreach ($Transfer_data['details'] as $detail) {
@@ -1215,6 +1310,13 @@ class TransferController extends BaseController
                 ];
             }, $existingBatches);
 
+            $data['is_imei'] = (bool) ($detail['product']['is_imei'] ?? false);
+            $data['serial_numbers'] = $serialsByDetail[(int) $detail->id] ?? [];
+            $data['serial_components'] = $serialComponentsByCombo[(int) $detail->product_id] ?? [];
+            $data['serial_groups'] = (object) ($data['serial_components'] && $data['serial_numbers']
+                ? $serialService->groupSerialsByProduct($data['serial_numbers'])
+                : []);
+
             $details[] = $data;
         }
 
@@ -1258,6 +1360,7 @@ class TransferController extends BaseController
             'transfer' => $transfer,
             'warehouses' => $warehouses,
             'to_warehouses' => $to_warehouses,
+            'serial_transfers' => app(SerialNumberService::class)->transfersSupported(),
         ]);
     }
 
@@ -1296,7 +1399,10 @@ class TransferController extends BaseController
         $transfer['approval_status'] = $Transfer_data->approval_status;
         $transfer['GrandTotal'] = $Transfer_data->GrandTotal;
 
-        $batchesByDetail = app(BatchService::class)->batchesForTransferDetails($Transfer_data['details']);
+        // Applied batches, else the picks kept while the transfer is pending.
+        $batchesByDetail = app(BatchService::class)->batchesForTransferDetails($Transfer_data['details'])
+            + app(BatchService::class)->pickedBatchesForTransferDetails($Transfer_data['details']);
+        $serialsByDetail = app(SerialNumberService::class)->serialsByTransferDetail($Transfer_data['details']);
 
         foreach ($Transfer_data['details'] as $detail) {
 
@@ -1328,6 +1434,7 @@ class TransferController extends BaseController
             $data['total'] = $detail->total;
             $data['is_batch_tracked'] = (bool) ($detail['product']['is_batch_tracked'] ?? false);
             $data['batches'] = $batchesByDetail[(int) $detail->id] ?? [];
+            $data['serial_numbers'] = $serialsByDetail[(int) $detail->id] ?? [];
 
             $details[] = $data;
         }
@@ -1355,7 +1462,13 @@ class TransferController extends BaseController
 
         $to_warehouses = Warehouse::where('deleted_at', '=', null)->get(['id', 'name']);
 
-        return response()->json(['warehouses' => $warehouses, 'to_warehouses' => $to_warehouses]);
+        return response()->json([
+            'warehouses' => $warehouses,
+            'to_warehouses' => $to_warehouses,
+            // Off until the transfer_detail_serials migration has run: the form
+            // then neither shows the serial picker nor requires serials.
+            'serial_transfers' => app(SerialNumberService::class)->transfersSupported(),
+        ]);
     }
 
     // -------------- transfer_pdf -----------\\
@@ -1368,7 +1481,11 @@ class TransferController extends BaseController
             ->where('deleted_at', '=', null)
             ->findOrFail($id);
 
-        $batchesByDetail = app(BatchService::class)->batchesForTransferDetails($transfer_data['details']);
+        $this->authorizeDocumentView($request, $transfer_data);
+
+        // Applied batches, else the picks kept while the transfer is pending.
+        $batchesByDetail = app(BatchService::class)->batchesForTransferDetails($transfer_data['details'])
+            + app(BatchService::class)->pickedBatchesForTransferDetails($transfer_data['details']);
 
         $transfer['from_warehouse'] = $transfer_data['from_warehouse']->name;
         $transfer['to_warehouse'] = $transfer_data['to_warehouse']->name;
@@ -1416,6 +1533,8 @@ class TransferController extends BaseController
         $settings = Setting::where('deleted_at', '=', null)->first();
         $Html = view('pdf.transfer_pdf', [
             'setting' => $settings,
+            // Branch letterhead: the issuing warehouse, falling back to company settings.
+            'issuer' => \App\Services\InvoiceIssuerService::resolve($transfer_data->from_warehouse_id, $settings),
             'transfer' => $transfer,
             'details' => $details,
         ])->render();
@@ -1475,6 +1594,12 @@ class TransferController extends BaseController
 
             $transfer->approval_status = 'approved';
             $transfer->save();
+
+            // Pharmacy: the batches picked when the transfer was created move now.
+            app(BatchService::class)->applyRememberedTransferPicks($transfer);
+
+            // Serial / IMEI: the saved selection moves now, with the stock.
+            app(SerialNumberService::class)->applyTransferSerials($transfer);
         }, 10);
 
         return response()->json(['success' => true]);
@@ -1549,7 +1674,7 @@ class TransferController extends BaseController
                         ->where('warehouse_id', $transfer->from_warehouse_id)
                         ->where('product_id', $detail->product_id)
                         ->where('product_variant_id', $detail->product_variant_id)
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($product_warehouse_from) {
                         if ($unit->operator == '/') {
@@ -1565,7 +1690,7 @@ class TransferController extends BaseController
                         ->where('warehouse_id', $transfer->to_warehouse_id)
                         ->where('product_id', $detail->product_id)
                         ->where('product_variant_id', $detail->product_variant_id)
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($product_warehouse_to) {
                         if ($unit->operator == '/') {
@@ -1580,7 +1705,7 @@ class TransferController extends BaseController
                     $product_warehouse_from = product_warehouse::where('deleted_at', '=', null)
                         ->where('warehouse_id', $transfer->from_warehouse_id)
                         ->where('product_id', $detail->product_id)
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($product_warehouse_from) {
                         if ($unit->operator == '/') {
@@ -1595,7 +1720,7 @@ class TransferController extends BaseController
                     $product_warehouse_to = product_warehouse::where('deleted_at', '=', null)
                         ->where('warehouse_id', $transfer->to_warehouse_id)
                         ->where('product_id', $detail->product_id)
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($product_warehouse_to) {
                         if ($unit->operator == '/') {
@@ -1613,7 +1738,7 @@ class TransferController extends BaseController
                         ->where('warehouse_id', $transfer->from_warehouse_id)
                         ->where('product_id', $detail->product_id)
                         ->where('product_variant_id', $detail->product_variant_id)
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($product_warehouse_from) {
                         if ($unit->operator == '/') {
@@ -1627,7 +1752,7 @@ class TransferController extends BaseController
                     $product_warehouse_from = product_warehouse::where('deleted_at', '=', null)
                         ->where('warehouse_id', $transfer->from_warehouse_id)
                         ->where('product_id', $detail->product_id)
-                        ->first();
+                        ->lockForUpdate()->first();
 
                     if ($product_warehouse_from) {
                         if ($unit->operator == '/') {
@@ -1642,10 +1767,9 @@ class TransferController extends BaseController
         }
 
         // Pharmacy: per-batch movements are NOT auto-FEFO'd at approval time. The
-        // strict picker is the source of truth — for a pending transfer to update
-        // the per-batch ledger on approval, the user must edit it after approval
-        // and pick batches explicitly (the same flow they'd use to fix any line).
-        // Warehouse stock above is still moved either way; only the per-batch
-        // ledger is left untouched when no batches were saved.
+        // strict picker is the source of truth — approve() applies the batches
+        // remembered on each line (BatchService::applyRememberedTransferPicks).
+        // A line with no remembered picks (saved before picks were kept) still
+        // moves warehouse stock only; editing it and picking batches fixes it.
     }
 }

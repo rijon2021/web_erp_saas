@@ -90,6 +90,10 @@ class MrpBom extends Model
      * (so you must start more), and each line's scrap_pct is component you
      * expect to spoil (so you must draw more of that component).
      *
+     * Quantities come back in each component's base (stock) unit whatever unit
+     * the recipe line was written in, so stock maths downstream never has to
+     * know about sub-units.
+     *
      * @return array<int, array{product_id:int, product_variant_id:?int, qty:float, unit_id:?int, is_optional:bool}>
      */
     public function requirementsFor(float $qty, bool $includeOptional = true): array
@@ -117,8 +121,8 @@ class MrpBom extends Model
             $rows[] = [
                 'product_id' => (int) $line->product_id,
                 'product_variant_id' => $line->product_variant_id ? (int) $line->product_variant_id : null,
-                'qty' => round($line->qtyWithScrap() * $factor, 6),
-                'unit_id' => $line->unit_id,
+                'qty' => round($line->baseQtyWithScrap() * $factor, 6),
+                'unit_id' => $line->product ? $line->product->unit_id : null,
                 'is_optional' => (bool) $line->is_optional,
             ];
         }

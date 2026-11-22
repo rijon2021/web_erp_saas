@@ -40,9 +40,13 @@ class RequestSafety
     ];
 
     /**
-     * Max characters to scan per string (perf guard).
+     * Window size (bytes) for scanning long strings; the WHOLE string is
+     * always scanned, window by window, overlapping by $scanOverlap so a
+     * pattern cannot hide across a boundary.
      */
-    protected int $maxScanLen = 4096;
+    protected int $maxScanLen = 65536;
+
+    protected int $scanOverlap = 1024;
 
     public function handle(Request $request, Closure $next): Response
     {
@@ -130,11 +134,35 @@ class RequestSafety
             return false;
         }
 
-        // Perf guard
-        if (mb_strlen($s) > $this->maxScanLen) {
-            $s = mb_substr($s, 0, $this->maxScanLen);
+        // Embedded raster images (signature pads, images pasted into the rich
+        // text editor) are base64, which can contain "…/onXy==" and trip the
+        // event-handler pattern at random. Base64 cannot carry "<", ":", "{"
+        // or "$", so dropping the payload hides nothing. Possessive quantifier:
+        // no backtracking on multi-MB strings.
+        $stripped = preg_replace('#data:image/(?:png|jpe?g|gif|webp|bmp|avif);base64,[A-Za-z0-9+/=\s]++#i', 'data:image;base64,', $s);
+        if (is_string($stripped)) {
+            $s = $stripped;
         }
 
+        // Perf guard: long values are scanned in overlapping windows, never
+        // truncated — truncating let a payload through after enough padding.
+        $len = strlen($s);
+        if ($len > $this->maxScanLen) {
+            $step = $this->maxScanLen - $this->scanOverlap;
+            for ($offset = 0; $offset < $len; $offset += $step) {
+                if ($this->matchesUnsafePattern(substr($s, $offset, $this->maxScanLen))) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return $this->matchesUnsafePattern($s);
+    }
+
+    private function matchesUnsafePattern(string $s): bool
+    {
         $patterns = [
             // Raw tags
             '/<\/?\s*script\b/i',

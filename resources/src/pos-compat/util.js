@@ -58,17 +58,21 @@ const readJSON = (key, fallback) => {
   }
 };
 
+// Returns whether the write landed. Cache writers ignore the result (caches
+// are best-effort); the offline queues must not — see writeQueueJSON.
 const writeJSON = (key, value) => {
   const storage = getStorage();
-  if (!storage) return;
+  if (!storage) return false;
   try {
     if (value === undefined || value === null) {
       storage.removeItem(key);
     } else {
       storage.setItem(key, JSON.stringify(value));
     }
+    return true;
   } catch (e) {
-    // Ignore quota and other errors – offline is best-effort
+    // Quota exceeded or storage blocked
+    return false;
   }
 };
 
@@ -79,6 +83,24 @@ const POS_PRODUCT_DETAILS_KEY = 'pos_product_details_v1';
 const POS_CART_STATE_KEY = 'pos_cart_state_v1';
 const POS_OFFLINE_DRAFTS_KEY = 'pos_offline_drafts_v1';
 const POS_OFFLINE_CLIENTS_KEY = 'pos_offline_clients_v1';
+
+// Offline queue records (sales, drafts, customers) are the only copy of work
+// the server has not seen yet, so a write that hits the ~5MB localStorage
+// quota must not be swallowed: the product caches (rebuilt on the next online
+// load) are evicted to make room and the write retried. Returns false only
+// when even that failed, so callers can tell the cashier instead of claiming
+// the record was saved.
+const writeQueueJSON = (key, value) => {
+  if (writeJSON(key, value)) return true;
+  const storage = getStorage();
+  if (!storage) return false;
+  const evictable = [POS_PRODUCT_DETAILS_KEY, POS_WAREHOUSE_SNAPSHOTS_KEY];
+  for (let i = 0; i < evictable.length; i++) {
+    try { storage.removeItem(evictable[i]); } catch (e) {}
+    if (writeJSON(key, value)) return true;
+  }
+  return false;
+};
 
 // Records created offline get string ids with this prefix so they can never
 // collide with (numeric) server ids and are recognizable everywhere.
@@ -176,23 +198,9 @@ const offlinePos = {
     return current[key] || null;
   },
 
-  // ---- In-progress cart persistence (refresh/crash survival) ----
-  // The whole cart lives in PosPage component state; without this snapshot a
-  // page refresh (deliberate or accidental, online or offline) wiped the sale.
-  saveCartState(state) {
-    if (!state || typeof state !== 'object') return;
-    writeJSON(POS_CART_STATE_KEY, Object.assign({}, state, {
-      savedAt: new Date().toISOString()
-    }));
-  },
-
-  getCartState() {
-    const state = readJSON(POS_CART_STATE_KEY, null);
-    if (!state || typeof state !== 'object') return null;
-    if (!Array.isArray(state.details) || !state.details.length) return null;
-    return state;
-  },
-
+  // ---- In-progress cart ----
+  // The POS no longer saves the cart across refreshes; this only removes a
+  // snapshot left behind by older builds.
   clearCartState() {
     writeJSON(POS_CART_STATE_KEY, null);
   },
@@ -236,8 +244,16 @@ const offlinePos = {
       payload: safePayload
     };
     list.push(record);
-    writeJSON(POS_OFFLINE_SALES_KEY, list);
-    return record;
+    // null = not persisted (storage full even after evicting caches). The
+    // caller must not report the sale as saved.
+    return writeQueueJSON(POS_OFFLINE_SALES_KEY, list) ? record : null;
+  },
+
+  // Cashier-confirmed discard of a queued sale (failed-sales review).
+  removeOfflineSale(id) {
+    if (!id) return;
+    const list = this.getOfflineSales();
+    writeQueueJSON(POS_OFFLINE_SALES_KEY, list.filter((s) => !s || s.id !== id));
   },
 
   _updateSale(id, updater) {
@@ -253,7 +269,7 @@ const offlinePos = {
       });
     });
     if (changed) {
-      writeJSON(POS_OFFLINE_SALES_KEY, next);
+      writeQueueJSON(POS_OFFLINE_SALES_KEY, next);
     }
   },
 
@@ -274,6 +290,28 @@ const offlinePos = {
       status: 'pending',
       lastError: null
     }));
+  },
+
+  // A sync attempt the server answered with a temporary error (gateway
+  // 502/503/504, 408, 429). The sale goes back to 'pending' so the automatic
+  // sync retries it, but only up to maxAttempts times — after that it is
+  // parked as 'failed' (visible in the failed-sales review, retryable by
+  // hand) instead of being retried forever. Returns the resulting status.
+  recordSaleTransientFailure(id, message, statusCode, maxAttempts) {
+    let status = 'pending';
+    this._updateSale(id, (s) => {
+      const attempts = (Number(s.transientAttempts) || 0) + 1;
+      status = attempts >= (maxAttempts || 5) ? 'failed' : 'pending';
+      return {
+        status,
+        transientAttempts: attempts,
+        lastError: {
+          message: message || 'Unknown error',
+          statusCode: statusCode || null
+        }
+      };
+    });
+    return status;
   },
 
   markSaleAsSynced(id, remoteId) {
@@ -297,7 +335,7 @@ const offlinePos = {
   pruneSyncedSales() {
     const list = this.getOfflineSales();
     const next = list.filter((s) => !s || s.status !== 'synced');
-    writeJSON(POS_OFFLINE_SALES_KEY, next);
+    writeQueueJSON(POS_OFFLINE_SALES_KEY, next);
   },
 
   // A record left in 'syncing' means a sync worker died mid-flight (tab
@@ -325,7 +363,7 @@ const offlinePos = {
         return s;
       });
       if (keyChanged) {
-        writeJSON(key, next);
+        writeQueueJSON(key, next);
         changed = true;
       }
     });
@@ -362,7 +400,7 @@ const offlinePos = {
       meta: meta || {}
     };
     list.push(record);
-    writeJSON(POS_OFFLINE_DRAFTS_KEY, list);
+    writeQueueJSON(POS_OFFLINE_DRAFTS_KEY, list);
     return record;
   },
 
@@ -382,14 +420,14 @@ const offlinePos = {
       });
       return updated;
     });
-    if (updated) writeJSON(POS_OFFLINE_DRAFTS_KEY, next);
+    if (updated) writeQueueJSON(POS_OFFLINE_DRAFTS_KEY, next);
     return updated;
   },
 
   removeOfflineDraft(id) {
     if (!id) return;
     const list = this.getOfflineDrafts();
-    writeJSON(POS_OFFLINE_DRAFTS_KEY, list.filter((d) => !d || d.id !== id));
+    writeQueueJSON(POS_OFFLINE_DRAFTS_KEY, list.filter((d) => !d || d.id !== id));
   },
 
   markDraftStatus(id, status, message) {
@@ -405,7 +443,7 @@ const offlinePos = {
         updatedAt: new Date().toISOString()
       });
     });
-    if (changed) writeJSON(POS_OFFLINE_DRAFTS_KEY, next);
+    if (changed) writeQueueJSON(POS_OFFLINE_DRAFTS_KEY, next);
   },
 
   // ---- Offline clients (quick-add customers created while offline) ----
@@ -432,14 +470,14 @@ const offlinePos = {
           : null
     };
     list.push(record);
-    writeJSON(POS_OFFLINE_CLIENTS_KEY, list);
+    writeQueueJSON(POS_OFFLINE_CLIENTS_KEY, list);
     return record;
   },
 
   removeOfflineClient(id) {
     if (!id) return;
     const list = this.getOfflineClients();
-    writeJSON(POS_OFFLINE_CLIENTS_KEY, list.filter((c) => !c || c.id !== id));
+    writeQueueJSON(POS_OFFLINE_CLIENTS_KEY, list.filter((c) => !c || c.id !== id));
   },
 
   markClientStatus(id, status, message) {
@@ -455,7 +493,7 @@ const offlinePos = {
         updatedAt: new Date().toISOString()
       });
     });
-    if (changed) writeJSON(POS_OFFLINE_CLIENTS_KEY, next);
+    if (changed) writeQueueJSON(POS_OFFLINE_CLIENTS_KEY, next);
   },
 
   // After an offline client syncs, rewrite every queued record that still
@@ -476,7 +514,7 @@ const offlinePos = {
         }
         return s;
       });
-      if (changed) writeJSON(POS_OFFLINE_SALES_KEY, nextSales);
+      if (changed) writeQueueJSON(POS_OFFLINE_SALES_KEY, nextSales);
     } catch (e) {}
     try {
       const drafts = this.getOfflineDrafts();
@@ -497,14 +535,7 @@ const offlinePos = {
         if (rec !== d) changed = true;
         return rec;
       });
-      if (changed) writeJSON(POS_OFFLINE_DRAFTS_KEY, nextDrafts);
-    } catch (e) {}
-    try {
-      const cart = readJSON(POS_CART_STATE_KEY, null);
-      if (cart && String(cart.selectedClientId) === String(localId)) {
-        cart.selectedClientId = remoteId;
-        writeJSON(POS_CART_STATE_KEY, cart);
-      }
+      if (changed) writeQueueJSON(POS_OFFLINE_DRAFTS_KEY, nextDrafts);
     } catch (e) {}
   },
 

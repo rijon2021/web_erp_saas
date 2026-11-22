@@ -10,17 +10,24 @@
       <a-card size="small" :title="$t('Receipt') || 'Receipt'" style="margin-bottom: 16px">
         <a-row :gutter="16">
           <a-col :xs="24" :md="8">
-            <a-form-item label="Receipt paper size">
+            <a-form-item
+              :label="$t('Receipt_Paper_Size')"
+              :extra="$t('PosSet_Paper_Size_Help')"
+            >
               <a-select
                 v-model:value="s.receipt_paper_size"
-                :options="['80mm', '58mm', 'A4'].map(v => ({ value: v, label: v }))"
+                :options="[
+                  { value: 58, label: $t('Paper_58mm') },
+                  { value: 80, label: $t('Paper_80mm') },
+                  { value: 88, label: $t('Paper_88mm') },
+                ]"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
             <a-form-item
-              label="Receipt layout"
-              extra="Preview each layout live in Settings → POS Receipt."
+              :label="$t('PosSet_Receipt_Layout')"
+              :extra="$t('PosSet_Receipt_Layout_Help')"
             >
               <a-select
                 v-model:value="s.receipt_layout"
@@ -30,19 +37,20 @@
                   { value: 3, label: $t('Layout_3_Detailed') },
                   { value: 4, label: $t('Layout_4_Bilingual') },
                   { value: 5, label: $t('Layout_5_Minimal') },
+                  { value: 6, label: $t('Layout_6_Tabular') },
                 ]"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Logo size (px)">
+            <a-form-item :label="$t('PosSet_Logo_Size_Px')">
               <a-input-number v-model:value="s.logo_size" style="width: 100%" :min="0" />
             </a-form-item>
           </a-col>
           <a-col :span="24">
             <a-alert
               type="info" show-icon
-              message="The receipt content — note and show/hide toggles (logo, reference, taxes, payments…) — is configured in Settings → POS Receipt, with a live preview."
+              :message="$t('PosSet_Receipt_Content_Info')"
             />
           </a-col>
         </a-row>
@@ -51,20 +59,20 @@
       <a-card size="small" title="POS" style="margin-bottom: 16px">
         <a-row :gutter="16">
           <a-col :xs="24" :md="8">
-            <a-form-item label="Products per page">
+            <a-form-item :label="$t('PosSet_Products_Per_Page')">
               <a-input-number v-model:value="s.products_per_page" style="width: 100%" :min="1" />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
             <a-form-item
-              label="Invoice format"
-              extra="Format of the invoice printed after a sale — thermal receipt or full A4 page. Colors and layout of the A4 PDF are configured in System Settings → Invoice PDF."
+              :label="$t('Invoice_Format')"
+              :extra="$t('PosSet_Invoice_Format_Help')"
             >
               <a-select
                 v-model:value="invoiceFormat"
                 :options="[
-                  { value: 'thermal', label: 'Thermal receipt' },
-                  { value: 'a4', label: 'A4 page' },
+                  { value: 'thermal', label: $t('PosSet_Thermal_Receipt') },
+                  { value: 'a4', label: $t('PosSet_A4_Page') },
                 ]"
               />
             </a-form-item>
@@ -72,11 +80,23 @@
           <a-col :span="24">
             <a-row :gutter="[8, 8]">
               <a-col v-for="f in POS_FLAGS" :key="f.key" :xs="12" :md="8">
-                <a-checkbox v-model:checked="s[f.key]">{{ f.label }}</a-checkbox>
+                <a-checkbox v-model:checked="s[f.key]">{{ $t(f.label) }}</a-checkbox>
               </a-col>
             </a-row>
           </a-col>
         </a-row>
+      </a-card>
+
+      <!-- Manager PIN to remove items: cashiers without pos_void_items need a
+           manager's PIN to remove a line, lower a quantity or clear the cart. -->
+      <a-card size="small" :title="$t('Pv_Item_Removal')" style="margin-bottom: 16px">
+        <a-space direction="vertical" size="small">
+          <a-space>
+            <a-switch v-model:checked="s.require_void_approval" />
+            <span>{{ $t('Pv_Require_Approval') }}</span>
+          </a-space>
+          <a-typography-text type="secondary">{{ $t('Pv_Require_Approval_Help') }}</a-typography-text>
+        </a-space>
       </a-card>
 
       <!-- Cash drawer auto-open (QZ Tray + ESC/POS) — same section as legacy pos_settings.vue -->
@@ -167,19 +187,23 @@ import {
 const { t } = useI18n();
 
 const POS_FLAGS = [
-  { key: 'quick_add_customer', label: 'Quick add customer' },
-  { key: 'barcode_scanning_sound', label: 'Barcode scanning sound' },
-  { key: 'show_product_images', label: 'Show product images' },
-  { key: 'show_stock_quantity', label: 'Show stock quantity' },
-  { key: 'enable_hold_sales', label: 'Enable hold sales' },
-  { key: 'enable_customer_points', label: 'Enable customer points' },
-  { key: 'show_categories', label: 'Show categories' },
-  { key: 'show_brands', label: 'Show brands' },
+  { key: 'quick_add_customer', label: 'Quick_Add_Customer' },
+  { key: 'barcode_scanning_sound', label: 'Barcode_Scanning_Sound' },
+  { key: 'show_product_images', label: 'Show_Product_Images_in_POS' },
+  { key: 'show_stock_quantity', label: 'Show_Stock_Quantity_in_POS' },
+  // Available quantity next to each hit in the product search dropdown.
+  { key: 'show_search_stock', label: 'Show_Stock_In_Search_Results' },
+  { key: 'enable_hold_sales', label: 'Enable_Hold_Sales' },
+  { key: 'enable_customer_points', label: 'Enable_Customer_Points_in_POS' },
+  { key: 'show_categories', label: 'Show_Categories_in_POS' },
+  { key: 'show_brands', label: 'Show_Brands_in_POS' },
+  // Ask before selling an item priced at 0 (catches unpriced products).
+  { key: 'confirm_zero_price', label: 'Pos_Confirm_Zero_Price' },
   // allow_overselling moved to System Settings > Features (global switch).
   // cash_drawer_auto_open has its own card below (legacy "Cash Drawer" section).
 ];
 
-const ALL_FLAGS = [...POS_FLAGS.map(f => f.key), 'cash_drawer_auto_open'];
+const ALL_FLAGS = [...POS_FLAGS.map(f => f.key), 'cash_drawer_auto_open', 'require_void_approval'];
 
 const loading = ref(true);
 const saving = ref(false);
@@ -224,7 +248,7 @@ async function save() {
     invoice_format: invoiceFormat.value,
   };
   ALL_FLAGS.forEach(k => {
-    body[k] = k === 'cash_drawer_auto_open' ? (v[k] ? 1 : 0) : v[k];
+    body[k] = (k === 'cash_drawer_auto_open' || k === 'require_void_approval') ? (v[k] ? 1 : 0) : v[k];
   });
   try {
     await http.put(`pos_settings/${v.id}`, body);
@@ -241,6 +265,10 @@ onMounted(async () => {
     const data = await http.get('get_pos_Settings_api');
     const ps = data.pos_settings || {};
     ALL_FLAGS.forEach(k => { ps[k] = !!Number(ps[k] ?? 0) || ps[k] === true; });
+    // Stored as an integer (58/80/88); coerce so the select matches an option.
+    ps.receipt_paper_size = [58, 80, 88].includes(Number(ps.receipt_paper_size))
+      ? Number(ps.receipt_paper_size)
+      : 80;
     s.value = ps;
     // Global invoice format comes as a top-level field on the response
     // (it lives on the `settings` row, not `pos_settings`).

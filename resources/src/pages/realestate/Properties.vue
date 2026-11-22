@@ -42,7 +42,7 @@
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'featured_image'">
           <img
-            v-if="record.featured_image" :src="'/' + record.featured_image"
+            v-if="record.featured_image" :src="publicUrl(record.featured_image)" @error="onImageError"
             style="width: 54px; height: 42px; object-fit: cover; border-radius: 6px"
           />
           <span v-else style="color: rgba(var(--ink-rgb), 0.45)">—</span>
@@ -100,6 +100,7 @@ import PageHeader from '../../components/PageHeader.vue';
 import DataTable from '../../components/DataTable.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import http from '../../lib/http';
+import { publicUrl, onImageError } from '../../lib/uploadUrl';
 
 const { t } = useI18n();
 

@@ -1,25 +1,25 @@
 <template>
   <div class="page">
-    <PageHeader title="Timesheets" subtitle="Hours booked against projects and tasks." :breadcrumb="['Projects Management', 'Timesheets']">
+    <PageHeader :title="$t('Pm_Timesheets')" :subtitle="$t('Pm_Timesheets_Subtitle')" :breadcrumb="[$t('Pm_Projects_Management'), $t('Pm_Timesheets')]">
       <template #actions>
         <a-button type="primary" @click="openForm(null)">
           <template #icon><PlusOutlined /></template>
-          Log time
+          {{ $t('Pm_Log_Time') }}
         </a-button>
       </template>
     </PageHeader>
 
     <div class="summary">
       <div class="sum">
-        <span class="sum-label">Hours</span>
+        <span class="sum-label">{{ $t('Hours') }}</span>
         <span class="sum-value">{{ number(totals.hours || 0, 2) }}</span>
       </div>
       <div class="sum">
-        <span class="sum-label">Billable value</span>
+        <span class="sum-label">{{ $t('Pm_Billable_Value') }}</span>
         <span class="sum-value ok">{{ money(totals.amount || 0) }}</span>
       </div>
       <div class="sum">
-        <span class="sum-label">Entries</span>
+        <span class="sum-label">{{ $t('Pm_Entries') }}</span>
         <span class="sum-value">{{ crud.total.value }}</span>
       </div>
     </div>
@@ -27,22 +27,22 @@
     <a-card size="small" style="margin-bottom: 16px">
       <div class="toolbar">
         <a-input-search
-          v-model:value="crud.search.value" placeholder="Search description…"
+          v-model:value="crud.search.value" :placeholder="$t('Pm_Search_Description')"
           allow-clear class="tb-search" @search="crud.reload"
         />
         <a-select
           v-model:value="filters.project_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="All projects"
+          option-filter-prop="label" :placeholder="$t('Pm_All_Projects')"
           :options="projectOptions" @change="onProjectChange"
         />
         <a-select
           v-model:value="filters.employee_id" class="tb-item" allow-clear show-search
-          option-filter-prop="label" placeholder="Anyone"
+          option-filter-prop="label" :placeholder="$t('Pm_Anyone')"
           :options="employeeOptions" @change="crud.reload"
         />
         <a-select
-          v-model:value="filters.billable" class="tb-item-sm" allow-clear placeholder="All"
-          :options="[{ value: '1', label: 'Billable' }, { value: '0', label: 'Non-billable' }]"
+          v-model:value="filters.billable" class="tb-item-sm" allow-clear :placeholder="$t('All')"
+          :options="[{ value: '1', label: $t('Pm_Billable') }, { value: '0', label: $t('Pm_Non_Billable') }]"
           @change="crud.reload"
         />
         <a-range-picker v-model:value="filters.range" class="tb-range" value-format="YYYY-MM-DD" @change="crud.reload" />
@@ -53,7 +53,7 @@
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'log_date'">{{ date(record.log_date) }}</template>
         <template v-else-if="column.key === 'project'">
-          <a class="link" @click="$router.push(`/projects/${record.project_id}`)">{{ record.project_title }}</a>
+          <a class="link" @click="$router.push(`/projects/${record.project_id}/edit`)">{{ record.project_title }}</a>
           <div v-if="record.task_title" class="cell-sub">{{ record.task_title }}</div>
         </template>
         <template v-else-if="column.key === 'hours'">
@@ -61,7 +61,7 @@
         </template>
         <template v-else-if="column.key === 'billable'">
           <a-tag :color="record.billable ? 'success' : 'default'">
-            {{ record.billable ? 'Billable' : 'Internal' }}
+            {{ record.billable ? $t('Pm_Billable') : $t('Pm_Internal') }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'hourly_rate'">
@@ -91,14 +91,14 @@
     </DataTable>
 
     <a-modal
-      :open="formOpen" :title="editing ? 'Edit time entry' : 'Log time'" :width="600"
+      :open="formOpen" :title="editing ? $t('Pm_Edit_Time_Entry') : $t('Pm_Log_Time')" :width="600"
       :confirm-loading="saving" :ok-text="$t('submit')" :cancel-text="$t('Cancel')"
       @ok="submit" @cancel="formOpen = false"
     >
       <a-form ref="formRef" :model="form" :rules="rules" layout="vertical">
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
-            <a-form-item label="Project *" name="project_id">
+            <a-form-item :label="$t('Pm_Project') + ' *'" name="project_id">
               <a-select
                 v-model:value="form.project_id" show-search option-filter-prop="label"
                 :options="projectOptions" @change="form.task_id = undefined"
@@ -106,38 +106,38 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Task" extra="Leave empty to book against the project">
+            <a-form-item :label="$t('Pm_Task')" :extra="$t('Pm_Task_Hint')">
               <a-select
                 v-model:value="form.task_id" allow-clear show-search option-filter-prop="label"
-                :options="formTaskOptions" :disabled="!form.project_id" placeholder="No specific task"
+                :options="formTaskOptions" :disabled="!form.project_id" :placeholder="$t('Pm_No_Specific_Task')"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="12">
-            <a-form-item label="Who">
+            <a-form-item :label="$t('Pm_Who')">
               <a-select
                 v-model:value="form.employee_id" allow-clear show-search option-filter-prop="label"
-                :options="employeeOptions" placeholder="Unassigned"
+                :options="employeeOptions" :placeholder="$t('Pm_Unassigned')"
               />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Date *" name="log_date">
+            <a-form-item :label="$t('Date') + ' *'" name="log_date">
               <a-date-picker v-model:value="form.log_date" style="width: 100%" value-format="YYYY-MM-DD" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-form-item label="Hours *" name="hours">
+            <a-form-item :label="$t('Hours') + ' *'" name="hours">
               <a-input-number v-model:value="form.hours" :min="0.25" :max="24" :step="0.25" style="width: 100%" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Billable">
-              <a-switch v-model:checked="form.billable" checked-children="Yes" un-checked-children="No" />
+            <a-form-item :label="$t('Pm_Billable')">
+              <a-switch v-model:checked="form.billable" :checked-children="$t('Yes')" :un-checked-children="$t('No')" />
             </a-form-item>
           </a-col>
           <a-col :xs="12" :md="8">
-            <a-form-item label="Hourly rate">
+            <a-form-item :label="$t('Pm_Hourly_Rate')">
               <a-input-number
                 v-model:value="form.hourly_rate" :min="0" :disabled="!form.billable"
                 style="width: 100%"
@@ -145,13 +145,13 @@
             </a-form-item>
           </a-col>
           <a-col :xs="24" :md="8">
-            <a-form-item label="Value" extra="Calculated on save">
+            <a-form-item :label="$t('Pm_Value')" :extra="$t('Pm_Calculated_On_Save')">
               <a-input :value="money(previewAmount)" disabled />
             </a-form-item>
           </a-col>
           <a-col :span="24">
             <a-form-item :label="$t('Description')" style="margin-bottom: 0">
-              <a-textarea v-model:value="form.description" :rows="2" placeholder="What was done" />
+              <a-textarea v-model:value="form.description" :rows="2" :placeholder="$t('Pm_What_Was_Done')" />
             </a-form-item>
           </a-col>
         </a-row>
@@ -203,14 +203,14 @@ function onProjectChange() {
 }
 
 const columns = computed(() => [
-  { title: 'Date', key: 'log_date', dataIndex: 'log_date', sorter: true, width: 130 },
-  { title: 'Project / task', key: 'project', dataIndex: 'project_title' },
-  { title: 'Who', key: 'employee', dataIndex: 'employee_name', width: 160 },
-  { title: 'Hours', key: 'hours', dataIndex: 'hours', sorter: true, width: 100 },
-  { title: 'Type', key: 'billable', dataIndex: 'billable', width: 120 },
-  { title: 'Rate', key: 'hourly_rate', dataIndex: 'hourly_rate', width: 110 },
-  { title: 'Value', key: 'amount', dataIndex: 'amount', sorter: true, width: 120 },
-  { title: 'Description', dataIndex: 'description', key: 'description' },
+  { title: t('Date'), key: 'log_date', dataIndex: 'log_date', sorter: true, width: 130 },
+  { title: t('Pm_Project_Task'), key: 'project', dataIndex: 'project_title' },
+  { title: t('Pm_Who'), key: 'employee', dataIndex: 'employee_name', width: 160 },
+  { title: t('Hours'), key: 'hours', dataIndex: 'hours', sorter: true, width: 100 },
+  { title: t('Type'), key: 'billable', dataIndex: 'billable', width: 120 },
+  { title: t('Pm_Rate'), key: 'hourly_rate', dataIndex: 'hourly_rate', width: 110 },
+  { title: t('Pm_Value'), key: 'amount', dataIndex: 'amount', sorter: true, width: 120 },
+  { title: t('Description'), dataIndex: 'description', key: 'description' },
   { title: '', key: 'actions', width: 90 },
 ]);
 

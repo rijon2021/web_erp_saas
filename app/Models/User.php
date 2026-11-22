@@ -15,10 +15,16 @@ class User extends Authenticatable
     /**
      * The attributes that are mass assignable.
      *
+     * Privilege fields (role_id, statut, is_all_warehouses, record_view) are
+     * deliberately NOT mass assignable: a future create/update($request->all())
+     * must never let a user change their own role, activation or data scope.
+     * Set them explicitly ($user->statut = ...) as UserController and the
+     * super-admin block/unblock (Central\Super\TenantUserController) do.
+     *
      * @var array
      */
     protected $fillable = [
-        'firstname', 'lastname', 'username', 'email', 'password', 'phone', 'statut', 'avatar', 'role_id', 'is_all_warehouses', 'record_view',
+        'firstname', 'lastname', 'username', 'email', 'password', 'phone', 'avatar',
     ];
 
     /**
@@ -27,7 +33,7 @@ class User extends Authenticatable
      * @var array
      */
     protected $hidden = [
-        'password', 'remember_token',
+        'password', 'remember_token', 'pos_pin_hash',
     ];
 
     /**
@@ -83,14 +89,18 @@ class User extends Authenticatable
         // Backward compatibility: If record_view is null, fall back to role permission check
         if (isset($this->record_view)) {
             return (bool) $this->record_view;
-        } else {
-            // Fallback to role permission check for backward compatibility
-            $role = $this->roles()->first();
-            if ($role) {
-                return $role->inRole('record_view');
-            }
         }
-        
-        return false;
+
+        // The role fallback costs queries and dashboards/reports ask many times
+        // per request on the same Auth::user() instance — resolve it once.
+        if ($this->recordViewFromRole === null) {
+            $role = $this->roles()->first();
+            $this->recordViewFromRole = $role ? (bool) $role->inRole('record_view') : false;
+        }
+
+        return $this->recordViewFromRole;
     }
+
+    /** Per-instance memo for hasRecordView()'s role fallback. */
+    protected ?bool $recordViewFromRole = null;
 }

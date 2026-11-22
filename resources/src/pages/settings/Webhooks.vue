@@ -22,7 +22,7 @@
             </template>
             <template v-else-if="column.key === 'actions'">
               <a-space>
-                <a-tooltip title="Test">
+                <a-tooltip :title="$t('Webhook_Test')">
                   <a-button type="text" size="small" @click="test(record)">
                     <template #icon><ThunderboltOutlined style="color: #faad14" /></template>
                   </a-button>
@@ -55,7 +55,7 @@
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'webhook'">{{ record.webhook?.name || record.webhook }}</template>
             <template v-else-if="column.key === 'status'">
-              <a-tag :color="deliveryStatusColor(record.status)">{{ record.status }}</a-tag>
+              <a-tag :color="deliveryStatusColor(record.status)">{{ statusLabel(DELIVERY_STATUSES, record.status) }}</a-tag>
             </template>
             <template v-else-if="column.key === 'response_code'">
               <a-tag v-if="record.response_code" :color="httpColor(record.response_code)">
@@ -77,7 +77,7 @@
         <DataTable :crud="incoming" :columns="incomingColumns">
           <template #toolbar>
             <a-input
-              v-model:value="incomingSource" placeholder="Filter source…"
+              v-model:value="incomingSource" :placeholder="$t('Webhook_Filter_Source')"
               allow-clear style="width: 180px" @press-enter="incoming.reload()"
             />
             <a-select
@@ -88,7 +88,7 @@
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'status'">
               <a-tag :color="record.status === 'processed' ? 'success' : record.status === 'failed' ? 'error' : 'default'">
-                {{ record.status }}
+                {{ statusLabel(INCOMING_STATUSES, record.status) }}
               </a-tag>
             </template>
             <template v-else-if="column.key === 'signature_valid'">
@@ -151,7 +151,7 @@
           <a-form-item :label="$t('Secret')">
             <a-input-group compact>
               <a-input :value="editing.secret" readonly style="width: calc(100% - 130px)" />
-              <a-button style="width: 130px" @click="regenerateSecret">Regenerate</a-button>
+              <a-button style="width: 130px" @click="regenerateSecret">{{ $t('Webhook_Regenerate') }}</a-button>
             </a-input-group>
           </a-form-item>
         </template>
@@ -212,19 +212,20 @@ crud.fetchRows();
 // incoming; all three are sent as plain query params alongside the usual
 // page/limit/search.
 const DELIVERY_STATUSES = [
-  { value: '', label: 'All statuses' },
-  { value: 'pending', label: 'Pending' },
-  { value: 'retrying', label: 'Retrying' },
-  { value: 'success', label: 'Success' },
-  { value: 'failed', label: 'Failed' },
+  { value: '', label: t('All_Statuses') },
+  { value: 'pending', label: t('Pending') },
+  { value: 'retrying', label: t('Status_Retrying') },
+  { value: 'success', label: t('Success') },
+  { value: 'failed', label: t('Failed') },
 ];
 const INCOMING_STATUSES = [
-  { value: '', label: 'All statuses' },
-  { value: 'received', label: 'Received' },
-  { value: 'processed', label: 'Processed' },
-  { value: 'failed', label: 'Failed' },
-  { value: 'ignored', label: 'Ignored' },
+  { value: '', label: t('All_Statuses') },
+  { value: 'received', label: t('Received') },
+  { value: 'processed', label: t('Processed') },
+  { value: 'failed', label: t('Failed') },
+  { value: 'ignored', label: t('Status_Ignored') },
 ];
+const statusLabel = (list, s) => (s && list.find(o => o.value === s)?.label) || s;
 
 const deliveryStatus = ref('');
 const incomingStatus = ref('');
@@ -399,23 +400,23 @@ const activeLogFields = computed(() => {
   const add = (label, value, tag) => {
     if (value !== undefined && value !== null && value !== '') out.push({ label, value, tag });
   };
-  add('Event', r.event);
-  add('Source', r.source);
-  add('Webhook', r.webhook?.name);
-  add('URL', r.webhook?.url);
-  add('Status', r.status, deliveryStatusColor(r.status));
-  add('Response code', r.response_code);
-  add('Attempt', r.attempt);
-  if (r.duration_ms !== undefined && r.duration_ms !== null) add('Duration', `${r.duration_ms} ms`);
+  add(t('Event'), r.event);
+  add(t('Source'), r.source);
+  add(t('Webhook'), r.webhook?.name);
+  add(t('URL'), r.webhook?.url);
+  add(t('Status'), statusLabel([...DELIVERY_STATUSES, ...INCOMING_STATUSES], r.status), deliveryStatusColor(r.status));
+  add(t('Response_Code'), r.response_code);
+  add(t('Attempt'), r.attempt);
+  if (r.duration_ms !== undefined && r.duration_ms !== null) add(t('Duration'), `${r.duration_ms} ms`);
   if (r.signature_valid !== undefined) {
     out.push({
-      label: 'Signature',
-      value: r.signature_valid ? 'Valid' : 'Invalid',
+      label: t('Signature'),
+      value: r.signature_valid ? t('Valid') : t('Invalid'),
       tag: r.signature_valid ? 'success' : 'error',
     });
   }
   add('IP', r.ip);
-  add('Error', r.error_message);
+  add(t('Webhook_Error'), r.error_message);
   return out;
 });
 
@@ -423,10 +424,10 @@ const activeLogJson = computed(() => {
   const r = activeLog.value;
   if (!r) return [];
   const blocks = [];
-  if (r.headers !== undefined) blocks.push({ label: 'Headers', value: formatJson(r.headers) });
-  if (r.payload !== undefined) blocks.push({ label: 'Payload', value: formatJson(r.payload) });
+  if (r.headers !== undefined) blocks.push({ label: t('Headers'), value: formatJson(r.headers) });
+  if (r.payload !== undefined) blocks.push({ label: t('Payload'), value: formatJson(r.payload) });
   if (r.response_body !== undefined) {
-    blocks.push({ label: 'Response body', value: r.response_body || '—' });
+    blocks.push({ label: t('Response_Body'), value: r.response_body || '—' });
   }
   return blocks;
 });

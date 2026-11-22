@@ -80,7 +80,7 @@
             <template v-if="column.key === 'product'">
               <div style="font-weight: 500">{{ record.name }}</div>
               <div class="muted">{{ record.code }}</div>
-              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">Batch</a-tag>
+              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">{{ $t('Batch') }}</a-tag>
             </template>
             <template v-else-if="column.key === 'net_price'">{{ docMoney(record.Net_price) }}</template>
             <template v-else-if="column.key === 'stock'">
@@ -210,8 +210,8 @@
               <a-select
                 v-model:value="lineDraft.tax_method"
                 :options="[
-                  { value: '1', label: 'Exclusive' },
-                  { value: '2', label: 'Inclusive' },
+                  { value: '1', label: $t('Tax_Exclusive') },
+                  { value: '2', label: $t('Tax_Inclusive') },
                 ]"
               />
             </a-form-item>
@@ -242,9 +242,11 @@
               <a-select v-model:value="lineDraft.sale_unit_id" :options="units.map(u => ({ value: u.id, label: u.name }))" />
             </a-form-item>
           </a-col>
-          <a-col v-if="editingLine.is_imei" :span="24">
+          <a-col v-if="editingLine.is_imei || hasComboSerials(editingLine)" :span="24">
             <!-- Quotations don't reserve stock, so legacy takes serials as a
-                 single free-text field rather than a picker or entry list. -->
+                 single free-text field rather than a picker or entry list.
+                 A combo takes its tracked components' serials here; the
+                 sale it converts to sorts them per component. -->
             <a-form-item :label="$t('Add_product_IMEI_Serial_number')">
               <a-input
                 v-model:value="lineDraft.imei_number"
@@ -271,7 +273,8 @@
  *   param and the quantity clamps. Edit GET quotations/{id}/edit →
  *   +quote/details, products always loaded with stock=1, and the setting is
  *   never loaded — legacy edit has no stock clamps, so neither do we.
- * - line data: GET show_product_data/{pid}/{vid} — NO warehouse segment
+ * - line data: GET show_product_data/{pid}/{vid}/{wid} (store price of the
+ *   quote's warehouse; no segment while no warehouse is picked)
  * - totals: computeSimpleTotals (uncapped fixed discount, like purchases)
  * - payload quirk kept verbatim: create POST sends `Discount` (capital D),
  *   edit PUT sends `discount`
@@ -294,6 +297,7 @@ import { useFormat } from '../../composables/useFormat';
 import { useDocCurrency } from '../../composables/useDocCurrency';
 import { recomputeLine, computeSimpleTotals } from '../../lib/lineCalc';
 import { hasBatchSelectErrors, firstBatchSelectError } from '../../lib/batchValidation';
+import { hasComboSerials } from '../../lib/comboSerials';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -436,8 +440,11 @@ async function onProductPicked(idx) {
   }
 
   try {
-    // Quotation lines are priced without a warehouse segment, like legacy.
-    const d = await http.get(`show_product_data/${p.id}/${variantId}`);
+    // The warehouse segment prices the line at that store's price when
+    // "Different prices per store" is on (same price as a sale there).
+    const d = await http.get(quote.value.warehouse_id
+      ? `show_product_data/${p.id}/${variantId}/${quote.value.warehouse_id}`
+      : `show_product_data/${p.id}/${variantId}`);
     const line = {
       detail_id: nextDetailId++,
       product_id: d.id,
@@ -460,6 +467,7 @@ async function onProductPicked(idx) {
       sale_unit_id: d.sale_unit_id,
       is_imei: d.is_imei,
       imei_number: '',
+      serial_components: d.serial_components || [],
       is_batch_tracked: !!d.is_batch_tracked,
       batches: [],
       subtotal: 0,

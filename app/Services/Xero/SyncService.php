@@ -300,7 +300,7 @@ class SyncService
             'Date' => (string) $sale->date,
             'DueDate' => (string) $sale->date,
             'InvoiceNumber' => (string) $sale->Ref,
-            'Reference' => 'Stocky sale #'.$sale->id,
+            'Reference' => 'Sale #'.$sale->id,
             'Status' => 'AUTHORISED',
             'LineAmountTypes' => 'NoTax',
             'LineItems' => $lines,

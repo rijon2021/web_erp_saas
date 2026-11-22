@@ -60,7 +60,8 @@
             <template v-if="column.key === 'product'">
               <div style="font-weight: 500">{{ record.name }}</div>
               <div class="muted">{{ record.code }}</div>
-              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">Batch</a-tag>
+              <a-tag v-if="record.is_batch_tracked" color="warning" style="margin-top: 2px">{{ $t('Batch') }}</a-tag>
+              <a-tag v-if="hasSerialPanel(record)" color="processing" style="margin-top: 2px">{{ $t('Serial_Numbers') }}</a-tag>
             </template>
             <template v-else-if="column.key === 'current'">{{ record.current }} {{ record.unit }}</template>
             <template v-else-if="column.key === 'quantity'">
@@ -82,9 +83,25 @@
                availability when the warehouse changes (legacy behavior). -->
           <template #expandedRowRender="{ record }">
             <BatchAllocator
+              v-if="record.is_batch_tracked"
               :key="record.detail_id + '-' + (damage.warehouse_id || 0)"
               :line="record" :warehouse-id="damage.warehouse_id" endpoint="batches_for_damage"
             />
+            <!-- Serial / IMEI: pick the damaged units; a kit's are its
+                 components', from its kits or from stock. -->
+            <div v-if="hasSerialPanel(record)" :style="{ marginTop: record.is_batch_tracked ? '12px' : 0 }">
+              <div class="muted" style="margin-bottom: 6px">{{ $t('Damage_Serial_Hint') }}</div>
+              <SerialPicker
+                v-if="record.is_imei"
+                :key="'sn-' + record.detail_id + '-' + (damage.warehouse_id || 0)"
+                :line="record" :warehouse-id="damage.warehouse_id"
+              />
+              <ComboSerialPicker
+                v-else
+                :key="'sn-' + record.detail_id + '-' + (damage.warehouse_id || 0)"
+                :line="record" :warehouse-id="damage.warehouse_id" kit-units="include"
+              />
+            </div>
           </template>
           <template #emptyText>
             <a-empty :description="$t('NodataAvailable')" style="padding: 24px 0" />
@@ -134,7 +151,10 @@ import PageHeader from '../../components/PageHeader.vue';
 import ProductScanModal from '../../components/ProductScanModal.vue';
 import { resolveScan } from '../../lib/scanMatch';
 import BatchAllocator from '../../components/BatchAllocator.vue';
+import SerialPicker from '../../components/SerialPicker.vue';
+import ComboSerialPicker from '../../components/ComboSerialPicker.vue';
 import { hasBatchSelectErrors, firstBatchSelectError } from '../../lib/batchValidation';
+import { hasComboSerials, comboSerialMismatch } from '../../lib/comboSerials';
 import http from '../../lib/http';
 
 const { t } = useI18n();
@@ -166,7 +186,23 @@ const warehouseOptions = computed(() => warehouses.value.map(w => ({ value: w.id
 const productOptions = computed(() =>
   products.value.map((p, i) => ({ value: i, label: `${p.code} — ${p.name}` }))
 );
-const expandedKeys = computed(() => lines.value.filter(l => l.is_batch_tracked).map(l => l.detail_id));
+// Serial pickers on lines: only once the damage_detail_serials migration has
+// run (create/edit report it), else the backend would ignore them.
+const serialDamages = ref(false);
+const hasSerialPanel = l => serialDamages.value && (!!l.is_imei || hasComboSerials(l));
+// One damaged serial per unit (per component unit on a kit).
+const serialLineError = l => {
+  if (!hasSerialPanel(l)) return false;
+  // Saved before serials were recorded on damages: may stay empty.
+  if (!(l.serial_numbers || []).length && l.serials_optional) return false;
+  return l.is_imei
+    ? (l.serial_numbers || []).length !== Math.round(Number(l.quantity) || 0)
+    : comboSerialMismatch(l);
+};
+
+const expandedKeys = computed(() => lines.value
+  .filter(l => l.is_batch_tracked || hasSerialPanel(l))
+  .map(l => l.detail_id));
 
 // A variant's label carries the VARIANT code, so also match the parent
 // product's code — otherwise typing the main code finds none of its variants.
@@ -202,6 +238,9 @@ async function loadProducts() {
 function onWarehouseChange() {
   for (const l of lines.value) {
     if (l.is_batch_tracked) l.batches = [];
+    l.serial_numbers = [];
+    l.serial_groups = {};
+    l.imei_number = '';
   }
   loadProducts();
 }
@@ -246,6 +285,11 @@ async function onProductPicked(idx) {
       unit: d.unit,
       is_batch_tracked: !!d.is_batch_tracked,
       batches: [],
+      is_imei: !!d.is_imei,
+      serial_components: d.serial_components || [],
+      serial_numbers: [],
+      serial_groups: {},
+      imei_number: '',
     });
   } catch (e) {
     message.error(t('InvalidData'));
@@ -288,6 +332,11 @@ function validateForm() {
     message.error(firstBatchSelectError(lines.value, t));
     return false;
   }
+  const badSerials = lines.value.find(serialLineError);
+  if (badSerials) {
+    message.warning(`${t('Serials_Count_Mismatch')} — ${badSerials.name}`);
+    return false;
+  }
   return true;
 }
 
@@ -313,6 +362,8 @@ function detailsPayload() {
         .filter(b => b && b.product_batch_id && Number(b.qty) > 0)
         .map(b => ({ product_batch_id: Number(b.product_batch_id), qty: Number(b.qty) || 0 }));
     }
+    // Serialized lines always send the key: it tells an edit to re-sync.
+    if (hasSerialPanel(l)) out.serial_numbers = l.serial_numbers || [];
     return out;
   });
 }
@@ -350,6 +401,7 @@ onMounted(async () => {
     if (isEdit.value) {
       const data = await http.get(`damages/${id.value}/edit`);
       warehouses.value = data.warehouses || [];
+      serialDamages.value = data.serial_damages === true;
       const a = data.damage || {};
       damage.value = {
         date: a.date,
@@ -362,11 +414,16 @@ onMounted(async () => {
         type: 'sub',
         is_batch_tracked: !!d.is_batch_tracked,
         batches: Array.isArray(d.batches) ? d.batches : [],
+        serial_numbers: Array.isArray(d.serial_numbers) ? d.serial_numbers : [],
+        serial_groups: d.serial_groups || {},
+        imei_number: Array.isArray(d.serial_numbers) ? d.serial_numbers.join(',') : '',
+        serials_optional: !(Array.isArray(d.serial_numbers) && d.serial_numbers.length),
       }));
       await loadProducts();
     } else {
       const data = await http.get('damages/create');
       warehouses.value = data.warehouses || [];
+      serialDamages.value = data.serial_damages === true;
     }
   } catch (e) {
     message.error(t('InvalidData'));

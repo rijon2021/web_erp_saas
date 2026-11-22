@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Store;
 
 use App\Http\Controllers\Controller;
 use App\Models\StorePage;
+use App\Models\StoreSetting;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -11,9 +12,12 @@ class PagesApiController extends Controller
 {
     public function index(Request $req)
     {
+        $this->authorizeForUser(request()->user('api'), 'store_pages', StoreSetting::class);
+
         $q = trim((string) $req->query('q', ''));
-        $sort = $req->query('sort', 'updated_at');
-        $dir = $req->query('dir', 'desc');
+        // Whitelisted: the values go straight into ORDER BY.
+        $sort = in_array($req->query('sort'), ['id', 'title', 'slug', 'published', 'created_at', 'updated_at'], true) ? $req->query('sort') : 'updated_at';
+        $dir = strtolower((string) $req->query('dir')) === 'asc' ? 'asc' : 'desc';
         $per = (int) $req->query('per_page', 10);
 
         $pages = StorePage::query()
@@ -31,6 +35,8 @@ class PagesApiController extends Controller
 
     public function store(Request $req)
     {
+        $this->authorizeForUser(request()->user('api'), 'store_pages', StoreSetting::class);
+
         $data = $req->validate([
             'title' => 'required|string|max:190',
             'slug' => 'nullable|string|max:190|unique:store_pages,slug',
@@ -61,6 +67,8 @@ class PagesApiController extends Controller
 
     public function show($id)
     {
+        $this->authorizeForUser(request()->user('api'), 'store_pages', StoreSetting::class);
+
         $page = StorePage::findOrFail($id);
 
         return response()->json($page);
@@ -68,6 +76,8 @@ class PagesApiController extends Controller
 
     public function update(Request $req, $id)
     {
+        $this->authorizeForUser(request()->user('api'), 'store_pages', StoreSetting::class);
+
         $page = StorePage::findOrFail($id);
         $data = $req->validate([
             'title' => 'required|string|max:190',
@@ -99,6 +109,8 @@ class PagesApiController extends Controller
 
     public function destroy($id)
     {
+        $this->authorizeForUser(request()->user('api'), 'store_pages', StoreSetting::class);
+
         $page = StorePage::findOrFail($id);
         $page->delete();
 

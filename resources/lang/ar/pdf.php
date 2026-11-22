@@ -177,4 +177,5 @@ return [
     'balance_carried_forward' => 'الرصيد المنقول من الفترة السابقة',
     'sale' => 'بيع',
     'additional_info' => 'معلومات إضافية',
+    'order_reference' => 'مرجع الطلب',
 ];

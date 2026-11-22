@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Models\Central\EInvoicingProviderSetting;
 
 class FbrSetting extends Model
 {
@@ -28,7 +29,7 @@ class FbrSetting extends Model
             $row = static::query()->first();
             if (! $row) {
                 $row = static::query()->create([
-                    'environment' => config('fbr.default_environment', 'sandbox'),
+                    'environment' => (string) EInvoicingProviderSetting::value('fbr', 'default_environment', config('fbr.default_environment', 'sandbox')),
                 ]);
             }
 

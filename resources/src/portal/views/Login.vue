@@ -1,215 +1,156 @@
 <template>
-  <div class="portal-login">
-    <div class="pc-login-bg"></div>
-    <div class="pc-login-lang"><LanguageSwitcher /></div>
-    <div class="pc-login-card">
-      <div class="pc-login-brand">
-        <div class="pc-login-mark">
-          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2"/>
-            <path d="M7 11V7a5 5 0 0110 0v4"/>
-          </svg>
+  <!-- Portal gate: sign-in (password, then the two-step code when the account has it) -->
+  <div>
+    <div class="position-absolute top-0 p-3 rst-gate-lang"><LanguageMenu /></div>
+    <div class="rst-login-screen w-100">
+      <div class="container py-4 rst-gate-frame">
+        <div class="text-center mb-4"><BrandMark /></div>
+
+        <div class="card rst-login-panel">
+          <div v-if="!tf" class="card-body p-4 p-md-5">
+            <h2 class="h2 text-center mb-1">{{ $t('welcome_back') }}</h2>
+            <p class="text-secondary text-center mb-4">{{ $t('login_subtitle') }}</p>
+
+            <form autocomplete="off" novalidate @submit.prevent="login">
+              <div class="mb-3">
+                <label class="form-label" for="portal-email">{{ $t('email') }}</label>
+                <input id="portal-email" v-model="email" type="email" class="form-control" :class="{ 'is-invalid': !!error }" placeholder="you@company.com" autocomplete="username" required autofocus />
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="portal-password">{{ $t('password') }}</label>
+                <input id="portal-password" v-model="password" type="password" class="form-control" :class="{ 'is-invalid': !!error }" placeholder="••••••••" autocomplete="current-password" required />
+                <div v-if="error" class="invalid-feedback d-block">{{ error }}</div>
+              </div>
+              <div class="form-footer">
+                <button type="submit" class="btn btn-primary w-100" :disabled="loading">
+                  <span v-if="loading" class="spinner-border spinner-border-sm me-2" role="status"></span>
+                  <i v-else class="ti ti-login-2 me-2"></i>
+                  {{ loading ? $t('signing_in') : $t('sign_in') }}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Two-step code (PortalTwoFactorController::verify) -->
+          <div v-else class="card-body p-4 p-md-5">
+            <div class="text-center mb-3"><i class="ti ti-shield-lock" style="font-size: 2.5rem; color: var(--tblr-primary)"></i></div>
+            <h2 class="h2 text-center mb-1">{{ $t('tf_title') }}</h2>
+            <p class="text-secondary text-center mb-4">
+              <template v-if="tf.method === 'email'">{{ $t('tf_email_prompt').replace(':email', tf.email) }}</template>
+              <template v-else-if="recovery">{{ $t('tf_recovery_prompt') }}</template>
+              <template v-else>{{ $t('tf_app_prompt') }}</template>
+            </p>
+
+            <div v-if="info" class="alert alert-success py-2">{{ info }}</div>
+
+            <form autocomplete="off" novalidate @submit.prevent="verify">
+              <div class="mb-3">
+                <label class="form-label" for="portal-code">{{ recovery ? $t('tf_recovery_label') : $t('tf_code_label') }}</label>
+                <input
+                  id="portal-code" ref="codeInput" v-model="code" type="text" class="form-control text-center"
+                  :class="{ 'is-invalid': !!error }" :inputmode="recovery ? 'text' : 'numeric'" autocomplete="one-time-code"
+                  :placeholder="recovery ? 'xxxxx-xxxxx' : '000000'" maxlength="32" style="font-size: 1.25rem; letter-spacing: .3em"
+                />
+                <div v-if="error" class="invalid-feedback d-block">{{ error }}</div>
+              </div>
+              <label class="form-check mb-3">
+                <input v-model="trust" class="form-check-input" type="checkbox" />
+                <span class="form-check-label">{{ $t('tf_trust_device').replace(':days', tf.trust_days) }}</span>
+              </label>
+              <div class="form-footer">
+                <button type="submit" class="btn btn-primary w-100" :disabled="loading || !code.trim()">
+                  <span v-if="loading" class="spinner-border spinner-border-sm me-2" role="status"></span>
+                  <i v-else class="ti ti-check me-2"></i>
+                  {{ $t('tf_verify') }}
+                </button>
+              </div>
+            </form>
+
+            <div class="d-flex justify-content-between flex-wrap gap-2 mt-3 small">
+              <a v-if="tf.method === 'email'" href="#" @click.prevent="resend">{{ $t('tf_resend') }}</a>
+              <a v-else href="#" @click.prevent="toggleRecovery">{{ recovery ? $t('tf_use_app') : $t('tf_use_recovery') }}</a>
+              <a href="#" class="text-secondary" @click.prevent="back">{{ $t('tf_back') }}</a>
+            </div>
+          </div>
         </div>
-        <h1>{{ $t('welcome_back') }}</h1>
-        <p class="pc-sub">{{ $t('login_subtitle') }}</p>
       </div>
-      <form @submit.prevent="login" class="pc-form">
-        <div class="pc-field">
-          <label>{{ $t('email') }}</label>
-          <div class="pc-input-wrap">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v12H4z"/><path d="M4 6l8 7 8-7"/></svg>
-            <input v-model="email" type="email" required placeholder="your@email.com" autocomplete="email" />
-          </div>
-        </div>
-        <div class="pc-field">
-          <label>{{ $t('password') }}</label>
-          <div class="pc-input-wrap">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-            <input v-model="password" type="password" required placeholder="••••••••" autocomplete="current-password" />
-          </div>
-        </div>
-        <p v-if="error" class="pc-alert pc-alert-error">{{ error }}</p>
-        <button type="submit" class="pc-btn-primary" :disabled="loading">
-          <span v-if="loading" class="pc-btn-spinner"></span>
-          {{ loading ? $t('signing_in') : $t('sign_in') }}
-        </button>
-      </form>
     </div>
   </div>
 </template>
 
 <script>
 import http from '../lib/http';
-import LanguageSwitcher from '../components/LanguageSwitcher.vue';
+import { apiError } from '../lib/ui';
+import LanguageMenu from '../components/LanguageMenu.vue';
+import BrandMark from '../components/BrandMark.vue';
+
 export default {
-  components: { LanguageSwitcher },
+  components: { LanguageMenu, BrandMark },
   data() {
-    return { email: '', password: '', error: '', loading: false };
+    return {
+      email: '', password: '', error: '', loading: false,
+      // Two-step state: { method, email, trust_days } once the password passed.
+      tf: null, code: '', trust: false, recovery: false, info: '',
+    };
   },
   methods: {
     async login() {
       this.error = '';
       this.loading = true;
       try {
-        await http.post('/portal/login', { email: this.email, password: this.password });
+        const { data } = await http.post('/portal/login', { email: this.email, password: this.password });
+        if (data && data.two_factor) {
+          this.tf = { method: data.method, email: data.email, trust_days: data.trust_days };
+          this.password = '';
+          this.info = data.method === 'email' && !data.email_failed ? this.$t('tf_code_sent') : '';
+          // The code email could not be sent: say so, the "resend" link stays available.
+          if (data.email_failed) this.error = this.$t('tf_email_failed');
+          this.$nextTick(() => this.$refs.codeInput && this.$refs.codeInput.focus());
+          return;
+        }
         window.location.href = '/portal/dashboard';
       } catch (e) {
-        const data = e && e.response && e.response.data ? e.response.data : e;
-        this.error = (data && data.message) || (e && e.message) || this.$t('login_failed');
+        this.error = apiError(e, this.$t('login_failed'));
       } finally {
         this.loading = false;
       }
     },
+    async verify() {
+      this.error = '';
+      this.loading = true;
+      try {
+        await http.post('/portal/login/two-factor', { code: this.code.trim(), trust_device: this.trust });
+        window.location.href = '/portal/dashboard';
+      } catch (e) {
+        this.error = apiError(e, this.$t('login_failed'));
+        // The step timed out (10 minutes): start over with the password.
+        if (e && e.response && e.response.data && e.response.data.expired) this.back();
+      } finally {
+        this.loading = false;
+      }
+    },
+    async resend() {
+      this.error = '';
+      this.info = '';
+      try {
+        await http.post('/portal/login/two-factor/resend');
+        this.info = this.$t('tf_code_sent');
+      } catch (e) {
+        this.error = apiError(e, this.$t('login_failed'));
+      }
+    },
+    toggleRecovery() {
+      this.recovery = !this.recovery;
+      this.code = '';
+      this.error = '';
+      this.$nextTick(() => this.$refs.codeInput && this.$refs.codeInput.focus());
+    },
+    back() {
+      this.tf = null;
+      this.code = '';
+      this.recovery = false;
+      this.info = '';
+    },
   },
 };
 </script>
-
-<style scoped>
-.portal-login {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem 1.25rem;
-  position: relative;
-  overflow: hidden;
-}
-.pc-login-bg {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  background:
-    radial-gradient(1100px circle at 20% -10%, rgba(99, 102, 241, 0.35), transparent 55%),
-    radial-gradient(1000px circle at 110% 110%, rgba(6, 182, 212, 0.28), transparent 55%),
-    linear-gradient(180deg, #eef2ff 0%, #f6f8fb 100%);
-}
-
-.pc-login-card {
-  position: relative;
-  z-index: 1;
-  background: var(--pc-surface);
-  padding: 2.25rem 2.25rem 2rem;
-  border-radius: 18px;
-  box-shadow: 0 18px 50px -12px rgba(15, 23, 42, 0.18), 0 6px 18px -8px rgba(79, 70, 229, 0.2);
-  border: 1px solid var(--pc-border);
-  width: 100%;
-  max-width: 420px;
-  animation: pc-slide-up 0.35s ease-out both;
-}
-@keyframes pc-slide-up {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.pc-login-brand {
-  text-align: center;
-  margin-bottom: 1.75rem;
-}
-.pc-login-mark {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #7c3aed 100%);
-  color: #fff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 0.85rem;
-  box-shadow: 0 10px 25px -8px rgba(79, 70, 229, 0.6);
-}
-.pc-login-card h1 {
-  margin: 0 0 0.4rem;
-  font-size: 1.45rem;
-  font-weight: 700;
-  color: var(--pc-text);
-  letter-spacing: -0.01em;
-}
-.pc-sub {
-  color: var(--pc-text-muted);
-  font-size: 0.92rem;
-  margin: 0;
-}
-
-.pc-form { display: flex; flex-direction: column; gap: 1rem; }
-.pc-field { display: flex; flex-direction: column; gap: 0.35rem; }
-.pc-field label {
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--pc-text);
-}
-.pc-input-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-.pc-input-wrap svg {
-  position: absolute;
-  left: 0.85rem;
-  color: var(--pc-text-soft);
-  pointer-events: none;
-}
-.pc-input-wrap input {
-  width: 100%;
-  padding: 0.7rem 1rem 0.7rem 2.35rem;
-  border: 1px solid var(--pc-border-strong);
-  border-radius: 10px;
-  font-size: 0.95rem;
-  background: var(--pc-surface-alt);
-  color: var(--pc-text);
-  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
-  box-sizing: border-box;
-}
-.pc-input-wrap input:focus {
-  outline: none;
-  background: var(--pc-surface);
-  border-color: var(--pc-primary);
-  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
-}
-
-.pc-alert {
-  margin: 0;
-  padding: 0.65rem 0.85rem;
-  border-radius: 8px;
-  font-size: 0.88rem;
-  font-weight: 500;
-}
-.pc-alert-error { background: var(--pc-danger-bg); color: var(--pc-danger); border: 1px solid #fecaca; }
-
-.pc-btn-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  width: 100%;
-  padding: 0.8rem 1rem;
-  background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
-  color: #fff;
-  border: none;
-  border-radius: 10px;
-  font-size: 0.98rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
-  box-shadow: 0 8px 20px -8px rgba(79, 70, 229, 0.6);
-}
-.pc-btn-primary:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); }
-.pc-btn-primary:disabled { opacity: 0.7; cursor: not-allowed; }
-.pc-btn-spinner {
-  display: inline-block;
-  width: 1rem; height: 1rem;
-  border: 2px solid rgba(255,255,255,0.35);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: pc-spin 0.7s linear infinite;
-}
-@keyframes pc-spin { to { transform: rotate(360deg); } }
-
-.pc-login-lang { position: absolute; top: 1rem; right: 1rem; z-index: 2; }
-html[dir="rtl"] .pc-login-lang { right: auto; left: 1rem; }
-
-@media (max-width: 480px) {
-  .portal-login { padding: 1rem; }
-  .pc-login-card { padding: 1.75rem 1.25rem 1.5rem; border-radius: 16px; }
-  .pc-login-card h1 { font-size: 1.25rem; }
-}
-</style>

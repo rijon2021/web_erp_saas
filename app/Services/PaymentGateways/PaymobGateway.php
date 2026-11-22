@@ -98,8 +98,8 @@ class PaymobGateway implements PaymentGatewayInterface
         $result = $this->createCheckoutUrl(
             amount: (float) $chargeAmount,
             currency: $payment->gateway_currency ?? $payment->currency,
-            productName: ($payment->plan->name ?? 'Subscription') . ' Plan',
-            description: ucfirst($payment->billing_cycle) . ' subscription',
+            productName: $payment->checkoutProductName(),
+            description: $payment->checkoutDescription(),
             metadata: [
                 'payment_id' => $payment->id,
                 'tenant_id'  => $payment->tenant_id,

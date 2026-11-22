@@ -2,6 +2,7 @@
 
 namespace App\Services\Zatca;
 
+use App\Models\Central\EInvoicingProviderSetting;
 use App\Models\Setting;
 use App\Models\ZatcaSetting;
 use Illuminate\Support\Str;
@@ -40,8 +41,8 @@ class CertificateBuilder
         $orgUnit = $zatca->organization_unit ?: $organization;
         $serial = sprintf(
             '1-%s|2-%s|3-%s',
-            $zatca->solution_name ?: 'Rasheed',
-            $zatca->solution_version ?: '1.0',
+            $zatca->solution_name ?: (string) EInvoicingProviderSetting::value('zatca', 'solution_name', 'Rasheed'),
+            $zatca->solution_version ?: (string) EInvoicingProviderSetting::value('zatca', 'solution_version', '1.0'),
             $zatca->device_serial ?: (string) Str::uuid()
         );
         $address = trim(implode(' ', array_filter([

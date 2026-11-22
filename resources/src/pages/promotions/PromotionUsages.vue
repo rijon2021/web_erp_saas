@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <PageHeader :title="'Promotion Usage Report'" :breadcrumb="['Promotions', 'Usage Report']">
+    <PageHeader :title="$t('PromotionUsageReport')" :breadcrumb="[$t('Promotions'), $t('UsageReport')]">
       <template #actions>
         <a-button @click="$router.push('/promotions')">
           <template #icon><ArrowLeftOutlined /></template>
-          Back to Promotions
+          {{ $t('BackToPromotions') }}
         </a-button>
       </template>
     </PageHeader>
@@ -19,7 +19,7 @@
         <a-select
           v-model:value="filters.promotion_id" class="filter-select"
           allow-clear show-search option-filter-prop="label"
-          placeholder="All promotions" :options="promotionOptions"
+          :placeholder="$t('Promo_All_Promotions')" :options="promotionOptions"
           @change="reload"
         />
         <a-select
@@ -30,7 +30,7 @@
         />
         <a-button @click="resetFilters">
           <template #icon><ReloadOutlined /></template>
-          Reset
+          {{ $t('Reset') }}
         </a-button>
       </div>
     </a-card>
@@ -40,25 +40,25 @@
       <a-col :xs="24" :sm="8">
         <a-card size="small" class="kpi">
           <div class="kpi-icon uses"><NumberOutlined /></div>
-          <a-statistic title="Total uses" :value="totals.uses || 0" />
+          <a-statistic :title="$t('TotalUses')" :value="totals.uses || 0" />
         </a-card>
       </a-col>
       <a-col :xs="24" :sm="8">
         <a-card size="small" class="kpi">
           <div class="kpi-icon discount"><PercentageOutlined /></div>
-          <a-statistic title="Total discount" :value="money(totals.total_discount || 0)" />
+          <a-statistic :title="$t('TotalDiscount')" :value="money(totals.total_discount || 0)" />
         </a-card>
       </a-col>
       <a-col :xs="24" :sm="8">
         <a-card size="small" class="kpi">
           <div class="kpi-icon promos"><GiftOutlined /></div>
-          <a-statistic title="Promotions used" :value="totals.promotions_with_usage || 0" />
+          <a-statistic :title="$t('PromotionsUsed')" :value="totals.promotions_with_usage || 0" />
         </a-card>
       </a-col>
     </a-row>
 
     <!-- Per-promotion summary -->
-    <a-card size="small" title="Summary" style="margin-bottom: 16px">
+    <a-card size="small" :title="$t('Summary')" style="margin-bottom: 16px">
       <a-table
         :columns="summaryColumns" :data-source="summary"
         :pagination="false" size="small" :row-key="r => r.promotion_id"
@@ -70,7 +70,7 @@
             <span v-else class="muted">—</span>
           </template>
           <template v-else-if="column.key === 'kind'">
-            <a-tag :color="record.kind === 'discount' ? 'processing' : 'success'">{{ record.kind || '—' }}</a-tag>
+            <a-tag :color="record.kind === 'discount' ? 'processing' : 'success'">{{ record.kind === 'discount' ? $t('Discount') : record.kind === 'promotion' ? $t('Promotion') : (record.kind || '—') }}</a-tag>
           </template>
           <template v-else-if="column.key === 'total_discount'">
             <span class="amount">{{ money(record.total_discount) }}</span>
@@ -86,17 +86,17 @@
                 />
               </div>
             </template>
-            <span v-else class="muted">Unlimited</span>
+            <span v-else class="muted">{{ $t('Unlimited') }}</span>
           </template>
         </template>
         <template #emptyText>
-          <a-empty description="No usage recorded in this window." style="padding: 24px 0" />
+          <a-empty :description="$t('NoUsageYet')" style="padding: 24px 0" />
         </template>
       </a-table>
     </a-card>
 
     <!-- Details -->
-    <a-card size="small" title="Details">
+    <a-card size="small" :title="$t('Details')">
       <a-input-search
         v-model:value="crud.search.value" :placeholder="$t('Search')"
         allow-clear style="max-width: 280px; margin-bottom: 12px"
@@ -127,7 +127,7 @@
           </template>
           <template v-else-if="column.key === 'client'">
             <span v-if="record.client">{{ record.client.name }}</span>
-            <span v-else class="muted">Guest</span>
+            <span v-else class="muted">{{ $t('Guest') }}</span>
           </template>
           <template v-else-if="column.key === 'warehouse'">
             <span v-if="record.warehouse && record.warehouse.name">{{ record.warehouse.name }}</span>
@@ -138,7 +138,7 @@
           </template>
         </template>
         <template #emptyText>
-          <a-empty description="No usage recorded yet." style="padding: 24px 0" />
+          <a-empty :description="$t('Promo_No_Usage_Yet')" style="padding: 24px 0" />
         </template>
       </a-table>
     </a-card>
@@ -156,11 +156,13 @@ import {
   ArrowLeftOutlined, ReloadOutlined, NumberOutlined, PercentageOutlined,
   GiftOutlined,
 } from '@ant-design/icons-vue';
+import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
 import { useCrudTable } from '../../composables/useCrudTable';
 import { useFormat } from '../../composables/useFormat';
 import http from '../../lib/http';
 
+const { t } = useI18n();
 const { money, dateTime } = useFormat();
 
 const filters = ref({ range: null, promotion_id: undefined, warehouse_id: undefined });
@@ -190,25 +192,25 @@ const promotionOptions = computed(() => promotionsList.value.map(p => ({
 })));
 const warehouseOptions = computed(() => warehouses.value.map(w => ({ value: w.id, label: w.name })));
 
-const summaryColumns = [
-  { title: 'Promotion', dataIndex: 'name', key: 'name' },
-  { title: 'Code', key: 'code', width: 130 },
-  { title: 'Type', key: 'kind', width: 110 },
-  { title: 'Uses', dataIndex: 'uses', key: 'uses', width: 80, align: 'right' },
-  { title: 'Unique customers', dataIndex: 'unique_customers', key: 'unique_customers', width: 140, align: 'right' },
-  { title: 'Total discount', key: 'total_discount', width: 130, align: 'right' },
-  { title: 'Cap progress', key: 'cap', width: 160 },
-];
+const summaryColumns = computed(() => [
+  { title: t('Promotion'), dataIndex: 'name', key: 'name' },
+  { title: t('Code'), key: 'code', width: 130 },
+  { title: t('Type'), key: 'kind', width: 110 },
+  { title: t('Uses'), dataIndex: 'uses', key: 'uses', width: 80, align: 'right' },
+  { title: t('UniqueCustomers'), dataIndex: 'unique_customers', key: 'unique_customers', width: 140, align: 'right' },
+  { title: t('TotalDiscount'), key: 'total_discount', width: 130, align: 'right' },
+  { title: t('CapProgress'), key: 'cap', width: 160 },
+]);
 
-const detailColumns = [
-  { title: 'Date', dataIndex: 'used_at', key: 'used_at', sorter: true, width: 160 },
-  { title: 'Promotion', key: 'promotion' },
-  { title: 'Code', key: 'code', width: 120 },
-  { title: 'Sale', key: 'sale', width: 110 },
-  { title: 'Client', key: 'client', width: 150 },
-  { title: 'Warehouse', key: 'warehouse', width: 150 },
-  { title: 'Discount', dataIndex: 'discount_amount', key: 'discount_amount', sorter: true, width: 110, align: 'right' },
-];
+const detailColumns = computed(() => [
+  { title: t('Date'), dataIndex: 'used_at', key: 'used_at', sorter: true, width: 160 },
+  { title: t('Promotion'), key: 'promotion' },
+  { title: t('Code'), key: 'code', width: 120 },
+  { title: t('Sale'), key: 'sale', width: 110 },
+  { title: t('Client'), key: 'client', width: 150 },
+  { title: t('Warehouse'), key: 'warehouse', width: 150 },
+  { title: t('Discount'), dataIndex: 'discount_amount', key: 'discount_amount', sorter: true, width: 110, align: 'right' },
+]);
 
 async function fetchSummary() {
   try {

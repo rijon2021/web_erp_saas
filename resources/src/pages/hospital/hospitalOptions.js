@@ -8,129 +8,133 @@
  * attention now" is red, "in progress" is amber, "settled" is green.
  */
 
+import { i18n } from '../../i18n';
+
+const tr = (k) => i18n.global.t(k);
+
 export const GENDERS = [
-    { value: 'male', label: 'Male' },
-    { value: 'female', label: 'Female' },
-    { value: 'other', label: 'Other' },
+    { value: 'male', get label() { return tr('Hm_Male'); } },
+    { value: 'female', get label() { return tr('Hm_Female'); } },
+    { value: 'other', get label() { return tr('Hm_Other'); } },
 ];
 
 export const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
     .map(g => ({ value: g, label: g }));
 
 export const PATIENT_STATUSES = [
-    { value: 'active', label: 'Active', color: 'success' },
-    { value: 'inactive', label: 'Inactive', color: 'default' },
-    { value: 'deceased', label: 'Deceased', color: 'error' },
+    { value: 'active', get label() { return tr('Hm_Active'); }, color: 'success' },
+    { value: 'inactive', get label() { return tr('Hm_Inactive'); }, color: 'default' },
+    { value: 'deceased', get label() { return tr('Hm_Deceased'); }, color: 'error' },
 ];
 
 export const APPOINTMENT_TYPES = [
-    { value: 'consultation', label: 'Consultation', color: 'blue' },
-    { value: 'follow_up', label: 'Follow-up', color: 'cyan' },
-    { value: 'procedure', label: 'Procedure', color: 'purple' },
-    { value: 'emergency', label: 'Emergency', color: 'red' },
-    { value: 'teleconsult', label: 'Teleconsult', color: 'geekblue' },
+    { value: 'consultation', get label() { return tr('Hm_Consultation'); }, color: 'blue' },
+    { value: 'follow_up', get label() { return tr('Hm_Follow_Up'); }, color: 'cyan' },
+    { value: 'procedure', get label() { return tr('Hm_Procedure'); }, color: 'purple' },
+    { value: 'emergency', get label() { return tr('Hm_Emergency'); }, color: 'red' },
+    { value: 'teleconsult', get label() { return tr('Hm_Teleconsult'); }, color: 'geekblue' },
 ];
 
 export const APPOINTMENT_STATUSES = [
-    { value: 'scheduled', label: 'Scheduled', color: 'default' },
-    { value: 'confirmed', label: 'Confirmed', color: 'processing' },
-    { value: 'arrived', label: 'Arrived', color: 'warning' },
-    { value: 'completed', label: 'Completed', color: 'success' },
-    { value: 'cancelled', label: 'Cancelled', color: 'default' },
-    { value: 'no_show', label: 'No show', color: 'error' },
+    { value: 'scheduled', get label() { return tr('Hm_Scheduled'); }, color: 'default' },
+    { value: 'confirmed', get label() { return tr('Hm_Confirmed'); }, color: 'processing' },
+    { value: 'arrived', get label() { return tr('Hm_Arrived'); }, color: 'warning' },
+    { value: 'completed', get label() { return tr('Hm_Completed'); }, color: 'success' },
+    { value: 'cancelled', get label() { return tr('Hm_Cancelled'); }, color: 'default' },
+    { value: 'no_show', get label() { return tr('Hm_No_Show'); }, color: 'error' },
 ];
 
 export const VISIT_TYPES = [
-    { value: 'opd', label: 'OPD', color: 'blue' },
-    { value: 'emergency', label: 'Emergency', color: 'red' },
-    { value: 'follow_up', label: 'Follow-up', color: 'cyan' },
-    { value: 'teleconsult', label: 'Teleconsult', color: 'geekblue' },
+    { value: 'opd', get label() { return tr('Hm_OPD'); }, color: 'blue' },
+    { value: 'emergency', get label() { return tr('Hm_Emergency'); }, color: 'red' },
+    { value: 'follow_up', get label() { return tr('Hm_Follow_Up'); }, color: 'cyan' },
+    { value: 'teleconsult', get label() { return tr('Hm_Teleconsult'); }, color: 'geekblue' },
 ];
 
 export const VISIT_STATUSES = [
-    { value: 'open', label: 'Open', color: 'processing' },
-    { value: 'completed', label: 'Completed', color: 'success' },
+    { value: 'open', get label() { return tr('Hm_Open'); }, color: 'processing' },
+    { value: 'completed', get label() { return tr('Hm_Completed'); }, color: 'success' },
 ];
 
 export const WARD_TYPES = [
-    { value: 'general', label: 'General' },
-    { value: 'private', label: 'Private' },
-    { value: 'semi_private', label: 'Semi-private' },
-    { value: 'icu', label: 'ICU' },
-    { value: 'nicu', label: 'NICU' },
-    { value: 'maternity', label: 'Maternity' },
-    { value: 'isolation', label: 'Isolation' },
+    { value: 'general', get label() { return tr('Hm_General'); } },
+    { value: 'private', get label() { return tr('Hm_Private'); } },
+    { value: 'semi_private', get label() { return tr('Hm_Semi_Private'); } },
+    { value: 'icu', get label() { return tr('Hm_ICU'); } },
+    { value: 'nicu', get label() { return tr('Hm_NICU'); } },
+    { value: 'maternity', get label() { return tr('Hm_Maternity'); } },
+    { value: 'isolation', get label() { return tr('Hm_Isolation'); } },
 ];
 
 export const BED_STATUSES = [
-    { value: 'available', label: 'Available', color: 'success' },
-    { value: 'occupied', label: 'Occupied', color: 'error' },
-    { value: 'reserved', label: 'Reserved', color: 'warning' },
-    { value: 'maintenance', label: 'Maintenance', color: 'default' },
+    { value: 'available', get label() { return tr('Hm_Available'); }, color: 'success' },
+    { value: 'occupied', get label() { return tr('Hm_Occupied'); }, color: 'error' },
+    { value: 'reserved', get label() { return tr('Hm_Reserved'); }, color: 'warning' },
+    { value: 'maintenance', get label() { return tr('Hm_Maintenance'); }, color: 'default' },
 ];
 
 export const ADMISSION_STATUSES = [
-    { value: 'admitted', label: 'Admitted', color: 'processing' },
-    { value: 'discharged', label: 'Discharged', color: 'success' },
-    { value: 'transferred', label: 'Transferred', color: 'warning' },
-    { value: 'deceased', label: 'Deceased', color: 'error' },
+    { value: 'admitted', get label() { return tr('Hm_Admitted'); }, color: 'processing' },
+    { value: 'discharged', get label() { return tr('Hm_Discharged'); }, color: 'success' },
+    { value: 'transferred', get label() { return tr('Hm_Transferred'); }, color: 'warning' },
+    { value: 'deceased', get label() { return tr('Hm_Deceased'); }, color: 'error' },
 ];
 
 export const LAB_PRIORITIES = [
-    { value: 'routine', label: 'Routine', color: 'default' },
-    { value: 'urgent', label: 'Urgent', color: 'warning' },
-    { value: 'stat', label: 'STAT', color: 'error' },
+    { value: 'routine', get label() { return tr('Hm_Routine'); }, color: 'default' },
+    { value: 'urgent', get label() { return tr('Hm_Urgent'); }, color: 'warning' },
+    { value: 'stat', get label() { return tr('Hm_STAT'); }, color: 'error' },
 ];
 
 export const LAB_STATUSES = [
-    { value: 'ordered', label: 'Ordered', color: 'default' },
-    { value: 'sample_collected', label: 'Sample collected', color: 'processing' },
-    { value: 'in_progress', label: 'In progress', color: 'warning' },
-    { value: 'completed', label: 'Completed', color: 'success' },
-    { value: 'cancelled', label: 'Cancelled', color: 'default' },
+    { value: 'ordered', get label() { return tr('Hm_Ordered'); }, color: 'default' },
+    { value: 'sample_collected', get label() { return tr('Hm_Sample_Collected'); }, color: 'processing' },
+    { value: 'in_progress', get label() { return tr('Hm_In_Progress'); }, color: 'warning' },
+    { value: 'completed', get label() { return tr('Hm_Completed'); }, color: 'success' },
+    { value: 'cancelled', get label() { return tr('Hm_Cancelled'); }, color: 'default' },
 ];
 
 export const RESULT_FLAGS = [
-    { value: 'normal', label: 'Normal', color: 'success' },
-    { value: 'low', label: 'Low', color: 'warning' },
-    { value: 'high', label: 'High', color: 'warning' },
-    { value: 'critical', label: 'Critical', color: 'error' },
+    { value: 'normal', get label() { return tr('Hm_Normal'); }, color: 'success' },
+    { value: 'low', get label() { return tr('Hm_Low'); }, color: 'warning' },
+    { value: 'high', get label() { return tr('Hm_High'); }, color: 'warning' },
+    { value: 'critical', get label() { return tr('Hm_Critical'); }, color: 'error' },
 ];
 
 export const INVOICE_STATUSES = [
-    { value: 'draft', label: 'Draft', color: 'default' },
-    { value: 'unpaid', label: 'Unpaid', color: 'error' },
-    { value: 'partial', label: 'Partly paid', color: 'warning' },
-    { value: 'paid', label: 'Paid', color: 'success' },
-    { value: 'cancelled', label: 'Cancelled', color: 'default' },
+    { value: 'draft', get label() { return tr('Hm_Draft'); }, color: 'default' },
+    { value: 'unpaid', get label() { return tr('Hm_Unpaid'); }, color: 'error' },
+    { value: 'partial', get label() { return tr('Hm_Partly_Paid'); }, color: 'warning' },
+    { value: 'paid', get label() { return tr('Hm_Paid'); }, color: 'success' },
+    { value: 'cancelled', get label() { return tr('Hm_Cancelled'); }, color: 'default' },
 ];
 
 export const INVOICE_ITEM_TYPES = [
-    { value: 'consultation', label: 'Consultation' },
-    { value: 'procedure', label: 'Procedure' },
-    { value: 'medicine', label: 'Medicine' },
-    { value: 'lab', label: 'Lab test' },
-    { value: 'bed', label: 'Bed charge' },
-    { value: 'other', label: 'Other' },
+    { value: 'consultation', get label() { return tr('Hm_Consultation'); } },
+    { value: 'procedure', get label() { return tr('Hm_Procedure'); } },
+    { value: 'medicine', get label() { return tr('Hm_Medicine'); } },
+    { value: 'lab', get label() { return tr('Hm_Lab_Test'); } },
+    { value: 'bed', get label() { return tr('Hm_Bed_Charge'); } },
+    { value: 'other', get label() { return tr('Hm_Other'); } },
 ];
 
 export const PAYMENT_METHODS = [
-    { value: 'cash', label: 'Cash' },
-    { value: 'card', label: 'Card' },
-    { value: 'bank_transfer', label: 'Bank transfer' },
-    { value: 'insurance', label: 'Insurance' },
-    { value: 'cheque', label: 'Cheque' },
-    { value: 'other', label: 'Other' },
+    { value: 'cash', get label() { return tr('Hm_Cash'); } },
+    { value: 'card', get label() { return tr('Hm_Card'); } },
+    { value: 'bank_transfer', get label() { return tr('Hm_Bank_Transfer'); } },
+    { value: 'insurance', get label() { return tr('Hm_Insurance'); } },
+    { value: 'cheque', get label() { return tr('Hm_Cheque'); } },
+    { value: 'other', get label() { return tr('Hm_Other'); } },
 ];
 
 export const WEEK_DAYS = [
-    { value: 'mon', label: 'Mon' },
-    { value: 'tue', label: 'Tue' },
-    { value: 'wed', label: 'Wed' },
-    { value: 'thu', label: 'Thu' },
-    { value: 'fri', label: 'Fri' },
-    { value: 'sat', label: 'Sat' },
-    { value: 'sun', label: 'Sun' },
+    { value: 'mon', get label() { return tr('Hm_Mon'); } },
+    { value: 'tue', get label() { return tr('Hm_Tue'); } },
+    { value: 'wed', get label() { return tr('Hm_Wed'); } },
+    { value: 'thu', get label() { return tr('Hm_Thu'); } },
+    { value: 'fri', get label() { return tr('Hm_Fri'); } },
+    { value: 'sat', get label() { return tr('Hm_Sat'); } },
+    { value: 'sun', get label() { return tr('Hm_Sun'); } },
 ];
 
 /** Look one up, falling back to the raw value so nothing renders blank. */
@@ -172,8 +176,17 @@ export function vitalTone(key, value, age = null) {
 /** Standard adult BMI bands. */
 export function bmiBand(bmi) {
     if (!bmi) return null;
-    if (bmi < 18.5) return { label: 'Underweight', color: 'warning' };
-    if (bmi < 25) return { label: 'Normal', color: 'success' };
-    if (bmi < 30) return { label: 'Overweight', color: 'warning' };
-    return { label: 'Obese', color: 'error' };
+    if (bmi < 18.5) return { label: tr('Hm_Underweight'), color: 'warning' };
+    if (bmi < 25) return { label: tr('Hm_Normal'), color: 'success' };
+    if (bmi < 30) return { label: tr('Hm_Overweight'), color: 'warning' };
+    return { label: tr('Hm_Obese'), color: 'error' };
+}
+
+/**
+ * Y-m-d in the browser's own calendar. toISOString() is UTC, so the day board
+ * opened on yesterday east of UTC after midnight (and tomorrow west of it).
+ */
+export function localDate(d = new Date()) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }

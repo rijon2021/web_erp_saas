@@ -92,15 +92,17 @@ class UnitsController extends BaseController
             $operator_value = $request->operator_value;
         }
 
-        Unit::create([
+        $unit = Unit::create([
             'name' => $request['name'],
             'ShortName' => $request['ShortName'],
-            'base_unit' => $request['base_unit'],
+            'base_unit' => $request['base_unit'] ?: null,
             'operator' => $operator,
             'operator_value' => $operator_value,
         ]);
 
-        return response()->json(['success' => true]);
+        // Returned so quick-create forms (e.g. the product form) can select
+        // the new unit without re-fetching and guessing it by name.
+        return response()->json(['success' => true, 'unit' => $unit]);
 
     }
 
@@ -171,6 +173,24 @@ class UnitsController extends BaseController
     }
 
     // -------------- Get Sales Units ------------------\\
+
+    /**
+     * Base units per unit, for the serial pickers (one serial per base unit
+     * leaving stock). Any signed-in user: cashiers need it without the unit
+     * management permission. Same conversion as ComboStockService::baseQty.
+     */
+    public function factors()
+    {
+        $factors = Unit::where('deleted_at', '=', null)
+            ->get(['id', 'operator', 'operator_value'])
+            ->mapWithKeys(function ($u) {
+                $value = (float) ($u->operator_value ?: 1);
+
+                return [(int) $u->id => $u->operator == '/' ? 1 / $value : $value];
+            });
+
+        return response()->json(['factors' => (object) $factors->all()]);
+    }
 
     public function Get_sales_units(request $request)
     {

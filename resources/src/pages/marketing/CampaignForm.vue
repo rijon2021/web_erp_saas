@@ -44,7 +44,12 @@
               <a-input v-model:value="form.subject" />
             </a-form-item>
 
-            <a-form-item :label="$t('Message_Content')" name="message_content">
+            <WhatsAppTemplateFields v-if="form.type === 'whatsapp'" :model="form" />
+
+            <a-form-item
+              :label="$t('Message_Content')" name="message_content"
+              :extra="usesWaTemplate ? $t('Mk_WA_Content_With_Template') : ''"
+            >
               <a-textarea v-model:value="form.message_content" :rows="form.type === 'email' ? 8 : 4" />
             </a-form-item>
 
@@ -138,6 +143,7 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import { UploadOutlined } from '@ant-design/icons-vue';
 import PageHeader from '../../components/PageHeader.vue';
+import WhatsAppTemplateFields from './WhatsAppTemplateFields.vue';
 import { CHANNELS, channelLabel, PERSONALIZATION_VARIABLES } from './marketingVocab';
 import http from '../../lib/http';
 
@@ -162,18 +168,28 @@ const sendMode = ref('now');
 const form = ref({
   title: '', description: '', type: 'sms', subject: '', message_content: '',
   attachment: '', template_id: '', segment_id: undefined, scheduled_at: null,
+  wa_template_name: '', wa_template_language: '', wa_template_params: [],
 });
+
+// A Meta template carries the message, so the free-text body becomes optional.
+const usesWaTemplate = computed(() =>
+  form.value.type === 'whatsapp' && !!String(form.value.wa_template_name || '').trim());
 
 const typeOptions = computed(() => CHANNELS.map(c => ({ value: c, label: channelLabel(c) })));
 const templateOptions = computed(() => templates.value.map(x => ({ value: x.id, label: x.name })));
 const segmentOptions = computed(() =>
-  segments.value.map(s => ({ value: s.id, label: `${s.name} (${s.customers_count})` }))
+  segments.value.map(s => ({
+    value: s.id,
+    label: s.audience === 'crm_leads'
+      ? `${s.name} · ${t('Crm_Leads')} (${s.customers_count})`
+      : `${s.name} (${s.customers_count})`,
+  }))
 );
 
 const rules = computed(() => ({
   title: [{ required: true, message: t('Field_is_required') }],
   type: [{ required: true, message: t('Field_is_required') }],
-  message_content: [{ required: true, message: t('Field_is_required') }],
+  message_content: [{ required: !usesWaTemplate.value, message: t('Field_is_required') }],
 }));
 
 function onFileSelected(file) {
@@ -192,6 +208,11 @@ function applyTemplate(tplId) {
   form.value.message_content = tpl.content;
   if (tpl.subject) form.value.subject = tpl.subject;
   form.value.template_id = tpl.id;
+  if (form.value.type === 'whatsapp') {
+    form.value.wa_template_name = tpl.wa_template_name || '';
+    form.value.wa_template_language = tpl.wa_template_language || '';
+    form.value.wa_template_params = Array.isArray(tpl.wa_template_params) ? [...tpl.wa_template_params] : [];
+  }
 }
 
 async function loadSegments() {
@@ -221,8 +242,14 @@ async function submit() {
   fd.append('description', form.value.description || '');
   fd.append('type', form.value.type);
   fd.append('subject', form.value.subject || '');
-  fd.append('message_content', form.value.message_content);
+  fd.append('message_content', form.value.message_content || '');
   fd.append('template_id', form.value.template_id || '');
+  if (usesWaTemplate.value) {
+    fd.append('wa_template_name', String(form.value.wa_template_name).trim());
+    fd.append('wa_template_language', form.value.wa_template_language || '');
+    // Multipart: the API decodes this JSON string back into the params array.
+    fd.append('wa_template_params', JSON.stringify(form.value.wa_template_params || []));
+  }
   fd.append('all_customers', audience.value === 'all' ? 1 : 0);
   fd.append('segment_id', audience.value === 'segment' ? (form.value.segment_id || '') : '');
   fd.append('send_immediately', sendMode.value === 'now' ? 1 : 0);
@@ -260,6 +287,9 @@ async function bootstrap() {
         attachment: c.attachment || '', template_id: c.template_id || '',
         segment_id: c.segment_id || undefined,
         scheduled_at: c.scheduled_at ? String(c.scheduled_at).replace('T', ' ').substring(0, 16) : null,
+        wa_template_name: c.wa_template_name || '',
+        wa_template_language: c.wa_template_language || '',
+        wa_template_params: Array.isArray(c.wa_template_params) ? c.wa_template_params : [],
       };
       audience.value = c.all_customers ? 'all' : 'segment';
       sendMode.value = c.send_immediately ? 'now' : 'schedule';

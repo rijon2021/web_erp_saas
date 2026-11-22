@@ -138,7 +138,7 @@ class HospitalDashboardController extends Controller
             ->map(fn ($a) => [
                 'id' => $a->id,
                 'reference' => $a->reference,
-                'scheduled_at' => optional($a->scheduled_at)->toIso8601String(),
+                'scheduled_at' => optional($a->scheduled_at)->toDateTimeLocalString(),
                 'patient_name' => $a->patient ? $a->patient->name : '',
                 'patient_id' => $a->patient_id,
                 'doctor_name' => $a->doctor ? $a->doctor->name : '',

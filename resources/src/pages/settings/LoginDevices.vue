@@ -8,7 +8,7 @@
       <template #extra>
         <a-button danger :loading="revokingOthers" @click="logoutOthers">
           <template #icon><LogoutOutlined /></template>
-          Logout other devices
+          {{ $t('Logout_Other_Devices') }}
         </a-button>
       </template>
       <a-table
@@ -18,7 +18,7 @@
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'device'">
             {{ record.device }}
-            <a-tag v-if="record.is_current" color="success" style="margin-left: 6px">Current</a-tag>
+            <a-tag v-if="record.is_current" color="success" style="margin-left: 6px">{{ $t('Current') }}</a-tag>
           </template>
           <template v-else-if="column.key === 'actions'">
             <a-button
@@ -68,11 +68,11 @@ const revokingOthers = ref(false);
 const sessions = ref([]);
 
 const columns = computed(() => [
-  { title: 'User', dataIndex: 'user_name', key: 'user_name' },
-  { title: 'Device / Browser', dataIndex: 'device', key: 'device' },
-  { title: 'IP Address', dataIndex: 'ip_address', key: 'ip_address' },
-  { title: 'Login', dataIndex: 'login_at', key: 'login_at', customRender: ({ text }) => fmtDateTime(text) },
-  { title: 'Last activity', dataIndex: 'last_activity_at', key: 'last_activity_at', customRender: ({ text }) => fmtDateTime(text) },
+  { title: t('User'), dataIndex: 'user_name', key: 'user_name' },
+  { title: t('Device_Browser'), dataIndex: 'device', key: 'device' },
+  { title: t('IP_Address'), dataIndex: 'ip_address', key: 'ip_address' },
+  { title: t('Login_At'), dataIndex: 'login_at', key: 'login_at', customRender: ({ text }) => fmtDateTime(text) },
+  { title: t('Last_Activity'), dataIndex: 'last_activity_at', key: 'last_activity_at', customRender: ({ text }) => fmtDateTime(text) },
   { title: t('Action'), key: 'actions', width: 70, align: 'center' },
 ]);
 

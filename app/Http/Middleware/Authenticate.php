@@ -2,10 +2,35 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\User;
+use App\Support\Security\ForceLogout;
 use Illuminate\Auth\Middleware\Authenticate as Middleware;
+use Illuminate\Http\Exceptions\HttpResponseException;
 
 class Authenticate extends Middleware
 {
+    /**
+     * Every auth:api route passes here, including the groups without
+     * token.timeout, so this is where a super admin "force logout" refuses the
+     * SPA's still-valid Passport cookie. The 409 makes the SPA log out.
+     */
+    protected function authenticate($request, array $guards)
+    {
+        parent::authenticate($request, $guards);
+
+        if ($this->auth->getDefaultDriver() !== 'api') {
+            return;
+        }
+
+        $user = $this->auth->guard()->user();
+        if ($user instanceof User && ForceLogout::apiCookieIsStale($request, $user)) {
+            throw new HttpResponseException(
+                response()->json(['message' => 'You were signed out by an administrator.'], 409)
+                    ->header('X-Session-Revoked', '1')
+            );
+        }
+    }
+
     /**
      * Get the path the user should be redirected to when they are not authenticated.
      *

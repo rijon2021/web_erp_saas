@@ -53,7 +53,7 @@ import { message } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import PageHeader from '../../components/PageHeader.vue';
 import http from '../../lib/http';
-import { PAGE_SIZE_OPTIONS, buildPageSizeOptionText } from '../../composables/useCrudTable';
+import { pageSizesFor, buildPageSizeOptionText } from '../../composables/useCrudTable';
 
 const { t } = useI18n();
 
@@ -79,7 +79,7 @@ const pagination = computed(() => ({
   pageSize: limit.value,
   total: totalRows.value,
   showSizeChanger: true,
-  pageSizeOptions: PAGE_SIZE_OPTIONS,
+  pageSizeOptions: pageSizesFor(totalRows.value),
   buildOptionText: buildPageSizeOptionText,
 }));
 

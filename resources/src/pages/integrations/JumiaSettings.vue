@@ -1,9 +1,9 @@
 <template>
   <div class="page">
-    <PageHeader title="Jumia" :breadcrumb="['Ecommerce Platforms', 'Jumia']">
+    <PageHeader title="Jumia" :breadcrumb="[$t('Int_Ecommerce_Platforms'), 'Jumia']">
       <template #actions>
         <a-tag v-if="!isLoading" :color="state.configured && state.enabled ? 'success' : 'default'" style="font-size: 13px; padding: 4px 12px">
-          {{ state.configured ? (state.enabled ? $t('Enabled') : $t('Disabled')) : 'Not configured' }}
+          {{ state.configured ? (state.enabled ? $t('Enabled') : $t('Disabled')) : $t('Int_Not_Configured') }}
         </a-tag>
       </template>
     </PageHeader>
@@ -18,38 +18,38 @@
           <template #icon><ShoppingOutlined /></template>
         </a-avatar>
         <div>
-          <div class="hero-title">Jumia marketplace sync</div>
-          <div class="muted">Push prices and stock to your Jumia Seller Center listings and import marketplace orders as sales.</div>
+          <div class="hero-title">{{ $t('Jumia_Hero_Title') }}</div>
+          <div class="muted">{{ $t('Jumia_Hero_Desc') }}</div>
         </div>
       </div>
 
       <a-tabs v-model:activeKey="tab">
         <!-- ============================ Connection ============================ -->
-        <a-tab-pane key="connection" tab="Connection">
+        <a-tab-pane key="connection" :tab="$t('Connection')">
           <a-card size="small" title="Seller Center API" style="max-width: 640px">
             <a-form layout="vertical">
-              <a-form-item label="API URL (your country's Seller Center endpoint)">
+              <a-form-item :label="$t('Jumia_Api_Url_Label')">
                 <a-input v-model:value="form.api_url" placeholder="https://sellercenter-api.jumia.com.ng" />
               </a-form-item>
-              <a-form-item label="Account email (User ID)">
+              <a-form-item :label="$t('Jumia_Account_Email')">
                 <a-input v-model:value="form.user_email" placeholder="seller@example.com" />
               </a-form-item>
-              <a-form-item label="API key">
+              <a-form-item :label="$t('API_Key')">
                 <a-input-password
                   v-model:value="form.api_key"
-                  :placeholder="state.has_api_key ? 'Saved — paste a new key to replace it' : 'Seller Center → Settings → Integration Management'"
+                  :placeholder="state.has_api_key ? $t('Int_Saved_Paste_New_Key') : 'Seller Center → Settings → Integration Management'"
                   autocomplete="off"
                 />
               </a-form-item>
-              <a-form-item label="Stock warehouse">
+              <a-form-item :label="$t('Int_Stock_Warehouse')">
                 <a-select
                   v-model:value="form.warehouse_id"
-                  :options="[{ value: null, label: 'All warehouses (aggregate)' }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
+                  :options="[{ value: null, label: $t('Int_All_Warehouses_Aggregate') }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
                 />
               </a-form-item>
               <a-space align="center" style="margin-bottom: 16px">
                 <a-switch v-model:checked="form.enabled" />
-                <span>Enable Jumia sync</span>
+                <span>{{ $t('Int_Enable_Sync', { name: 'Jumia' }) }}</span>
               </a-space>
               <div>
                 <a-space wrap>
@@ -62,18 +62,15 @@
         </a-tab-pane>
 
         <!-- ============================ Price & Stock ============================ -->
-        <a-tab-pane key="stock" tab="Prices & Stock" :disabled="!state.configured">
-          <StatsRow :stats="stats" :items="[['products_total', 'Total products']]" />
-          <a-card size="small" title="Push prices & stock to Jumia" style="margin-bottom: 16px">
-            <p class="muted">
-              Sends the current price and quantity for every product (and variant) that has a SKU matching the
-              Jumia listing's <strong>Seller SKU</strong>. Updates are submitted as Seller Center feeds and applied
-              asynchronously — the feed ID is recorded in the Logs tab, and per-item rejections appear in
-              Seller Center's feed status screen.
-            </p>
+        <a-tab-pane key="stock" :tab="$t('Jumia_Prices_Stock')" :disabled="!state.configured">
+          <StatsRow :stats="stats" :items="[['products_total', $t('Total_Products')]]" />
+          <a-card size="small" :title="$t('Jumia_Push_Card_Title')" style="margin-bottom: 16px">
+            <i18n-t keypath="Jumia_Push_Desc" tag="p" class="muted">
+              <template #sellerSku><strong>Seller SKU</strong></template>
+            </i18n-t>
             <a-space>
               <a-button type="primary" :disabled="sync.running.value" @click="runSync('jumia/sync/price-stock', {}, 'push')">
-                <template #icon><UploadOutlined /></template>Push prices & stock
+                <template #icon><UploadOutlined /></template>{{ $t('Jumia_Push_Prices_Stock') }}
               </a-button>
               <a-button v-if="sync.running.value" danger @click="sync.cancel()">{{ $t('Cancel') }}</a-button>
             </a-space>
@@ -82,25 +79,23 @@
         </a-tab-pane>
 
         <!-- ============================ Orders ============================ -->
-        <a-tab-pane key="orders" tab="Orders" :disabled="!state.configured">
-          <StatsRow :stats="stats" :items="[['orders_imported', 'Orders imported']]" />
-          <a-card size="small" title="Pull orders from Jumia" style="margin-bottom: 16px">
-            <p class="muted">
-              Imports marketplace orders as sales (references like <code>JM-402…</code>), matched to your products by
-              Seller SKU. Already-imported and cancelled orders are skipped, so pulling regularly is safe. Payments are
-              marked paid only for delivered orders (Jumia is COD-dominant).
-            </p>
+        <a-tab-pane key="orders" :tab="$t('Orders')" :disabled="!state.configured">
+          <StatsRow :stats="stats" :items="[['orders_imported', $t('Int_Orders_Imported')]]" />
+          <a-card size="small" :title="$t('Int_Pull_Orders_From', { name: 'Jumia' })" style="margin-bottom: 16px">
+            <i18n-t keypath="Jumia_Orders_Desc" tag="p" class="muted">
+              <template #ref><code>JM-402…</code></template>
+            </i18n-t>
             <a-form layout="inline" style="margin-bottom: 12px">
-              <a-form-item label="Import into warehouse">
+              <a-form-item :label="$t('Int_Import_Into_Warehouse')">
                 <a-select
                   v-model:value="ordersWarehouseId" style="min-width: 220px"
-                  :options="[{ value: null, label: 'Default (settings / first warehouse)' }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
+                  :options="[{ value: null, label: $t('Int_Default_Warehouse_Option') }, ...state.warehouses.map(w => ({ value: w.id, label: w.name }))]"
                 />
               </a-form-item>
             </a-form>
             <a-space>
               <a-button type="primary" :disabled="sync.running.value" @click="runSync('jumia/sync/orders', ordersWarehouseId ? { warehouse_id: ordersWarehouseId } : {}, 'pull')">
-                <template #icon><DownloadOutlined /></template>Pull orders
+                <template #icon><DownloadOutlined /></template>{{ $t('Int_Pull_Orders') }}
               </a-button>
               <a-button v-if="sync.running.value" danger @click="sync.cancel()">{{ $t('Cancel') }}</a-button>
             </a-space>
@@ -109,18 +104,18 @@
         </a-tab-pane>
 
         <!-- ============================ Logs ============================ -->
-        <a-tab-pane key="logs" tab="Logs">
+        <a-tab-pane key="logs" :tab="$t('Logs')">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap">
             <a-select
               v-model:value="logLevel" style="min-width: 160px" :options="[
-                { value: '', label: 'All levels' },
-                { value: 'info', label: 'Info' },
-                { value: 'warning', label: 'Warning' },
-                { value: 'error', label: 'Error' },
+                { value: '', label: $t('Int_All_Levels') },
+                { value: 'info', label: $t('Info') },
+                { value: 'warning', label: $t('Warning') },
+                { value: 'error', label: $t('Cr_Log_Error') },
               ]" @change="loadLogs(1)"
             />
-            <a-popconfirm title="Clear all Jumia logs?" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="clearLogs">
-              <a-button danger size="small">Clear logs</a-button>
+            <a-popconfirm :title="$t('Int_Clear_All_Logs_Confirm', { name: 'Jumia' })" :ok-text="$t('Yes')" :cancel-text="$t('No')" @confirm="clearLogs">
+              <a-button danger size="small">{{ $t('Clear_Logs') }}</a-button>
             </a-popconfirm>
           </div>
           <a-table
@@ -138,14 +133,24 @@
         </a-tab-pane>
 
         <!-- ============================ Guide ============================ -->
-        <a-tab-pane key="guide" tab="Guide">
+        <a-tab-pane key="guide" :tab="$t('Guide')">
           <a-card size="small" style="max-width: 860px">
             <ol class="guide">
-              <li>In Jumia <strong>Seller Center</strong>, open Settings → <strong>Integration Management</strong> and generate an API key.</li>
-              <li>Enter your country's API URL (e.g. <code>https://sellercenter-api.jumia.com.ng</code> for Nigeria, <code>.co.ke</code> for Kenya, <code>.com.eg</code> for Egypt), your Seller Center account email, and the key — then run <strong>Test connection</strong>.</li>
-              <li>Make sure each Jumia listing's <strong>Seller SKU</strong> equals the Stocky product code — that is the identity used for both stock pushes and order matching.</li>
-              <li>Push prices &amp; stock after inventory changes; pull orders regularly (Jumia has no webhooks in this API).</li>
-              <li>Creating new listings stays in Seller Center — Jumia requires category-specific attributes and image review that only their portal handles well.</li>
+              <i18n-t keypath="Jumia_Guide_1" tag="li">
+                <template #sellerCenter><strong>Seller Center</strong></template>
+                <template #integrationMgmt><strong>Integration Management</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Jumia_Guide_2" tag="li">
+                <template #ng><code>https://sellercenter-api.jumia.com.ng</code></template>
+                <template #ke><code>.co.ke</code></template>
+                <template #eg><code>.com.eg</code></template>
+                <template #test><strong>{{ $t('Test_Connection') }}</strong></template>
+              </i18n-t>
+              <i18n-t keypath="Jumia_Guide_3" tag="li">
+                <template #sellerSku><strong>Seller SKU</strong></template>
+              </i18n-t>
+              <li>{{ $t('Jumia_Guide_4') }}</li>
+              <li>{{ $t('Jumia_Guide_5') }}</li>
             </ol>
           </a-card>
         </a-tab-pane>
@@ -188,9 +193,9 @@ const sync = useBatchSync();
 
 const logColumns = [
   { title: 'ID', dataIndex: 'id', width: 70 },
-  { title: 'Action', dataIndex: 'action', width: 180 },
-  { title: 'Level', key: 'level', width: 100 },
-  { title: 'Message', dataIndex: 'message', ellipsis: true },
+  { title: t('Action'), dataIndex: 'action', width: 180 },
+  { title: t('Level'), key: 'level', width: 100 },
+  { title: t('Message'), dataIndex: 'message', ellipsis: true },
   { title: t('Date'), key: 'created_at', width: 170 },
 ];
 
@@ -244,9 +249,9 @@ async function testConnection() {
   testing.value = true;
   try {
     await http.post('jumia/test-connection');
-    message.success('Connected to Jumia Seller Center.');
+    message.success(t('Int_Connected_To_Dot', { name: 'Jumia Seller Center' }));
   } catch (e) {
-    message.error(e?.data?.error || e?.data?.message || 'Connection test failed');
+    message.error(e?.data?.error || e?.data?.message || t('Connection_Test_Failed'));
   } finally {
     testing.value = false;
   }

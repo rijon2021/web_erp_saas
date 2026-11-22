@@ -35,7 +35,11 @@ class WhatsAppSettingsController extends Controller
                 'automations'          => $this->normalizedAutomations($setting),
             ],
             'automation_keys' => WhatsappSetting::AUTOMATIONS,
-            'webhook_url'     => url('/whatsapp/webhook/' . optional(tenant())->id),
+            // The webhook route is central-only (routes/central.php) and finds
+            // the workspace by the id in its path, so it must be built on the
+            // central APP_URL — url() here would give this tenant's own host,
+            // where the route does not exist.
+            'webhook_url'     => rtrim((string) config('app.url'), '/') . '/whatsapp/webhook/' . optional(tenant())->id,
             'quota' => [
                 'used'      => $limits->getWhatsappUsage(),
                 'max'       => $limits->getMaxAllowed('max_whatsapp_messages'),

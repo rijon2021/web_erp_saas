@@ -27,7 +27,7 @@
               </a-form-item>
             </a-col>
             <a-col :xs="24" :md="8">
-              <a-form-item :label="'Slug *'">
+              <a-form-item :label="$t('Slug') + ' *'">
                 <a-input v-model:value="form.slug" addon-before="/collections/" />
               </a-form-item>
             </a-col>

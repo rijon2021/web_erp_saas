@@ -82,9 +82,8 @@
           </a-col>
           <a-col :xs="24" :md="12">
             <a-form-item label=" ">
-              <!-- Hardcoded English in legacy too — no i18n key exists. -->
               <a-checkbox v-model:checked="form.hide_from_customer">
-                Hide from customer
+                {{ $t('Ct_Hide_From_Customer') }}
               </a-checkbox>
             </a-form-item>
           </a-col>

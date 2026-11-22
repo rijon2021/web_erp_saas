@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Integrations;
 
 use App\Http\Controllers\Controller;
+use App\Models\Setting;
 use App\Models\SlackSetting;
 use App\Services\Notifications\ChannelNotifier;
 use App\Services\Webhooks\WebhookService;
@@ -70,9 +71,22 @@ class SlackSettingsController extends Controller
 
         $result = $notifier->send(
             'slack',
-            "\u{2705} Test notification from Stocky — your Slack integration works."
+            "\u{2705} Test notification from ".$this->tenantAppName().' — your Slack integration works.'
         );
 
         return response()->json(['ok' => $result['success'], 'error' => $result['error']], $result['success'] ? 200 : 422);
+    }
+
+    /** The tenant's app name (the part before "|"), or a neutral fallback. */
+    private function tenantAppName(): string
+    {
+        try {
+            $raw = (string) (Setting::where('deleted_at', null)->value('app_name') ?? '');
+        } catch (\Throwable) {
+            $raw = '';
+        }
+        $name = trim(explode('|', $raw)[0]);
+
+        return $name !== '' ? $name : 'your POS';
     }
 }

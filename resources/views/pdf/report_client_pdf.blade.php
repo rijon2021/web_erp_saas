@@ -68,10 +68,10 @@
                             <div><strong style="color: #1f2937;">{{ __('pdf.phone') }}{{ $isRtl ? '' : ':' }}</strong> {{$client['phone']}}</div>
                             <div><strong style="color: #1f2937;">{{ __('pdf.total_sales') }}{{ $isRtl ? '' : ':' }}</strong> {{$client['total_sales']}}</div>
                             <div style="margin-top: 5px; padding-top: 5px; border-top: 1px solid #c7d2fe;">
-                                <div><strong style="color: #1f2937;">{{ __('pdf.total_amount') }}{{ $isRtl ? '' : ':' }}</strong> {{$symbol}} {{formatPrice((float)$client['total_amount'], 2, $priceFormat)}}</div>
-                                <div><strong style="color: #1f2937;">{{ __('pdf.total_paid') }}{{ $isRtl ? '' : ':' }}</strong> {{$symbol}} {{formatPrice((float)$client['total_paid'], 2, $priceFormat)}}</div>
-                                <div><strong style="color: #ef4444;">{{ __('pdf.sales_due') }}{{ $isRtl ? '' : ':' }}</strong> {{$symbol}} {{formatPrice((float)$client['due'], 2, $priceFormat)}}</div>
-                                <div><strong style="color: #f59e0b;">{{ __('pdf.return_due') }}{{ $isRtl ? '' : ':' }}</strong> {{$symbol}} {{formatPrice((float)$client['return_Due'], 2, $priceFormat)}}</div>
+                                <div><strong style="color: #1f2937;">{{ __('pdf.total_amount') }}{{ $isRtl ? '' : ':' }}</strong> {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$client['total_amount'], 2, $priceFormat)) }}</div>
+                                <div><strong style="color: #1f2937;">{{ __('pdf.total_paid') }}{{ $isRtl ? '' : ':' }}</strong> {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$client['total_paid'], 2, $priceFormat)) }}</div>
+                                <div><strong style="color: #ef4444;">{{ __('pdf.sales_due') }}{{ $isRtl ? '' : ':' }}</strong> {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$client['due'], 2, $priceFormat)) }}</div>
+                                <div><strong style="color: #f59e0b;">{{ __('pdf.return_due') }}{{ $isRtl ? '' : ':' }}</strong> {{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$client['return_Due'], 2, $priceFormat)) }}</div>
                             </div>
                         </div>
                     </div>
@@ -135,8 +135,8 @@
                     {{$formattedDate}}
                 </td>
                 <td style="padding: 8px; font-size: 8.5pt; font-weight: 600; color: #6366f1;">{{$sale['Ref']}}</td>
-                <td style="padding: 8px; text-align: right; font-size: 8.5pt; color: #10b981;">{{$symbol}} {{formatPrice((float)$sale['paid_amount'], 2, $priceFormat)}}</td>
-                <td style="padding: 8px; text-align: right; font-size: 8.5pt; font-weight: bold; color: #ef4444;">{{$symbol}} {{formatPrice((float)$sale['due'], 2, $priceFormat)}}</td>
+                <td style="padding: 8px; text-align: right; font-size: 8.5pt; color: #10b981;">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$sale['paid_amount'], 2, $priceFormat)) }}</td>
+                <td style="padding: 8px; text-align: right; font-size: 8.5pt; font-weight: bold; color: #ef4444;">{{ \App\utils\helpers::with_currency($symbol, formatPrice((float)$sale['due'], 2, $priceFormat)) }}</td>
                 <td style="padding: 8px; font-size: 8pt;">
                     @php
                         $paymentColors = [

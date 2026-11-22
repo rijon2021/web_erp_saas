@@ -72,7 +72,7 @@ const columns = computed(() => isInvoices
     { title: tf('Invoice', 'Invoice #'), key: 'invoice_number' },
     { title: tf('Plan', 'Plan'), key: 'plan' },
     { title: t('Amount'), key: 'amount' },
-    { title: tf('Gateway', 'Gateway'), dataIndex: 'gateway_label', key: 'gateway_label' },
+    { title: tf('Billing_Gateway', 'Gateway'), dataIndex: 'gateway_label', key: 'gateway_label' },
     { title: tf('Billing_Cycle', 'Cycle'), key: 'cycle' },
     { title: tf('Paid_Date', 'Paid Date'), key: 'date' },
     { title: '', key: 'actions', width: 110 },
@@ -81,7 +81,7 @@ const columns = computed(() => isInvoices
     { title: tf('Invoice', 'Invoice'), key: 'invoice_number' },
     { title: tf('Plan', 'Plan'), key: 'plan' },
     { title: t('Amount'), key: 'amount' },
-    { title: tf('Gateway', 'Gateway'), dataIndex: 'gateway_label', key: 'gateway_label' },
+    { title: tf('Billing_Gateway', 'Gateway'), dataIndex: 'gateway_label', key: 'gateway_label' },
     { title: t('Status'), key: 'status' },
     { title: t('date'), key: 'date' },
     { title: '', key: 'actions', width: 170 },
@@ -96,7 +96,7 @@ async function load(p) {
     page.value = data.current_page || 1;
     total.value = data.total || 0;
   } catch (e) {
-    message.error(e?.data?.message || (isInvoices ? 'Failed to load invoices.' : 'Failed to load history.'));
+    message.error(e?.data?.message || (isInvoices ? tf('Billing_Failed_Load_Invoices', 'Failed to load invoices.') : tf('Billing_Failed_Load_History', 'Failed to load history.')));
   } finally {
     loading.value = false;
   }
@@ -117,7 +117,7 @@ async function retry(record) {
     const data = await http.post(`billing/retry/${record.id}`, {});
     router.push({ path: `/subscription/checkout/${data.plan_id}`, query: { cycle: data.billing_cycle } });
   } catch (e) {
-    message.error(e?.data?.message || 'Cannot retry this payment.');
+    message.error(e?.data?.message || tf('Billing_Cannot_Retry_Payment', 'Cannot retry this payment.'));
   } finally {
     busy.value = '';
   }
