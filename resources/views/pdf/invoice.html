@@ -1,0 +1,321 @@
+<html lang="bn"><head>
+    <meta charset="UTF-8">
+    <title>Invoice - 102-0002</title>
+    <link rel="icon" href="https://zw.xylub.com/favicon.ico">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&amp;display=swap" rel="stylesheet">
+    <style>
+        @page {
+            size: A4;
+            margin: 15mm;
+        }
+
+        body {
+            max-width: 180mm;
+            margin: 0 auto;
+            padding: 10px;
+            font-family: "Nirmala UI", "SolaimanLipi", "Kalpurush", Arial, sans-serif;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #000;
+            background: #fff;
+        }
+
+        .header {
+            text-align: center;
+            border-bottom: 2px solid #000;
+            padding-bottom: 5px;
+            margin-bottom: 10px;
+        }
+
+        .header h1 {
+            margin: 0 0 5px;
+            font-size: 24px;
+        }
+
+        .header p {
+            margin: 0;
+            font-size: 12px;
+        }
+
+        .doc-title {
+            text-align: center;
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            width: 130px;
+            border: 2px solid #000;
+            margin: auto;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .info-row .box {
+            max-width: 48%;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+        }
+
+        th,
+        td {
+            border: 1px solid #000;
+            padding: 6px 8px;
+        }
+
+        th {
+            background: #f0f0f0;
+        }
+
+        th.num,
+        td.num {
+            text-align: right;
+        }
+
+        td.center {
+            text-align: center;
+        }
+
+        tfoot td {
+            padding: 2px 8px;
+        }
+
+        .bg-light td:not(.no-border) {
+            background: #f0f0f0;
+        }
+
+        .font-weight-600 {
+            font-weight: 600;
+        }
+
+        tfoot .label {
+            text-align: right;
+            border-left: none;
+        }
+
+        .note {
+            font-size: 12px;
+            margin-top: 20px;
+        }
+
+        .sign-row {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 60px;
+        }
+
+        .sign-row .sign {
+            border-top: 1px solid #000;
+            padding-top: 5px;
+            width: 160px;
+            text-align: center;
+        }
+
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            color: #fff;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 10px rgba(0, 0, 0, 0.2);
+        }
+
+        .print-btn {
+            background-color: #007bff;
+            /* Blue */
+        }
+
+        .print-btn:hover {
+            background-color: #0056b3;
+        }
+
+        tfoot td {
+            border: none;
+        }
+
+        .no-border {
+            border-left: none !important;
+            border-top: none !important;
+            border-bottom: none !important;
+        }
+
+        #qrcode img {
+            height: 90px;
+        }
+
+        @media print {
+            @page {
+                size: A4;
+                margin: 10mm;
+            }
+
+            body {
+                padding: 0;
+                background: #f5f5f5 !important;
+                color: #000 !important;
+
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+
+            .no-print {
+                display: none;
+            }
+
+            th {
+                background: #f0f0f0 !important;
+                -webkit-print-color-adjust: exact;
+            }
+
+            .item-section {
+                min-height: 580px;
+            }
+
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="header">
+        <table style="width: 100%;margin-bottom: 0px;">
+            <tbody><tr>
+                <td style="width: 100px; border: none;text-align: left;padding-left: 0">
+                    <img style="width: 100%" src="https://zw.xylub.com/images/print-logo.png" alt="">
+                </td>
+                <td style=" border: none">
+                    <div style="width: 100%;text-align: left;float: left;">
+                        <h1 style="color: #e78a1b;font-size: 26px;font-family: Montserrat, sans-serif;text-transform: uppercase;">ZUVENTURE WELLNESS</h1>
+                                                <p>
+                            <strong> Mobile: </strong> 01715900962                        </p>
+                                                <p>
+                            www.zuventurewellness.com
+                        </p>
+                    </div>
+                </td>
+                <td style=" border: none;text-align: right;padding-right: 0">
+                    <img style="height: 70px" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGYAAABmAQMAAAADEXYhAAAABlBMVEUEAgT8/vxJvsdeAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAApUlEQVQ4jb3UOw7EMAgEUHdcmQ46rkwRiZ3xFuvSs0VQJOu5SPgpa4541uvKtSyjeEiqmeooHprSioFDF17zj9JG1/CZo4Y7sT1M+tezOzHazhndKRdai3K/Wd8L82i3TUls0l4C14SUm/szHZIyUGs6xymJgRsPURwHEuBkJO0tSNzEaEKb8G0urCwMhtSVLHY0IevEGqSbpP3XcGv3kPT2f/DUBy07bNZMaOCKAAAAAElFTkSuQmCC" alt="QR">
+
+                </td>
+            </tr>
+        </tbody></table>
+
+    </div>
+
+    <div class="doc-title">Invoice</div>
+
+    <div class="info-row">
+        <div class="box">
+            <p style="margin-top:2px; margin-bottom:2px"><strong>Bill To</strong></p>
+            <p style="margin:0"><strong>Customer ID:</strong> 45878</p>
+            <p style="margin:0"><strong>Customer Name:</strong> Mr. Arifur Rahman</p>
+                            <p style="margin:0"> <strong>Mobile:</strong> 01737052413</p>
+                        <p style="margin:0"> <strong>Address:</strong>
+                                    Keshobpur, Jessore.                            </p>
+                            <p style="margin:0"><strong>Location:</strong> Khulna → Jashore → Keshabpur</p>
+                    </div>
+        <div class="box">
+            <br>
+            <strong>Invoice No:</strong> 102-0002<br>
+            <strong>Date:</strong> 19-09-2026        </div>
+    </div>
+    <div class="item-section">
+        <table style="width: 100%;">
+            <thead>
+                <tr>
+                    <th style="width:40px;">SN</th>
+                    <th>Item</th>
+                    <th class="text-center">Qty</th>
+                    <th class="num">U.Price</th>
+                    <th class="num">Total Price</th>
+                </tr>
+            </thead>
+            <tbody>
+                                    <tr>
+                        <td class="center">1</td>
+                        <td>Ukona Shampoo 8ml</td>
+                        <td class="text-center">15 Box</td>
+                        <td class="num">140.00</td>
+                        <td class="num">2,100.00</td>
+                    </tr>
+                            </tbody>
+            <tfoot>
+                <tr class=" font-weight-600">
+                    <td colspan="3" class="no-border"></td>
+                    <td class="label">TOTAL </td>
+                    <td class="num">৳ 2,100.00</td>
+                </tr>
+                <tr>
+                    <td colspan="3" class="no-border"></td>
+                    <td class="label">DISCOUNT</td>
+                    <td class="num">৳ 0.00</td>
+                </tr>
+                <tr class=" font-weight-600">
+                    <td colspan="3" class="no-border"></td>
+                    <td class="label">SUB TOTAL</td>
+                    <td class="num">৳ 2,100.00</td>
+                </tr>
+                <tr>
+                    <td colspan="3" class="no-border">
+                    </td>
+                    <td class="label">VAT/TAX</td>
+                    <td class="num">৳ 0.00</td>
+                </tr>
+                <tr class=" ">
+                    <td colspan="3" class="no-border" style="text-transform: capitalize"><strong>In Word: </strong>  two thousand one hundred  </td>
+                    <td class="label font-weight-600">TOTAL AMOUNT</td>
+                    <td class="num font-weight-600">৳ 2,100.00</td>
+                </tr>
+                <tr>
+                    <td colspan="3" class="no-border"><strong>Previous Balance: </strong> ৳ 0.00</td>
+                    <td class="label">PAID</td>
+                    <td class="num">৳ 0.00</td>
+                </tr>
+                <tr>
+                    <td colspan="3" class="no-border"></td>
+                    <td class="label font-weight-600">DUE</td>
+                    <td class="num font-weight-600">৳ 2,100.00</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+
+    
+    <div class="sign-row">
+        <div class="sign">Sales Representative Sign </div>
+        <div class="sign">Authorized By</div>
+        <div class="sign">
+            Customer Signature &amp; Seal
+            <small style="font-size: 9px">(Received product in good condition)</small>
+        </div>
+    </div>
+
+    
+
+    <div style="text-align: center; margin-top: 20px;" class="no-print">
+        <button class="btn print-btn" onclick="window.print()">
+            🖨️ Print Invoice
+        </button>
+    </div>
+
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon="{&quot;version&quot;:&quot;2024.11.0&quot;,&quot;token&quot;:&quot;d8e49e80765f473e840d3572afc39057&quot;,&quot;r&quot;:1,&quot;spa&quot;:2}" crossorigin="anonymous"></script>
+
+
+</body><grammarly-desktop-integration data-grammarly-shadow-root="true" style="visibility: visible !important;"></grammarly-desktop-integration></html>
