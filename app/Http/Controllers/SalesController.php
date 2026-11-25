@@ -3144,9 +3144,20 @@ class SalesController extends BaseController
         $sale['due'] = number_format($sale['GrandTotal'] - $sale['paid_amount'], helpers::price_decimals(), '.', '');
         $sale['payment_status'] = $sale_data->payment_statut;
         $sale['notes'] = $sale_data->notes ?? '';
+        $sale['previous_dues'] = number_format(
+            $this->clientPreviousDues($sale_data->client_id, $sale_data->id) * $docCurrency['rate'],
+            helpers::price_decimals(), '.', ''
+        );
 
-        // Get payment notes from payment_sales table with Ref
-        $payments = PaymentSale::where('sale_id', $id)->whereNotNull('notes')->get();
+        $payments = PaymentSale::with('payment_method')->where('sale_id', $id)->get();
+        $sale['payment_terms'] = $payments
+            ->map(function ($payment) {
+                return optional($payment->payment_method)->name;
+            })
+            ->filter()
+            ->unique()
+            ->implode(', ') ?: 'Credit';
+
         $payment_notes_array = [];
         foreach ($payments as $payment) {
             if ($payment->notes) {
@@ -3314,9 +3325,20 @@ class SalesController extends BaseController
         $sale['due'] = number_format($sale['GrandTotal'] - $sale['paid_amount'], helpers::price_decimals(), '.', '');
         $sale['payment_status'] = $sale_data->payment_statut;
         $sale['notes'] = $sale_data->notes ?? '';
+        $sale['previous_dues'] = number_format(
+            $this->clientPreviousDues($sale_data->client_id, $sale_data->id) * $docCurrency['rate'],
+            helpers::price_decimals(), '.', ''
+        );
 
-        // Get payment notes from payment_sales table with Ref
-        $payments = PaymentSale::where('sale_id', $id)->whereNotNull('notes')->get();
+        $payments = PaymentSale::with('payment_method')->where('sale_id', $id)->get();
+        $sale['payment_terms'] = $payments
+            ->map(function ($payment) {
+                return optional($payment->payment_method)->name;
+            })
+            ->filter()
+            ->unique()
+            ->implode(', ') ?: 'Credit';
+
         $payment_notes_array = [];
         foreach ($payments as $payment) {
             if ($payment->notes) {
